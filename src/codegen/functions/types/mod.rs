@@ -47,6 +47,7 @@ pub fn infer_local_type_with_ctx(expr: &Expr, sig: &FunctionSig, ctx: &Context) 
 pub fn infer_contextual_type(expr: &Expr, ctx: &Context) -> PhpType {
     let empty_sig = FunctionSig {
         params: Vec::new(),
+        param_type_exprs: Vec::new(),
         defaults: Vec::new(),
         return_type: PhpType::Void,
         declared_return: false,

@@ -6403,8 +6403,10 @@ try {
 fn test_eval_reflection_method_lists_parameters() {
     let out = compile_and_run_capture(
         r#"<?php
-eval('class EvalReflectParamTarget {
-    public function run(int $first, int|string $union, \App\Name|null $second = null, ...$rest) {}
+eval('interface EvalReflectLeft {}
+interface EvalReflectRight {}
+class EvalReflectParamTarget {
+    public function run(int $first, int|string $union, EvalReflectLeft&EvalReflectRight $both, \App\Name|null $second = null, ...$rest) {}
 }
 $method = new ReflectionMethod("EvalReflectParamTarget", "run");
 echo $method->getNumberOfParameters() . "/";
@@ -6419,6 +6421,13 @@ foreach ($params as $param) {
     $type = $param->getType();
     if ($param->getName() == "union") {
         echo ":union";
+        echo $type->allowsNull() ? "?" : "!";
+        foreach ($type->getTypes() as $memberType) {
+            echo ":" . $memberType->getName();
+            echo $memberType->isBuiltin() ? "B" : "C";
+        }
+    } elseif ($param->getName() == "both") {
+        echo ":intersection";
         echo $type->allowsNull() ? "?" : "!";
         foreach ($type->getTypes() as $memberType) {
             echo ":" . $memberType->getName();
@@ -6447,7 +6456,7 @@ foreach ($params as $param) {
     );
     assert_eq!(
         out.stdout,
-        "4/2:first@0rvbT:int!B:d|union@1rvbT:union!:intB:stringB:d|second@2OvbT:App\\Name?C:D=null|rest@3OVbt:null:d|"
+        "5/3:first@0rvbT:int!B:d|union@1rvbT:union!:intB:stringB:d|both@2rvbT:intersection!:EvalReflectLeftC:EvalReflectRightC:d|second@3OvbT:App\\Name?C:D=null|rest@4OVbt:null:d|"
     );
 }
 

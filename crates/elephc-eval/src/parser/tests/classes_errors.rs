@@ -565,7 +565,7 @@ fn parse_fragment_accepts_abstract_and_final_class_members() {
 fn parse_fragment_accepts_typed_method_parameter_metadata() {
     let program = parse_fragment(
         br#"class DynEvalTypedParams {
-    public function run(int &$id = 7, ?\App\Name &$name = null, string|null $label = "x", mixed &...$tail) {}
+    public function run(Left&Right $both, int &$id = 7, ?\App\Name &$name = null, string|null $label = "x", mixed &...$tail) {}
 }"#,
     )
     .expect("fragment should parse");
@@ -578,32 +578,47 @@ fn parse_fragment_accepts_typed_method_parameter_metadata() {
     assert_eq!(
         method.params(),
         &[
+            "both".to_string(),
             "id".to_string(),
             "name".to_string(),
             "label".to_string(),
             "tail".to_string()
         ]
     );
-    assert_eq!(method.parameter_has_types(), &[true, true, true, true]);
+    assert_eq!(method.parameter_has_types(), &[true, true, true, true, true]);
     assert!(method.parameter_types().iter().all(Option::is_some));
-    let id_type = method.parameter_types()[0].as_ref().expect("id type");
+    let both_type = method.parameter_types()[0].as_ref().expect("both type");
+    assert_eq!(
+        both_type.variants(),
+        &[
+            EvalParameterTypeVariant::Class("Left".to_string()),
+            EvalParameterTypeVariant::Class("Right".to_string())
+        ]
+    );
+    assert!(!both_type.allows_null());
+    assert!(both_type.is_intersection());
+    let id_type = method.parameter_types()[1].as_ref().expect("id type");
     assert_eq!(id_type.variants(), &[EvalParameterTypeVariant::Int]);
     assert!(!id_type.allows_null());
-    let name_type = method.parameter_types()[1].as_ref().expect("name type");
+    assert!(!id_type.is_intersection());
+    let name_type = method.parameter_types()[2].as_ref().expect("name type");
     assert_eq!(
         name_type.variants(),
         &[EvalParameterTypeVariant::Class("App\\Name".to_string())]
     );
     assert!(name_type.allows_null());
-    let label_type = method.parameter_types()[2].as_ref().expect("label type");
+    assert!(!name_type.is_intersection());
+    let label_type = method.parameter_types()[3].as_ref().expect("label type");
     assert_eq!(
         label_type.variants(),
         &[EvalParameterTypeVariant::String]
     );
     assert!(label_type.allows_null());
+    assert!(!label_type.is_intersection());
     assert!(matches!(
         method.parameter_defaults(),
         [
+            None,
             Some(EvalExpr::Const(EvalConst::Int(7))),
             Some(EvalExpr::Const(EvalConst::Null)),
             Some(EvalExpr::Const(EvalConst::String(label))),
@@ -612,9 +627,12 @@ fn parse_fragment_accepts_typed_method_parameter_metadata() {
     ));
     assert_eq!(
         method.parameter_is_by_ref(),
-        &[true, true, false, true]
+        &[false, true, true, false, true]
     );
-    assert_eq!(method.parameter_is_variadic(), &[false, false, false, true]);
+    assert_eq!(
+        method.parameter_is_variadic(),
+        &[false, false, false, false, true]
+    );
 }
 
 /// Verifies eval method parameter defaults retain supported constant-expression metadata.

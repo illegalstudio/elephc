@@ -253,6 +253,7 @@ fn ir_function_sig(function: &Function) -> FunctionSig {
             .iter()
             .map(|param| (param.name.clone(), param.php_type.clone()))
             .collect(),
+        param_type_exprs: vec![None; function.params.len()],
         defaults: vec![None; function.params.len()],
         return_type: function.return_php_type.clone(),
         declared_return: false,
@@ -530,6 +531,7 @@ fn seed_builtin_reflection_class_names(module: &Module, names: &mut HashSet<Stri
         "ReflectionParameter",
         "ReflectionProperty",
         "ReflectionUnionType",
+        "ReflectionIntersectionType",
     ] {
         if module.class_infos.contains_key(class_name) {
             names.insert(class_name.to_string());

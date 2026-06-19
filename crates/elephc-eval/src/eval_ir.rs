@@ -191,11 +191,19 @@ pub enum EvalParameterTypeVariant {
     String,
 }
 
+/// How multiple eval parameter type atoms combine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvalParameterTypeKind {
+    Union,
+    Intersection,
+}
+
 /// Type metadata retained for one eval method parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvalParameterType {
     variants: Vec<EvalParameterTypeVariant>,
     allows_null: bool,
+    kind: EvalParameterTypeKind,
 }
 
 impl EvalParameterType {
@@ -204,6 +212,16 @@ impl EvalParameterType {
         Self {
             variants,
             allows_null,
+            kind: EvalParameterTypeKind::Union,
+        }
+    }
+
+    /// Creates one eval method parameter type from intersection variants.
+    pub fn intersection(variants: Vec<EvalParameterTypeVariant>) -> Self {
+        Self {
+            variants,
+            allows_null: false,
+            kind: EvalParameterTypeKind::Intersection,
         }
     }
 
@@ -215,6 +233,11 @@ impl EvalParameterType {
     /// Returns whether the type explicitly accepts PHP null.
     pub const fn allows_null(&self) -> bool {
         self.allows_null
+    }
+
+    /// Returns whether all variants must match the value.
+    pub const fn is_intersection(&self) -> bool {
+        matches!(self.kind, EvalParameterTypeKind::Intersection)
     }
 }
 

@@ -826,6 +826,7 @@ fn lower_builtin_reflection_methods(
         "ReflectionParameter",
         "ReflectionProperty",
         "ReflectionUnionType",
+        "ReflectionIntersectionType",
     ] {
         lower_builtin_reflection_class_methods(class_name, module, check_result, constants, fiber_return_sigs);
     }

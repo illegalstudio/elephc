@@ -41,6 +41,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionParameter",
         "ReflectionNamedType",
         "ReflectionUnionType",
+        "ReflectionIntersectionType",
         "ReflectionClassConstant",
         "ReflectionEnumUnitCase",
         "ReflectionEnumBackedCase",
@@ -144,6 +145,10 @@ pub(crate) fn inject_builtin_reflection(
     class_map.insert(
         "ReflectionUnionType".to_string(),
         builtin_reflection_union_type_class(),
+    );
+    class_map.insert(
+        "ReflectionIntersectionType".to_string(),
+        builtin_reflection_intersection_type_class(),
     );
     for class_name in [
         "ReflectionClassConstant",
@@ -1744,6 +1749,52 @@ fn builtin_reflection_union_type_class() -> FlattenedClass {
     }
 }
 
+/// Builds the synthetic `ReflectionIntersectionType` shell returned by `ReflectionParameter::getType()`.
+fn builtin_reflection_intersection_type_class() -> FlattenedClass {
+    let properties = vec![
+        builtin_property(
+            "__types",
+            Visibility::Private,
+            Some(object_array_type("ReflectionNamedType")),
+            empty_array(),
+        ),
+        builtin_property(
+            "__attrs",
+            Visibility::Private,
+            Some(object_array_type("ReflectionAttribute")),
+            empty_array(),
+        ),
+        builtin_property(
+            "__allows_null",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ),
+    ];
+    let methods = vec![
+        builtin_reflection_private_constructor_method(),
+        builtin_reflection_class_array_method(
+            "getTypes",
+            "__types",
+            object_array_type("ReflectionNamedType"),
+        ),
+        builtin_reflection_class_bool_method("allowsNull", "__allows_null"),
+    ];
+    FlattenedClass {
+        name: "ReflectionIntersectionType".to_string(),
+        extends: None,
+        implements: Vec::new(),
+        is_abstract: false,
+        is_final: true,
+        is_readonly_class: false,
+        properties,
+        methods,
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+    }
+}
+
 /// Builds a public `__construct` method for a reflection owner class using the
 /// provided parameter list: each tuple is (name, type_expr, default, by_ref).
 fn builtin_reflection_owner_constructor_method(
@@ -1829,6 +1880,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
         "ReflectionParameter",
         "ReflectionNamedType",
         "ReflectionUnionType",
+        "ReflectionIntersectionType",
         "ReflectionClassConstant",
         "ReflectionEnumUnitCase",
         "ReflectionEnumBackedCase",
@@ -1846,6 +1898,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     | "ReflectionParameter"
                     | "ReflectionNamedType"
                     | "ReflectionUnionType"
+                    | "ReflectionIntersectionType"
                     | "ReflectionClassConstant"
                     | "ReflectionEnumUnitCase"
                     | "ReflectionEnumBackedCase"
@@ -1928,6 +1981,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     if !sig.params.iter().any(|(name, _)| name == "args") {
                         sig.params
                             .push(("args".to_string(), PhpType::Array(Box::new(PhpType::Mixed))));
+                        sig.param_type_exprs.push(None);
                         sig.defaults.push(None);
                         sig.ref_params.push(false);
                         sig.declared_params.push(false);
@@ -1999,6 +2053,16 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
             }
             if class_name == "ReflectionUnionType" {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getTypes")) {
+                    sig.return_type = PhpType::Array(Box::new(PhpType::Object(
+                        "ReflectionNamedType".to_string(),
+                    )));
+                }
+                if let Some(sig) = class_info.methods.get_mut("allowsnull") {
+                    sig.return_type = PhpType::Bool;
+                }
+            }
+            if class_name == "ReflectionIntersectionType" {
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getTypes")) {
                     sig.return_type = PhpType::Array(Box::new(PhpType::Object(
                         "ReflectionNamedType".to_string(),

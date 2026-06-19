@@ -130,6 +130,7 @@ pub(super) fn emit_main_and_finalize(
     allocate_main_variables(global_env, &mut ctx, uses_argc, uses_argv);
     let main_sig = FunctionSig {
         params: Vec::new(),
+        param_type_exprs: Vec::new(),
         defaults: Vec::new(),
         return_type: PhpType::Void,
         declared_return: false,

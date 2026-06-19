@@ -22,6 +22,7 @@ use super::super::Checker;
 /// environment bindings, default value expressions, by-reference flags, and declared-param flags.
 pub(crate) struct ClosureSignatureContext {
     pub params: Vec<(String, PhpType)>,
+    pub param_type_exprs: Vec<Option<TypeExpr>>,
     pub env: TypeEnv,
     pub defaults: Vec<Option<Expr>>,
     pub ref_params: Vec<bool>,
@@ -53,6 +54,7 @@ impl Checker {
 
         let mut closure_env = env.clone();
         let mut param_types = Vec::new();
+        let mut param_type_exprs = Vec::new();
         let mut defaults = Vec::new();
         let mut ref_params = Vec::new();
         let mut declared_params = Vec::new();
@@ -78,6 +80,7 @@ impl Checker {
 
             closure_env.insert(name.clone(), env_ty);
             param_types.push((name.clone(), sig_ty));
+            param_type_exprs.push(type_ann.clone());
             defaults.push(default.clone());
             ref_params.push(*is_ref);
             declared_params.push(type_ann.is_some());
@@ -86,6 +89,7 @@ impl Checker {
         if let Some(name) = variadic {
             closure_env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Int)));
             param_types.push((name.clone(), PhpType::Array(Box::new(PhpType::Mixed))));
+            param_type_exprs.push(None);
             defaults.push(None);
             ref_params.push(false);
             declared_params.push(false);
@@ -93,6 +97,7 @@ impl Checker {
 
         Ok(ClosureSignatureContext {
             params: param_types,
+            param_type_exprs,
             env: closure_env,
             defaults,
             ref_params,
@@ -212,6 +217,7 @@ impl Checker {
                 )?;
                 Ok(Some(FunctionSig {
                     params: closure_sig.params,
+                    param_type_exprs: closure_sig.param_type_exprs,
                     defaults: closure_sig.defaults,
                     return_type,
                     declared_return,

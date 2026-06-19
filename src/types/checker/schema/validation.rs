@@ -62,6 +62,12 @@ pub(crate) fn build_method_sig(
     };
     let mut sig = Checker::callable_wrapper_sig(&FunctionSig {
         params,
+        param_type_exprs: method
+            .params
+            .iter()
+            .map(|(_, type_ann, _, _)| type_ann.clone())
+            .chain(method.variadic.iter().map(|_| method.variadic_type.clone()))
+            .collect(),
         defaults,
         return_type,
         declared_return: method.return_type.is_some(),

@@ -99,6 +99,7 @@ pub(super) fn emit_short_ternary(
 fn infer_branch_result_type(left: &Expr, right: &Expr, ctx: &Context) -> PhpType {
     let dummy_sig = FunctionSig {
         params: vec![],
+        param_type_exprs: vec![],
         defaults: vec![],
         return_type: PhpType::Int,
         declared_return: false,

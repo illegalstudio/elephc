@@ -169,6 +169,12 @@ fn build_static_method_codegen_sig(
         label,
         FunctionSig {
             params,
+            param_type_exprs: method
+                .params
+                .iter()
+                .map(|(_, type_ann, _, _)| type_ann.clone())
+                .chain(method.variadic.iter().map(|_| method.variadic_type.clone()))
+                .collect(),
             defaults,
             return_type,
             declared_return,
@@ -249,6 +255,12 @@ fn build_instance_method_codegen_sig(
         label,
         FunctionSig {
             params,
+            param_type_exprs: method
+                .params
+                .iter()
+                .map(|(_, type_ann, _, _)| type_ann.clone())
+                .chain(method.variadic.iter().map(|_| method.variadic_type.clone()))
+                .collect(),
             defaults,
             return_type,
             declared_return,

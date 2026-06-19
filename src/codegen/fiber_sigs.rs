@@ -119,6 +119,10 @@ fn fiber_start_sig_from_closure_params(
             .iter()
             .map(|(name, _, _, _)| (name.clone(), PhpType::Mixed))
             .collect(),
+        param_type_exprs: params
+            .iter()
+            .map(|(_, type_ann, _, _)| type_ann.clone())
+            .collect(),
         defaults: params
             .iter()
             .map(|(_, _, default, _)| default.clone())
@@ -143,6 +147,7 @@ fn fiber_start_sig_from_callback_sig(sig: &FunctionSig) -> Option<FunctionSig> {
             .iter()
             .map(|(name, _)| (name.clone(), PhpType::Mixed))
             .collect(),
+        param_type_exprs: sig.param_type_exprs.clone(),
         defaults: sig.defaults.clone(),
         return_type: PhpType::Mixed,
         declared_return: false,

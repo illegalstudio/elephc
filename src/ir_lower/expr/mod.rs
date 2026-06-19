@@ -2563,6 +2563,7 @@ fn signature_for_static_callable_binding(
 fn function_sig_from_extern_for_descriptor(sig: &ExternFunctionSig) -> FunctionSig {
     FunctionSig {
         params: sig.params.clone(),
+        param_type_exprs: vec![None; sig.params.len()],
         defaults: vec![None; sig.params.len()],
         return_type: sig.return_type.clone(),
         declared_return: true,

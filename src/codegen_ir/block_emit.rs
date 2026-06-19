@@ -257,6 +257,7 @@ fn generator_signature(function: &Function, visible_param_count: usize) -> Funct
             .take(visible_param_count)
             .map(|param| (param.name.clone(), param.php_type.clone()))
             .collect(),
+        param_type_exprs: vec![None; visible_param_count],
         defaults: function
             .params
             .iter()

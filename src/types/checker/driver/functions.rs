@@ -268,6 +268,12 @@ impl Checker {
         let param_types = self.initial_function_param_types(first_variant, &decl)?;
         Ok(Some(FunctionSig {
             params: param_types,
+            param_type_exprs: decl
+                .param_types
+                .iter()
+                .cloned()
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
+                .collect(),
             defaults: decl.defaults,
             return_type: crate::types::PhpType::Int,
             declared_return: decl.return_type.is_some(),

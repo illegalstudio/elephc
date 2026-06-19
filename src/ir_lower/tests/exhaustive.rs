@@ -73,6 +73,7 @@ fn dummy_check_result() -> CheckResult {
         "f".to_string(),
         FunctionSig {
             params: vec![("x".to_string(), PhpType::Int)],
+            param_type_exprs: vec![None],
             defaults: vec![None],
             return_type: PhpType::Int,
             declared_return: true,
@@ -140,6 +141,7 @@ fn dummy_check_result() -> CheckResult {
 fn class_info(_class_name: &str) -> ClassInfo {
     let method_sig = FunctionSig {
         params: Vec::new(),
+        param_type_exprs: Vec::new(),
         defaults: Vec::new(),
         return_type: PhpType::Int,
         declared_return: true,

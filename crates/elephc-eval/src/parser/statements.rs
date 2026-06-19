@@ -1793,6 +1793,23 @@ impl Parser {
         if nullable_shorthand && matches!(self.current(), TokenKind::Pipe) {
             return Err(EvalParseError::UnsupportedConstruct);
         }
+        if nullable_shorthand
+            && matches!(self.current(), TokenKind::Ampersand)
+            && !self.next_token_starts_parameter_storage()
+        {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        if matches!(self.current(), TokenKind::Ampersand)
+            && !self.next_token_starts_parameter_storage()
+        {
+            while self.consume(TokenKind::Ampersand) {
+                let Some(variant) = self.parse_parameter_type_name()? else {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                };
+                variants.push(variant);
+            }
+            return Ok(Some(EvalParameterType::intersection(variants)));
+        }
         while self.consume(TokenKind::Pipe) {
             match self.parse_parameter_type_name()? {
                 Some(variant) => variants.push(variant),
@@ -1800,6 +1817,14 @@ impl Parser {
             }
         }
         Ok(Some(EvalParameterType::new(variants, allows_null)))
+    }
+
+    /// Returns whether `&` belongs to by-reference parameter storage.
+    fn next_token_starts_parameter_storage(&self) -> bool {
+        matches!(
+            self.peek(),
+            TokenKind::DollarIdent(_) | TokenKind::Ellipsis
+        )
     }
 
     /// Consumes one simple qualified method parameter type name.

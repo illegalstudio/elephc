@@ -1759,14 +1759,16 @@ echo ($traitParams[2]->hasType() ? "T" : "t");
     );
 }
 
-/// Verifies that `ReflectionParameter::getType()` returns named and union type metadata.
+/// Verifies that `ReflectionParameter::getType()` returns named, union, and intersection metadata.
 #[test]
 fn test_reflection_parameter_get_type_returns_named_type_metadata() {
     let out = compile_and_run_capture(
         r#"<?php
 class ReflectParamTypeDep {}
+interface ReflectParamTypeA {}
+interface ReflectParamTypeB {}
 class ReflectParamTypeTarget {
-    public function run(int $id, ?string $name, ReflectParamTypeDep $dep, $plain, int|string $union, int|string|null $nullableUnion) {}
+    public function run(int $id, ?string $name, ReflectParamTypeDep $dep, $plain, int|string $union, int|string|null $nullableUnion, ReflectParamTypeA&ReflectParamTypeB $intersection) {}
 }
 $params = (new ReflectionMethod(ReflectParamTypeTarget::class, "run"))->getParameters();
 foreach ($params as $param) {
@@ -1779,6 +1781,13 @@ foreach ($params as $param) {
         echo $type->isBuiltin() ? "B" : "C";
     } elseif ($type instanceof ReflectionUnionType) {
         echo "union";
+        echo $type->allowsNull() ? "?" : "!";
+        foreach ($type->getTypes() as $memberType) {
+            echo ":" . $memberType->getName();
+            echo $memberType->isBuiltin() ? "B" : "C";
+        }
+    } elseif ($type instanceof ReflectionIntersectionType) {
+        echo "intersection";
         echo $type->allowsNull() ? "?" : "!";
         foreach ($type->getTypes() as $memberType) {
             echo ":" . $memberType->getName();
@@ -1803,7 +1812,7 @@ if ($directType instanceof ReflectionNamedType) {
     );
     assert_eq!(
         out.stdout,
-        "id:T:int!B|name:T:string?B|dep:T:ReflectParamTypeDep!C|plain:t:null|union:T:union!:intB:stringB|nullableUnion:T:union?:intB:stringB|direct:ReflectParamTypeDep"
+        "id:T:int!B|name:T:string?B|dep:T:ReflectParamTypeDep!C|plain:t:null|union:T:union!:intB:stringB|nullableUnion:T:union?:intB:stringB|intersection:T:intersection!:ReflectParamTypeAC:ReflectParamTypeBC|direct:ReflectParamTypeDep"
     );
 }
 

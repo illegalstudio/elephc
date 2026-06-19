@@ -112,6 +112,7 @@ impl Checker {
         }
         let sig = FunctionSig {
             params: php_params.clone(),
+            param_type_exprs: vec![None; php_params.len()],
             defaults: params.iter().map(|_| None).collect(),
             return_type: php_ret.clone(),
             declared_return: true,

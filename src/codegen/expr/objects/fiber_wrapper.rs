@@ -162,6 +162,7 @@ pub(super) fn prepare_descriptor_invoker_wrapper(ctx: &mut Context) -> String {
 fn descriptor_invoker_placeholder_sig() -> FunctionSig {
     FunctionSig {
         params: Vec::new(),
+        param_type_exprs: Vec::new(),
         defaults: Vec::new(),
         return_type: PhpType::Mixed,
         declared_return: false,

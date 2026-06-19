@@ -727,8 +727,10 @@ return true;"#,
 #[test]
 fn execute_program_reflects_eval_method_parameters() {
     let program = parse_fragment(
-br##"class EvalReflectParamTarget {
-    public function run(int &$first, int|string $union, \App\Name|null $second = null, &...$rest) {}
+br##"interface EvalReflectLeft {}
+interface EvalReflectRight {}
+class EvalReflectParamTarget {
+    public function run(int &$first, int|string $union, EvalReflectLeft&EvalReflectRight $both, \App\Name|null $second = null, &...$rest) {}
 }
 $method = new ReflectionMethod("EvalReflectParamTarget", "run");
 echo $method->getNumberOfParameters(); echo "/";
@@ -743,6 +745,13 @@ foreach ($params as $param) {
     $type = $param->getType();
     if ($param->getName() == "union") {
         echo ":union";
+        echo $type->allowsNull() ? "?" : "!";
+        foreach ($type->getTypes() as $memberType) {
+            echo ":"; echo $memberType->getName();
+            echo $memberType->isBuiltin() ? "B" : "C";
+        }
+    } elseif ($param->getName() == "both") {
+        echo ":intersection";
         echo $type->allowsNull() ? "?" : "!";
         foreach ($type->getTypes() as $memberType) {
             echo ":"; echo $memberType->getName();
@@ -772,7 +781,7 @@ return true;"##,
 
     assert_eq!(
         values.output,
-        "4/2:first#0rvRT:int!B:d|union#1rvbT:union!:intB:stringB:d|second#2OvbT:App\\Name?C:D=null|rest#3OVRt:null:d|"
+        "5/3:first#0rvRT:int!B:d|union#1rvbT:union!:intB:stringB:d|both#2rvbT:intersection!:EvalReflectLeftC:EvalReflectRightC:d|second#3OvbT:App\\Name?C:D=null|rest#4OVRt:null:d|"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

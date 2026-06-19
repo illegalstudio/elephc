@@ -82,6 +82,7 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "ReflectionParameter",
     "ReflectionProperty",
     "ReflectionUnionType",
+    "ReflectionIntersectionType",
     "RuntimeException",
     "SeekableIterator",
     "SortDirection",

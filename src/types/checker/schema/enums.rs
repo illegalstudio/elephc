@@ -324,6 +324,7 @@ pub(crate) fn insert_enum_metadata(
         "cases".to_string(),
         FunctionSig {
             params: Vec::new(),
+            param_type_exprs: Vec::new(),
             defaults: Vec::new(),
             return_type: PhpType::Array(Box::new(PhpType::Object(name.to_string()))),
             declared_return: true,
@@ -342,6 +343,7 @@ pub(crate) fn insert_enum_metadata(
                 method_name.to_string(),
                 FunctionSig {
                     params: vec![("value".to_string(), backing_ty.clone())],
+                    param_type_exprs: vec![None],
                     defaults: vec![None],
                     return_type: if method_name == "from" {
                         PhpType::Object(name.to_string())

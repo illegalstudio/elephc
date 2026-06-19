@@ -369,6 +369,7 @@ pub(crate) fn lower_property_init_thunk(
     });
     let sig = FunctionSig {
         params: vec![("this".to_string(), this_type.clone())],
+        param_type_exprs: vec![None],
         defaults: vec![None],
         return_type: PhpType::Void,
         declared_return: false,
@@ -1059,6 +1060,10 @@ fn signature_from_ast_with_variadic(
                 )
             })
             .collect(),
+        param_type_exprs: params
+            .iter()
+            .map(|(_, type_ann, _, _)| type_ann.clone())
+            .collect(),
         defaults: params.iter().map(|(_, _, default, _)| default.clone()).collect(),
         return_type: return_type
             .map(type_expr_to_php_type)
@@ -1084,6 +1089,7 @@ fn append_variadic_param_slot(signature: &mut FunctionSig) {
     signature
         .params
         .push((variadic, PhpType::Array(Box::new(PhpType::Mixed))));
+    signature.param_type_exprs.push(None);
     signature.defaults.push(None);
     signature.ref_params.push(false);
     signature.declared_params.push(false);

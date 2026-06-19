@@ -78,6 +78,7 @@ struct EvalReflectionParameterTypeMetadata {
 enum EvalReflectionParameterTypeKind {
     Named(EvalReflectionNamedTypeMetadata),
     Union(EvalReflectionUnionTypeMetadata),
+    Intersection(EvalReflectionIntersectionTypeMetadata),
 }
 
 /// Eval metadata needed to materialize one `ReflectionNamedType` object.
@@ -91,6 +92,11 @@ struct EvalReflectionNamedTypeMetadata {
 struct EvalReflectionUnionTypeMetadata {
     types: Vec<EvalReflectionNamedTypeMetadata>,
     allows_null: bool,
+}
+
+/// Eval metadata needed to materialize one `ReflectionIntersectionType` object.
+struct EvalReflectionIntersectionTypeMetadata {
+    types: Vec<EvalReflectionNamedTypeMetadata>,
 }
 
 /// Attempts to construct a ReflectionClass/Method/Property object for eval metadata.
@@ -856,6 +862,9 @@ fn eval_reflection_type_object_result(
         EvalReflectionParameterTypeKind::Union(union_type) => {
             eval_reflection_union_type_object_result(union_type, values)
         }
+        EvalReflectionParameterTypeKind::Intersection(intersection_type) => {
+            eval_reflection_intersection_type_object_result(intersection_type, values)
+        }
     }
 }
 
@@ -924,6 +933,44 @@ fn eval_reflection_union_type_object_result(
         property_objects,
         parent_class,
         flags,
+        0,
+    )?;
+    values.release(attrs)?;
+    values.release(interface_names)?;
+    values.release(trait_names)?;
+    values.release(method_names)?;
+    values.release(property_names)?;
+    values.release(types)?;
+    values.release(property_objects)?;
+    values.release(parent_class)?;
+    Ok(object)
+}
+
+/// Materializes one ReflectionIntersectionType object through the shared reflection helper.
+fn eval_reflection_intersection_type_object_result(
+    type_metadata: &EvalReflectionIntersectionTypeMetadata,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let attrs = values.array_new(0)?;
+    let interface_names = values.array_new(0)?;
+    let trait_names = values.array_new(0)?;
+    let method_names = values.array_new(0)?;
+    let property_names = values.array_new(0)?;
+    let types = eval_reflection_named_type_object_array_result(&type_metadata.types, values)?;
+    let property_objects = values.array_new(0)?;
+    let parent_class = values.bool_value(false)?;
+    let object = values.reflection_owner_new(
+        EVAL_REFLECTION_OWNER_INTERSECTION_TYPE,
+        "",
+        attrs,
+        interface_names,
+        trait_names,
+        method_names,
+        property_names,
+        types,
+        property_objects,
+        parent_class,
+        0,
         0,
     )?;
     values.release(attrs)?;
@@ -1425,6 +1472,13 @@ fn eval_reflection_parameter_type_metadata(
         named.allows_null = allows_null;
         return Some(EvalReflectionParameterTypeMetadata {
             kind: EvalReflectionParameterTypeKind::Named(named),
+        });
+    }
+    if parameter_type.is_intersection() {
+        return Some(EvalReflectionParameterTypeMetadata {
+            kind: EvalReflectionParameterTypeKind::Intersection(
+                EvalReflectionIntersectionTypeMetadata { types },
+            ),
         });
     }
     Some(EvalReflectionParameterTypeMetadata {

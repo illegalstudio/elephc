@@ -156,6 +156,7 @@ fn fiber_wrapper_label(closure_name: &str) -> String {
 fn descriptor_invoker_placeholder_sig() -> FunctionSig {
     FunctionSig {
         params: Vec::new(),
+        param_type_exprs: Vec::new(),
         defaults: Vec::new(),
         return_type: PhpType::Mixed,
         declared_return: false,
@@ -184,6 +185,7 @@ fn signature_from_closure(closure: &Function, visible_abi_param_count: usize) ->
             .take(visible_abi_param_count)
             .map(|param| (param.name.clone(), param.php_type.clone()))
             .collect(),
+        param_type_exprs: vec![None; visible_abi_param_count],
         defaults: closure
             .params
             .iter()
@@ -228,6 +230,7 @@ fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
     signature.defaults.push(None);
     signature.ref_params.push(false);
     signature.declared_params.push(false);
+    signature.param_type_exprs.push(None);
 }
 
 /// Returns hidden argument types for closure captures stored in descriptor capture slots.

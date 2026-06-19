@@ -199,8 +199,13 @@ pub(super) fn emit_closure(
         .iter()
         .map(|(_, _, default, _)| default.clone())
         .collect();
+    let mut param_type_exprs: Vec<Option<crate::parser::ast::TypeExpr>> = params
+        .iter()
+        .map(|(_, type_ann, _, _)| type_ann.clone())
+        .collect();
     if variadic.is_some() {
         defaults.push(None);
+        param_type_exprs.push(None);
     }
     let mut ref_params: Vec<bool> = params.iter().map(|(_, _, _, is_ref)| *is_ref).collect();
     let mut declared_params: Vec<bool> =
@@ -211,6 +216,7 @@ pub(super) fn emit_closure(
     }
     let preliminary_sig = FunctionSig {
         params: param_types.clone(),
+        param_type_exprs: param_type_exprs.clone(),
         defaults: defaults.clone(),
         return_type: PhpType::Int,
         declared_return: false,
@@ -225,6 +231,7 @@ pub(super) fn emit_closure(
         .unwrap_or_else(|| infer_closure_return_type(body, &preliminary_sig, &capture_types));
     let sig = FunctionSig {
         params: param_types,
+        param_type_exprs,
         defaults,
         return_type: resolved_return_type,
         declared_return: return_type.is_some(),

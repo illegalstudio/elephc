@@ -162,7 +162,13 @@ impl Checker {
                         .cloned()
                         .map(|name| (name, PhpType::Array(Box::new(PhpType::Int)))),
                 )
-            .collect(),
+                .collect(),
+            param_type_exprs: decl
+                .param_types
+                .iter()
+                .cloned()
+                .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
+                .collect(),
             defaults: decl.defaults.clone(),
             return_type: PhpType::Int,
             declared_return: decl.return_type.is_some(),

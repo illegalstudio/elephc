@@ -53,6 +53,7 @@ impl Checker {
                 if let Some(sig) = self.extern_functions.get(function_name) {
                     return Ok(FunctionSig {
                         params: sig.params.clone(),
+                        param_type_exprs: vec![None; sig.params.len()],
                         defaults: vec![None; sig.params.len()],
                         return_type: sig.return_type.clone(),
                         declared_return: true,

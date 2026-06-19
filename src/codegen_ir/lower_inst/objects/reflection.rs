@@ -21,7 +21,7 @@ use crate::codegen_ir::literal_defaults::{
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, Op, TraitMethodInfo, ValueDef, ValueId};
 use crate::names::{enum_case_symbol, php_symbol_key};
-use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Visibility};
+use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
 use crate::types::{AttrArgValue, FunctionSig, InterfaceInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
@@ -84,6 +84,7 @@ struct ReflectionParameterMember {
 enum ReflectionParameterTypeMetadata {
     Named(ReflectionNamedTypeMetadata),
     Union(ReflectionUnionTypeMetadata),
+    Intersection(ReflectionIntersectionTypeMetadata),
 }
 
 /// Metadata for one `ReflectionNamedType` returned by `ReflectionParameter::getType()`.
@@ -99,6 +100,12 @@ struct ReflectionNamedTypeMetadata {
 struct ReflectionUnionTypeMetadata {
     types: Vec<ReflectionNamedTypeMetadata>,
     allows_null: bool,
+}
+
+/// Metadata for one `ReflectionIntersectionType` returned by `ReflectionParameter::getType()`.
+#[derive(Clone)]
+struct ReflectionIntersectionTypeMetadata {
+    types: Vec<ReflectionNamedTypeMetadata>,
 }
 
 /// Compile-time default forms returned by `ReflectionParameter::getDefaultValue()`.
@@ -1621,7 +1628,11 @@ fn reflection_parameter_members(sig: &FunctionSig) -> Vec<ReflectionParameterMem
                 is_variadic,
                 is_passed_by_reference: sig.ref_params.get(index).copied().unwrap_or(false),
                 has_type,
-                type_metadata: reflection_parameter_type_metadata(ty).filter(|_| has_type),
+                type_metadata: reflection_parameter_type_metadata(
+                    sig.param_type_exprs.get(index).and_then(Option::as_ref),
+                    ty,
+                )
+                .filter(|_| has_type),
                 default_value: sig
                     .defaults
                     .get(index)
@@ -1652,7 +1663,13 @@ fn reflection_parameter_default_value(default: &Expr) -> Option<ReflectionParame
 }
 
 /// Converts a normalized parameter type into a supported `ReflectionType` subset.
-fn reflection_parameter_type_metadata(ty: &PhpType) -> Option<ReflectionParameterTypeMetadata> {
+fn reflection_parameter_type_metadata(
+    type_expr: Option<&TypeExpr>,
+    ty: &PhpType,
+) -> Option<ReflectionParameterTypeMetadata> {
+    if let Some(TypeExpr::Intersection(members)) = type_expr {
+        return reflection_intersection_type_metadata(members);
+    }
     match ty {
         PhpType::Union(members) => reflection_union_or_nullable_type_metadata(members),
         _ => reflection_named_type_metadata(ty).map(ReflectionParameterTypeMetadata::Named),
@@ -1711,6 +1728,47 @@ fn reflection_union_or_nullable_type_metadata(
     (!types.is_empty()).then_some(ReflectionParameterTypeMetadata::Union(
         ReflectionUnionTypeMetadata { types, allows_null },
     ))
+}
+
+/// Converts a declared `A&B` type into `ReflectionIntersectionType` metadata.
+fn reflection_intersection_type_metadata(
+    members: &[TypeExpr],
+) -> Option<ReflectionParameterTypeMetadata> {
+    let types = members
+        .iter()
+        .map(reflection_named_type_metadata_from_type_expr)
+        .collect::<Option<Vec<_>>>()?;
+    (!types.is_empty()).then_some(ReflectionParameterTypeMetadata::Intersection(
+        ReflectionIntersectionTypeMetadata { types },
+    ))
+}
+
+/// Converts one declared type atom into `ReflectionNamedType` metadata.
+fn reflection_named_type_metadata_from_type_expr(
+    type_expr: &TypeExpr,
+) -> Option<ReflectionNamedTypeMetadata> {
+    match type_expr {
+        TypeExpr::Int => Some(reflection_builtin_named_type("int", false)),
+        TypeExpr::Float => Some(reflection_builtin_named_type("float", false)),
+        TypeExpr::Bool => Some(reflection_builtin_named_type("bool", false)),
+        TypeExpr::Str => Some(reflection_builtin_named_type("string", false)),
+        TypeExpr::Iterable => Some(reflection_builtin_named_type("iterable", false)),
+        TypeExpr::Array(_) => Some(reflection_builtin_named_type("array", false)),
+        TypeExpr::Named(name) => {
+            let raw_name = name.as_str().trim_start_matches('\\');
+            match raw_name.to_ascii_lowercase().as_str() {
+                "array" | "callable" | "mixed" | "object" => {
+                    Some(reflection_builtin_named_type(raw_name, false))
+                }
+                _ => Some(ReflectionNamedTypeMetadata {
+                    name: raw_name.to_string(),
+                    allows_null: false,
+                    is_builtin: false,
+                }),
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Returns the `__construct` member object metadata when the reflected class-like symbol has one.
@@ -2832,6 +2890,13 @@ fn emit_reflection_parameter_type_property(
                 &PhpType::Object("ReflectionUnionType".to_string()),
             );
         }
+        Some(ReflectionParameterTypeMetadata::Intersection(type_metadata)) => {
+            emit_reflection_intersection_type_object(ctx, type_metadata)?;
+            emit_box_current_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Object("ReflectionIntersectionType".to_string()),
+            );
+        }
         None => emit_boxed_null_literal_to_result(ctx),
     }
     abi::emit_pop_reg(ctx.emitter, object_reg);
@@ -2923,6 +2988,70 @@ fn emit_reflection_union_type_types_property(
             .module
             .class_infos
             .get("ReflectionUnionType")
+            .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+        reflection_property_offset(class_info, "__types")?
+    };
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    emit_reflection_named_type_array(ctx, types)?;
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, types_offset);
+    abi::emit_load_int_immediate(ctx.emitter, abi::secondary_scratch_reg(ctx.emitter), 4);
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::secondary_scratch_reg(ctx.emitter),
+        object_reg,
+        types_offset + 8,
+    );
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    Ok(())
+}
+
+/// Allocates and populates one `ReflectionIntersectionType` object.
+fn emit_reflection_intersection_type_object(
+    ctx: &mut FunctionContext<'_>,
+    type_metadata: &ReflectionIntersectionTypeMetadata,
+) -> Result<()> {
+    let (class_id, property_count, uninitialized_marker_offsets) = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get("ReflectionIntersectionType")
+            .ok_or_else(|| CodegenIrError::unsupported("unknown class ReflectionIntersectionType"))?;
+        (
+            class_info.class_id,
+            class_info.properties.len(),
+            super::uninitialized_property_marker_offsets(class_info),
+        )
+    };
+    super::emit_object_allocation(
+        ctx,
+        class_id,
+        property_count,
+        false,
+        &uninitialized_marker_offsets,
+    )?;
+    emit_reflection_intersection_type_types_property(ctx, &type_metadata.types)?;
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionIntersectionType",
+        "__allows_null",
+        false,
+    )?;
+    Ok(())
+}
+
+/// Writes the `ReflectionIntersectionType::__types` array of `ReflectionNamedType` objects.
+fn emit_reflection_intersection_type_types_property(
+    ctx: &mut FunctionContext<'_>,
+    types: &[ReflectionNamedTypeMetadata],
+) -> Result<()> {
+    let types_offset = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get("ReflectionIntersectionType")
             .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
         reflection_property_offset(class_info, "__types")?
     };

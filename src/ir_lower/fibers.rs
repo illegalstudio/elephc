@@ -194,6 +194,7 @@ fn callback_sig_for_binding(
         StaticCallableBinding::ExternFunction(name) => {
             ctx.extern_functions.get(name.as_str()).map(|sig| FunctionSig {
                 params: sig.params.clone(),
+                param_type_exprs: vec![None; sig.params.len()],
                 defaults: vec![None; sig.params.len()],
                 return_type: sig.return_type.clone(),
                 declared_return: true,
@@ -306,6 +307,10 @@ fn callback_sig_from_closure_params(
                 )
             })
             .collect(),
+        param_type_exprs: params
+            .iter()
+            .map(|(_, type_ann, _, _)| type_ann.clone())
+            .collect(),
         defaults: params
             .iter()
             .map(|(_, _, default, _)| default.clone())
@@ -321,6 +326,7 @@ fn callback_sig_from_closure_params(
         if !sig.params.iter().any(|(name, _)| name == variadic_name) {
             sig.params
                 .push((variadic_name.to_string(), PhpType::Array(Box::new(PhpType::Mixed))));
+            sig.param_type_exprs.push(None);
             sig.defaults.push(None);
             sig.ref_params.push(false);
             sig.declared_params.push(false);
@@ -340,6 +346,7 @@ fn start_sig_from_callback_sig(sig: &FunctionSig) -> Option<FunctionSig> {
             .iter()
             .map(|(name, _)| (name.clone(), PhpType::Mixed))
             .collect(),
+        param_type_exprs: sig.param_type_exprs.clone(),
         defaults: sig.defaults.clone(),
         return_type: PhpType::Mixed,
         declared_return: false,
