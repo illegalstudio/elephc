@@ -524,7 +524,9 @@ fn seed_builtin_reflection_class_names(module: &Module, names: &mut HashSet<Stri
         "ReflectionClassConstant",
         "ReflectionEnumBackedCase",
         "ReflectionEnumUnitCase",
+        "ReflectionFunction",
         "ReflectionMethod",
+        "ReflectionParameter",
         "ReflectionProperty",
     ] {
         if module.class_infos.contains_key(class_name) {

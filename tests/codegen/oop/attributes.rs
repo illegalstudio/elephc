@@ -1692,6 +1692,40 @@ echo ($named->hasType() ? "T" : "t");
     assert_eq!(out.stdout, "name#1tRBv|rest#3TObV|id#0T");
 }
 
+/// Verifies `ReflectionFunction` exposes user-function name and parameter metadata.
+#[test]
+fn test_reflection_function_reflects_user_function_parameters() {
+    let out = compile_and_run_capture(
+        r##"<?php
+function reflect_function_target(int $id, &$name, string $mode = "x", string ...$rest) {}
+$ref = new ReflectionFunction("REFLECT_FUNCTION_TARGET");
+echo $ref->getName() . "#";
+echo $ref->getNumberOfParameters() . "#";
+echo $ref->getNumberOfRequiredParameters() . ":";
+$params = $ref->getParameters();
+foreach ($params as $param) {
+    echo $param->getName() . "#" . $param->getPosition();
+    echo ($param->hasType() ? "T" : "t");
+    echo ($param->isOptional() ? "O" : "R");
+    echo ($param->isPassedByReference() ? "B" : "b");
+    echo ($param->isVariadic() ? "V" : "v");
+    echo "|";
+}
+$named = new ReflectionFunction(function: "\\reflect_function_target");
+echo ":" . $named->getName();
+"##,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "reflect_function_target#4#2:id#0TRbv|name#1tRBv|mode#2TObv|rest#3TObV|:reflect_function_target"
+    );
+}
+
 /// Verifies that ReflectionMethod objects returned from `ReflectionClass::getMethods()`
 /// carry the same parameter metadata as directly constructed method reflectors.
 #[test]
