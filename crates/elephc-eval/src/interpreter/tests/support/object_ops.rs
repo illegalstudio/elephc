@@ -524,6 +524,7 @@ impl FakeOps {
                 | EVAL_REFLECTION_OWNER_CLASS_CONSTANT
                 | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE
                 | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
+                | EVAL_REFLECTION_OWNER_PARAMETER
         ) {
             properties.push(("__declaring_class".to_string(), parent_class));
         }

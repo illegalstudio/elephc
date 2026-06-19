@@ -1964,6 +1964,37 @@ echo ($traitParams[2]->hasType() ? "T" : "t");
     );
 }
 
+/// Verifies `ReflectionParameter::getDeclaringClass()` reports method owners and null for functions.
+#[test]
+fn test_reflection_parameter_get_declaring_class_reports_method_owner() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function reflect_declaring_function($value) {}
+class ReflectDeclaringParamBase {
+    public function inherited(int $base) {}
+}
+class ReflectDeclaringParamChild extends ReflectDeclaringParamBase {
+    public function own(string $child) {}
+}
+$inherited = new ReflectionParameter([ReflectDeclaringParamChild::class, "inherited"], "base");
+echo $inherited->getDeclaringClass()->getName() . ":";
+$listed = (new ReflectionMethod(ReflectDeclaringParamChild::class, "own"))->getParameters()[0];
+echo $listed->getDeclaringClass()->getName() . ":";
+$function = new ReflectionParameter("reflect_declaring_function", "value");
+echo is_null($function->getDeclaringClass()) ? "null" : "bad";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "ReflectDeclaringParamBase:ReflectDeclaringParamChild:null"
+    );
+}
+
 /// Verifies that `ReflectionParameter::getType()` returns named, union, and intersection metadata.
 #[test]
 fn test_reflection_parameter_get_type_returns_named_type_metadata() {

@@ -6506,6 +6506,31 @@ foreach ($params as $param) {
     );
 }
 
+/// Verifies eval ReflectionParameter exposes the declaring class for method parameters.
+#[test]
+fn test_eval_reflection_parameter_reports_declaring_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalDeclaringParamBase {
+    public function inherited($base) {}
+}
+class EvalDeclaringParamChild extends EvalDeclaringParamBase {
+    public function own($child) {}
+}
+$inherited = (new ReflectionMethod("EvalDeclaringParamChild", "inherited"))->getParameters()[0];
+echo $inherited->getDeclaringClass()->getName() . ":";
+$listed = (new ReflectionMethod("EvalDeclaringParamChild", "own"))->getParameters()[0];
+echo $listed->getDeclaringClass()->getName();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "EvalDeclaringParamBase:EvalDeclaringParamChild");
+}
+
 /// Verifies eval ReflectionClass::newInstance constructs eval-declared classes.
 #[test]
 fn test_eval_reflection_class_new_instance_constructs_eval_class() {
