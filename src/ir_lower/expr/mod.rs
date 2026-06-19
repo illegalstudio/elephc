@@ -8150,6 +8150,20 @@ fn lower_new_object(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionclass" {
+        if let Some(operands) = lower_reflection_class_constructor_operands(ctx, args) {
+            let php_type = PhpType::Object(class_name.as_str().to_string());
+            let data = ctx.intern_class_name(class_name.as_str());
+            return ctx.emit_value(
+                Op::ObjectNew,
+                operands,
+                Some(Immediate::Data(data)),
+                php_type,
+                Op::ObjectNew.default_effects(),
+                Some(expr.span),
+            );
+        }
+    }
     if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionparameter" {
         if let Some(operands) = lower_reflection_parameter_constructor_operands(ctx, args) {
             let php_type = PhpType::Object(class_name.as_str().to_string());
@@ -8178,12 +8192,31 @@ fn lower_new_object(
     )
 }
 
-/// Lowers PHP `clone $object` to a shallow object-copy opcode and optional `__clone()` hook.
-fn lower_clone(
+/// Lowers `ReflectionClass(object)` to the object's statically-known class name.
+fn lower_reflection_class_constructor_operands(
     ctx: &mut LoweringContext<'_, '_>,
-    inner: &Expr,
-    expr: &Expr,
-) -> LoweredValue {
+    args: &[Expr],
+) -> Option<Vec<ValueId>> {
+    let reflected_arg = reflection_class_constructor_class_arg(ctx, args)?;
+    let class_name = instance_callable_object_class(ctx, &reflected_arg)?;
+    let lowered = lower_expr(ctx, &reflected_arg);
+    if ctx.value_is_owning_temporary(lowered) {
+        crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(reflected_arg.span));
+    }
+    let data = ctx.intern_class_name(&class_name);
+    let value = ctx.emit_value(
+        Op::ConstClassName,
+        Vec::new(),
+        Some(Immediate::Data(data)),
+        PhpType::Str,
+        Op::ConstClassName.default_effects(),
+        Some(reflected_arg.span),
+    );
+    Some(vec![value.value])
+}
+
+/// Lowers PHP `clone $object` to a shallow object-copy opcode and optional `__clone()` hook.
+fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let object = lower_expr(ctx, inner);
     let object_ty = ctx.builder.value_php_type(object.value);
     let Some((class_name, false)) = singular_object_class(&object_ty) else {

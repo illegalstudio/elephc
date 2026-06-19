@@ -6255,6 +6255,30 @@ echo (new ReflectionClass("EvalInstEnum"))->isInstantiable() ? "E" : "e";');
     assert_eq!(out.stdout, "aBCprite");
 }
 
+/// Verifies eval ReflectionClass reports named eval class-like symbols as non-anonymous through
+/// the generated reflection-owner bridge.
+#[test]
+fn test_eval_reflection_class_anonymous_predicate() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalAnonReflect {}
+interface EvalAnonIface {}
+trait EvalAnonTrait {}
+enum EvalAnonEnum { case Ready; }
+echo (new ReflectionClass("EvalAnonReflect"))->isAnonymous() ? "C" : "c";
+echo (new ReflectionClass("EvalAnonIface"))->isAnonymous() ? "I" : "i";
+echo (new ReflectionClass("EvalAnonTrait"))->isAnonymous() ? "T" : "t";
+echo (new ReflectionClass("EvalAnonEnum"))->isAnonymous() ? "E" : "e";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "cite");
+}
+
 /// Verifies eval ReflectionClass reports method, property, and constant membership through the bridge.
 #[test]
 fn test_eval_reflection_class_member_existence() {
