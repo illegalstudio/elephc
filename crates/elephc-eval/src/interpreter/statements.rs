@@ -1987,7 +1987,18 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
         if !method.is_static() || method.is_abstract() {
             return Err(EvalStatus::RuntimeFatal);
         }
-        validate_eval_member_access(&declaring_class, method.visibility(), context)?;
+        if validate_eval_member_access(&declaring_class, method.visibility(), context).is_err() {
+            if let Some(result) = eval_magic_static_method_call(
+                &class_name,
+                method_name,
+                evaluated_args,
+                context,
+                values,
+            )? {
+                return Ok(result);
+            }
+            return Err(EvalStatus::RuntimeFatal);
+        }
         return eval_dynamic_static_method_with_values(
             &declaring_class,
             &class_name,
@@ -2002,6 +2013,15 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
         || context.has_trait(&class_name)
         || context.has_enum(&class_name)
     {
+        if let Some(result) = eval_magic_static_method_call(
+            &class_name,
+            method_name,
+            evaluated_args,
+            context,
+            values,
+        )? {
+            return Ok(result);
+        }
         return Err(EvalStatus::RuntimeFatal);
     }
     let args = bind_native_callable_args(
@@ -2586,22 +2606,139 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         return values.method_call(object, method_name, evaluated_args);
     };
     let called_class_name = class.name().to_string();
-    let (class_name, method) =
+    if let Some((class_name, method)) =
         eval_dynamic_method_for_call(&called_class_name, method_name, context)
-            .ok_or(EvalStatus::RuntimeFatal)?;
-    validate_eval_member_access(&class_name, method.visibility(), context)?;
-    if method.is_static() || method.is_abstract() {
-        return Err(EvalStatus::RuntimeFatal);
+    {
+        if method.is_abstract() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if validate_eval_member_access(&class_name, method.visibility(), context).is_ok() {
+            if method.is_static() {
+                return eval_dynamic_static_method_with_values(
+                    &class_name,
+                    &called_class_name,
+                    &method,
+                    evaluated_args,
+                    context,
+                    values,
+                );
+            }
+            return eval_dynamic_method_with_values(
+                &class_name,
+                &called_class_name,
+                &method,
+                object,
+                evaluated_args,
+                context,
+                values,
+            );
+        }
     }
-    eval_dynamic_method_with_values(
-        &class_name,
-        &called_class_name,
-        &method,
+    if let Some(result) = eval_magic_instance_method_call(
         object,
+        &called_class_name,
+        method_name,
         evaluated_args,
         context,
         values,
+    )? {
+        return Ok(result);
+    }
+    Err(EvalStatus::RuntimeFatal)
+}
+
+/// Dispatches a missing or inaccessible eval instance method through `__call()`.
+fn eval_magic_instance_method_call(
+    object: RuntimeCellHandle,
+    called_class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some((declaring_class, method)) = context.class_method(called_class_name, "__call") else {
+        return Ok(None);
+    };
+    if method.is_static() || method.is_abstract() {
+        return Ok(None);
+    }
+    validate_eval_member_access(&declaring_class, method.visibility(), context)?;
+    let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
+    eval_dynamic_method_with_values(
+        &declaring_class,
+        called_class_name,
+        &method,
+        object,
+        magic_args,
+        context,
+        values,
     )
+    .map(Some)
+}
+
+/// Dispatches a missing or inaccessible eval static method through `__callStatic()`.
+fn eval_magic_static_method_call(
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some((declaring_class, method)) = context.class_method(class_name, "__callStatic") else {
+        return Ok(None);
+    };
+    if !method.is_static() || method.is_abstract() {
+        return Ok(None);
+    }
+    validate_eval_member_access(&declaring_class, method.visibility(), context)?;
+    let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
+    eval_dynamic_static_method_with_values(
+        &declaring_class,
+        class_name,
+        &method,
+        magic_args,
+        context,
+        values,
+    )
+    .map(Some)
+}
+
+/// Builds the two synthetic arguments passed to `__call()` and `__callStatic()`.
+fn eval_magic_call_args(
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+    let method = values.string(method_name)?;
+    let args = eval_magic_call_arg_array(evaluated_args, values)?;
+    Ok(positional_args(vec![method, args]))
+}
+
+/// Materializes PHP's `$args` array for a magic method fallback.
+fn eval_magic_call_arg_array(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let contains_named = evaluated_args.iter().any(|arg| arg.name.is_some());
+    let mut args = if contains_named {
+        values.assoc_new(evaluated_args.len())?
+    } else {
+        values.array_new(evaluated_args.len())?
+    };
+    let mut next_positional = 0_i64;
+    for arg in evaluated_args {
+        let key = if let Some(name) = arg.name {
+            values.string(&name)?
+        } else {
+            let key = values.int(next_positional)?;
+            next_positional = next_positional
+                .checked_add(1)
+                .ok_or(EvalStatus::RuntimeFatal)?;
+            key
+        };
+        args = values.array_set(args, key, arg.value)?;
+    }
+    Ok(args)
 }
 
 /// Returns the runtime-visible class name for a non-eval object receiver.

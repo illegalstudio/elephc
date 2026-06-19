@@ -75,7 +75,7 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, invokable eval objects, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
 | Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; anonymous `new class [(args)] [extends Parent] [implements Iface, ...] { ... }` expressions; `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, and string-keyed named unpacking for supported public scalar/Mixed constructor signatures. |
 | Object cloning | `clone $object` shallow-copies eval-declared objects and `stdClass` storage. Eval-declared `__clone()` hooks run after the copy and obey public/protected/private visibility. |
-| Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, and by-reference parameters for direct variable, array-element, and object-property arguments. Runtime/AOT object-method and static-method fallback supports the same argument binding for supported public scalar/Mixed method signatures. |
+| Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, and by-reference parameters for direct variable, array-element, and object-property arguments. Missing or inaccessible eval methods dispatch through `__call()` / `__callStatic()` when those hooks are available. Runtime/AOT object-method and static-method fallback supports the same argument binding for supported public scalar/Mixed method signatures. |
 | Includes | `include`, `include_once`, `require`, and `require_once` are expressions. |
 | Magic constants | `__LINE__`, call-site `__FILE__` / `__DIR__`, empty eval-scope `__CLASS__` / `__TRAIT__`, namespace-aware `__NAMESPACE__`, and eval-declared-function `__FUNCTION__` / `__METHOD__`. |
 | Constants | Predefined eval-visible constants, dynamic constants from `define()`, namespaced constant fallback, and bare constant fetches are supported. |
@@ -145,7 +145,8 @@ properties, trait composition with `insteadof` conflict resolution and `as`
 aliases/visibility adaptations, interface implementation checks, static
 properties, static methods, static interface method contracts, class, interface,
 trait, and enum constants including `final` constants, class-level attributes,
-and `ClassName::class` literals. Member
+`ClassName::class` literals, and magic method fallback through `__call()` and
+`__callStatic()`. Member
 visibility is checked at runtime for eval-declared objects and
 static/class-constant accesses. Class-level attributes declared on eval classes,
 interfaces, traits, and enums are visible through `class_attribute_names()`,

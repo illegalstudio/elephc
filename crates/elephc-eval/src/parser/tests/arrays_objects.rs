@@ -130,7 +130,7 @@ fn parse_fragment_accepts_method_call_source() {
         program.statements(),
         &[EvalStmt::Return(Some(EvalExpr::MethodCall {
             object: Box::new(EvalExpr::LoadVar("this".to_string())),
-            method: "answer".to_string(),
+            method: "Answer".to_string(),
             args: Vec::new(),
         }))]
     );
