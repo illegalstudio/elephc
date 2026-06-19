@@ -401,6 +401,7 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         | ExprKind::NewDynamic { .. }
         | ExprKind::NewDynamicObject { .. }
         | ExprKind::NewScopedObject { .. }
+        | ExprKind::Clone(_)
         | ExprKind::MethodCall { .. }
         | ExprKind::NullsafeMethodCall { .. }
         | ExprKind::NullsafeDynamicMethodCall { .. }

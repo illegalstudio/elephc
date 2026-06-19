@@ -497,6 +497,7 @@ impl<'a> FunctionContext<'a> {
                 | Op::HashArrayUnion
                 | Op::ArrayToHash
                 | Op::ObjectNew
+                | Op::ObjectCloneShallow
                 | Op::DynamicObjectNew
                 | Op::DynamicObjectNewMixed
                 | Op::ClosureNew

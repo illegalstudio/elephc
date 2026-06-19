@@ -65,6 +65,9 @@ fn rewrite_expr(
         ExprKind::Throw(inner) => {
             ExprKind::Throw(Box::new(rewrite_expr(inner, class_name, parent_name)?))
         }
+        ExprKind::Clone(inner) => {
+            ExprKind::Clone(Box::new(rewrite_expr(inner, class_name, parent_name)?))
+        }
         ExprKind::ErrorSuppress(inner) => ExprKind::ErrorSuppress(Box::new(rewrite_expr(
             inner,
             class_name,

@@ -124,6 +124,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::ExprCall { callee, args } => lower_expr_call(ctx, callee, args, expr),
         ExprKind::ConstRef(name) => constants::lower_const_ref(ctx, name, expr),
         ExprKind::NewObject { class_name, args } => lower_new_object(ctx, class_name, args, expr),
+        ExprKind::Clone(inner) => lower_clone(ctx, inner, expr),
         ExprKind::NewDynamic { name_expr, args } => lower_new_dynamic(ctx, name_expr, args, expr),
         ExprKind::NewDynamicObject {
             class_name,
@@ -721,6 +722,7 @@ fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::NewDynamic { .. }
         | ExprKind::NewDynamicObject { .. }
         | ExprKind::NewScopedObject { .. }
+        | ExprKind::Clone(_)
         | ExprKind::Pipe { .. }
         | ExprKind::Yield { .. }
         | ExprKind::YieldFrom(_) => true,
@@ -7453,6 +7455,7 @@ fn expr_contains_eval_call(expr: &Expr) -> bool {
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)
+        | ExprKind::Clone(expr)
         | ExprKind::ErrorSuppress(expr)
         | ExprKind::Print(expr)
         | ExprKind::Spread(expr)
@@ -8168,6 +8171,34 @@ fn lower_new_object(
         Op::ObjectNew.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Lowers PHP `clone $object` to a shallow object-copy opcode and optional `__clone()` hook.
+fn lower_clone(
+    ctx: &mut LoweringContext<'_, '_>,
+    inner: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let object = lower_expr(ctx, inner);
+    let object_ty = ctx.builder.value_php_type(object.value);
+    let Some((class_name, false)) = singular_object_class(&object_ty) else {
+        unreachable!("clone expressions must be type-checked as non-null objects before lowering");
+    };
+    let class_name = class_name.to_string();
+    let data = ctx.intern_class_name(&class_name);
+    let result_ty = PhpType::Object(class_name.clone());
+    let cloned = ctx.emit_value(
+        Op::ObjectCloneShallow,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        result_ty,
+        Op::ObjectCloneShallow.default_effects(),
+        Some(expr.span),
+    );
+    if class_method_signature(ctx, &class_name, &php_symbol_key("__clone")).is_some() {
+        lower_method_call_with_receiver(ctx, cloned, "__clone", &[], Op::MethodCall, expr);
+    }
+    cloned
 }
 
 /// Metadata operand source for direct `ReflectionParameter` constructor lowering.

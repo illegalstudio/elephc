@@ -182,6 +182,7 @@ pub(in crate::lexer) fn scan_keyword(cursor: &mut Cursor) -> Result<Token, Compi
         "class" => Ok(Token::Class),
         "enum" => Ok(Token::Enum),
         "new" => Ok(Token::New),
+        "clone" => Ok(Token::Clone),
         "public" => Ok(Token::Public),
         "protected" => Ok(Token::Protected),
         "private" => Ok(Token::Private),

@@ -221,6 +221,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::Spread(inner) => expr_effect(inner),
         ExprKind::Print(inner) => expr_effect(inner).with_side_effects(),
+        ExprKind::Clone(inner) => expr_effect(inner)
+            .with_side_effects()
+            .with_may_throw(),
         ExprKind::BinaryOp { left, right, .. } => expr_effect(left).combine(expr_effect(right)),
         ExprKind::InstanceOf { value, target } => {
             expr_effect(value).combine(instanceof_target_effect(target))

@@ -153,6 +153,7 @@ pub enum ExprKind {
         required_parent: Name,
         args: Vec<Expr>,
     },
+    Clone(Box<Expr>),
     PropertyAccess {
         object: Box<Expr>,
         property: String,

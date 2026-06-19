@@ -766,6 +766,7 @@ echo sqlSortKeyword(SortDirection::Descending); // DESC
 ## Magic methods
 - `__construct(...)` — runs at instantiation
 - `__destruct()` — runs when the object is released (see below)
+- `__clone()` — runs after `clone $object` creates the shallow copy
 - `__toString()` — string coercion
 - `__get($name)` — reading undefined property
 - `__set($name, $value)` — writing undefined property
@@ -774,6 +775,48 @@ echo sqlSortKeyword(SortDirection::Descending); // DESC
 - `__invoke(...$args)` — calling an object directly
 - `__call($name, $args)` — intercepting missing instance methods
 - `__callStatic($name, $args)` — intercepting missing static methods
+
+## Object cloning (`clone`)
+
+`clone $object` creates a shallow copy of a user object or `stdClass` instance:
+declared property slots are copied into a new object, dynamic properties are
+copied into a separate hash table, and object-valued properties still point at
+the same nested object just like PHP.
+
+```php
+<?php
+class Child {
+    public int $x = 1;
+}
+
+class Boxed {
+    public Child $child;
+    public function __construct() {
+        $this->child = new Child();
+    }
+    public function __clone(): void {
+        // Runs on the copy after the shallow copy has been created.
+        $this->child->x = $this->child->x + 1;
+    }
+}
+
+$a = new Boxed();
+$b = clone $a;
+```
+
+`__clone` must be non-static, take no arguments, and if it declares a return
+type the return type must be `void`. PHP permits any visibility for `__clone`;
+elephc checks that the `clone` expression is allowed to access the hook from the
+current scope. A private `__clone` can therefore be used from inside the
+declaring class, while cloning that object from unrelated global code is
+rejected.
+
+Runtime-managed built-in objects whose storage is not represented as ordinary
+declared properties are not cloneable yet. This includes `Fiber`, `Generator`,
+Reflection objects, and SPL containers/iterators with native storage such as
+`SplFixedArray`, `SplDoublyLinkedList`, `SplStack`, `SplQueue`,
+`IteratorIterator`, `CallbackFilterIterator`, and
+`RecursiveCallbackFilterIterator`.
 
 ## Destructors (`__destruct`)
 

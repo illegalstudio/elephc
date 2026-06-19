@@ -69,6 +69,7 @@ pub(super) fn discover_expr(
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
+        | ExprKind::Clone(value)
         | ExprKind::ErrorSuppress(value)
         | ExprKind::Print(value)
         | ExprKind::Spread(value)

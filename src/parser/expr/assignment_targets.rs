@@ -344,6 +344,7 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
+        | ExprKind::Clone(value)
         | ExprKind::ErrorSuppress(value)
         | ExprKind::Print(value)
         | ExprKind::Cast { expr: value, .. }
@@ -476,6 +477,7 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
+        | ExprKind::Clone(value)
         | ExprKind::ErrorSuppress(value)
         | ExprKind::Print(value)
         | ExprKind::Cast { expr: value, .. }
@@ -686,6 +688,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
+        | ExprKind::Clone(value)
         | ExprKind::ErrorSuppress(value)
         | ExprKind::Print(value)
         | ExprKind::Cast { expr: value, .. }

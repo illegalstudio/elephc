@@ -144,6 +144,7 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
+        | ExprKind::Clone(value)
         | ExprKind::ErrorSuppress(value)
         | ExprKind::Print(value)
         | ExprKind::Spread(value)

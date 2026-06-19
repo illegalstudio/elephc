@@ -269,6 +269,9 @@ pub fn emit_expr(
             ctx,
             data,
         ),
+        ExprKind::Clone(_) => {
+            unreachable!("clone expressions are supported only by the active EIR backend")
+        }
         ExprKind::PropertyAccess { object, property } => {
             objects::emit_property_access(object, property, emitter, ctx, data)
         }

@@ -70,7 +70,7 @@ pub(crate) fn patch_magic_method_signatures(checker: &mut Checker) {
     }
 }
 
-/// Validates that user-declared magic methods (`__toString`, `__get`, `__set`, `__isset`, `__unset`, `__call`, `__callStatic`, `__invoke`)
+/// Validates that user-declared magic methods (`__toString`, `__get`, `__set`, `__isset`, `__unset`, `__call`, `__callStatic`, `__invoke`, `__clone`)
 /// conform to PHP's static/non-static, visibility, arity, and return-type rules.
 ///
 /// Returns `Ok(())` if all declared magic methods are contract-compliant.
@@ -292,6 +292,32 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         errors.push(CompileError::new(
                             method.span,
                             &format!("Magic method must be public: {}::__invoke", class_name),
+                        ));
+                    }
+                }
+                "__clone" => {
+                    if method.is_static {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Magic method must be non-static: {}::__clone", class_name),
+                        ));
+                        continue;
+                    }
+                    if !method.params.is_empty() || method.variadic.is_some() {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Magic method must take 0 arguments: {}::__clone", class_name),
+                        ));
+                        continue;
+                    }
+                    if method
+                        .return_type
+                        .as_ref()
+                        .is_some_and(|return_type| !matches!(return_type, TypeExpr::Void))
+                    {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Magic method must return void: {}::__clone", class_name),
                         ));
                     }
                 }
