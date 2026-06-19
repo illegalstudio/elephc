@@ -13,6 +13,7 @@
 //!   builds.
 
 mod allocation;
+mod branch_simplify;
 mod cfg;
 mod clobber;
 mod dead_inst;

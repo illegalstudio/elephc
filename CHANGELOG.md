@@ -5,6 +5,7 @@ Releases are listed newest first.
 
 ## [Unreleased]
 - EIR dead store elimination over PHP local slots: a CFG-liveness pass that drops `store_local` writes to scalar locals that are never read before being overwritten or the function exits, gated by `--ir-opt`. Refcounted and by-reference-aliased slots are left untouched to preserve ownership and aliasing semantics.
+- EIR branch simplification: folds constant-condition `cond_br`/`switch` terminators to unconditional branches (e.g. `while (true)` loops), threads predecessors through empty forwarding blocks, and neutralizes unreachable blocks, gated by `--ir-opt`.
 
 ## [0.25.0] - 2026-06-19
 - EIR dead instruction elimination over CFG liveness, registered after identity and peephole passes and gated by `--ir-opt`.

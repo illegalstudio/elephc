@@ -1009,6 +1009,39 @@ liveness-based and crosses block boundaries, so it removes a store of a
 `nop`; a pure value left feeding a removed store is then cleaned up by dead
 instruction elimination on a later driver sweep.
 
+### Branch Simplification
+
+The fifth registered transform (`src/ir_passes/branch_simplify.rs`) prunes the
+CFG in three ways:
+
+- **Constant-condition folding** — a `cond_br` whose condition resolves to a
+  constant (`const_bool`, `const_i64` via PHP truthiness, or `const_null`) becomes
+  an unconditional `br` to the taken edge. A `switch` on a `const_i64`/`const_bool`
+  scrutinee folds to a `br` to the matching case (or the default). A `while (true)`
+  loop, for example, lowers to a constant `cond_br` that this fold collapses.
+- **Empty-block jump threading** — a non-entry block with no parameters and only
+  `nop` instructions that ends in an unconditional `br` is a forwarding block.
+  Edges targeting it are redirected to the end of the forwarding chain (with cycle
+  detection). Because forwarding blocks have no parameters, every edge into them
+  carries empty arguments, so retargeting needs no argument rewriting.
+- **Unreachable-block neutralization** — blocks no longer reachable from the entry
+  have their terminator set to `Unreachable` and their instructions rewritten to
+  `nop`.
+
+Like the other passes, unreachable blocks are neutralized **in place** rather than
+physically removed. The validator requires `block.id == index` and reports any
+*use* in an unreachable block as `UseNotDominated` (an unreachable block's
+dominator set collapses to itself). Neutralizing clears every use — terminator
+and instruction operands — so the block stays valid, while the block, value, and
+instruction table slots keep their indices. This avoids renumbering and, crucially,
+keeps `try` handler block-id tokens (encoded in `try_push_handler` immediates)
+correct. Functions that use any exception-handling opcode are skipped wholesale,
+because their handler blocks are reachable through implicit edges absent from the
+terminator graph, so terminator-only reachability could wrongly neutralize a live
+handler. Removing edges only enlarges dominator sets and threaded forwarding blocks
+carry no definitions, so simplification never invalidates a use that was valid
+before; cross-block cascades converge through the fixed-point driver.
+
 ## AST Lowering Catalogue
 
 Lowering must cover every variant in `src/parser/ast/expr.rs` and
