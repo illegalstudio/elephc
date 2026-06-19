@@ -2763,11 +2763,20 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("newInstance")) {
                     sig.return_type = PhpType::Mixed;
                     sig.variadic = Some("args".to_string());
-                    if !sig.params.iter().any(|(name, _)| name == "args") {
+                    let variadic_default = Some(Expr::new(
+                        ExprKind::ArrayLiteral(Vec::new()),
+                        crate::span::Span::dummy(),
+                    ));
+                    if let Some(index) = sig.params.iter().position(|(name, _)| name == "args") {
+                        while sig.defaults.len() <= index {
+                            sig.defaults.push(None);
+                        }
+                        sig.defaults[index] = variadic_default;
+                    } else {
                         sig.params
                             .push(("args".to_string(), PhpType::Array(Box::new(PhpType::Mixed))));
                         sig.param_type_exprs.push(None);
-                        sig.defaults.push(None);
+                        sig.defaults.push(variadic_default);
                         sig.ref_params.push(false);
                         sig.declared_params.push(false);
                     }
