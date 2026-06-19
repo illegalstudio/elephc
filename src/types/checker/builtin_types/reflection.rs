@@ -528,6 +528,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 empty_array(),
             ),
             builtin_property(
+                "__parent_names",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
                 "__method_names",
                 Visibility::Private,
                 Some(string_array_type()),
@@ -623,6 +629,7 @@ fn builtin_reflection_class() -> FlattenedClass {
             ),
             builtin_reflection_class_get_reflection_constant_method(),
             builtin_reflection_class_implements_interface_method(),
+            builtin_reflection_class_is_subclass_of_method(),
             builtin_reflection_class_array_method(
                 "getMethods",
                 "__methods",
@@ -1039,6 +1046,153 @@ fn builtin_reflection_class_implements_interface_method() -> ClassMethod {
                     then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
                     elseif_clauses: Vec::new(),
                     else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(false_bool()), dummy_span),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionClass::isSubclassOf()` backed by parent and interface metadata.
+fn builtin_reflection_class_is_subclass_of_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let class_var = variable_expr("class", dummy_span);
+    let target_var = variable_expr("target", dummy_span);
+    let parent_name_var = variable_expr("parentName", dummy_span);
+    let interface_name_var = variable_expr("interfaceName", dummy_span);
+    let target_missing = binary_expr(
+        binary_expr(
+            Expr::new(
+                ExprKind::Not(Box::new(function_call(
+                    "class_exists",
+                    vec![class_var.clone()],
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+            BinOp::And,
+            Expr::new(
+                ExprKind::Not(Box::new(function_call(
+                    "interface_exists",
+                    vec![class_var.clone()],
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+            dummy_span,
+        ),
+        BinOp::And,
+        binary_expr(
+            Expr::new(
+                ExprKind::Not(Box::new(function_call(
+                    "trait_exists",
+                    vec![class_var.clone()],
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+            BinOp::And,
+            Expr::new(
+                ExprKind::Not(Box::new(function_call(
+                    "enum_exists",
+                    vec![class_var.clone()],
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+            dummy_span,
+        ),
+        dummy_span,
+    );
+    let missing_target_check = Stmt::new(
+        StmtKind::If {
+            condition: target_missing,
+            then_body: vec![throw_new_reflection_exception(
+                concat_expr(
+                    concat_expr(
+                        string_lit("Class \"", dummy_span),
+                        class_var.clone(),
+                        dummy_span,
+                    ),
+                    string_lit("\" does not exist", dummy_span),
+                    dummy_span,
+                ),
+                dummy_span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        dummy_span,
+    );
+    let parent_matches = binary_expr(
+        strtolower_call(parent_name_var, dummy_span),
+        BinOp::Eq,
+        target_var.clone(),
+        dummy_span,
+    );
+    let interface_matches = binary_expr(
+        strtolower_call(interface_name_var, dummy_span),
+        BinOp::Eq,
+        target_var.clone(),
+        dummy_span,
+    );
+    ClassMethod {
+        name: "isSubclassOf".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("class".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        body: vec![
+            missing_target_check,
+            Stmt::new(
+                StmtKind::Assign {
+                    name: "target".to_string(),
+                    value: strtolower_call(class_var, dummy_span),
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: reflection_this_property("__parent_names", dummy_span),
+                    key_var: None,
+                    value_var: "parentName".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: parent_matches,
+                            then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: reflection_this_property("__interface_names", dummy_span),
+                    key_var: None,
+                    value_var: "interfaceName".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: interface_matches,
+                            then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        dummy_span,
+                    )],
                 },
                 dummy_span,
             ),
@@ -2259,6 +2413,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "hasmethod",
                     "hasproperty",
                     "implementsinterface",
+                    "issubclassof",
                 ] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;

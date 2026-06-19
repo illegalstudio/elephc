@@ -199,6 +199,48 @@ pub(in crate::interpreter) fn eval_reflection_class_implements_interface_result(
         .map(Some)
 }
 
+/// Handles eval-backed `ReflectionClass::isSubclassOf()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_is_subclass_of_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("isSubclassOf") {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let args = bind_evaluated_function_args(&[String::from("class")], evaluated_args)?;
+    let target_name = eval_reflection_string_arg(args[0], values)?;
+    if !eval_reflection_class_like_exists(&target_name, context)
+        && !values.class_exists(&target_name)?
+        && !values.interface_exists(&target_name)?
+        && !values.trait_exists(&target_name)?
+        && !values.enum_exists(&target_name)?
+    {
+        return eval_throw_reflection_exception(
+            &format!("Class \"{}\" does not exist", target_name),
+            context,
+            values,
+        );
+    }
+    let result = if eval_reflection_class_like_exists(&reflected_name, context) {
+        eval_reflection_class_is_subclass_of_name(&reflected_name, &target_name, context)
+    } else {
+        let reflected_class = values.string(&reflected_name)?;
+        let result = values.object_is_a(reflected_class, &target_name, true)?;
+        values.release(reflected_class)?;
+        result
+    };
+    values.bool_value(result).map(Some)
+}
+
 /// Handles eval-backed `ReflectionClass::hasConstant()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_has_constant_result(
     identity: u64,
@@ -501,7 +543,44 @@ fn eval_reflection_class_new(
     let args = bind_evaluated_function_args(&[String::from("class_name")], evaluated_args)?;
     let class_name = eval_reflection_string_arg(args[0], values)?;
     let Some(metadata) = eval_reflection_class_like_attributes(&class_name, context) else {
-        return Ok(None);
+        let is_class = values.class_exists(&class_name)?;
+        let is_interface = values.interface_exists(&class_name)?;
+        let is_trait = values.trait_exists(&class_name)?;
+        let is_enum = values.enum_exists(&class_name)?;
+        if !(is_class || is_interface || is_trait || is_enum) {
+            return Ok(None);
+        }
+        let mut flags = 0;
+        if is_interface {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_INTERFACE;
+        }
+        if is_trait {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_TRAIT;
+        }
+        if is_enum {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_FINAL | EVAL_REFLECTION_CLASS_FLAG_ENUM;
+        }
+        return eval_reflection_owner_object(
+            EVAL_REFLECTION_OWNER_CLASS,
+            class_name.trim_start_matches('\\'),
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            None,
+            &[],
+            None,
+            None,
+            flags,
+            if is_enum { 32 } else { 0 },
+            0,
+            None,
+            None,
+            context,
+            values,
+        )
+        .map(Some);
     };
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS,
@@ -1669,6 +1748,24 @@ fn eval_reflection_class_implements_interface_name(
             .class_interface_names(reflected_name)
             .iter()
             .any(|interface| eval_reflection_same_class_like_name(interface, interface_name));
+    }
+    false
+}
+
+/// Returns true when reflected eval metadata is a subclass or subinterface of a target.
+fn eval_reflection_class_is_subclass_of_name(
+    reflected_name: &str,
+    target_name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    if context.has_interface(reflected_name) {
+        return context
+            .interface_parent_names(reflected_name)
+            .iter()
+            .any(|parent| eval_reflection_same_class_like_name(parent, target_name));
+    }
+    if context.has_class(reflected_name) || context.has_enum(reflected_name) {
+        return context.class_is_a(reflected_name, target_name, true);
     }
     false
 }

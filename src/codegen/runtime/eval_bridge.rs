@@ -183,7 +183,31 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed eval value for unboxing
     emitter.instruction("bl __rt_mixed_unbox");                                 // unwrap nested Mixed cells to tag and payload words
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the eval value is an object
-    emitter.instruction("b.ne __elephc_eval_value_is_a_false");                 // non-object values do not satisfy class relations
+    emitter.instruction("b.eq __elephc_eval_value_is_a_object");                // object values can use their concrete runtime class id
+    emitter.instruction("cmp x0, #1");                                          // runtime tag 1 means the eval value is a class string
+    emitter.instruction("b.eq __elephc_eval_value_is_a_string");                // class-string values need source metadata lookup
+    emitter.instruction("b __elephc_eval_value_is_a_false");                    // other runtime tags cannot satisfy class relations
+    emitter.label("__elephc_eval_value_is_a_string");
+    emitter.instruction("bl __rt_instanceof_lookup");                           // resolve the source class string to matcher metadata
+    emitter.instruction("cmp x0, #0");                                          // did the source string resolve to emitted metadata?
+    emitter.instruction("b.eq __elephc_eval_value_is_a_false");                 // unresolved source strings cannot match relation metadata
+    emitter.instruction("cmp x2, #0");                                          // source strings must resolve to concrete classes for this matcher
+    emitter.instruction("b.ne __elephc_eval_value_is_a_false");                 // interface-source strings need a dedicated interface-parent matcher
+    emitter.instruction("str x1, [sp, #32]");                                   // build a fake object header containing the source class id
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the exact-self exclusion flag
+    emitter.instruction("cbz x10, __elephc_eval_value_is_a_string_match");      // is_a() allows exact class-string matches
+    emitter.instruction("ldr x11, [sp, #24]");                                  // reload target kind before exact-class filtering
+    emitter.instruction("cbnz x11, __elephc_eval_value_is_a_string_match");     // interface targets cannot be exact concrete-class self matches
+    emitter.instruction("ldr x13, [sp, #16]");                                  // reload the target concrete class id
+    emitter.instruction("cmp x1, x13");                                         // compare source and target class ids for subclass self exclusion
+    emitter.instruction("b.eq __elephc_eval_value_is_a_false");                 // is_subclass_of() excludes the exact class string
+    emitter.label("__elephc_eval_value_is_a_string_match");
+    emitter.instruction("add x0, sp, #32");                                     // pass the fake object header to the metadata matcher
+    emitter.instruction("ldr x1, [sp, #16]");                                   // pass the target class/interface id
+    emitter.instruction("ldr x2, [sp, #24]");                                   // pass the target kind: 0 class, 1 interface
+    emitter.instruction("bl __rt_exception_matches");                           // test class-string inheritance or implemented interfaces
+    emitter.instruction("b __elephc_eval_value_is_a_done");                     // keep the matcher result and restore the wrapper frame
+    emitter.label("__elephc_eval_value_is_a_object");
     emitter.instruction("mov x9, x1");                                          // keep the unboxed object pointer for matcher input
     emitter.instruction("cbz x9, __elephc_eval_value_is_a_false");              // malformed object payloads cannot match class metadata
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the exact-self exclusion flag
@@ -1573,7 +1597,31 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the boxed eval value for unboxing
     emitter.instruction("call __rt_mixed_unbox");                               // unwrap nested Mixed cells to tag and payload words
     emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means the eval value is an object
-    emitter.instruction("jne __elephc_eval_value_is_a_false_x86");              // non-object values do not satisfy class relations
+    emitter.instruction("je __elephc_eval_value_is_a_object_x86");              // object values can use their concrete runtime class id
+    emitter.instruction("cmp rax, 1");                                          // runtime tag 1 means the eval value is a class string
+    emitter.instruction("je __elephc_eval_value_is_a_string_x86");              // class-string values need source metadata lookup
+    emitter.instruction("jmp __elephc_eval_value_is_a_false_x86");              // other runtime tags cannot satisfy class relations
+    emitter.label("__elephc_eval_value_is_a_string_x86");
+    emitter.instruction("mov rax, rdi");                                        // pass the source class-string pointer to the metadata lookup
+    emitter.instruction("call __rt_instanceof_lookup");                         // resolve the source class string to matcher metadata
+    emitter.instruction("test rax, rax");                                       // did the source string resolve to emitted metadata?
+    emitter.instruction("je __elephc_eval_value_is_a_false_x86");               // unresolved source strings cannot match relation metadata
+    emitter.instruction("test rdx, rdx");                                       // source strings must resolve to concrete classes for this matcher
+    emitter.instruction("jne __elephc_eval_value_is_a_false_x86");              // interface-source strings need a dedicated interface-parent matcher
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // build a fake object header containing the source class id
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // does this call reject exact concrete-class matches?
+    emitter.instruction("je __elephc_eval_value_is_a_string_match_x86");        // is_a() allows exact class-string matches
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // is the target a concrete class rather than an interface?
+    emitter.instruction("jne __elephc_eval_value_is_a_string_match_x86");       // interface targets cannot be exact concrete-class self matches
+    emitter.instruction("cmp rdi, QWORD PTR [rbp - 24]");                       // compare source and target class ids for subclass self exclusion
+    emitter.instruction("je __elephc_eval_value_is_a_false_x86");               // is_subclass_of() excludes the exact class string
+    emitter.label("__elephc_eval_value_is_a_string_match_x86");
+    emitter.instruction("lea rdi, [rbp - 40]");                                 // pass the fake object header to the metadata matcher
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the target class/interface id
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // pass the target kind: 0 class, 1 interface
+    emitter.instruction("call __rt_exception_matches");                         // test class-string inheritance or implemented interfaces
+    emitter.instruction("jmp __elephc_eval_value_is_a_done_x86");               // keep the matcher result and restore the wrapper frame
+    emitter.label("__elephc_eval_value_is_a_object_x86");
     emitter.instruction("test rdi, rdi");                                       // check the unboxed object pointer before reading its header
     emitter.instruction("je __elephc_eval_value_is_a_false_x86");               // malformed object payloads cannot match class metadata
     emitter.instruction("mov r8, rdi");                                         // keep the unboxed object pointer for matcher input
