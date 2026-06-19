@@ -15,6 +15,10 @@ const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
 const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE: u64 = 8;
 const EVAL_REFLECTION_MEMBER_FLAG_FINAL: u64 = 16;
 const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
+const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
+const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
+const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
+const EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE: u64 = 8;
 
 impl FakeOps {
     /// Reads one fake object property by name.
@@ -190,6 +194,29 @@ impl FakeOps {
                 Self::object_property(&properties, "__args")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
             }
+            (FakeValue::Object(properties), "getparameters") if args.is_empty() => {
+                Self::object_property(&properties, "__parameters")
+                    .map_or_else(|| self.runtime_array_new(0), Ok)
+            }
+            (FakeValue::Object(properties), "getposition") if args.is_empty() => {
+                Self::object_property(&properties, "__position").map_or_else(|| self.int(0), Ok)
+            }
+            (FakeValue::Object(properties), "isoptional") if args.is_empty() => {
+                Self::object_property(&properties, "__is_optional")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "isvariadic") if args.is_empty() => {
+                Self::object_property(&properties, "__is_variadic")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "ispassedbyreference") if args.is_empty() => {
+                Self::object_property(&properties, "__is_passed_by_reference")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "hastype") if args.is_empty() => {
+                Self::object_property(&properties, "__has_type")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
             (FakeValue::Object(_), "newinstance") if args.is_empty() => self.null(),
             (FakeValue::Object(properties), "getattributes") if args.is_empty() => {
                 Self::object_property(&properties, "__attrs")
@@ -317,6 +344,7 @@ impl FakeOps {
             EVAL_REFLECTION_OWNER_CLASS_CONSTANT => "ReflectionClassConstant",
             EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE => "ReflectionEnumUnitCase",
             EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE => "ReflectionEnumBackedCase",
+            EVAL_REFLECTION_OWNER_PARAMETER => "ReflectionParameter",
             _ => return Err(EvalStatus::RuntimeFatal),
         };
         let name = self.string(reflected_name)?;
@@ -326,7 +354,7 @@ impl FakeOps {
         let is_trait = self.bool_value((flags & 8) != 0)?;
         let is_enum = self.bool_value((flags & 16) != 0)?;
         let is_readonly = self.bool_value((flags & 32) != 0)?;
-        let modifiers = self.int(modifiers as i64)?;
+        let modifiers_cell = self.int(modifiers as i64)?;
         let mut properties = vec![("__name".to_string(), name), ("__attrs".to_string(), attrs)];
         if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
             let (namespace_name, short_name) = reflection_name_parts(reflected_name);
@@ -340,7 +368,7 @@ impl FakeOps {
             properties.push(("__is_trait".to_string(), is_trait));
             properties.push(("__is_enum".to_string(), is_enum));
             properties.push(("__is_readonly".to_string(), is_readonly));
-            properties.push(("__modifiers".to_string(), modifiers));
+            properties.push(("__modifiers".to_string(), modifiers_cell));
             properties.push(("__short_name".to_string(), short_name));
             properties.push(("__namespace_name".to_string(), namespace_name));
             properties.push(("__in_namespace".to_string(), in_namespace));
@@ -370,6 +398,25 @@ impl FakeOps {
                 self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT) != 0)?;
             properties.push(("__is_final".to_string(), is_final));
             properties.push(("__is_abstract".to_string(), is_abstract));
+            properties.push(("__parameters".to_string(), method_objects));
+        }
+        if owner_kind == EVAL_REFLECTION_OWNER_PARAMETER {
+            let position = self.int(modifiers as i64)?;
+            let is_optional =
+                self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL) != 0)?;
+            let is_variadic =
+                self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC) != 0)?;
+            let is_passed_by_reference =
+                self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_BY_REF) != 0)?;
+            let has_type = self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE) != 0)?;
+            properties.push(("__position".to_string(), position));
+            properties.push(("__is_optional".to_string(), is_optional));
+            properties.push(("__is_variadic".to_string(), is_variadic));
+            properties.push((
+                "__is_passed_by_reference".to_string(),
+                is_passed_by_reference,
+            ));
+            properties.push(("__has_type".to_string(), has_type));
         }
         let object = self.alloc(FakeValue::Object(properties));
         self.object_classes

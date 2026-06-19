@@ -24,6 +24,10 @@ const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
 const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE: u64 = 8;
 const EVAL_REFLECTION_MEMBER_FLAG_FINAL: u64 = 16;
 const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
+const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
+const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
+const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
+const EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE: u64 = 8;
 
 /// Eval metadata needed to materialize one `ReflectionClass` owner object.
 struct EvalReflectionClassMetadata {
@@ -44,6 +48,17 @@ struct EvalReflectionMemberMetadata {
     is_static: bool,
     is_final: bool,
     is_abstract: bool,
+    parameters: Vec<EvalReflectionParameterMetadata>,
+}
+
+/// Eval metadata needed to materialize one `ReflectionParameter` object.
+struct EvalReflectionParameterMetadata {
+    name: String,
+    position: usize,
+    is_optional: bool,
+    is_variadic: bool,
+    is_passed_by_reference: bool,
+    has_type: bool,
 }
 
 /// Attempts to construct a ReflectionClass/Method/Property object for eval metadata.
@@ -102,6 +117,7 @@ fn eval_reflection_class_new(
         &metadata.trait_names,
         &metadata.method_names,
         &metadata.property_names,
+        &[],
         metadata.flags,
         metadata.modifiers,
         context,
@@ -141,6 +157,7 @@ fn eval_reflection_method_new(
         &[],
         &[],
         &[],
+        &method.parameters,
         flags,
         0,
         context,
@@ -175,6 +192,7 @@ fn eval_reflection_property_new(
         &[],
         &[],
         &[],
+        &[],
         flags,
         0,
         context,
@@ -205,6 +223,7 @@ fn eval_reflection_class_constant_new(
         EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
         &constant_name,
         &attributes,
+        &[],
         &[],
         &[],
         &[],
@@ -252,6 +271,7 @@ fn eval_reflection_enum_case_new(
         &[],
         &[],
         &[],
+        &[],
         0,
         0,
         context,
@@ -269,6 +289,7 @@ fn eval_reflection_owner_object(
     trait_names: &[String],
     method_names: &[String],
     property_names: &[String],
+    parameter_metadata: &[EvalReflectionParameterMetadata],
     flags: u64,
     modifiers: u64,
     context: &mut ElephcEvalContext,
@@ -287,6 +308,8 @@ fn eval_reflection_owner_object(
             context,
             values,
         )?
+    } else if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        eval_reflection_parameter_object_array_result(parameter_metadata, values)?
     } else {
         values.array_new(0)?
     };
@@ -340,6 +363,56 @@ fn eval_reflection_string_array_result(
     Ok(result)
 }
 
+/// Builds an indexed array of populated ReflectionParameter objects.
+fn eval_reflection_parameter_object_array_result(
+    parameters: &[EvalReflectionParameterMetadata],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(parameters.len())?;
+    for parameter in parameters {
+        let parameter_object = eval_reflection_parameter_object_result(parameter, values)?;
+        let key = values.int(parameter.position as i64)?;
+        result = values.array_set(result, key, parameter_object)?;
+    }
+    Ok(result)
+}
+
+/// Materializes one ReflectionParameter object through the shared reflection helper.
+fn eval_reflection_parameter_object_result(
+    parameter: &EvalReflectionParameterMetadata,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let attrs = values.array_new(0)?;
+    let interface_names = values.array_new(0)?;
+    let trait_names = values.array_new(0)?;
+    let method_names = values.array_new(0)?;
+    let property_names = values.array_new(0)?;
+    let method_objects = values.array_new(0)?;
+    let property_objects = values.array_new(0)?;
+    let flags = eval_reflection_parameter_flags(parameter);
+    let object = values.reflection_owner_new(
+        EVAL_REFLECTION_OWNER_PARAMETER,
+        &parameter.name,
+        attrs,
+        interface_names,
+        trait_names,
+        method_names,
+        property_names,
+        method_objects,
+        property_objects,
+        flags,
+        parameter.position as u64,
+    )?;
+    values.release(attrs)?;
+    values.release(interface_names)?;
+    values.release(trait_names)?;
+    values.release(method_names)?;
+    values.release(property_names)?;
+    values.release(method_objects)?;
+    values.release(property_objects)?;
+    Ok(object)
+}
+
 /// Builds an indexed array of ReflectionMethod or ReflectionProperty objects for a ReflectionClass.
 fn eval_reflection_member_object_array_result(
     owner_kind: u64,
@@ -369,6 +442,7 @@ fn eval_reflection_member_object_array_result(
             &[],
             &[],
             &[],
+            &member.parameters,
             flags,
             0,
             context,
@@ -531,6 +605,7 @@ fn eval_reflection_method_metadata(
                 is_static: method.is_static(),
                 is_final: method.is_final(),
                 is_abstract: method.is_abstract(),
+                parameters: eval_reflection_parameters_from_names(method.params()),
             });
     }
     if context.has_interface(class_name) {
@@ -544,6 +619,7 @@ fn eval_reflection_method_metadata(
                 is_static: false,
                 is_final: false,
                 is_abstract: true,
+                parameters: eval_reflection_parameters_from_names(method.params()),
             });
     }
     context.trait_decl(class_name).and_then(|trait_decl| {
@@ -557,6 +633,7 @@ fn eval_reflection_method_metadata(
                 is_static: method.is_static(),
                 is_final: method.is_final(),
                 is_abstract: method.is_abstract(),
+                parameters: eval_reflection_parameters_from_names(method.params()),
             })
     })
 }
@@ -576,6 +653,7 @@ fn eval_reflection_property_metadata(
                 is_static: property.is_static(),
                 is_final: false,
                 is_abstract: property.is_abstract(),
+                parameters: Vec::new(),
             });
     }
     if context.has_interface(class_name) {
@@ -589,6 +667,7 @@ fn eval_reflection_property_metadata(
                 is_static: false,
                 is_final: false,
                 is_abstract: true,
+                parameters: Vec::new(),
             });
     }
     context.trait_decl(class_name).and_then(|trait_decl| {
@@ -602,8 +681,27 @@ fn eval_reflection_property_metadata(
                 is_static: property.is_static(),
                 is_final: false,
                 is_abstract: property.is_abstract(),
+                parameters: Vec::new(),
             })
     })
+}
+
+/// Builds parameter reflection metadata from the currently supported eval parameter syntax.
+fn eval_reflection_parameters_from_names(
+    names: &[String],
+) -> Vec<EvalReflectionParameterMetadata> {
+    names
+        .iter()
+        .enumerate()
+        .map(|(position, name)| EvalReflectionParameterMetadata {
+            name: name.clone(),
+            position,
+            is_optional: false,
+            is_variadic: false,
+            is_passed_by_reference: false,
+            has_type: false,
+        })
+        .collect()
 }
 
 /// Packs ReflectionMethod/ReflectionProperty predicate flags for the runtime owner factory.
@@ -627,6 +725,24 @@ fn eval_reflection_member_flags(
     }
     if is_abstract {
         flags |= EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT;
+    }
+    flags
+}
+
+/// Packs ReflectionParameter predicate flags for the runtime parameter factory.
+fn eval_reflection_parameter_flags(parameter: &EvalReflectionParameterMetadata) -> u64 {
+    let mut flags = 0;
+    if parameter.is_optional {
+        flags |= EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL;
+    }
+    if parameter.is_variadic {
+        flags |= EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC;
+    }
+    if parameter.is_passed_by_reference {
+        flags |= EVAL_REFLECTION_PARAMETER_FLAG_BY_REF;
+    }
+    if parameter.has_type {
+        flags |= EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE;
     }
     flags
 }

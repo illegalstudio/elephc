@@ -17,7 +17,7 @@ use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::names::php_symbol_key;
 use crate::parser::ast::Visibility;
-use crate::types::{AttrArgValue, PhpType};
+use crate::types::{AttrArgValue, FunctionSig, PhpType};
 
 use super::super::super::context::FunctionContext;
 
@@ -33,6 +33,7 @@ struct ReflectionOwnerMetadata {
     method_members: Vec<ReflectionListedMember>,
     property_members: Vec<ReflectionListedMember>,
     constructor_member: Option<ReflectionListedMember>,
+    parameter_members: Vec<ReflectionParameterMember>,
     is_final: bool,
     is_abstract: bool,
     is_interface: bool,
@@ -50,6 +51,18 @@ struct ReflectionListedMember {
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgValue>>>,
     flags: ReflectionMemberFlags,
+    parameters: Vec<ReflectionParameterMember>,
+}
+
+/// Metadata for one object returned by `ReflectionMethod::getParameters()`.
+#[derive(Clone)]
+struct ReflectionParameterMember {
+    name: String,
+    position: i64,
+    is_optional: bool,
+    is_variadic: bool,
+    is_passed_by_reference: bool,
+    has_type: bool,
 }
 
 /// Boolean metadata exposed by ReflectionMethod and ReflectionProperty predicates.
@@ -150,6 +163,14 @@ pub(super) fn lower_reflection_owner_new(
         emit_reflection_bool_property(ctx, "__is_readonly", metadata.is_readonly)?;
         emit_reflection_int_property(ctx, "__modifiers", metadata.modifiers)?;
     }
+    if class_name == "ReflectionMethod" {
+        emit_reflection_parameter_array_property_by_name(
+            ctx,
+            class_name,
+            "__parameters",
+            &metadata.parameter_members,
+        )?;
+    }
     emit_reflection_member_flag_properties(ctx, class_name, metadata.member_flags)?;
     let result = inst
         .result
@@ -226,6 +247,7 @@ fn reflection_class_metadata(
             method_members,
             property_members,
             constructor_member,
+            parameter_members: Vec::new(),
             is_final: info.is_final,
             is_abstract: info.is_abstract,
             is_interface: false,
@@ -290,10 +312,11 @@ fn reflection_method_metadata(
     let method_key = php_symbol_key(&method_name);
     Ok(resolve_reflection_class(ctx, &reflected_class)
         .and_then(|(_, info)| {
+            let member = reflection_class_method_member(info, &method_key)?;
             Some(ReflectionOwnerMetadata {
                 reflected_name: Some(method_name.clone()),
-                attr_names: info.method_attribute_names.get(&method_key)?.clone(),
-                attr_args: info.method_attribute_args.get(&method_key)?.clone(),
+                attr_names: member.attr_names,
+                attr_args: member.attr_args,
                 interface_names: Vec::new(),
                 trait_names: Vec::new(),
                 method_names: Vec::new(),
@@ -301,6 +324,7 @@ fn reflection_method_metadata(
                 method_members: Vec::new(),
                 property_members: Vec::new(),
                 constructor_member: None,
+                parameter_members: member.parameters,
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -308,7 +332,7 @@ fn reflection_method_metadata(
                 is_enum: false,
                 is_readonly: false,
                 modifiers: 0,
-                member_flags: reflection_method_member_flags(info, &method_key)?,
+                member_flags: member.flags,
             })
         })
         .unwrap_or_else(empty_reflection_metadata))
@@ -340,6 +364,7 @@ fn reflection_property_metadata(
                 method_members: Vec::new(),
                 property_members: Vec::new(),
                 constructor_member: None,
+                parameter_members: Vec::new(),
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -380,6 +405,7 @@ fn reflection_class_constant_metadata(
             method_members: Vec::new(),
             property_members: Vec::new(),
             constructor_member: None,
+            parameter_members: Vec::new(),
             is_final: false,
             is_abstract: false,
             is_interface: false,
@@ -414,6 +440,7 @@ fn reflection_class_constant_metadata(
                     method_members: Vec::new(),
                     property_members: Vec::new(),
                     constructor_member: None,
+                    parameter_members: Vec::new(),
                     is_final: false,
                     is_abstract: false,
                     is_interface: false,
@@ -455,6 +482,7 @@ fn reflection_enum_case_metadata(
                 method_members: Vec::new(),
                 property_members: Vec::new(),
                 constructor_member: None,
+                parameter_members: Vec::new(),
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -694,6 +722,10 @@ fn reflection_class_method_member(
     method_name: &str,
 ) -> Option<ReflectionListedMember> {
     let method_key = php_symbol_key(method_name);
+    let sig = info
+        .methods
+        .get(&method_key)
+        .or_else(|| info.static_methods.get(&method_key))?;
     Some(ReflectionListedMember {
         name: method_key.clone(),
         attr_names: info
@@ -707,6 +739,7 @@ fn reflection_class_method_member(
             .cloned()
             .unwrap_or_default(),
         flags: reflection_method_member_flags(info, &method_key)?,
+        parameters: reflection_parameter_members(sig),
     })
 }
 
@@ -748,6 +781,7 @@ fn reflection_class_property_member(
             .cloned()
             .unwrap_or_default(),
         flags,
+        parameters: Vec::new(),
     })
 }
 
@@ -769,6 +803,7 @@ fn default_method_members(
                 false,
                 is_interface,
             ),
+            parameters: Vec::new(),
         })
         .collect()
 }
@@ -790,6 +825,31 @@ fn default_property_members(
                 false,
                 is_interface,
             ),
+            parameters: Vec::new(),
+        })
+        .collect()
+}
+
+/// Builds reflected parameter metadata from a method/function signature.
+fn reflection_parameter_members(sig: &FunctionSig) -> Vec<ReflectionParameterMember> {
+    sig.params
+        .iter()
+        .enumerate()
+        .map(|(index, (name, _))| {
+            let is_variadic = sig.variadic.as_deref() == Some(name.as_str());
+            ReflectionParameterMember {
+                name: name.clone(),
+                position: index as i64,
+                is_optional: is_variadic
+                    || sig
+                        .defaults
+                        .get(index)
+                        .map(|default| default.is_some())
+                        .unwrap_or(false),
+                is_variadic,
+                is_passed_by_reference: sig.ref_params.get(index).copied().unwrap_or(false),
+                has_type: sig.declared_params.get(index).copied().unwrap_or(false),
+            }
         })
         .collect()
 }
@@ -925,6 +985,7 @@ fn class_like_reflection_metadata(
         method_members,
         property_members,
         constructor_member,
+        parameter_members: Vec::new(),
         is_final: false,
         is_abstract: false,
         is_interface,
@@ -977,6 +1038,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         method_members: Vec::new(),
         property_members: Vec::new(),
         constructor_member: None,
+        parameter_members: Vec::new(),
         is_final: false,
         is_abstract: false,
         is_interface: false,
@@ -1241,6 +1303,44 @@ fn emit_reflection_constructor_property(
     Ok(())
 }
 
+/// Replaces a ReflectionMethod private array slot with ReflectionParameter objects.
+fn emit_reflection_parameter_array_property_by_name(
+    ctx: &mut FunctionContext<'_>,
+    owner_class_name: &str,
+    property_name: &str,
+    parameters: &[ReflectionParameterMember],
+) -> Result<()> {
+    if parameters.is_empty() {
+        return Ok(());
+    }
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(owner_class_name)
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, property_name)?;
+    let high_offset = low_offset + 8;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    emit_reflection_parameter_array(ctx, parameters)?;
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_load_int_immediate(ctx.emitter, abi::secondary_scratch_reg(ctx.emitter), 4);
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::secondary_scratch_reg(ctx.emitter),
+        object_reg,
+        high_offset,
+    );
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    Ok(())
+}
+
 /// Allocates an indexed array of populated ReflectionMethod/ReflectionProperty objects.
 fn emit_reflection_member_array(
     ctx: &mut FunctionContext<'_>,
@@ -1257,6 +1357,28 @@ fn emit_reflection_member_array(
     for member in members {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_member_object(ctx, member_class_name, member)?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_append_reflection_member_object(ctx);
+    }
+
+    Ok(())
+}
+
+/// Allocates an indexed array of populated ReflectionParameter objects.
+fn emit_reflection_parameter_array(
+    ctx: &mut FunctionContext<'_>,
+    parameters: &[ReflectionParameterMember],
+) -> Result<()> {
+    emit_reflection_indexed_array(ctx, parameters.len().max(1), 8);
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &PhpType::Object("ReflectionParameter".to_string()),
+    );
+
+    for parameter in parameters {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_reflection_parameter_object(ctx, parameter)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_append_reflection_member_object(ctx);
     }
@@ -1301,7 +1423,78 @@ fn emit_reflection_member_object(
         &member.attr_names,
         &member.attr_args,
     )?;
+    if member_class_name == "ReflectionMethod" {
+        emit_reflection_parameter_array_property_by_name(
+            ctx,
+            member_class_name,
+            "__parameters",
+            &member.parameters,
+        )?;
+    }
     emit_reflection_member_flag_properties(ctx, member_class_name, member.flags)?;
+    Ok(())
+}
+
+/// Allocates and populates one ReflectionParameter object.
+fn emit_reflection_parameter_object(
+    ctx: &mut FunctionContext<'_>,
+    parameter: &ReflectionParameterMember,
+) -> Result<()> {
+    let (class_id, property_count, uninitialized_marker_offsets) = {
+        let class_info =
+            ctx.module.class_infos.get("ReflectionParameter").ok_or_else(|| {
+                CodegenIrError::unsupported("unknown class ReflectionParameter")
+            })?;
+        (
+            class_info.class_id,
+            class_info.properties.len(),
+            super::uninitialized_property_marker_offsets(class_info),
+        )
+    };
+    super::emit_object_allocation(
+        ctx,
+        class_id,
+        property_count,
+        false,
+        &uninitialized_marker_offsets,
+    )?;
+    let class_info = ctx
+        .module
+        .class_infos
+        .get("ReflectionParameter")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let name_offset = reflection_property_offset(class_info, "__name")?;
+    emit_reflection_string_property(ctx, &parameter.name, name_offset, name_offset + 8);
+    emit_reflection_owner_int_property(
+        ctx,
+        "ReflectionParameter",
+        "__position",
+        parameter.position,
+    )?;
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionParameter",
+        "__is_optional",
+        parameter.is_optional,
+    )?;
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionParameter",
+        "__is_variadic",
+        parameter.is_variadic,
+    )?;
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionParameter",
+        "__is_passed_by_reference",
+        parameter.is_passed_by_reference,
+    )?;
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionParameter",
+        "__has_type",
+        parameter.has_type,
+    )?;
     Ok(())
 }
 
@@ -1468,10 +1661,20 @@ fn emit_reflection_int_property(
     property_name: &str,
     value: i64,
 ) -> Result<()> {
+    emit_reflection_owner_int_property(ctx, "ReflectionClass", property_name, value)
+}
+
+/// Stores one integer property on the current Reflection owner object result.
+fn emit_reflection_owner_int_property(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property_name: &str,
+    value: i64,
+) -> Result<()> {
     let class_info = ctx
         .module
         .class_infos
-        .get("ReflectionClass")
+        .get(class_name)
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, property_name)?;
     let high_offset = low_offset + 8;

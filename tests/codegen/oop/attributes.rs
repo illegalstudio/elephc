@@ -1417,6 +1417,64 @@ foreach ($properties as $property) {
     assert_eq!(out.stdout, "2:2:F1SR:V1PTR");
 }
 
+/// Verifies that `ReflectionMethod::getParameters()` returns populated
+/// ReflectionParameter objects for typed, by-reference, defaulted, and variadic parameters.
+#[test]
+fn test_reflection_method_get_parameters_returns_parameter_metadata() {
+    let out = compile_and_run_capture(
+        r##"<?php
+class ReflectParamTarget {
+    public function run(int $id, &$name, string $mode = "x", ...$rest) {}
+}
+$params = (new ReflectionMethod(ReflectParamTarget::class, "run"))->getParameters();
+echo count($params) . ":";
+foreach ($params as $param) {
+    echo $param->getName() . "#" . $param->getPosition();
+    echo ($param->hasType() ? "T" : "t");
+    echo ($param->isOptional() ? "O" : "R");
+    echo ($param->isPassedByReference() ? "B" : "b");
+    echo ($param->isVariadic() ? "V" : "v");
+    echo "|";
+}
+"##,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "4:id#0TRbv|name#1tRBv|mode#2TObv|rest#3tObV|");
+}
+
+/// Verifies that ReflectionMethod objects returned from `ReflectionClass::getMethods()`
+/// carry the same parameter metadata as directly constructed method reflectors.
+#[test]
+fn test_reflection_class_get_methods_preserves_parameter_metadata() {
+    let out = compile_and_run_capture(
+        r##"<?php
+class ReflectListedParamTarget {
+    public function listed(int $first, $second = 2) {}
+}
+$methods = (new ReflectionClass(ReflectListedParamTarget::class))->getMethods();
+foreach ($methods as $method) {
+    if ($method->getName() === "listed") {
+        $params = $method->getParameters();
+        echo count($params) . ":";
+        echo $params[0]->getName() . ($params[0]->hasType() ? "T" : "t");
+        echo ":";
+        echo $params[1]->getName() . ($params[1]->isOptional() ? "O" : "R");
+    }
+}
+"##,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "2:firstT:secondO");
+}
+
 /// Verifies that `ReflectionClass::getConstructor()` returns a ReflectionMethod
 /// for direct, inherited, interface, and trait constructors, and null otherwise.
 #[test]

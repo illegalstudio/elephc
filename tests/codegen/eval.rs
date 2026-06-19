@@ -5868,6 +5868,34 @@ foreach ($properties as $property) {
     assert_eq!(out.stdout, "2:2:F1SR:V1PTR");
 }
 
+/// Verifies eval ReflectionMethod materializes ReflectionParameter objects through the bridge.
+#[test]
+fn test_eval_reflection_method_lists_parameters() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectParamTarget {
+    public function run($first, $second) {}
+}
+$params = (new ReflectionMethod("EvalReflectParamTarget", "run"))->getParameters();
+echo count($params) . ":";
+foreach ($params as $param) {
+    echo $param->getName() . "@" . $param->getPosition();
+    echo $param->isOptional() ? "O" : "r";
+    echo $param->isVariadic() ? "V" : "v";
+    echo $param->isPassedByReference() ? "R" : "b";
+    echo $param->hasType() ? "T" : "t";
+    echo "|";
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "2:first@0rvbt|second@1rvbt|");
+}
+
 /// Verifies eval ReflectionClass::newInstance constructs eval-declared classes.
 #[test]
 fn test_eval_reflection_class_new_instance_constructs_eval_class() {

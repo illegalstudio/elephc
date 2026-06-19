@@ -723,6 +723,7 @@ fn lower_builtin_reflection_methods(
         "ReflectionEnumBackedCase",
         "ReflectionEnumUnitCase",
         "ReflectionMethod",
+        "ReflectionParameter",
         "ReflectionProperty",
     ] {
         lower_builtin_reflection_class_methods(class_name, module, check_result, constants, fiber_return_sigs);
@@ -987,6 +988,7 @@ fn known_dynamic_new_builtin_class_name(class_name: &str) -> bool {
             | "reflectionattribute"
             | "reflectionclass"
             | "reflectionmethod"
+            | "reflectionparameter"
             | "reflectionproperty"
             | "regexiterator"
             | "runtimeexception"

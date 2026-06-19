@@ -542,6 +542,16 @@ fn test_error_reflection_attribute_constructor_is_private() {
     );
 }
 
+/// Verifies that `new ReflectionParameter()` reports "Cannot access private
+/// constructor: ReflectionParameter::__construct".
+#[test]
+fn test_error_reflection_parameter_constructor_is_private() {
+    expect_error(
+        "<?php $r = new ReflectionParameter();",
+        "Cannot access private constructor: ReflectionParameter::__construct",
+    );
+}
+
 /// Verifies that accessing `ReflectionAttribute::__name` property reports
 /// "Cannot access private property: ReflectionAttribute::__name".
 #[test]

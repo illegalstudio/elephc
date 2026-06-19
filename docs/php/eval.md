@@ -176,6 +176,11 @@ classes and forwards constructor arguments through eval's positional, named, and
 unpacking-aware call binding.
 `ReflectionMethod::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
 `isFinal()`, and `isAbstract()` report eval method metadata.
+`ReflectionMethod::getParameters()` returns `ReflectionParameter` objects for
+eval-declared method parameters. Eval currently exposes parameter names and
+zero-based positions there; optional, variadic, by-reference, and declared-type
+flags remain false until eval's method-parameter parser carries those richer
+parameter forms.
 `ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, and
 `isPrivate()` report eval property metadata.
 `ReflectionClassConstant::getAttributes()`,
@@ -339,9 +344,10 @@ broader parameter/return ABI shapes are still outside that bridge.
 
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are broader reflection APIs beyond the supported
-ReflectionClass/Method/Property/attribute slice and broader generated/AOT method
-bridge signatures beyond the current public non-by-reference fixed scalar/Mixed
-slice.
+ReflectionClass/Method/Parameter/Property/attribute slice, richer
+ReflectionParameter metadata inside eval-declared methods, and broader
+generated/AOT method bridge signatures beyond the current public
+non-by-reference fixed scalar/Mixed slice.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

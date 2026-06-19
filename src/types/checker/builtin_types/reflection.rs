@@ -36,6 +36,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionClass",
         "ReflectionMethod",
         "ReflectionProperty",
+        "ReflectionParameter",
         "ReflectionClassConstant",
         "ReflectionEnumUnitCase",
         "ReflectionEnumBackedCase",
@@ -119,6 +120,10 @@ pub(crate) fn inject_builtin_reflection(
                 ("property_name", Some(TypeExpr::Str), None, false),
             ],
         ),
+    );
+    class_map.insert(
+        "ReflectionParameter".to_string(),
+        builtin_reflection_parameter_class(),
     );
     for class_name in [
         "ReflectionClassConstant",
@@ -235,6 +240,11 @@ fn bool_type() -> TypeExpr {
 
 /// Returns a private parameterless `__construct` method for `ReflectionAttribute`.
 fn builtin_reflection_attribute_constructor_method() -> ClassMethod {
+    builtin_reflection_private_constructor_method()
+}
+
+/// Returns a private parameterless `__construct` for internally materialized reflection objects.
+fn builtin_reflection_private_constructor_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
         name: "__construct".to_string(),
@@ -806,6 +816,19 @@ fn builtin_reflection_owner_class(
         methods.push(builtin_reflection_class_string_method("getName", "__name"));
     }
     add_reflection_member_flag_methods(name, &mut properties, &mut methods);
+    if name == "ReflectionMethod" {
+        properties.push(builtin_property(
+            "__parameters",
+            Visibility::Private,
+            Some(object_array_type("ReflectionParameter")),
+            empty_array(),
+        ));
+        methods.push(builtin_reflection_class_array_method(
+            "getParameters",
+            "__parameters",
+            object_array_type("ReflectionParameter"),
+        ));
+    }
     properties.push(builtin_property(
         "__attrs",
         Visibility::Private,
@@ -861,6 +884,79 @@ fn add_reflection_member_flag_methods(
             ));
             methods.push(builtin_reflection_class_bool_method(method, property));
         }
+    }
+}
+
+/// Builds the synthetic `ReflectionParameter` shell used by method parameter reflection.
+fn builtin_reflection_parameter_class() -> FlattenedClass {
+    let properties = vec![
+        builtin_property(
+            "__name",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ),
+        builtin_property(
+            "__attrs",
+            Visibility::Private,
+            Some(object_array_type("ReflectionAttribute")),
+            empty_array(),
+        ),
+        builtin_property(
+            "__position",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ),
+        builtin_property(
+            "__is_optional",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ),
+        builtin_property(
+            "__is_variadic",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ),
+        builtin_property(
+            "__is_passed_by_reference",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ),
+        builtin_property(
+            "__has_type",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ),
+    ];
+    let methods = vec![
+        builtin_reflection_private_constructor_method(),
+        builtin_reflection_class_string_method("getName", "__name"),
+        builtin_reflection_class_int_method("getPosition", "__position"),
+        builtin_reflection_class_bool_method("isOptional", "__is_optional"),
+        builtin_reflection_class_bool_method("isVariadic", "__is_variadic"),
+        builtin_reflection_class_bool_method(
+            "isPassedByReference",
+            "__is_passed_by_reference",
+        ),
+        builtin_reflection_class_bool_method("hasType", "__has_type"),
+    ];
+    FlattenedClass {
+        name: "ReflectionParameter".to_string(),
+        extends: None,
+        implements: Vec::new(),
+        is_abstract: false,
+        is_final: true,
+        is_readonly_class: false,
+        properties,
+        methods,
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
     }
 }
 
@@ -945,6 +1041,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
         "ReflectionClass",
         "ReflectionMethod",
         "ReflectionProperty",
+        "ReflectionParameter",
         "ReflectionClassConstant",
         "ReflectionEnumUnitCase",
         "ReflectionEnumBackedCase",
@@ -958,6 +1055,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 "ReflectionClass"
                     | "ReflectionMethod"
                     | "ReflectionProperty"
+                    | "ReflectionParameter"
                     | "ReflectionClassConstant"
                     | "ReflectionEnumUnitCase"
                     | "ReflectionEnumBackedCase"
@@ -1025,6 +1123,26 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
             }
             if class_name == "ReflectionMethod" {
                 for method_name in ["isfinal", "isabstract"] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = PhpType::Bool;
+                    }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getParameters")) {
+                    sig.return_type = PhpType::Array(Box::new(PhpType::Object(
+                        "ReflectionParameter".to_string(),
+                    )));
+                }
+            }
+            if class_name == "ReflectionParameter" {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getPosition")) {
+                    sig.return_type = PhpType::Int;
+                }
+                for method_name in [
+                    "isoptional",
+                    "isvariadic",
+                    "ispassedbyreference",
+                    "hastype",
+                ] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
                     }

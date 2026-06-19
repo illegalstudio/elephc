@@ -488,6 +488,64 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod exposes eval method parameter objects with names and positions.
+#[test]
+fn execute_program_reflects_eval_method_parameters() {
+    let program = parse_fragment(
+        br##"class EvalReflectParamTarget {
+    public function run($first, $second) {}
+}
+$params = (new ReflectionMethod("EvalReflectParamTarget", "run"))->getParameters();
+echo count($params); echo ":";
+foreach ($params as $param) {
+    echo $param->getName(); echo "#"; echo $param->getPosition();
+    echo $param->isOptional() ? "O" : "r";
+    echo $param->isVariadic() ? "V" : "v";
+    echo $param->isPassedByReference() ? "R" : "b";
+    echo $param->hasType() ? "T" : "t";
+    echo "|";
+}
+return true;"##,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "2:first#0rvbt|second#1rvbt|");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies ReflectionClass::getMethods preserves eval method parameter metadata.
+#[test]
+fn execute_program_reflection_class_lists_eval_method_parameters() {
+    let program = parse_fragment(
+        br#"class EvalReflectListedParamTarget {
+    public function first($left) {}
+    public function second($right, $tail) {}
+}
+$methods = (new ReflectionClass("EvalReflectListedParamTarget"))->getMethods();
+foreach ($methods as $method) {
+    $params = $method->getParameters();
+    echo $method->getName(); echo ":"; echo count($params);
+    if (count($params) > 0) {
+        echo ":"; echo $params[0]->getName(); echo ":"; echo $params[0]->getPosition();
+    }
+    echo "|";
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "first:1:left:0|second:2:right:0|");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass getMethods/getProperties return eval member objects.
 #[test]
 fn execute_program_reflection_class_lists_eval_member_objects() {
