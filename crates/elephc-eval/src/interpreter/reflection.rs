@@ -537,9 +537,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_members_result(
     } else {
         return Ok(None);
     };
-    if !evaluated_args.is_empty() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
+    let filter = eval_reflection_member_filter(evaluated_args, values)?;
     let Some(reflected_name) = context
         .eval_reflection_class_name(identity)
         .map(str::to_string)
@@ -556,6 +554,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_members_result(
             owner_kind,
             &reflected_name,
             &names,
+            filter,
             context,
             values,
         )
@@ -566,6 +565,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_members_result(
         owner_kind,
         &reflected_name,
         &names,
+        filter,
         context,
         values,
     )
@@ -1217,6 +1217,7 @@ fn eval_reflection_owner_object_with_members(
             EVAL_REFLECTION_OWNER_METHOD,
             reflected_name,
             &method_names,
+            None,
             context,
             values,
         )?
@@ -1235,6 +1236,7 @@ fn eval_reflection_owner_object_with_members(
             EVAL_REFLECTION_OWNER_PROPERTY,
             reflected_name,
             &property_names,
+            None,
             context,
             values,
         )?
@@ -1795,6 +1797,7 @@ fn eval_reflection_member_object_array_result(
     owner_kind: u64,
     class_name: &str,
     names: &[String],
+    filter: Option<u64>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -1805,6 +1808,9 @@ fn eval_reflection_member_object_array_result(
         else {
             continue;
         };
+        if !eval_reflection_member_matches_filter(&member, filter) {
+            continue;
+        }
         let member_object =
             eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
         let key = values.int(index)?;
@@ -1819,6 +1825,7 @@ fn eval_reflection_aot_member_object_array_result(
     owner_kind: u64,
     class_name: &str,
     names: &[String],
+    filter: Option<u64>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -1833,6 +1840,9 @@ fn eval_reflection_aot_member_object_array_result(
         let Some(member) = member else {
             continue;
         };
+        if !eval_reflection_member_matches_filter(&member, filter) {
+            continue;
+        }
         let reflected_name = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
             name.to_ascii_lowercase()
         } else {
@@ -1850,6 +1860,49 @@ fn eval_reflection_aot_member_object_array_result(
         index += 1;
     }
     Ok(result)
+}
+
+/// Returns true when a ReflectionClass member passes an optional modifier filter.
+fn eval_reflection_member_matches_filter(
+    member: &EvalReflectionMemberMetadata,
+    filter: Option<u64>,
+) -> bool {
+    match filter {
+        Some(filter) => member.modifiers & filter != 0,
+        None => true,
+    }
+}
+
+/// Parses the optional ReflectionClass member filter argument.
+fn eval_reflection_member_filter(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<u64>, EvalStatus> {
+    let mut filter = None;
+    for arg in evaluated_args {
+        if let Some(name) = arg.name.as_deref() {
+            if name != "filter" {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+        }
+        if filter.is_some() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        filter = Some(arg.value);
+    }
+    let Some(filter) = filter else {
+        return Ok(None);
+    };
+    if values.is_null(filter)? {
+        return Ok(None);
+    }
+    let cast_filter = values.cast_int(filter)?;
+    let bytes = values.string_bytes(cast_filter)?;
+    values.release(cast_filter)?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+    text.parse::<i64>()
+        .map(|value| Some(value as u64))
+        .map_err(|_| EvalStatus::RuntimeFatal)
 }
 
 /// Returns generated AOT member names for one reflected class.
