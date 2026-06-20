@@ -154,6 +154,72 @@ fn test_parse_array_element_post_increment_assignment() {
     }
 }
 
+/// Verifies that array-element prefix `++` lowers to the same `ArrayAssign`
+/// read-modify-write as the postfix form (the result is discarded in statement
+/// position, so prefix and postfix are observably identical).
+#[test]
+fn test_parse_array_element_pre_increment_assignment() {
+    let stmts = parse_source("<?php ++$items[0];");
+    match &stmts[0].kind {
+        StmtKind::ArrayAssign {
+            array,
+            index,
+            value,
+        } => {
+            assert_eq!(array, "items");
+            assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+            match &value.kind {
+                ExprKind::BinaryOp { left, op, right } => {
+                    assert_eq!(op, &BinOp::Add);
+                    assert!(matches!(right.kind, ExprKind::IntLiteral(1)));
+                    assert!(matches!(left.kind, ExprKind::ArrayAccess { .. }));
+                }
+                other => panic!("Expected BinaryOp value, got {:?}", other),
+            }
+        }
+        other => panic!("Expected ArrayAssign, got {:?}", other),
+    }
+}
+
+/// Verifies that property prefix `++` lowers to a `PropertyAssign` read-modify-write
+/// (`++$o->count;` behaves like `$o->count += 1;` in statement position).
+#[test]
+fn test_parse_property_pre_increment_assignment() {
+    let stmts = parse_source("<?php ++$o->count;");
+    match &stmts[0].kind {
+        StmtKind::PropertyAssign {
+            object,
+            property,
+            value,
+        } => {
+            assert!(matches!(object.kind, ExprKind::Variable(ref name) if name == "o"));
+            assert_eq!(property, "count");
+            match &value.kind {
+                ExprKind::BinaryOp { left, op, right } => {
+                    assert_eq!(op, &BinOp::Add);
+                    assert!(matches!(right.kind, ExprKind::IntLiteral(1)));
+                    assert!(matches!(left.kind, ExprKind::PropertyAccess { .. }));
+                }
+                other => panic!("Expected BinaryOp value, got {:?}", other),
+            }
+        }
+        other => panic!("Expected PropertyAssign, got {:?}", other),
+    }
+}
+
+/// Verifies that a bare-variable prefix `++` keeps its `PreIncrement` AST node
+/// (it must not be rerouted through the complex-l-value statement lowering).
+#[test]
+fn test_parse_bare_variable_pre_increment_keeps_node() {
+    let stmts = parse_source("<?php ++$x;");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => {
+            assert!(matches!(expr.kind, ExprKind::PreIncrement(ref name) if name == "x"));
+        }
+        other => panic!("Expected ExprStmt(PreIncrement), got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php $items[idx()] += 3;` lowers to a `Synthetic` stmt containing
 /// a temporary assignment for `idx()` and a subsequent `ArrayAssign`.
 /// This protects against registering the call effect directly on the ArrayAssign.

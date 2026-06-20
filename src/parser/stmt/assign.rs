@@ -31,6 +31,7 @@ pub(crate) use postfix::{
 };
 pub(super) use postfix::{
     try_parse_postfix_assignment,
+    try_parse_prefix_incdec,
     try_parse_scoped_property_assignment,
 };
 pub(super) use simple::parse_variable_stmt;

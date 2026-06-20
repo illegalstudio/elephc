@@ -41,6 +41,62 @@ fn test_post_decrement() {
     assert_eq!(out, "4 5");
 }
 
+/// Verifies prefix `++` on an object property statement (`++$o->count;`).
+/// In statement position the result is discarded, so it lowers like `$o->count += 1`.
+/// Fixture: a class with `int $count = 0`, expects the property to read back as 1.
+#[test]
+fn test_pre_increment_property() {
+    let out = compile_and_run(
+        "<?php class C { public int $count = 0; } $o = new C(); ++$o->count; echo $o->count;",
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies prefix `--` on an object property statement (`--$o->count;`).
+/// Fixture: a class with `int $count = 3`, expects the property to read back as 2.
+#[test]
+fn test_pre_decrement_property() {
+    let out = compile_and_run(
+        "<?php class C { public int $count = 3; } $o = new C(); --$o->count; echo $o->count;",
+    );
+    assert_eq!(out, "2");
+}
+
+/// Verifies prefix `++` on a string-keyed array element statement (`++$a["k"];`).
+/// Fixture: `["k" => 5]`, expects the element to read back as 6.
+#[test]
+fn test_pre_increment_array_element() {
+    let out = compile_and_run("<?php $a = [\"k\" => 5]; ++$a[\"k\"]; echo $a[\"k\"];");
+    assert_eq!(out, "6");
+}
+
+/// Verifies prefix `--` on a string-keyed array element statement (`--$a["k"];`).
+/// Fixture: `["k" => 5]`, expects the element to read back as 4.
+#[test]
+fn test_pre_decrement_array_element() {
+    let out = compile_and_run("<?php $a = [\"k\" => 5]; --$a[\"k\"]; echo $a[\"k\"];");
+    assert_eq!(out, "4");
+}
+
+/// Verifies prefix `++` on an integer-indexed array element statement (`++$a[1];`).
+/// Fixture: `[10, 20]`, expects index 1 to read back as 21.
+#[test]
+fn test_pre_increment_indexed_array_element() {
+    let out = compile_and_run("<?php $a = [10, 20]; ++$a[1]; echo $a[1];");
+    assert_eq!(out, "21");
+}
+
+/// Verifies repeated prefix `++` on a property inside a loop accumulates correctly.
+/// Mirrors the Symfony DeepClone `++$value->count;` pattern that motivated the fix.
+/// Fixture: increments `$o->count` three times, expects 3.
+#[test]
+fn test_pre_increment_property_in_loop() {
+    let out = compile_and_run(
+        "<?php class C { public int $count = 0; } $o = new C(); foreach ([1, 2, 3] as $x) { ++$o->count; } echo $o->count;",
+    );
+    assert_eq!(out, "3");
+}
+
 /// Verifies `+=` compound addition on integer locals.
 /// Fixture: `$x = 10; $x += 5;` expects output "15".
 #[test]

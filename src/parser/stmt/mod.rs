@@ -103,7 +103,12 @@ fn parse_stmt_dispatch(
         Token::At => simple::parse_error_suppressed_stmt(tokens, pos, span),
         Token::Variable(_) => assign::parse_variable_stmt(tokens, pos, span),
         Token::This => simple::parse_this_stmt(tokens, pos, span),
-        Token::PlusPlus | Token::MinusMinus => assign::parse_incdec_stmt(tokens, pos, span),
+        Token::PlusPlus | Token::MinusMinus => {
+            match assign::try_parse_prefix_incdec(tokens, pos, span)? {
+                Some(stmt) => Ok(stmt),
+                None => assign::parse_incdec_stmt(tokens, pos, span),
+            }
+        }
         Token::Class => oop::parse_class_decl(tokens, pos, span, false, false, false),
         Token::Enum => oop::parse_enum_decl(tokens, pos, span),
         Token::ReadOnly => oop::parse_readonly_decl(tokens, pos, span),

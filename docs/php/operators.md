@@ -253,6 +253,22 @@ Nullsafe access cannot be used as an assignment target or combined with first-cl
 | `--$i` | Pre-decrement | New value |
 | `$i--` | Post-decrement | Old value |
 
+Increment and decrement work on simple variables in any position. They also work
+on object properties and array elements when used as a standalone statement, where
+the returned value is discarded:
+
+```php
+++$obj->count;   // like $obj->count += 1;
+--$obj->count;
+++$arr["k"];     // like $arr["k"] += 1;
+$arr[0]++;
+```
+
+In statement position the prefix (`++$x`) and postfix (`$x++`) forms produce the
+same effect, since the expression result is unused. Using increment/decrement on a
+property or array element where the produced value is read (for example
+`$y = ++$obj->count;`) is not yet supported.
+
 ## Ternary
 
 ```php

@@ -303,6 +303,54 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
     lower_postfix_incdec_assignment(lhs_expr, is_increment, span).map(Some)
 }
 
+/// Parses a discarded pre-increment/decrement on a complex l-value target
+/// (`++$obj->prop;`, `--$arr[$k];`).
+///
+/// In a statement context the expression result is unused, so a prefix `++`/`--`
+/// is observably identical to the postfix form and lowers to the same
+/// read-modify-write shape as `$target += 1`. A bare local target (`++$x;`) is
+/// left to the existing local-variable parser so its `PreIncrement` AST node,
+/// which downstream passes already handle, is preserved.
+///
+/// Returns `Ok(None)` when the statement does not start with `++`/`--` followed
+/// by a variable and a complex-target marker, so the caller falls back to
+/// `parse_incdec_stmt`.
+pub(in crate::parser::stmt) fn try_parse_prefix_incdec(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Option<Stmt>, CompileError> {
+    let start = *pos;
+    let is_increment = match tokens.get(start).map(|(token, _)| token) {
+        Some(Token::PlusPlus) => true,
+        Some(Token::MinusMinus) => false,
+        _ => return Ok(None),
+    };
+
+    // The l-value must begin with a variable, and the token after it must be a
+    // complex-target marker (`->`, `?->`, `[`). A bare `++$x;` (marker is `;`)
+    // is left to `parse_incdec_stmt`, which keeps the `PreIncrement` node.
+    if !matches!(
+        tokens.get(start + 1).map(|(token, _)| token),
+        Some(Token::Variable(_))
+    ) {
+        return Ok(None);
+    }
+    if !matches!(
+        tokens.get(start + 2).map(|(token, _)| token),
+        Some(Token::Arrow | Token::QuestionArrow | Token::LBracket)
+    ) {
+        return Ok(None);
+    }
+
+    let mut probe = start + 1;
+    let lhs_expr = parse_expr(tokens, &mut probe)?;
+    *pos = probe;
+    expect_semicolon(tokens, pos)?;
+
+    lower_postfix_incdec_assignment(lhs_expr, is_increment, span).map(Some)
+}
+
 /// Parses a scoped (static class member) postfix assignment, handling targets like
 /// `$obj::prop`, `$obj::$prop`, and `$obj::prop[]`. Detects `+=` append style via `[]`.
 /// For compound operators on static properties that cannot be replayed safely, lowers

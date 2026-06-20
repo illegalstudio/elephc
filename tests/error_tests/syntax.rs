@@ -79,6 +79,17 @@ fn test_error_unexpected_character() {
     expect_error("<?php `", "Unexpected character");
 }
 
+/// Verifies that a malformed prefix increment target reports a clean diagnostic.
+/// `++$o->;` enters the complex-l-value prefix-incdec path and fails parsing the
+/// property name after `->` rather than producing a confusing fallback error.
+#[test]
+fn test_error_prefix_increment_malformed_property_target() {
+    expect_error(
+        "<?php $o = 1; ++$o->;",
+        "Expected property or method name after '->'",
+    );
+}
+
 /// Verifies the error diagnostic for empty list destructuring pattern.
 #[test]
 fn test_error_empty_list_destructuring_pattern() {
