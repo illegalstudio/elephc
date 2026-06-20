@@ -99,45 +99,7 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #16");                                     // release the dynamic-object wrapper frame
     emitter.instruction("ret");                                                 // return the boxed object or null Mixed cell to Rust
 
-    label_c_global(emitter, "__elephc_eval_value_object_clone_shallow");
-    emitter.instruction("sub sp, sp, #48");                                     // reserve clone source, destination, and wrapper frame slots
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across clone helper calls
-    emitter.instruction("add x29, sp, #32");                                    // establish a stable clone wrapper frame pointer
-    emitter.instruction("cbz x0, __elephc_eval_value_object_clone_shallow_null"); // null handles cannot be cloned as objects
-    emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
-    emitter.instruction("cmp x9, #6");                                          // tag 6 = object
-    emitter.instruction("b.ne __elephc_eval_value_object_clone_shallow_null");  // non-object values cannot be cloned by this bridge
-    emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
-    emitter.instruction("cbz x9, __elephc_eval_value_object_clone_shallow_null"); // malformed object payloads cannot be cloned
-    abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
-    emitter.instruction("ldr x10, [x10]");                                      // load the compile-time stdClass class id
-    emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
-    emitter.instruction("cmp x11, x10");                                        // check whether the object is stdClass-backed
-    emitter.instruction("b.ne __elephc_eval_value_object_clone_shallow_null");  // non-stdClass objects need a broader clone bridge
-    emitter.instruction("ldr x10, [x9, #8]");                                   // load the source dynamic-property hash pointer
-    emitter.instruction("str x10, [sp, #0]");                                   // save the source hash pointer across allocation
-    emitter.instruction("bl __rt_stdclass_new");                                // allocate a fresh stdClass shell for the clone
-    emitter.instruction("str x0, [sp, #8]");                                    // save the clone object pointer before hash fixup
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the source dynamic-property hash pointer
-    emitter.instruction("cbz x10, __elephc_eval_value_object_clone_shallow_box"); // empty source hashes can keep the fresh shell hash
-    emitter.instruction("ldr x0, [x0, #8]");                                    // load the fresh shell's empty hash pointer
-    emitter.instruction("bl __rt_decref_any");                                  // release the fresh empty hash before installing the clone
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source dynamic-property hash for cloning
-    emitter.instruction("bl __rt_hash_clone_shallow");                          // clone dynamic properties and retain nested values
-    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the clone object pointer
-    emitter.instruction("str x0, [x9, #8]");                                    // install the cloned dynamic-property hash
-    emitter.label("__elephc_eval_value_object_clone_shallow_box");
-    emitter.instruction("ldr x1, [sp, #8]");                                    // move the cloned object pointer into the Mixed payload
-    emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
-    emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the cloned object for Rust
-    emitter.instruction("b __elephc_eval_value_object_clone_shallow_done");     // skip the null sentinel after a successful clone
-    emitter.label("__elephc_eval_value_object_clone_shallow_null");
-    emitter.instruction("mov x0, xzr");                                         // return a null C pointer for unsupported clone inputs
-    emitter.label("__elephc_eval_value_object_clone_shallow_done");
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the clone wrapper frame
-    emitter.instruction("ret");                                                 // return the boxed clone or null failure sentinel
+    emit_aarch64_object_clone_shallow_wrapper(emitter);
 
     label_c_global(emitter, "__elephc_eval_class_exists");
     emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for class-name lookup state
@@ -1558,47 +1520,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed object or null Mixed cell to Rust
 
-    label_c_global(emitter, "__elephc_eval_value_object_clone_shallow");
-    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across clone calls
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable clone wrapper frame pointer
-    emitter.instruction("sub rsp, 32");                                         // reserve source hash and clone object spill slots
-    emitter.instruction("test rdi, rdi");                                       // null handles cannot be cloned as objects
-    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_null_x86"); // branch to the null sentinel for null handles
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed Mixed runtime tag
-    emitter.instruction("cmp r10, 6");                                          // tag 6 = object
-    emitter.instruction("jne __elephc_eval_value_object_clone_shallow_null_x86"); // non-object values cannot be cloned by this bridge
-    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
-    emitter.instruction("test r10, r10");                                       // malformed object payloads cannot be cloned
-    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_null_x86"); // branch to the null sentinel for missing payloads
-    abi::emit_load_symbol_to_reg(emitter, "r11", "_stdclass_class_id", 0);
-    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
-    emitter.instruction("cmp rax, r11");                                        // check whether the object is stdClass-backed
-    emitter.instruction("jne __elephc_eval_value_object_clone_shallow_null_x86"); // non-stdClass objects need a broader clone bridge
-    emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                        // load the source dynamic-property hash pointer
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source hash pointer across allocation
-    emitter.instruction("call __rt_stdclass_new");                              // allocate a fresh stdClass shell for the clone
-    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the clone object pointer before hash fixup
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source dynamic-property hash pointer
-    emitter.instruction("test r10, r10");                                       // empty source hashes can keep the fresh shell hash
-    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_box_x86"); // skip hash replacement when the source hash is absent
-    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the fresh shell's empty hash pointer
-    emitter.instruction("call __rt_decref_any");                                // release the fresh empty hash before installing the clone
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the source dynamic-property hash for cloning
-    emitter.instruction("call __rt_hash_clone_shallow");                        // clone dynamic properties and retain nested values
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the clone object pointer
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // install the cloned dynamic-property hash
-    emitter.label("__elephc_eval_value_object_clone_shallow_box_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // move the cloned object pointer into the Mixed payload
-    emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
-    emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
-    emitter.instruction("call __rt_mixed_from_value");                          // box the cloned object for Rust
-    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_done_x86"); // skip the null sentinel after a successful clone
-    emitter.label("__elephc_eval_value_object_clone_shallow_null_x86");
-    emitter.instruction("xor eax, eax");                                        // return a null C pointer for unsupported clone inputs
-    emitter.label("__elephc_eval_value_object_clone_shallow_done_x86");
-    emitter.instruction("add rsp, 32");                                         // release clone wrapper spill slots
-    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
-    emitter.instruction("ret");                                                 // return the boxed clone or null failure sentinel
+    emit_x86_64_object_clone_shallow_wrapper(emitter);
 
     label_c_global(emitter, "__elephc_eval_class_exists");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
@@ -3626,6 +3548,277 @@ fn emit_x86_64_eval_name_table_exists(
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the metadata-name existence flag to Rust
+}
+
+/// Emits the ARM64 eval bridge wrapper for cloning boxed object cells.
+fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_value_object_clone_shallow");
+    emitter.instruction("sub sp, sp, #80");                                     // reserve source, clone, descriptor, counters, and wrapper frame slots
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address across clone helper calls
+    emitter.instruction("add x29, sp, #64");                                    // establish a stable clone wrapper frame pointer
+    emitter.instruction("cbz x0, __elephc_eval_value_object_clone_shallow_null"); // null handles cannot be cloned as objects
+    emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
+    emitter.instruction("cmp x9, #6");                                          // tag 6 = object
+    emitter.instruction("b.ne __elephc_eval_value_object_clone_shallow_null");  // non-object values cannot be cloned by this bridge
+    emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
+    emitter.instruction("cbz x9, __elephc_eval_value_object_clone_shallow_null"); // malformed object payloads cannot be cloned
+    emitter.instruction("str x9, [sp, #0]");                                    // save the source object payload pointer
+    emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
+    emitter.instruction("str x11, [sp, #56]");                                  // save class id across allocation and ownership calls
+    emit_aarch64_reject_runtime_managed_clone_classes(emitter, "x11", "__elephc_eval_value_object_clone_shallow_null");
+    abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");
+    emitter.instruction("ldr x10, [x10]");                                      // load the number of emitted class descriptors
+    emitter.instruction("cmp x11, x10");                                        // is this class id inside the descriptor table?
+    emitter.instruction("b.hs __elephc_eval_value_object_clone_shallow_null");  // unknown class layouts cannot be cloned by the eval bridge
+    abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_ptrs");
+    emitter.instruction("lsl x12, x11, #3");                                    // scale class id to an 8-byte descriptor pointer slot
+    emitter.instruction("ldr x10, [x10, x12]");                                 // load the class property-tag descriptor pointer
+    emitter.instruction("str x10, [sp, #16]");                                  // save descriptor pointer for the property-copy loop
+    emitter.instruction("ldr w12, [x9, #-16]");                                 // load the object payload size from the heap header
+    emitter.instruction("str x12, [sp, #48]");                                  // save payload size for allocation and dyn-prop detection
+    emitter.instruction("mov x0, x12");                                         // pass the source payload size to the heap allocator
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate a clone object payload with the same byte size
+    emitter.instruction("mov x9, #4");                                          // heap kind 4 marks object instances for ownership helpers
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the uniform object heap header
+    emitter.instruction("ldr x11, [sp, #56]");                                  // reload the source class id
+    emitter.instruction("str x11, [x0]");                                       // store the class id at the clone payload head
+    emitter.instruction("str x0, [sp, #8]");                                    // save the clone object payload pointer
+    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the payload size
+    emitter.instruction("sub x12, x12, #8");                                    // remove the leading class id field from the clone layout
+    emitter.instruction("lsr x12, x12, #4");                                    // derive declared-property slot count from the payload size
+    emitter.instruction("str x12, [sp, #24]");                                  // save property count for the copy loop
+    emitter.instruction("str xzr, [sp, #32]");                                  // initialize property-copy index to zero
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_prop_loop");
+    emitter.instruction("ldr x12, [sp, #32]");                                  // reload the current property index
+    emitter.instruction("ldr x13, [sp, #24]");                                  // reload the declared-property slot count
+    emitter.instruction("cmp x12, x13");                                        // has every declared property slot been copied?
+    emitter.instruction("b.ge __elephc_eval_value_object_clone_shallow_dyn");   // move on to the optional dynamic-property hash
+    emitter.instruction("mov x10, #16");                                        // each declared-property slot is two 8-byte words
+    emitter.instruction("mul x10, x12, x10");                                   // compute the byte offset inside the property region
+    emitter.instruction("add x10, x10, #8");                                    // skip the leading class id to reach this slot
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source object pointer
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the clone object pointer
+    emitter.instruction("ldr x15, [x9, x10]");                                  // copy the source property low word and keep it for retains
+    emitter.instruction("str x15, [x11, x10]");                                 // store the property low word on the clone
+    emitter.instruction("add x10, x10, #8");                                    // advance to the high word of the property slot
+    emitter.instruction("ldr x14, [x9, x10]");                                  // copy the source property high word
+    emitter.instruction("str x14, [x11, x10]");                                 // store the property high word on the clone
+    emitter.instruction("ldr x11, [sp, #16]");                                  // reload the property-tag descriptor pointer
+    emitter.instruction("ldrb w14, [x11, x12]");                                // load the compile-time ownership tag for this slot
+    emitter.instruction("cmp x14, #1");                                         // does the slot hold a retained string payload?
+    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); // retained string slots need an extra owner reference
+    emitter.instruction("cmp x14, #4");                                         // does the slot hold a retained indexed-array payload?
+    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); // retained array slots need an extra owner reference
+    emitter.instruction("cmp x14, #5");                                         // does the slot hold a retained associative-array payload?
+    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); // retained hash slots need an extra owner reference
+    emitter.instruction("cmp x14, #6");                                         // does the slot hold a retained object payload?
+    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); // retained object slots need an extra owner reference
+    emitter.instruction("cmp x14, #7");                                         // does the slot hold a retained boxed Mixed payload?
+    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); // retained Mixed slots need an extra owner reference
+    emitter.instruction("b __elephc_eval_value_object_clone_shallow_next");     // scalar slots are copied without ownership changes
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_retain");
+    emitter.instruction("str x12, [sp, #32]");                                  // preserve property index across the retain helper
+    emitter.instruction("mov x0, x15");                                         // pass the copied heap payload to the retain helper
+    emitter.instruction("bl __rt_incref");                                      // retain the shared property payload for the cloned object
+    emitter.instruction("ldr x12, [sp, #32]");                                  // restore property index after the retain helper
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_next");
+    emitter.instruction("add x12, x12, #1");                                    // advance to the next declared-property slot
+    emitter.instruction("str x12, [sp, #32]");                                  // save the advanced property-copy index
+    emitter.instruction("b __elephc_eval_value_object_clone_shallow_prop_loop"); // continue copying declared properties
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_dyn");
+    emitter.instruction("ldr x12, [sp, #48]");                                  // reload clone payload size for dynamic-property detection
+    emitter.instruction("sub x13, x12, #8");                                    // isolate bytes after the leading class id field
+    emitter.instruction("and x14, x13, #15");                                   // check whether an 8-byte dynamic-property tail exists
+    emitter.instruction("cmp x14, #8");                                         // remainder 8 means the layout has a dyn-props hash slot
+    emitter.instruction("b.ne __elephc_eval_value_object_clone_shallow_box");   // no dynamic hash slot: box the copied clone
+    emitter.instruction("sub x13, x12, #8");                                    // compute dyn-props slot offset as payload_size - 8
+    emitter.instruction("str x13, [sp, #40]");                                  // save dyn-props slot offset across hash cloning
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source object pointer
+    emitter.instruction("ldr x10, [x9, x13]");                                  // load the source dynamic-property hash pointer
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the clone object pointer
+    emitter.instruction("cbz x10, __elephc_eval_value_object_clone_shallow_dyn_null"); // null source hash stays null on the clone
+    emitter.instruction("mov x0, x10");                                         // pass the source dynamic hash to the clone helper
+    emitter.instruction("bl __rt_hash_clone_shallow");                          // clone dynamic properties and retain nested values
+    emitter.instruction("ldr x13, [sp, #40]");                                  // restore the dynamic-property slot offset
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the clone object pointer after hash cloning
+    emitter.instruction("str x0, [x11, x13]");                                  // install the cloned dynamic-property hash
+    emitter.instruction("b __elephc_eval_value_object_clone_shallow_box");      // box the clone after dynamic properties are installed
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_dyn_null");
+    emitter.instruction("str xzr, [x11, x13]");                                 // clear the clone's dynamic-property hash slot
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_box");
+    emitter.instruction("ldr x1, [sp, #8]");                                    // move the cloned object pointer into the Mixed payload
+    emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
+    emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the cloned object for Rust
+    emitter.instruction("b __elephc_eval_value_object_clone_shallow_done");     // skip the null sentinel after a successful clone
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_null");
+    emitter.instruction("mov x0, xzr");                                         // return a null C pointer for unsupported clone inputs
+    emitter.label("__elephc_eval_value_object_clone_shallow_done");
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the clone wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed clone or null failure sentinel
+}
+
+/// Emits the x86_64 eval bridge wrapper for cloning boxed object cells.
+fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_value_object_clone_shallow");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across clone calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable clone wrapper frame pointer
+    emitter.instruction("sub rsp, 64");                                         // reserve source, clone, descriptor, counters, and payload slots
+    emitter.instruction("test rdi, rdi");                                       // null handles cannot be cloned as objects
+    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_null_x86"); // branch to the null sentinel for null handles
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed Mixed runtime tag
+    emitter.instruction("cmp r10, 6");                                          // tag 6 = object
+    emitter.instruction("jne __elephc_eval_value_object_clone_shallow_null_x86"); // non-object values cannot be cloned by this bridge
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
+    emitter.instruction("test r10, r10");                                       // malformed object payloads cannot be cloned
+    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_null_x86"); // branch to the null sentinel for missing payloads
+    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the source object payload pointer
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save class id across allocation and ownership calls
+    emit_x86_64_reject_runtime_managed_clone_classes(emitter, "rax", "__elephc_eval_value_object_clone_shallow_null_x86");
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_class_gc_desc_count", 0);
+    emitter.instruction("cmp rax, r11");                                        // is this class id inside the descriptor table?
+    emitter.instruction("jae __elephc_eval_value_object_clone_shallow_null_x86"); // unknown class layouts cannot be cloned by the eval bridge
+    abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_ptrs");
+    emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load the class property-tag descriptor pointer
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save descriptor pointer for the property-copy loop
+    emitter.instruction("mov ecx, DWORD PTR [r10 - 16]");                       // load the object payload size from the heap header
+    emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save payload size for allocation and dyn-prop detection
+    emitter.instruction("mov rax, rcx");                                        // pass the source payload size to the heap allocator
+    emitter.instruction("call __rt_heap_alloc");                                // allocate a clone object payload with the same byte size
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the x86_64 object heap kind word
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform object heap header
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the source class id
+    emitter.instruction("mov QWORD PTR [rax], rcx");                            // store the class id at the clone payload head
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the clone object payload pointer
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the payload size
+    emitter.instruction("sub r10, 8");                                          // remove the leading class id field from the clone layout
+    emitter.instruction("shr r10, 4");                                          // derive declared-property slot count from the payload size
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save property count for the copy loop
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize property-copy index to zero
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_prop_loop_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current property index
+    emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // has every declared property slot been copied?
+    emitter.instruction("jae __elephc_eval_value_object_clone_shallow_dyn_x86"); // move on to the optional dynamic-property hash
+    emitter.instruction("mov rcx, r10");                                        // copy property index before scaling it into a byte offset
+    emitter.instruction("shl rcx, 4");                                          // each declared-property slot is two 8-byte words
+    emitter.instruction("add rcx, 8");                                          // skip the leading class id to reach this slot
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the source object pointer
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the clone object pointer
+    emitter.instruction("mov rax, QWORD PTR [r11 + rcx]");                      // copy the source property low word
+    emitter.instruction("mov rdx, QWORD PTR [r11 + rcx + 8]");                  // copy the source property high word
+    emitter.instruction("mov QWORD PTR [r8 + rcx], rax");                       // store the property low word on the clone
+    emitter.instruction("mov QWORD PTR [r8 + rcx + 8], rdx");                   // store the property high word on the clone
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the property-tag descriptor pointer
+    emitter.instruction("movzx r11, BYTE PTR [r9 + r10]");                      // load the compile-time ownership tag for this slot
+    emitter.instruction("cmp r11, 1");                                          // does the slot hold a retained string payload?
+    emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); // retained string slots need an extra owner reference
+    emitter.instruction("cmp r11, 4");                                          // does the slot hold a retained indexed-array payload?
+    emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); // retained array slots need an extra owner reference
+    emitter.instruction("cmp r11, 5");                                          // does the slot hold a retained associative-array payload?
+    emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); // retained hash slots need an extra owner reference
+    emitter.instruction("cmp r11, 6");                                          // does the slot hold a retained object payload?
+    emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); // retained object slots need an extra owner reference
+    emitter.instruction("cmp r11, 7");                                          // does the slot hold a retained boxed Mixed payload?
+    emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); // retained Mixed slots need an extra owner reference
+    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_next_x86"); // scalar slots are copied without ownership changes
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_retain_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve property index across the retain helper
+    emitter.instruction("mov rdi, rax");                                        // pass the copied heap payload to the retain helper
+    emitter.instruction("call __rt_incref");                                    // retain the shared property payload for the cloned object
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_next_x86");
+    emitter.instruction("add QWORD PTR [rbp - 40], 1");                         // advance to the next declared-property slot
+    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_prop_loop_x86"); // continue copying declared properties
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_dyn_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload clone payload size for dynamic-property detection
+    emitter.instruction("mov r11, r10");                                        // copy payload size before deriving the property region size
+    emitter.instruction("sub r11, 8");                                          // isolate bytes after the leading class id field
+    emitter.instruction("and r11, 15");                                         // check whether an 8-byte dynamic-property tail exists
+    emitter.instruction("cmp r11, 8");                                          // remainder 8 means the layout has a dyn-props hash slot
+    emitter.instruction("jne __elephc_eval_value_object_clone_shallow_box_x86"); // no dynamic hash slot: box the copied clone
+    emitter.instruction("sub r10, 8");                                          // compute dyn-props slot offset as payload_size - 8
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save dyn-props slot offset across hash cloning
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the source object pointer
+    emitter.instruction("mov rax, QWORD PTR [r11 + r10]");                      // load the source dynamic-property hash pointer
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the clone object pointer
+    emitter.instruction("test rax, rax");                                       // is the source dynamic-property hash present?
+    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_dyn_null_x86"); // null source hash stays null on the clone
+    emitter.instruction("mov rdi, rax");                                        // pass the source dynamic hash to the clone helper
+    emitter.instruction("call __rt_hash_clone_shallow");                        // clone dynamic properties and retain nested values
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // restore the dynamic-property slot offset
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the clone object pointer after hash cloning
+    emitter.instruction("mov QWORD PTR [r11 + r10], rax");                      // install the cloned dynamic-property hash
+    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_box_x86"); // box the clone after dynamic properties are installed
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_dyn_null_x86");
+    emitter.instruction("mov QWORD PTR [r11 + r10], 0");                        // clear the clone's dynamic-property hash slot
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_box_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // move the cloned object pointer into the Mixed payload
+    emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
+    emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the cloned object for Rust
+    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_done_x86"); // skip the null sentinel after a successful clone
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_null_x86");
+    emitter.instruction("xor eax, eax");                                        // return a null C pointer for unsupported clone inputs
+    emitter.label("__elephc_eval_value_object_clone_shallow_done_x86");
+    emitter.instruction("add rsp, 64");                                         // release clone wrapper spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed clone or null failure sentinel
+}
+
+/// Emits ARM64 comparisons that keep runtime-managed object payloads out of the generic clone path.
+fn emit_aarch64_reject_runtime_managed_clone_classes(
+    emitter: &mut Emitter,
+    class_id_reg: &str,
+    reject_label: &str,
+) {
+    for symbol in [
+        "_fiber_class_id",
+        "_generator_class_id",
+        "_spl_dll_class_id",
+        "_spl_stack_class_id",
+        "_spl_queue_class_id",
+        "_spl_fixed_array_class_id",
+    ] {
+        abi::emit_symbol_address(emitter, "x10", symbol);
+        emitter.instruction("ldr x10, [x10]");                                  // load one runtime-managed class id sentinel
+        emitter.instruction(&format!("cmp {}, x10", class_id_reg));             // compare source class id with the unsupported payload sentinel
+        emitter.instruction(&format!("b.eq {}", reject_label));                 // reject custom runtime payload layouts
+    }
+}
+
+/// Emits x86_64 comparisons that keep runtime-managed object payloads out of the generic clone path.
+fn emit_x86_64_reject_runtime_managed_clone_classes(
+    emitter: &mut Emitter,
+    class_id_reg: &str,
+    reject_label: &str,
+) {
+    for symbol in [
+        "_fiber_class_id",
+        "_generator_class_id",
+        "_spl_dll_class_id",
+        "_spl_stack_class_id",
+        "_spl_queue_class_id",
+        "_spl_fixed_array_class_id",
+    ] {
+        abi::emit_load_symbol_to_reg(emitter, "r11", symbol, 0);
+        emitter.instruction(&format!("cmp {}, r11", class_id_reg));             // compare source class id with the unsupported payload sentinel
+        emitter.instruction(&format!("je {}", reject_label));                   // reject custom runtime payload layouts
+    }
 }
 
 /// Emits a global label with platform C-symbol mangling.

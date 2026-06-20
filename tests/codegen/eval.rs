@@ -8363,6 +8363,43 @@ echo $second->name;');
     assert_eq!(out, "A:A:clone:A:B");
 }
 
+/// Verifies eval `clone` shallow-copies ordinary emitted AOT objects.
+#[test]
+fn test_eval_clone_aot_object_expression() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCloneAotBox {
+    public string $name;
+    public int $count;
+
+    public function __construct(string $name, int $count) {
+        $this->name = $name;
+        $this->count = $count;
+    }
+
+    public function run(): void {
+        eval('$copy = clone $this;
+$copy->name = $copy->name . ":copy";
+$copy->count = $copy->count + 10;
+echo $this->name; echo ":";
+echo $this->count; echo ":";
+echo $copy->name; echo ":";
+echo $copy->count; echo ":";
+$plain = new stdClass();
+$plain->name = "S";
+$plainCopy = clone $plain;
+$plainCopy->name = "S:copy";
+echo $plain->name; echo ":";
+echo $plainCopy->name;');
+    }
+}
+
+(new EvalCloneAotBox("A", 2))->run();
+"#,
+    );
+    assert_eq!(out, "A:2:A:copy:12:S:S:copy");
+}
+
 /// Verifies eval ReflectionClass::isIterable reports eval and builtin class metadata.
 #[test]
 fn test_eval_reflection_class_iterable_predicate() {

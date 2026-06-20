@@ -74,7 +74,7 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Arrays | Indexed and associative literals, modern `[...]` and legacy `array(...)`, keyed elements, append writes (`$array[] = value`), numeric-index reads/writes, and string-key reads/writes. |
 | Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, invokable eval objects, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
 | Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; anonymous `new class [(args)] [extends Parent] [implements Iface, ...] { ... }` expressions; `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, and string-keyed named unpacking for supported public scalar/Mixed constructor signatures. |
-| Object cloning | `clone $object` shallow-copies eval-declared objects and `stdClass` storage. Eval-declared `__clone()` hooks run after the copy and obey public/protected/private visibility. |
+| Object cloning | `clone $object` shallow-copies eval-declared objects, `stdClass` storage, and ordinary emitted/AOT object storage. Eval-declared `__clone()` hooks run after the copy and obey public/protected/private visibility. |
 | Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, and by-reference parameters for direct variable, array-element, and object-property arguments. Missing or inaccessible eval methods dispatch through `__call()` / `__callStatic()` when those hooks are available. Runtime/AOT object-method and static-method fallback supports the same argument binding for supported public scalar/Mixed method signatures. |
 | Includes | `include`, `include_once`, `require`, and `require_once` are expressions. |
 | Magic constants | `__LINE__`, call-site `__FILE__` / `__DIR__`, empty eval-scope `__CLASS__` / `__TRAIT__`, namespace-aware `__NAMESPACE__`, and eval-declared-function `__FUNCTION__` / `__METHOD__`. |
@@ -378,9 +378,10 @@ for supported static members, class constants, and class-name literals.
 Eval object construction can allocate eval-declared classes, `stdClass`, and
 emitted AOT classes visible through runtime class metadata. Missing class names
 during eval object construction fail with an eval runtime fatal diagnostic.
-`clone $object` creates a shallow copy for eval-declared objects and `stdClass`
-objects. Eval `__clone()` hooks are invoked on the cloned object after storage
-copying and use the same runtime visibility checks as method calls.
+`clone $object` creates a shallow copy for eval-declared objects, `stdClass`
+objects, and ordinary emitted/AOT objects. Eval `__clone()` hooks are invoked on
+the cloned object after storage copying and use the same runtime visibility
+checks as method calls.
 
 AOT and eval-declared class-name probes are visible through `class_exists()`.
 Eval object relation probes through `instanceof`, `is_a()`, and `is_subclass_of()` use
@@ -540,9 +541,9 @@ and attribute slice, Reflection type APIs beyond retained parameter, property,
 and function/method return metadata, broader
 parameter default-value objects beyond the eval-supported
 constant-expression subset, and broader generated/AOT method bridge signatures beyond the current public
-non-by-reference fixed scalar/Mixed slice. Eval object cloning currently covers
-eval-declared and `stdClass` objects; cloning emitted AOT objects through the
-eval bridge is still outside that bridge slice.
+non-by-reference fixed scalar/Mixed slice. Eval object cloning covers ordinary
+emitted/AOT storage, but AOT `__clone()` hook dispatch through eval clone is
+still outside that bridge slice.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`
