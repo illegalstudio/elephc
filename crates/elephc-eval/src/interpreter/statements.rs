@@ -184,7 +184,7 @@ pub(in crate::interpreter) fn execute_stmt(
         EvalStmt::Return(Some(expr)) => Ok(EvalControl::Return(eval_expr(
             expr, context, scope, values,
         )?)),
-        EvalStmt::Return(None) => Ok(EvalControl::Return(values.null()?)),
+        EvalStmt::Return(None) => Ok(EvalControl::ReturnVoid),
         EvalStmt::ReferenceAssign { target, source } => {
             for replaced in set_reference_alias(context, scope, target, source, values)? {
                 values.release(replaced)?;
@@ -271,6 +271,7 @@ pub(in crate::interpreter) fn execute_stmt(
                     EvalControl::None | EvalControl::Continue => {}
                     EvalControl::Break => break,
                     EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
+                    EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
                     EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
                 }
             }
@@ -328,7 +329,10 @@ pub(in crate::interpreter) fn release_overridden_control(
 ) -> Result<(), EvalStatus> {
     match control {
         EvalControl::Return(value) | EvalControl::Throw(value) => values.release(value),
-        EvalControl::None | EvalControl::Break | EvalControl::Continue => Ok(()),
+        EvalControl::None
+        | EvalControl::ReturnVoid
+        | EvalControl::Break
+        | EvalControl::Continue => Ok(()),
     }
 }
 
@@ -3859,20 +3863,21 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_flags(
         context,
         values,
     );
+    let return_result = match (persist_result, writeback_result, result) {
+        (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
+        (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            method.return_type(),
+            Some(class_name),
+            Some(called_class_name),
+            control,
+            context,
+            values,
+        ),
+    };
     context.pop_called_class_scope();
     context.pop_class_scope();
     context.pop_function();
-    persist_result?;
-    writeback_result?;
-    match result? {
-        EvalControl::None => values.null(),
-        EvalControl::Return(result) => Ok(result),
-        EvalControl::Throw(result) => {
-            context.set_pending_throw(result);
-            Err(EvalStatus::UncaughtThrowable)
-        }
-        EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),
-    }
+    return_result
 }
 
 /// Executes one eval-declared static class method without binding `$this`.
@@ -3951,20 +3956,21 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_fla
         context,
         values,
     );
+    let return_result = match (persist_result, writeback_result, result) {
+        (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
+        (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            method.return_type(),
+            Some(class_name),
+            Some(called_class_name),
+            control,
+            context,
+            values,
+        ),
+    };
     context.pop_called_class_scope();
     context.pop_class_scope();
     context.pop_function();
-    persist_result?;
-    writeback_result?;
-    match result? {
-        EvalControl::None => values.null(),
-        EvalControl::Return(result) => Ok(result),
-        EvalControl::Throw(result) => {
-            context.set_pending_throw(result);
-            Err(EvalStatus::UncaughtThrowable)
-        }
-        EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),
-    }
+    return_result
 }
 
 /// Wraps positional method arguments into the shared dynamic-call binding shape.
@@ -4069,6 +4075,7 @@ pub(in crate::interpreter) fn execute_switch_stmt(
             EvalControl::None => {}
             EvalControl::Break | EvalControl::Continue => break,
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
+            EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
         }
     }
@@ -4088,6 +4095,7 @@ pub(in crate::interpreter) fn execute_do_while_stmt(
             EvalControl::None | EvalControl::Continue => {}
             EvalControl::Break => break,
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
+            EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
         }
         let condition = eval_expr(condition, context, scope, values)?;
@@ -4112,6 +4120,7 @@ pub(in crate::interpreter) fn execute_for_stmt(
         EvalControl::None | EvalControl::Continue => {}
         EvalControl::Break => return Ok(EvalControl::None),
         EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
+        EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
         EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
     }
     loop {
@@ -4125,12 +4134,14 @@ pub(in crate::interpreter) fn execute_for_stmt(
             EvalControl::None | EvalControl::Continue => {}
             EvalControl::Break => break,
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
+            EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
         }
         match execute_statements(update, context, scope, values)? {
             EvalControl::None | EvalControl::Continue => {}
             EvalControl::Break => break,
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
+            EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
         }
     }
@@ -4178,6 +4189,7 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
             EvalControl::None | EvalControl::Continue => {}
             EvalControl::Break => break,
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
+            EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
         }
     }

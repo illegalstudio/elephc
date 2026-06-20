@@ -113,6 +113,7 @@ fn eval_execute_include_bytes(
         match eval_execute_include_code(&bytes[code_start..code_end], path, context, scope, values)?
         {
             EvalControl::None => {}
+            EvalControl::ReturnVoid => return values.null(),
             EvalControl::Return(value) => return Ok(value),
             EvalControl::Throw(value) => {
                 context.set_pending_throw(value);

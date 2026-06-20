@@ -996,6 +996,93 @@ class EvalReturnMixedChildBad extends EvalReturnNullableBase {
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies eval enforces declared method return values at runtime.
+#[test]
+fn execute_program_enforces_eval_method_return_type_values() {
+    let program = parse_fragment(
+        br#"class EvalReturnRuntimeBase {
+    public function id(): int { return "12"; }
+    public function makeSelf(): self { return new EvalReturnRuntimeBase(); }
+    public function done(): void { return; }
+}
+class EvalReturnRuntimeChild extends EvalReturnRuntimeBase {}
+$child = new EvalReturnRuntimeChild();
+echo $child->id(); echo ":";
+echo get_class($child->makeSelf()); echo ":";
+$child->done();
+return 3;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "12:EvalReturnRuntimeBase:");
+    assert_eq!(values.get(result), FakeValue::Int(3));
+}
+
+/// Verifies eval rejects method return values that do not satisfy declarations.
+#[test]
+fn execute_program_rejects_invalid_eval_method_return_type_values() {
+    let bad_scalar = parse_fragment(
+        br#"class EvalReturnBadScalar {
+    public function id(): int { return "nope"; }
+}
+$box = new EvalReturnBadScalar();
+return $box->id();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&bad_scalar, &mut scope, &mut values)
+        .expect_err("non-numeric string should fail int return type");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let bad_void = parse_fragment(
+        br#"class EvalReturnBadVoid {
+    public function done(): void { return null; }
+}
+$box = new EvalReturnBadVoid();
+return $box->done();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&bad_void, &mut scope, &mut values)
+        .expect_err("explicit value should fail void return type");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let bad_static = parse_fragment(
+        br#"class EvalReturnStaticRuntimeBase {
+    public function make(): static { return new EvalReturnStaticRuntimeBase(); }
+}
+class EvalReturnStaticRuntimeChild extends EvalReturnStaticRuntimeBase {}
+$child = new EvalReturnStaticRuntimeChild();
+return $child->make();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&bad_static, &mut scope, &mut values)
+        .expect_err("base instance should fail inherited static return type");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let implicit_return = parse_fragment(
+        br#"class EvalReturnImplicitBad {
+    public function id(): ?int {}
+}
+$box = new EvalReturnImplicitBad();
+return $box->id();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&implicit_return, &mut scope, &mut values)
+        .expect_err("implicit return should fail non-void return type");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval rejects classes missing methods required by eval interfaces.
 #[test]
 fn execute_program_rejects_missing_dynamic_interface_method() {

@@ -14,6 +14,7 @@ use crate::value::RuntimeCellHandle;
 /// Internal statement-control result used to propagate eval returns and loops.
 pub(super) enum EvalControl {
     None,
+    ReturnVoid,
     Return(RuntimeCellHandle),
     Throw(RuntimeCellHandle),
     Break,

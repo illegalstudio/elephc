@@ -5067,6 +5067,88 @@ class EvalWiderReturnImpl implements EvalNeedsStringReturn {
     );
 }
 
+/// Verifies eval-declared methods enforce declared return values at runtime.
+#[test]
+fn test_eval_declared_method_return_type_values() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReturnRuntimeBase {
+    public function id(): int { return "12"; }
+    public function makeSelf(): self { return new EvalReturnRuntimeBase(); }
+    public function done(): void { return; }
+}
+class EvalReturnRuntimeChild extends EvalReturnRuntimeBase {}
+$child = new EvalReturnRuntimeChild();
+echo $child->id();
+echo ":" . get_class($child->makeSelf()) . ":";
+$child->done();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "12:EvalReturnRuntimeBase:");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalReturnBadScalar {
+    public function id(): int { return "nope"; }
+}
+$box = new EvalReturnBadScalar();
+echo $box->id();');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalReturnBadVoid {
+    public function done(): void { return null; }
+}
+$box = new EvalReturnBadVoid();
+$box->done();');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalReturnStaticRuntimeBase {
+    public function make(): static { return new EvalReturnStaticRuntimeBase(); }
+}
+class EvalReturnStaticRuntimeChild extends EvalReturnStaticRuntimeBase {}
+$child = new EvalReturnStaticRuntimeChild();
+$child->make();');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalReturnImplicitBad {
+    public function id(): ?int {}
+}
+$box = new EvalReturnImplicitBad();
+$box->id();');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared abstract classes can defer interface methods to concrete children.
 #[test]
 fn test_eval_declared_abstract_class_and_final_method_contracts() {

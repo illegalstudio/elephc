@@ -151,6 +151,9 @@ trait, and enum constants including `final` constants, class-level attributes,
 Eval validates method override and interface method return types with PHP-style
 covariance for supported declared return type metadata, including nullable,
 union, `mixed`, `self`, `parent`, `static`, class, and interface return types.
+Eval-declared method calls also enforce declared return values at runtime, with
+weak scalar coercions and PHP-style handling for `void`, `never`, `self`,
+`parent`, and late-bound `static`.
 `isset()`, `empty()`, and `unset()` on missing or inaccessible eval properties
 dispatch through `__isset()` and `__unset()` using PHP's `empty()` gate
 ordering. `instanceof` works with eval-declared classes and interfaces,

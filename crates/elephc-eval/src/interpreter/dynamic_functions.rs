@@ -628,7 +628,7 @@ fn eval_method_parameter_runtime_class_name(
 }
 
 /// Applies PHP weak-mode scalar coercion for supported scalar parameter types.
-fn eval_method_parameter_scalar_coercion(
+pub(in crate::interpreter) fn eval_method_parameter_scalar_coercion(
     variant: &EvalParameterTypeVariant,
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
@@ -926,18 +926,19 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
         context,
         values,
     );
+    let return_result = match (persist_result, writeback_result, result) {
+        (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
+        (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            function.return_type(),
+            None,
+            None,
+            control,
+            context,
+            values,
+        ),
+    };
     context.pop_function();
-    persist_result?;
-    writeback_result?;
-    match result? {
-        EvalControl::None => values.null(),
-        EvalControl::Return(result) => Ok(result),
-        EvalControl::Throw(result) => {
-            context.set_pending_throw(result);
-            Err(EvalStatus::UncaughtThrowable)
-        }
-        EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),
-    }
+    return_result
 }
 
 /// Persists static local variables from one eval-declared function activation.

@@ -25,6 +25,7 @@ mod json;
 mod libc_shims;
 mod reflection;
 mod return_type_compat;
+mod return_values;
 mod runtime_ops;
 mod scope_cells;
 mod statements;
@@ -65,6 +66,7 @@ use libc_shims::*;
 use reflection::*;
 use regex::bytes::{Captures, Regex, RegexBuilder};
 use return_type_compat::*;
+use return_values::*;
 pub use runtime_ops::RuntimeValueOps;
 use runtime_ops::*;
 use scope_cells::*;
@@ -110,7 +112,7 @@ pub fn execute_program_outcome_with_context(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
     match execute_statements(program.statements(), context, scope, values) {
-        Ok(EvalControl::None) => values.null().map(EvalOutcome::Value),
+        Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
         Ok(EvalControl::Return(result)) => Ok(EvalOutcome::Value(result)),
         Ok(EvalControl::Throw(result)) => Ok(EvalOutcome::Throwable(result)),
         Ok(EvalControl::Break | EvalControl::Continue) => Err(EvalStatus::UnsupportedConstruct),
