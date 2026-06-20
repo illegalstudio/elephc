@@ -242,6 +242,41 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod exposes PHP-compatible name and origin predicate metadata.
+#[test]
+fn execute_program_reflection_method_reports_name_and_origin_predicates() {
+    let program = parse_fragment(
+        br#"namespace EvalReflectMethodNs;
+class Target {
+    public function run(...$items) {}
+}
+$ref = new \ReflectionMethod(Target::class, "run");
+echo $ref->getShortName(); echo ":";
+echo $ref->getNamespaceName(); echo ":";
+echo $ref->inNamespace() ? "Y" : "N"; echo ":";
+echo $ref->isInternal() ? "I" : "i";
+echo $ref->isUserDefined() ? "U" : "u"; echo ":";
+echo $ref->isClosure() ? "C" : "c"; echo ":";
+echo $ref->isDeprecated() ? "D" : "d"; echo ":";
+echo $ref->returnsReference() ? "R" : "r"; echo ":";
+echo $ref->hasReturnType() ? "T" : "t"; echo ":";
+echo $ref->getReturnType() === null ? "N" : "n"; echo ":";
+echo $ref->isGenerator() ? "G" : "g"; echo ":";
+echo $ref->isVariadic() ? "V" : "v"; echo ":";
+echo $ref->hasTentativeReturnType() ? "H" : "h"; echo ":";
+echo $ref->getTentativeReturnType() === null ? "Q" : "q";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "run::N:iU:c:d:r:t:N:g:V:h:Q");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass exposes eval class namespace-derived name parts.
 #[test]
 fn execute_program_reflects_eval_class_name_parts() {

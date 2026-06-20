@@ -137,7 +137,8 @@ containers to eval-declared functions.
 ## Classes and objects
 
 Eval-declared classes support inheritance, public/protected/private properties
-and methods, constructor property promotion for non-by-reference parameters,
+and methods, constructor property promotion including by-reference promotion
+for variable, array-element, object-property, and default-value targets,
 concrete property `get` / `set` hooks, interface property hook contract checks,
 abstract property hook contracts, property-level `readonly`, `readonly class`,
 `__construct()`, abstract classes and methods, final classes, methods, and
@@ -187,6 +188,16 @@ report `false` / `null` for eval-declared user symbols.
 `ReflectionClass::getShortName()`,
 `ReflectionClass::getNamespaceName()`, and `ReflectionClass::inNamespace()`
 derive namespace-aware parts from the resolved eval class-like name.
+`ReflectionFunction::getShortName()`, `getNamespaceName()`, and
+`inNamespace()` derive namespace-aware parts from the reflected eval function
+name. `ReflectionMethod::getShortName()` reports the reflected method name,
+while `ReflectionMethod::getNamespaceName()` reports an empty string and
+`inNamespace()` reports `false`, matching PHP's method reflection behavior.
+`ReflectionFunction` and `ReflectionMethod` report eval user-symbol defaults
+through `isInternal()`, `isUserDefined()`, `isClosure()`, `isDeprecated()`,
+`returnsReference()`, `hasReturnType()`, `getReturnType()`, `isGenerator()`,
+`isVariadic()`, `hasTentativeReturnType()`, and `getTentativeReturnType()`.
+`ReflectionFunction::isDisabled()` reports `false` for eval-visible functions.
 `ReflectionClass::isFinal()`, `ReflectionClass::isAbstract()`,
 `ReflectionClass::isInterface()`, `ReflectionClass::isTrait()`, and
 `ReflectionClass::isEnum()` report eval class-like metadata, including

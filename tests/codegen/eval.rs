@@ -7740,6 +7740,60 @@ echo ($method->getExtension() === null) ? "Z" : "z";');
     assert_eq!(out.stdout, "C:F:M:P:K:U:B:E:N:O:X:Y:Z");
 }
 
+/// Verifies eval ReflectionFunction/Method expose name and origin predicate metadata.
+#[test]
+fn test_eval_reflection_function_and_method_name_origin_predicates() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('namespace EvalReflectNameNs;
+function sample(...$items) {}
+class Target {
+    public function run(...$items) {}
+}
+$fn = new \ReflectionFunction("EvalReflectNameNs\\\\sample");
+$method = new \ReflectionMethod(Target::class, "run");
+echo $fn->getShortName() . ":";
+echo $fn->getNamespaceName() . ":";
+echo ($fn->inNamespace() ? "Y" : "N") . ":";
+echo ($fn->isInternal() ? "I" : "i");
+echo ($fn->isUserDefined() ? "U" : "u") . ":";
+echo ($fn->isClosure() ? "C" : "c") . ":";
+echo ($fn->isDeprecated() ? "D" : "d") . ":";
+echo ($fn->returnsReference() ? "R" : "r") . ":";
+echo ($fn->hasReturnType() ? "T" : "t") . ":";
+echo ($fn->getReturnType() === null ? "N" : "n") . ":";
+echo ($fn->isGenerator() ? "G" : "g") . ":";
+echo ($fn->isVariadic() ? "V" : "v") . ":";
+echo ($fn->hasTentativeReturnType() ? "H" : "h") . ":";
+echo ($fn->getTentativeReturnType() === null ? "Q" : "q") . ":";
+echo ($fn->isDisabled() ? "X" : "x") . "|";
+echo $method->getShortName() . ":";
+echo $method->getNamespaceName() . ":";
+echo ($method->inNamespace() ? "Y" : "N") . ":";
+echo ($method->isInternal() ? "I" : "i");
+echo ($method->isUserDefined() ? "U" : "u") . ":";
+echo ($method->isClosure() ? "C" : "c") . ":";
+echo ($method->isDeprecated() ? "D" : "d") . ":";
+echo ($method->returnsReference() ? "R" : "r") . ":";
+echo ($method->hasReturnType() ? "T" : "t") . ":";
+echo ($method->getReturnType() === null ? "N" : "n") . ":";
+echo ($method->isGenerator() ? "G" : "g") . ":";
+echo ($method->isVariadic() ? "V" : "v") . ":";
+echo ($method->hasTentativeReturnType() ? "H" : "h") . ":";
+echo $method->getTentativeReturnType() === null ? "Q" : "q";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "sample:EvalReflectNameNs:Y:iU:c:d:r:t:N:g:V:h:Q:x|run::N:iU:c:d:r:t:N:g:V:h:Q"
+    );
+}
+
 /// Verifies eval-declared functions share method-style named/default/ref/variadic binding.
 #[test]
 fn test_eval_declared_function_rich_argument_binding() {
