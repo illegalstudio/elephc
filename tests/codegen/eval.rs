@@ -5166,7 +5166,7 @@ echo function_exists("get_class_methods"); echo function_exists("get_object_vars
     );
     assert_eq!(
         out.stdout,
-        "noParentPrivateMethod:objectParentPrivateMethod:classProtectedMethod:noParentPrivateProperty:noObjectParentPrivateProperty:dynamicProperty:basepublicmethod,childpublicmethod,childview,parentview:basePublic,childPublic,dynamic:baseprotectedmethod,basepublicmethod,childprivate,childprotectedmethod,childpublicmethod,childview,parentview|baseProtected,basePublic,childProtected,childPublic,childSecret,dynamic:baseProtected,basePublic,baseSecret,childProtected,childPublic,dynamic:callMethod:namedProperty:1111"
+        "noParentPrivateMethod:objectParentPrivateMethod:classProtectedMethod:noParentPrivateProperty:noObjectParentPrivateProperty:dynamicProperty:basePublicMethod,childPublicMethod,childView,parentView:basePublic,childPublic,dynamic:baseProtectedMethod,basePublicMethod,childPrivate,childProtectedMethod,childPublicMethod,childView,parentView|baseProtected,basePublic,childProtected,childPublic,childSecret,dynamic:baseProtected,basePublic,baseSecret,childProtected,childPublic,dynamic:callMethod:namedProperty:1111"
     );
 }
 

@@ -1699,8 +1699,8 @@ fn same_class_name(left: &str, right: &str) -> bool {
 /// Pushes a case-insensitive PHP method name once for ReflectionClass metadata.
 fn push_unique_method_name(name: &str, names: &mut Vec<String>, seen: &mut HashSet<String>) {
     let key = normalize_method_name(name);
-    if seen.insert(key.clone()) {
-        names.push(key);
+    if seen.insert(key) {
+        names.push(name.trim_start_matches('\\').to_string());
     }
 }
 
