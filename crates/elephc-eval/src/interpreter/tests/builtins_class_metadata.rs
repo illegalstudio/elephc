@@ -1319,6 +1319,36 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod preserves declared method case after case-insensitive lookup.
+#[test]
+fn execute_program_reflection_method_preserves_declared_name_case() {
+    let program = parse_fragment(
+        br#"class EvalReflectMethodCaseBase {
+    public function MiXeDCase() { return "base"; }
+}
+class EvalReflectMethodCaseChild extends EvalReflectMethodCaseBase {
+    public function childCase() { return "child"; }
+}
+$object = new EvalReflectMethodCaseChild();
+$direct = new ReflectionMethod("EvalReflectMethodCaseChild", "mixedcase");
+echo $direct->getName(); echo ":";
+echo $direct->getShortName(); echo ":";
+echo $direct->invoke($object); echo ":";
+$listed = (new ReflectionClass("EvalReflectMethodCaseChild"))->getMethod("CHILDCASE");
+echo $listed->getName(); echo ":";
+echo $listed->invoke($object);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "MiXeDCase:MiXeDCase:base:childCase:child");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval member and enum-case reflectors expose their declaring class.
 #[test]
 fn execute_program_reflects_eval_declaring_class_metadata() {

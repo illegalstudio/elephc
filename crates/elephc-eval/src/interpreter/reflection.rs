@@ -1414,7 +1414,14 @@ fn eval_reflection_method_new(
         }
         return Ok(None);
     }
-    let method_name = eval_reflection_string_arg(args[1], values)?;
+    let requested_method_name = eval_reflection_string_arg(args[1], values)?;
+    let method_name = eval_reflection_member_name(
+        EVAL_REFLECTION_OWNER_METHOD,
+        &class_name,
+        &requested_method_name,
+        context,
+    )
+    .ok_or(EvalStatus::RuntimeFatal)?;
     let method = eval_reflection_method_metadata(&class_name, &method_name, context)
         .ok_or(EvalStatus::RuntimeFatal)?;
     eval_reflection_member_object_result(
