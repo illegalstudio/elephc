@@ -46,8 +46,12 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::IntLiteral(value) => ExprKind::IntLiteral(value),
         ExprKind::FloatLiteral(value) => ExprKind::FloatLiteral(value),
         ExprKind::Variable(name) => match env.get(&name) {
-            Some(value) => value.clone().into_expr_kind(),
-            None => ExprKind::Variable(name),
+            // A reference-escaped variable may have been mutated through one of its aliases since the
+            // recorded constant, so never substitute it — always re-read the live value.
+            Some(value) if !crate::optimize::is_ref_escaped_var(&name) => {
+                value.clone().into_expr_kind()
+            }
+            _ => ExprKind::Variable(name),
         },
         ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
             left: Box::new(propagate_expr(*left, env)),

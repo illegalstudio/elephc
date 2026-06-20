@@ -184,7 +184,7 @@ echo $player->score;          // 100
 ```
 The shared value lives in a reference cell co-owned by the container and the source variable; copying the array preserves the reference (a copy-on-write split keeps the element shared), matching PHP.
 
-The source must be a scalar (`int`, `bool`, `float`) or a `mixed` value, and the property form requires a statically-typed `stdClass` receiver. The following are not yet supported and are reported at compile time: a `string` source; a reference into a declared typed-class property or a `mixed`-typed object; and reference *return* values (`$x =& f()`). Reading a variable again in the same scope after writing through its alias on the other side, and `unset()` of a referenced source variable, may not reflect the latest value; bind the reference close to where it is used.
+The source must be a scalar (`int`, `bool`, `float`) or a `mixed` value, and the property form requires a statically-typed `stdClass` receiver. The following are not yet supported and are reported at compile time: a `string` source; a reference into a declared typed-class property or a `mixed`-typed object; reference *return* values (`$x =& f()`); and `unset()` of a referenced source variable. Snapshotting a referenced object property into another variable (`$snap = $obj->prop;` while `$obj->prop` is a live reference) may observe a later write through the reference rather than the value at the read.
 
 ## Multi-dimensional arrays
 ```php

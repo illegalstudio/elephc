@@ -149,6 +149,9 @@ pub(super) fn propagate_foreach_stmt(
 ) -> (Stmt, ConstantEnv) {
     let mut loop_env = safe_foreach_env(&env, &array, key_var.as_deref(), &value_var, &body);
     if value_by_ref {
+        // `foreach (... as &$value)` aliases `$value` to an array element; the binding persists after
+        // the loop, so a later write through the array changes `$value` invisibly. Never propagate it.
+        crate::optimize::mark_ref_escaped_var(&value_var);
         if let ExprKind::Variable(array_name) = &array.kind {
             loop_env.remove(array_name);
         }

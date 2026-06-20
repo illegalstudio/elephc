@@ -24,8 +24,14 @@ pub(super) fn env_after_scalar_assign(mut env: ConstantEnv, name: &str, value: &
     if expr_effect(value).has_side_effects {
         env.clear();
     }
+    // A reference-escaped variable must not re-acquire a tracked constant: a later write through one
+    // of its aliases would not update this recording, making any subsequent substitution unsound.
     if let Some(value) = assigned_scalar_value(value) {
-        env.insert(name.to_string(), value);
+        if crate::optimize::is_ref_escaped_var(name) {
+            env.remove(name);
+        } else {
+            env.insert(name.to_string(), value);
+        }
     } else {
         env.remove(name);
     }
@@ -54,7 +60,9 @@ pub(super) fn env_after_list_unpack(mut env: ConstantEnv, vars: &[String], value
     if let ExprKind::ArrayLiteral(items) = &value.kind {
         for (var, item) in vars.iter().zip(items.iter()) {
             if let Some(value) = assigned_scalar_value(item) {
-                env.insert(var.clone(), value);
+                if !crate::optimize::is_ref_escaped_var(var) {
+                    env.insert(var.clone(), value);
+                }
             }
         }
     }

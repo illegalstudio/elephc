@@ -1225,3 +1225,34 @@ fn test_reference_into_two_object_properties_independent() {
     );
     assert_eq!(out, "10|20");
 }
+
+/// Regression: reading a reference-aliased source variable after writing through the array element
+/// on the other side must observe the fresh value. Constant propagation must not substitute the
+/// source's last directly-assigned constant once it is reference-escaped. Matches `php -r` `9`.
+#[test]
+fn test_reference_source_read_is_fresh_after_element_write_through() {
+    let out = compile_and_run(
+        "<?php $a = ['x' => 0, 'n' => 's']; $v = 1; $a['x'] =& $v; $v = 5; $a['x'] = 9; echo $v;",
+    );
+    assert_eq!(out, "9");
+}
+
+/// Regression: a local reference (`$a =& $b`) aliases both names to one storage, so reading either
+/// after writing the other must observe the fresh value — neither may be constant-propagated.
+/// Matches `php -r` `9`.
+#[test]
+fn test_local_reference_read_is_fresh_after_cross_write() {
+    let out = compile_and_run("<?php $b = 10; $a =& $b; $a = 5; $b = 9; echo $a;");
+    assert_eq!(out, "9");
+}
+
+/// Regression: a `foreach (... as &$value)` binding persists after the loop and aliases the last
+/// element, so reading `$value` after writing through the array must observe the fresh value rather
+/// than a propagated constant. Matches `php -r` `9`.
+#[test]
+fn test_foreach_by_ref_value_read_is_fresh_after_cross_write() {
+    let out = compile_and_run(
+        "<?php $a = [1, 2, 3]; foreach ($a as &$v) {} $v = 5; $a[2] = 9; echo $v;",
+    );
+    assert_eq!(out, "9");
+}

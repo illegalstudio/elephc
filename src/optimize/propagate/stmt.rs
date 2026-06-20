@@ -88,12 +88,21 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             let mut next_env = env_after_scalar_assign(env, &name, &value);
             (Stmt::new(StmtKind::Assign { name, value }, span), std::mem::take(&mut next_env))
         }
-        StmtKind::RefAssign { target, source } => (
-            Stmt::new(StmtKind::RefAssign { target, source }, span),
-            HashMap::new(),
-        ),
+        StmtKind::RefAssign { target, source } => {
+            // `$target =& $source` binds both names to one storage; a write through either changes
+            // the other, so neither may be propagated as a known constant again.
+            crate::optimize::mark_ref_escaped_var(&target);
+            crate::optimize::mark_ref_escaped_var(&source);
+            (
+                Stmt::new(StmtKind::RefAssign { target, source }, span),
+                HashMap::new(),
+            )
+        }
         StmtKind::RefAssignTarget { target, source } => {
             let target = propagate_expr(target, &env);
+            // The source is aliased into an array element or object property; a write through that
+            // container can change it invisibly, so suppress constant propagation for it from here.
+            crate::optimize::mark_ref_escaped_var(&source);
             (
                 Stmt::new(StmtKind::RefAssignTarget { target, source }, span),
                 HashMap::new(),
