@@ -118,6 +118,12 @@ struct EvalReflectionNamedTypeMetadata {
     is_builtin: bool,
 }
 
+/// Registered ReflectionFunctionAbstract target metadata for simple method dispatch.
+enum EvalReflectionFunctionMethodTarget {
+    Function { name: String, is_variadic: bool },
+    Method { name: String, is_variadic: bool },
+}
+
 /// Eval metadata needed to materialize one `ReflectionUnionType` object.
 struct EvalReflectionUnionTypeMetadata {
     types: Vec<EvalReflectionNamedTypeMetadata>,
@@ -604,12 +610,9 @@ pub(in crate::interpreter) fn eval_reflection_method_invoke_result(
     if !is_invoke && !is_invoke_args {
         return Ok(None);
     }
-    let Some((declaring_class, reflected_method)) =
-        context
-            .eval_reflection_method(identity)
-            .map(|(declaring_class, method)| {
-                (declaring_class.to_string(), method.to_string())
-            })
+    let Some((declaring_class, reflected_method)) = context
+        .eval_reflection_method(identity)
+        .map(|(declaring_class, method)| (declaring_class.to_string(), method.to_string()))
     else {
         return Ok(None);
     };
@@ -658,6 +661,65 @@ pub(in crate::interpreter) fn eval_reflection_function_invoke_result(
     };
     eval_reflection_function_invoke_dispatch(&function_name, function_args, context, values)
         .map(Some)
+}
+
+/// Handles eval-backed ReflectionFunctionAbstract name/origin metadata calls.
+pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(target) = eval_reflection_function_method_target(identity, context) else {
+        return Ok(None);
+    };
+    let method_key = method_name.to_ascii_lowercase();
+    match method_key.as_str() {
+        "getshortname" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values
+                .string(&eval_reflection_function_method_short_name(&target))
+                .map(Some)
+        }
+        "getnamespacename" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values
+                .string(&eval_reflection_function_method_namespace_name(&target))
+                .map(Some)
+        }
+        "innamespace" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values
+                .bool_value(!eval_reflection_function_method_namespace_name(&target).is_empty())
+                .map(Some)
+        }
+        "isinternal" | "isclosure" | "isdeprecated" | "returnsreference" | "hasreturntype"
+        | "isgenerator" | "hastentativereturntype" => {
+            eval_reflection_false_metadata_result(evaluated_args, values)
+        }
+        "isuserdefined" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values.bool_value(true).map(Some)
+        }
+        "isvariadic" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values
+                .bool_value(eval_reflection_function_method_is_variadic(&target))
+                .map(Some)
+        }
+        "isdisabled" => match target {
+            EvalReflectionFunctionMethodTarget::Function { .. } => {
+                eval_reflection_false_metadata_result(evaluated_args, values)
+            }
+            EvalReflectionFunctionMethodTarget::Method { .. } => Ok(None),
+        },
+        "getreturntype" | "gettentativereturntype" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values.null().map(Some)
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Handles PHP's no-op `ReflectionMethod/Property::setAccessible()` calls.
@@ -3425,12 +3487,8 @@ fn eval_reflection_method_invoke_dispatch(
                 values,
             );
         }
-        let called_class = eval_reflection_method_instance_called_class(
-            declaring_class,
-            object,
-            context,
-            values,
-        )?;
+        let called_class =
+            eval_reflection_method_instance_called_class(declaring_class, object, context, values)?;
         return eval_dynamic_method_with_values_and_ref_flags(
             &method_class,
             &called_class,
@@ -3767,7 +3825,10 @@ fn eval_reflection_function_parameters(
         declaring_class_name: None,
         attributes: function_attributes,
         flags: 0,
-        required_parameter_count: eval_reflection_required_parameter_count(defaults, variadic_flags),
+        required_parameter_count: eval_reflection_required_parameter_count(
+            defaults,
+            variadic_flags,
+        ),
     };
     eval_reflection_parameters_from_names_and_type_flags(
         None,
@@ -3910,6 +3971,104 @@ fn eval_reflection_builtin_named_type(
         allows_null,
         is_builtin: true,
     }
+}
+
+/// Returns function or method metadata registered for a synthetic reflection owner object.
+fn eval_reflection_function_method_target(
+    identity: u64,
+    context: &ElephcEvalContext,
+) -> Option<EvalReflectionFunctionMethodTarget> {
+    if let Some(name) = context.eval_reflection_function_name(identity) {
+        let is_variadic = context
+            .function(&name.to_ascii_lowercase())
+            .is_some_and(|function| function.parameter_is_variadic().iter().any(|flag| *flag));
+        return Some(EvalReflectionFunctionMethodTarget::Function {
+            name: name.to_string(),
+            is_variadic,
+        });
+    }
+    context
+        .eval_reflection_method(identity)
+        .map(|(declaring_class, method_name)| {
+            let is_variadic = eval_reflection_method_metadata(declaring_class, method_name, context)
+                .is_some_and(|method| {
+                    method
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.is_variadic)
+                });
+            EvalReflectionFunctionMethodTarget::Method {
+                name: method_name.to_string(),
+                is_variadic,
+            }
+        })
+}
+
+/// Validates that a synthetic reflection metadata call received no arguments.
+fn eval_reflection_bind_no_args(evaluated_args: Vec<EvaluatedCallArg>) -> Result<(), EvalStatus> {
+    let _ = bind_evaluated_function_args(&[], evaluated_args)?;
+    Ok(())
+}
+
+/// Returns a no-argument reflection metadata predicate result that is always false.
+fn eval_reflection_false_metadata_result(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    eval_reflection_bind_no_args(evaluated_args)?;
+    values.bool_value(false).map(Some)
+}
+
+/// Returns PHP's short name for a ReflectionFunction or ReflectionMethod target.
+fn eval_reflection_function_method_short_name(
+    target: &EvalReflectionFunctionMethodTarget,
+) -> String {
+    match target {
+        EvalReflectionFunctionMethodTarget::Function { name, .. } => {
+            eval_reflection_short_name(name)
+        }
+        EvalReflectionFunctionMethodTarget::Method { name, .. } => name.clone(),
+    }
+}
+
+/// Returns PHP's namespace name for a ReflectionFunction or ReflectionMethod target.
+fn eval_reflection_function_method_namespace_name(
+    target: &EvalReflectionFunctionMethodTarget,
+) -> String {
+    match target {
+        EvalReflectionFunctionMethodTarget::Function { name, .. } => {
+            eval_reflection_namespace_name(name)
+        }
+        EvalReflectionFunctionMethodTarget::Method { .. } => String::new(),
+    }
+}
+
+/// Returns whether the reflected function or method has a variadic parameter.
+fn eval_reflection_function_method_is_variadic(
+    target: &EvalReflectionFunctionMethodTarget,
+) -> bool {
+    match target {
+        EvalReflectionFunctionMethodTarget::Function { is_variadic, .. }
+        | EvalReflectionFunctionMethodTarget::Method { is_variadic, .. } => *is_variadic,
+    }
+}
+
+/// Returns the final namespace segment-free name component from a PHP symbol name.
+fn eval_reflection_short_name(name: &str) -> String {
+    let name = name.trim_start_matches('\\');
+    name.rsplit_once('\\').map_or_else(
+        || name.to_string(),
+        |(_, short_name)| short_name.to_string(),
+    )
+}
+
+/// Returns the namespace prefix from a PHP function name, or an empty string.
+fn eval_reflection_namespace_name(name: &str) -> String {
+    name.trim_start_matches('\\')
+        .rsplit_once('\\')
+        .map_or_else(String::new, |(namespace_name, _)| {
+            namespace_name.to_string()
+        })
 }
 
 /// Packs ReflectionMethod/ReflectionProperty predicate flags for the runtime owner factory.
