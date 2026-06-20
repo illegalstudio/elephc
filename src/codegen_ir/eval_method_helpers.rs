@@ -9,7 +9,8 @@
 //! - The cacheable runtime object cannot know user class ids, method symbols,
 //!   or return types, so this bridge is emitted into the user assembly.
 //! - This method-call slice supports public AOT methods with fixed non-by-ref
-//!   scalar/Mixed argument lists and reports unsupported calls as runtime failure.
+//!   scalar/Mixed/object argument lists and reports unsupported calls as
+//!   runtime failure.
 
 use std::collections::BTreeMap;
 
@@ -249,7 +250,12 @@ fn method_signature_supported(sig: &crate::types::FunctionSig) -> bool {
 fn method_param_supported(ty: &PhpType) -> bool {
     matches!(
         ty.codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Mixed
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Mixed
+            | PhpType::Object(_)
     )
 }
 
@@ -326,7 +332,7 @@ fn emit_static_method_call_aarch64(
     emitter.instruction("str x3, [sp, #40]");                                   // save the requested method-name length
     emit_aarch64_static_method_dispatch(module, emitter, data, slots);
     emitter.instruction(&format!("b {}", fail_label));                          // no supported public static method matched the request
-    emit_aarch64_static_method_bodies(module, emitter, slots, done_label, fail_label);
+    emit_aarch64_static_method_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
@@ -354,7 +360,7 @@ fn emit_static_method_call_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save the requested method-name length
     emit_x86_64_static_method_dispatch(module, emitter, data, slots);
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported public static method matched the request
-    emit_x86_64_static_method_bodies(module, emitter, slots, done_label, fail_label);
+    emit_x86_64_static_method_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
@@ -393,7 +399,7 @@ fn emit_method_call_aarch64(
     emit_aarch64_method_dispatch(module, emitter, data, slots);
     emitter.instruction(&format!("b {}", fail_label));                          // no supported public method matched the request
     emit_aarch64_builtin_throwable_method_bodies(module, emitter, done_label, fail_label);
-    emit_aarch64_method_bodies(module, emitter, slots, done_label, fail_label);
+    emit_aarch64_method_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
@@ -434,7 +440,7 @@ fn emit_method_call_x86_64(
     emit_x86_64_method_dispatch(module, emitter, data, slots);
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported public method matched the request
     emit_x86_64_builtin_throwable_method_bodies(module, emitter, done_label, fail_label);
-    emit_x86_64_method_bodies(module, emitter, slots, done_label, fail_label);
+    emit_x86_64_method_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
@@ -808,6 +814,7 @@ fn emit_x86_64_validate_builtin_throwable_method_arg_count(
 fn emit_aarch64_method_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalMethodSlot],
     done_label: &str,
     fail_label: &str,
@@ -815,7 +822,8 @@ fn emit_aarch64_method_bodies(
     for slot in slots {
         emitter.label(&method_body_label(module, slot));
         emit_aarch64_validate_method_arg_count(module, emitter, slot, fail_label);
-        let overflow_bytes = emit_aarch64_prepare_method_args(module, emitter, slot);
+        let overflow_bytes =
+            emit_aarch64_prepare_method_args(module, emitter, data, slot, fail_label);
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
@@ -831,6 +839,7 @@ fn emit_aarch64_method_bodies(
 fn emit_x86_64_method_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalMethodSlot],
     done_label: &str,
     fail_label: &str,
@@ -838,7 +847,8 @@ fn emit_x86_64_method_bodies(
     for slot in slots {
         emitter.label(&method_body_label(module, slot));
         emit_x86_64_validate_method_arg_count(module, emitter, slot, fail_label);
-        let overflow_bytes = emit_x86_64_prepare_method_args(module, emitter, slot);
+        let overflow_bytes =
+            emit_x86_64_prepare_method_args(module, emitter, data, slot, fail_label);
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
@@ -854,6 +864,7 @@ fn emit_x86_64_method_bodies(
 fn emit_aarch64_static_method_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalStaticMethodSlot],
     done_label: &str,
     fail_label: &str,
@@ -861,7 +872,8 @@ fn emit_aarch64_static_method_bodies(
     for slot in slots {
         emitter.label(&static_method_body_label(module, slot));
         emit_aarch64_validate_static_method_arg_count(module, emitter, slot, fail_label);
-        let overflow_bytes = emit_aarch64_prepare_static_method_args(module, emitter, slot);
+        let overflow_bytes =
+            emit_aarch64_prepare_static_method_args(module, emitter, data, slot, fail_label);
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
@@ -880,6 +892,7 @@ fn emit_aarch64_static_method_bodies(
 fn emit_x86_64_static_method_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalStaticMethodSlot],
     done_label: &str,
     fail_label: &str,
@@ -887,7 +900,8 @@ fn emit_x86_64_static_method_bodies(
     for slot in slots {
         emitter.label(&static_method_body_label(module, slot));
         emit_x86_64_validate_static_method_arg_count(module, emitter, slot, fail_label);
-        let overflow_bytes = emit_x86_64_prepare_static_method_args(module, emitter, slot);
+        let overflow_bytes =
+            emit_x86_64_prepare_static_method_args(module, emitter, data, slot, fail_label);
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
@@ -966,14 +980,16 @@ fn emit_x86_64_validate_static_method_arg_count(
 fn emit_aarch64_prepare_method_args(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slot: &EvalMethodSlot,
+    fail_label: &str,
 ) -> usize {
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("ldr x0, [sp, #16]");                                   // load the unboxed receiver as the first method argument
     abi::emit_push_result_value(emitter, &receiver_ty);
     for (index, param_ty) in slot.params.iter().enumerate() {
         emit_aarch64_load_eval_arg(module, emitter, index);
-        emit_aarch64_cast_eval_arg(emitter, param_ty);
+        emit_aarch64_cast_eval_arg(module, emitter, data, param_ty, fail_label);
         abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
     }
     materialize_method_args(module, emitter, &receiver_ty, &slot.params)
@@ -983,13 +999,15 @@ fn emit_aarch64_prepare_method_args(
 fn emit_aarch64_prepare_static_method_args(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slot: &EvalStaticMethodSlot,
+    fail_label: &str,
 ) -> usize {
     abi::emit_load_int_immediate(emitter, "x0", slot.class_id as i64);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     for (index, param_ty) in slot.params.iter().enumerate() {
         emit_aarch64_load_eval_arg(module, emitter, index);
-        emit_aarch64_cast_eval_arg(emitter, param_ty);
+        emit_aarch64_cast_eval_arg(module, emitter, data, param_ty, fail_label);
         abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
     }
     materialize_static_method_args(module, emitter, slot)
@@ -999,14 +1017,16 @@ fn emit_aarch64_prepare_static_method_args(
 fn emit_x86_64_prepare_method_args(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slot: &EvalMethodSlot,
+    fail_label: &str,
 ) -> usize {
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the unboxed receiver as the first method argument
     abi::emit_push_result_value(emitter, &receiver_ty);
     for (index, param_ty) in slot.params.iter().enumerate() {
         emit_x86_64_load_eval_arg(module, emitter, index);
-        emit_x86_64_cast_eval_arg(emitter, param_ty);
+        emit_x86_64_cast_eval_arg(module, emitter, data, param_ty, fail_label);
         abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
     }
     materialize_method_args(module, emitter, &receiver_ty, &slot.params)
@@ -1016,13 +1036,15 @@ fn emit_x86_64_prepare_method_args(
 fn emit_x86_64_prepare_static_method_args(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slot: &EvalStaticMethodSlot,
+    fail_label: &str,
 ) -> usize {
     abi::emit_load_int_immediate(emitter, "rax", slot.class_id as i64);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     for (index, param_ty) in slot.params.iter().enumerate() {
         emit_x86_64_load_eval_arg(module, emitter, index);
-        emit_x86_64_cast_eval_arg(emitter, param_ty);
+        emit_x86_64_cast_eval_arg(module, emitter, data, param_ty, fail_label);
         abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
     }
     materialize_static_method_args(module, emitter, slot)
@@ -1082,7 +1104,13 @@ fn emit_x86_64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usiz
 }
 
 /// Casts one boxed eval argument into ARM64 result registers for temporary staging.
-fn emit_aarch64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
+fn emit_aarch64_cast_eval_arg(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    param_ty: &PhpType,
+    fail_label: &str,
+) {
     match param_ty.codegen_repr() {
         PhpType::Int => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for integer coercion
@@ -1103,12 +1131,44 @@ fn emit_aarch64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
         PhpType::Mixed => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for a Mixed method parameter
         }
+        PhpType::Object(class_name) => {
+            emit_aarch64_cast_eval_object_arg(module, emitter, data, &class_name, fail_label);
+        }
         _ => {}
     }
 }
 
+/// Validates and unboxes one ARM64 object-typed eval argument for native method dispatch.
+fn emit_aarch64_cast_eval_object_arg(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    class_name: &str,
+    fail_label: &str,
+) {
+    let (label, len) = data.add_string(class_name.as_bytes());
+    let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+    emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for object type validation
+    abi::emit_symbol_address(emitter, "x1", &label);
+    abi::emit_load_int_immediate(emitter, "x2", len as i64);
+    emitter.instruction("mov x3, xzr");                                         // allow exact class matches for object type hints
+    abi::emit_call_label(emitter, &is_a_symbol);
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject values that fail the object type hint
+    emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for object unboxing
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the object payload for the native method call
+    emitter.instruction("cmp x0, #6");                                          // object type hints require an object payload, not a class string
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject malformed non-object payloads
+    emitter.instruction("mov x0, x1");                                          // place the unboxed object pointer in the result register
+}
+
 /// Casts one boxed eval argument into x86_64 result registers for temporary staging.
-fn emit_x86_64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
+fn emit_x86_64_cast_eval_arg(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    param_ty: &PhpType,
+    fail_label: &str,
+) {
     match param_ty.codegen_repr() {
         PhpType::Int => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for integer coercion
@@ -1129,8 +1189,35 @@ fn emit_x86_64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
         PhpType::Mixed => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for a Mixed method parameter
         }
+        PhpType::Object(class_name) => {
+            emit_x86_64_cast_eval_object_arg(module, emitter, data, &class_name, fail_label);
+        }
         _ => {}
     }
+}
+
+/// Validates and unboxes one x86_64 object-typed eval argument for native method dispatch.
+fn emit_x86_64_cast_eval_object_arg(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    class_name: &str,
+    fail_label: &str,
+) {
+    let (label, len) = data.add_string(class_name.as_bytes());
+    let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for object type validation
+    abi::emit_symbol_address(emitter, "rsi", &label);
+    abi::emit_load_int_immediate(emitter, "rdx", len as i64);
+    emitter.instruction("xor ecx, ecx");                                        // allow exact class matches for object type hints
+    abi::emit_call_label(emitter, &is_a_symbol);
+    emitter.instruction("test rax, rax");                                       // check whether the value satisfied the object type hint
+    emitter.instruction(&format!("je {}", fail_label));                         // reject values that fail the object type hint
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for object unboxing
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the object payload for the native method call
+    emitter.instruction("cmp rax, 6");                                          // object type hints require an object payload, not a class string
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject malformed non-object payloads
+    emitter.instruction("mov rax, rdi");                                        // place the unboxed object pointer in the result register
 }
 
 /// Boxes the current native method result as the Mixed cell expected by eval.

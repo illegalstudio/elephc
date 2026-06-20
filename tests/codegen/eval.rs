@@ -4473,6 +4473,40 @@ $box->run();
     assert_eq!(out, "mixed-ok");
 }
 
+/// Verifies eval fragments can pass object-typed arguments to public AOT methods.
+#[test]
+fn test_eval_fragment_can_call_aot_method_with_object_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMethodObjectArgItem {
+    public string $name;
+
+    public function __construct(string $name) {
+        $this->name = $name;
+    }
+}
+
+class EvalMethodObjectArgBox {
+    public function describe(EvalMethodObjectArgItem $item): string {
+        return $item->name;
+    }
+
+    public static function describeStatic(EvalMethodObjectArgItem $item): string {
+        return $item->name . "!";
+    }
+
+    public function run() {
+        $item = new EvalMethodObjectArgItem("Obj");
+        return eval('return $this->describe($item) . ":" . EvalMethodObjectArgBox::describeStatic($item);');
+    }
+}
+
+echo (new EvalMethodObjectArgBox())->run();
+"#,
+    );
+    assert_eq!(out, "Obj:Obj!");
+}
+
 /// Verifies eval fragments can unpack numeric arrays into public AOT method calls.
 #[test]
 fn test_eval_fragment_can_call_this_public_method_with_spread_args() {
