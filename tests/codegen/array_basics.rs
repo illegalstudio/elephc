@@ -1082,3 +1082,36 @@ fn test_reference_into_indexed_array_promotes_and_preserves_elements() {
     );
     assert_eq!(out, "7|10");
 }
+
+/// Verifies M3 two-level nested reference into an **existing** inner array: `$a['k']['x'] =& $v`
+/// shares the aliased source, and a later write to the source is observed when reading the nested
+/// element back through the Mixed hash path. Matches `php -r` output `7`.
+#[test]
+fn test_reference_into_nested_existing_inner_shares_source() {
+    let out = compile_and_run(
+        "<?php $a = ['k' => [1, 2], 'n' => 0]; $v = 9; $a['k']['x'] =& $v; $v = 7; echo $a['k']['x'];",
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies M3 two-level nested reference with an **absent** outer key: the inner array is
+/// auto-vivified at the reference assignment, so `$scoped['scope']['name'] =& $v` works on an
+/// initially empty base. Matches `php -r` output `8`.
+#[test]
+fn test_reference_into_nested_autovivified_inner_shares_source() {
+    let out = compile_and_run(
+        "<?php $scoped = []; $v = 5; $scoped['scope']['name'] =& $v; $v = 8; echo $scoped['scope']['name'];",
+    );
+    assert_eq!(out, "8");
+}
+
+/// Verifies the DeepClone accumulation pattern: two reference entries under the same outer key
+/// (`$scoped['cls']['x']` and `$scoped['cls']['y']`) coexist and each tracks its own aliased source.
+/// This is the shape `symfony/polyfill-deepclone` builds. Matches `php -r` output `10|20`.
+#[test]
+fn test_reference_into_nested_accumulates_under_same_outer_key() {
+    let out = compile_and_run(
+        "<?php $scoped = []; $a = 1; $b = 2; $scoped['cls']['x'] =& $a; $scoped['cls']['y'] =& $b; $a = 10; $b = 20; echo $scoped['cls']['x'], '|', $scoped['cls']['y'];",
+    );
+    assert_eq!(out, "10|20");
+}

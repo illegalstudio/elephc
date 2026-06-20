@@ -28,13 +28,13 @@ fn test_error_reference_assignment_requires_variable_source() {
     );
 }
 
-/// Tests that a reference assignment into a *nested* array element is gated with a clean diagnostic.
-/// Single-level element targets are now lowered (M2/M3); nested targets remain unimplemented, so a
-/// nested target must still fail cleanly rather than miscompile.
+/// Tests that a reference assignment into a *three-level* array element is gated with a clean
+/// diagnostic. Single-level (M2/M3) and two-level nested (M3) element targets are now lowered;
+/// deeper nesting remains unimplemented, so it must still fail cleanly rather than miscompile.
 #[test]
-fn test_error_reference_assignment_into_nested_array_element_is_gated() {
+fn test_error_reference_assignment_into_deep_nested_array_element_is_gated() {
     expect_error(
-        "<?php $v = 1; $a = [[1]]; $a[0][0] =& $v;",
+        "<?php $v = 1; $a = [[[1]]]; $a[0][0][0] =& $v;",
         "Reference assignment into an array element or object property is not yet supported",
     );
 }

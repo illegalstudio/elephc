@@ -171,6 +171,7 @@ pub enum Op {
     AliasLocalRefCell,
     ReleaseLocalRefCell,
     RefAssignElement,
+    MixedToOwnedHash,
     LoadGlobal,
     StoreGlobal,
     LoadStaticLocal,
@@ -384,6 +385,9 @@ impl Op {
                     | E::REFCOUNT_OP
                     | E::MAY_FATAL
             }
+            MixedToOwnedHash => {
+                E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL
+            }
             LoadGlobal | LoadStaticProperty | ScopedConstantGet | ClassAttrNames
             | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
             StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal | IncludeOnceMark
@@ -485,6 +489,7 @@ impl Op {
             AliasLocalRefCell => "alias_local_ref_cell",
             ReleaseLocalRefCell => "release_local_ref_cell",
             RefAssignElement => "ref_assign_element",
+            MixedToOwnedHash => "mixed_to_owned_hash",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",

@@ -70,6 +70,64 @@ pub(super) fn lower_hash_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruct
     store_if_result(ctx, inst)
 }
 
+/// Lowers `MixedToOwnedHash`: materialize an independently-owned associative hash from a boxed Mixed.
+///
+/// Used by nested reference-assignment lowering to obtain a mutable inner hash table from an outer
+/// Mixed-valued entry. A boxed Mixed holding a hash (inner tag 5) is shallow-cloned so the result is
+/// owned and copy-on-write safe; a null Mixed or any non-hash payload auto-vivifies to a fresh empty
+/// hash. The result stores boxed Mixed entry values, matching the inner hash representation.
+pub(super) fn lower_mixed_to_owned_hash(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expects exactly one operand",
+            inst.op.name()
+        )));
+    }
+    let mixed = expect_operand(inst, 0)?;
+    let mixed_tag = crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let fresh = ctx.next_label("mixed_to_owned_hash_fresh");
+            let done = ctx.next_label("mixed_to_owned_hash_done");
+            ctx.load_value_to_reg(mixed, "x0")?;
+            ctx.emitter.instruction(&format!("cbz x0, {}", fresh));             // a null Mixed auto-vivifies to a fresh empty hash
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the boxed Mixed inner value tag
+            ctx.emitter.instruction("cmp x9, #5");                              // is the boxed payload an associative-array hash?
+            ctx.emitter.instruction(&format!("b.ne {}", fresh));                // non-hash payloads auto-vivify to a fresh empty hash
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                        // load the inner hash table pointer from the Mixed payload
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");       // own an independent shallow copy so writes are copy-on-write safe
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the empty-hash fallback after cloning the existing inner hash
+            ctx.emitter.label(&fresh);
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 16);                // fresh associative hash initial capacity
+            abi::emit_load_int_immediate(ctx.emitter, "x1", mixed_tag);         // fresh hash stores boxed Mixed entry values
+            abi::emit_call_label(ctx.emitter, "__rt_hash_new");                 // allocate the fresh empty associative hash
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            let fresh = ctx.next_label("mixed_to_owned_hash_fresh");
+            let done = ctx.next_label("mixed_to_owned_hash_done");
+            ctx.load_value_to_reg(mixed, "rax")?;
+            ctx.emitter.instruction("test rax, rax");                           // a null Mixed auto-vivifies to a fresh empty hash
+            ctx.emitter.instruction(&format!("jz {}", fresh));                  // null payloads skip straight to the empty-hash fallback
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                // load the boxed Mixed inner value tag
+            ctx.emitter.instruction("cmp r10, 5");                              // is the boxed payload an associative-array hash?
+            ctx.emitter.instruction(&format!("jne {}", fresh));                 // non-hash payloads auto-vivify to a fresh empty hash
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rax + 8]");            // load the inner hash table pointer from the Mixed payload
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");       // own an independent shallow copy so writes are copy-on-write safe
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the empty-hash fallback after cloning the existing inner hash
+            ctx.emitter.label(&fresh);
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", 16);               // fresh associative hash initial capacity
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", mixed_tag);        // fresh hash stores boxed Mixed entry values
+            abi::emit_call_label(ctx.emitter, "__rt_hash_new");                 // allocate the fresh empty associative hash
+            ctx.emitter.label(&done);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers an associative-array lookup with PHP null-sentinel fallback on misses.
 pub(super) fn lower_hash_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let hash = expect_operand(inst, 0)?;

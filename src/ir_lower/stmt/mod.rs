@@ -359,17 +359,42 @@ fn lower_ref_assign_target(
     let ExprKind::ArrayAccess { array, index } = &target.kind else {
         return;
     };
-    let ExprKind::Variable(array_name) = &array.kind else {
-        return;
-    };
+    match &array.kind {
+        // Single-level target `$base[$index] =& $source`.
+        ExprKind::Variable(array_name) => {
+            lower_single_level_ref_assign(ctx, array_name, index, source, span);
+        }
+        // Two-level nested target `$base[$outer][$inner] =& $source` with a plain `Variable` base.
+        ExprKind::ArrayAccess {
+            array: inner_array,
+            index: outer_index,
+        } => {
+            let ExprKind::Variable(array_name) = &inner_array.kind else {
+                return;
+            };
+            lower_nested_ref_assign(ctx, array_name, outer_index, index, source, span);
+        }
+        _ => {}
+    }
+}
+
+/// Lowers a single-level reference assignment `$base[$index] =& $source`.
+///
+/// Promotes an indexed/empty base to a Mixed-valued associative array so the reference entry can be
+/// stored with value_tag 11 and read back through the Mixed hash path. A base that already lowers to
+/// a hash needs no promotion. The freshly promoted hash is its own sole owner, so `RefAssignElement`
+/// mutates it without a copy-on-write clone; the promoted hash is then written back to the base
+/// local explicitly (the promoted hash value is not sourced from a local, so the instruction's own
+/// table writeback would not target the base).
+fn lower_single_level_ref_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_name: &str,
+    index: &Expr,
+    source: &str,
+    span: Span,
+) {
     let array_value = ctx.load_local(array_name, Some(span));
     let index_value = lower_expr(ctx, index);
-    // Promote an indexed/empty base to a Mixed-valued associative array so the reference entry can
-    // be stored with value_tag 11 and read back through the Mixed hash path. A base that already
-    // lowers to a hash needs no promotion. The freshly promoted hash is its own sole owner, so
-    // `RefAssignElement` mutates it without a copy-on-write clone; we then write it back to the base
-    // local explicitly (the promoted hash value is not sourced from a local, so the instruction's
-    // own table writeback would not target the base).
     let promotion = if array_set_op(array_value.ir_type) != Op::HashSet {
         let current_ty = ctx.builder.value_php_type(array_value.value);
         let assoc_ty = promoted_assoc_array_type(current_ty, PhpType::Mixed);
@@ -401,6 +426,83 @@ fn lower_ref_assign_target(
         ctx.store_mutated_local(array_name, hash, assoc_ty, Some(span));
     }
     ctx.mark_ref_bound_local(source);
+}
+
+/// Lowers a two-level nested reference assignment `$base[$outer][$inner] =& $source`.
+///
+/// The outer base is promoted to a Mixed-valued associative hash. The inner element is materialized
+/// as an independently-owned hash table (`MixedToOwnedHash`: a shallow clone of an existing inner
+/// hash, or a fresh empty hash when the outer key is absent), the reference is stored into that
+/// inner hash through the tested single-level path, and the mutated inner hash is written back into
+/// the outer entry. The shallow clone keeps the write copy-on-write safe and independent of the
+/// outer entry, so the write-back's release of the previous inner value cannot free it.
+fn lower_nested_ref_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_name: &str,
+    outer_index: &Expr,
+    inner_index: &Expr,
+    source: &str,
+    span: Span,
+) {
+    // Promote the base to a Mixed hash, write it back, then reload it so the final inner write-back
+    // (`HashSet`) targets the base local through the instruction's own table writeback.
+    let base_value = ctx.load_local(array_name, Some(span));
+    if array_set_op(base_value.ir_type) != Op::HashSet {
+        let current_ty = ctx.builder.value_php_type(base_value.value);
+        let assoc_ty = promoted_assoc_array_type(current_ty, PhpType::Mixed);
+        let hash = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![base_value.value],
+            None,
+            assoc_ty.clone(),
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+        ctx.store_mutated_local(array_name, hash, assoc_ty, Some(span));
+    }
+    let outer_table = ctx.load_local(array_name, Some(span));
+    let outer_key = lower_expr(ctx, outer_index);
+
+    // Read the current inner entry as a boxed Mixed and materialize an owned inner hash from it.
+    let boxed_inner = ctx.emit_value(
+        Op::HashGet,
+        vec![outer_table.value, outer_key.value],
+        None,
+        PhpType::Mixed,
+        Op::HashGet.default_effects(),
+        Some(span),
+    );
+    let inner_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let inner_hash = ctx.emit_value(
+        Op::MixedToOwnedHash,
+        vec![boxed_inner.value],
+        None,
+        inner_ty.clone(),
+        Op::MixedToOwnedHash.default_effects(),
+        Some(span),
+    );
+
+    // Park the owned inner hash in a hidden temp local, store the reference into it through the
+    // single-level path, then reload it for the write-back into the outer entry.
+    let inner_name = ctx.declare_hidden_temp(inner_ty.clone());
+    ctx.store_mutated_local(&inner_name, inner_hash, inner_ty.clone(), Some(span));
+    lower_single_level_ref_assign(ctx, &inner_name, inner_index, source, span);
+    let inner_result = ctx.load_local(&inner_name, Some(span));
+
+    // Write the mutated inner hash back into the outer entry; `HashSet` boxes it as a Mixed value
+    // and releases the previously stored inner value. The outer table was reloaded from the base
+    // local, so the instruction's table writeback re-stores the (possibly grown) base.
+    let outer_table = ctx.load_local(array_name, Some(span));
+    ctx.emit_void(
+        Op::HashSet,
+        vec![outer_table.value, outer_key.value, inner_result.value],
+        None,
+        Op::HashSet.default_effects(),
+        Some(span),
+    );
 }
 
 /// Lowers an `if` / `elseif` / `else` chain and terminates unreachable merge blocks explicitly.
