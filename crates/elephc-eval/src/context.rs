@@ -1239,6 +1239,17 @@ impl ElephcEvalContext {
 
     /// Returns direct and inherited method requirements for an eval interface.
     pub fn interface_method_requirements(&self, interface_name: &str) -> Vec<EvalInterfaceMethod> {
+        self.interface_method_requirements_with_owners(interface_name)
+            .into_iter()
+            .map(|(_, method)| method)
+            .collect()
+    }
+
+    /// Returns direct and inherited method requirements with their declaring interface.
+    pub fn interface_method_requirements_with_owners(
+        &self,
+        interface_name: &str,
+    ) -> Vec<(String, EvalInterfaceMethod)> {
         let mut methods = Vec::new();
         let mut seen_interfaces = HashSet::new();
         let mut seen_methods = HashSet::new();
@@ -1255,7 +1266,7 @@ impl ElephcEvalContext {
     fn collect_interface_method_requirements(
         &self,
         interface_name: &str,
-        methods: &mut Vec<EvalInterfaceMethod>,
+        methods: &mut Vec<(String, EvalInterfaceMethod)>,
         seen_interfaces: &mut HashSet<String>,
         seen_methods: &mut HashSet<String>,
     ) {
@@ -1277,7 +1288,7 @@ impl ElephcEvalContext {
         for method in interface.methods() {
             let key = method.name().to_ascii_lowercase();
             if seen_methods.insert(key) {
-                methods.push(method.clone());
+                methods.push((interface.name().to_string(), method.clone()));
             }
         }
     }

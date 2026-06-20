@@ -1027,6 +1027,15 @@ class EvalReturnReader implements EvalReturnReadable {
         return 7;
     }
 }
+interface EvalReturnRootSelf {
+    function linked(): self;
+}
+interface EvalReturnChildSelf extends EvalReturnRootSelf {}
+class EvalReturnSelfImpl implements EvalReturnChildSelf {
+    public function linked(): EvalReturnRootSelf {
+        return $this;
+    }
+}
 $reader = new EvalReturnReader();
 return $reader->read();"#,
     )

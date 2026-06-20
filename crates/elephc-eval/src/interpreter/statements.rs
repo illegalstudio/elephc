@@ -1553,8 +1553,10 @@ fn validate_class_implements_eval_interface(
     interface_name: &str,
     context: &ElephcEvalContext,
 ) -> Result<(), EvalStatus> {
-    for requirement in context.interface_method_requirements(interface_name) {
-        if !class_has_interface_method(class, interface_name, &requirement, context) {
+    for (requirement_owner, requirement) in
+        context.interface_method_requirements_with_owners(interface_name)
+    {
+        if !class_has_interface_method(class, &requirement_owner, &requirement, context) {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -1569,7 +1571,7 @@ fn validate_class_implements_eval_interface(
 /// Returns whether a class or its eval parents satisfy one interface method signature.
 fn class_has_interface_method(
     class: &EvalClass,
-    interface_name: &str,
+    requirement_owner: &str,
     requirement: &EvalInterfaceMethod,
     context: &ElephcEvalContext,
 ) -> bool {
@@ -1581,7 +1583,7 @@ fn class_has_interface_method(
                 method,
                 class.name(),
                 requirement,
-                interface_name,
+                requirement_owner,
                 Some(class),
                 context,
             );
@@ -1597,7 +1599,7 @@ fn class_has_interface_method(
                     &method,
                     &declaring_class,
                     requirement,
-                    interface_name,
+                    requirement_owner,
                     Some(class),
                     context,
                 )
