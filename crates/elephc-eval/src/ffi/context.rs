@@ -1,7 +1,7 @@
 //! Purpose:
 //! Exports eval context handle allocation and context metadata setters.
-//! These functions manage process-level eval state and call-site/global-scope
-//! metadata used while executing fragments.
+//! These functions manage process-level eval state and call-site/global/class
+//! scope metadata used while executing fragments.
 //!
 //! Called from:
 //! - Generated EIR backend assembly through `__elephc_eval_context_*` symbols.
@@ -73,6 +73,42 @@ pub unsafe extern "C" fn __elephc_eval_context_set_global_scope(
         .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
+/// Enters a generated caller's class scope for the next eval fragment.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Class name pointers must be
+/// readable UTF-8 slices for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_context_push_class_scope(
+    ctx: *mut ElephcEvalContext,
+    class_ptr: *const u8,
+    class_len: u64,
+    called_class_ptr: *const u8,
+    called_class_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_context_push_class_scope_inner(
+            ctx,
+            class_ptr,
+            class_len,
+            called_class_ptr,
+            called_class_len,
+        )
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Leaves a generated caller class scope after an eval fragment returns.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle previously passed to
+/// `__elephc_eval_context_push_class_scope`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_context_pop_class_scope(ctx: *mut ElephcEvalContext) -> i32 {
+    std::panic::catch_unwind(|| unsafe { eval_context_pop_class_scope_inner(ctx) })
+        .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
 /// Runs the call-site metadata setter ABI body after installing a panic boundary.
 ///
 /// # Safety
@@ -123,5 +159,61 @@ unsafe fn eval_context_set_global_scope_inner(
     if !context.set_global_scope(scope) {
         return EvalStatus::RuntimeFatal.code();
     }
+    EvalStatus::Ok.code()
+}
+
+/// Runs the class-scope push ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_context_push_class_scope`; callers must pass a valid
+/// context and readable UTF-8 class-name byte slices.
+unsafe fn eval_context_push_class_scope_inner(
+    ctx: *mut ElephcEvalContext,
+    class_ptr: *const u8,
+    class_len: u64,
+    called_class_ptr: *const u8,
+    called_class_len: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    let Ok(class_name) = abi_name_to_string(class_ptr, class_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let Ok(called_class_name) = abi_name_to_string(called_class_ptr, called_class_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let class_name = class_name.trim_start_matches('\\').to_string();
+    if class_name.is_empty() {
+        return EvalStatus::RuntimeFatal.code();
+    }
+    let called_class_name = called_class_name.trim_start_matches('\\');
+    let called_class_name = if called_class_name.is_empty() {
+        class_name.clone()
+    } else {
+        called_class_name.to_string()
+    };
+    context.push_class_scope(class_name);
+    context.push_called_class_scope(called_class_name);
+    EvalStatus::Ok.code()
+}
+
+/// Runs the class-scope pop ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_context_pop_class_scope`; callers must pass a valid
+/// context handle created by the eval bridge.
+unsafe fn eval_context_pop_class_scope_inner(ctx: *mut ElephcEvalContext) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    context.pop_called_class_scope();
+    context.pop_class_scope();
     EvalStatus::Ok.code()
 }

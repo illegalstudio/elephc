@@ -2774,6 +2774,7 @@ pub(in crate::interpreter) fn resolve_eval_static_class_name(
                 .class(current)
                 .and_then(EvalClass::parent)
                 .map(str::to_string)
+                .or_else(|| context.native_class_parent(current).map(str::to_string))
                 .ok_or(EvalStatus::RuntimeFatal)
         }
         _ => context
