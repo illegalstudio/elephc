@@ -224,7 +224,11 @@ fn lower_ref_assign_element_aarch64(
     key: ValueId,
     source_slot: LocalSlotId,
 ) -> Result<()> {
-    promote_source_to_boxed_refcell_aarch64(ctx, source_slot)?;
+    if ctx.is_foreach_hash_ref_slot(source_slot) {
+        promote_foreach_entry_source_aarch64(ctx, source_slot)?;
+    } else {
+        promote_source_to_boxed_refcell_aarch64(ctx, source_slot)?;
+    }
     abi::emit_push_reg(ctx.emitter, "x0");                                      // save the new reference cell pointer across key materialization
     materialize_hash_key_aarch64(ctx, key)?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                          // preserve the materialized key across the table load
@@ -244,7 +248,11 @@ fn lower_ref_assign_element_x86_64(
     key: ValueId,
     source_slot: LocalSlotId,
 ) -> Result<()> {
-    promote_source_to_boxed_refcell_x86_64(ctx, source_slot)?;
+    if ctx.is_foreach_hash_ref_slot(source_slot) {
+        promote_foreach_entry_source_x86_64(ctx, source_slot)?;
+    } else {
+        promote_source_to_boxed_refcell_x86_64(ctx, source_slot)?;
+    }
     abi::emit_push_reg(ctx.emitter, "rax");                                     // save the new reference cell pointer across key materialization
     materialize_hash_key_x86_64(ctx, key)?;
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");                        // preserve the materialized key across the table load
@@ -323,6 +331,40 @@ fn promote_source_to_boxed_refcell_x86_64(
     }
     abi::store_at_offset_scratch(ctx.emitter, "rax", offset, "r10");          // overwrite the source slot with the cell pointer
     ctx.mark_boxed_refcell_slot(slot);
+    Ok(())
+}
+
+/// Promotes a foreach-by-reference source (an interior pointer into a hash entry) into a shared
+/// reference cell on AArch64, leaving the cell pointer in `x0`.
+///
+/// Unlike the value-source promotion, the entry the source aliases is promoted in place: its value
+/// triple moves into a fresh reference cell and the entry slot becomes a tag-11 reference to that
+/// cell, so the original container and the assignment target share the same cell. The cell is then
+/// increffed for the new target owner (the cell is co-owned by the origin entry and the target).
+fn promote_foreach_entry_source_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    let offset = ctx.local_offset(slot)?;
+    abi::load_at_offset(ctx.emitter, "x0", offset);                           // x0 = the foreach interior pointer to the entry value triple
+    abi::emit_call_label(ctx.emitter, "__rt_promote_entry_to_refcell");       // x0 = the shared reference cell (entry is now a tag-11 reference)
+    abi::emit_call_label(ctx.emitter, "__rt_incref");                         // retain the cell for the new target owner (origin entry keeps its own owner)
+    Ok(())
+}
+
+/// Promotes a foreach-by-reference source (an interior pointer into a hash entry) into a shared
+/// reference cell on x86_64, leaving the cell pointer in `rax`.
+///
+/// The mirror of `promote_foreach_entry_source_aarch64`: it promotes the aliased entry in place and
+/// increfs the resulting cell for the new target owner.
+fn promote_foreach_entry_source_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    let offset = ctx.local_offset(slot)?;
+    abi::load_at_offset(ctx.emitter, "rax", offset);                          // rax = the foreach interior pointer to the entry value triple
+    abi::emit_call_label(ctx.emitter, "__rt_promote_entry_to_refcell");       // rax = the shared reference cell (entry is now a tag-11 reference)
+    abi::emit_call_label(ctx.emitter, "__rt_incref");                         // retain the cell for the new target owner (origin entry keeps its own owner)
     Ok(())
 }
 

@@ -1176,3 +1176,18 @@ fn test_reference_reverse_direction_write_through_variable() {
     let out = compile_and_run("<?php $a = [10, 20]; $r =& $a[0]; $r = 7; echo $a[0], '|', $r;");
     assert_eq!(out, "7|7");
 }
+
+/// Verifies a foreach-by-reference value used as a reference source (the DeepClone pattern): each
+/// `$scoped[$k] =& $value` promotes the original array entry into a shared reference cell, so the
+/// source array and the target array alias the same value. Writing through the target propagates
+/// back to the source array, and untouched keys stay shared. The source array is heterogeneous
+/// (Mixed-valued) so reads dereference the reference entries. Matches `php -r` output `99|99|x|x`.
+#[test]
+fn test_reference_source_foreach_by_ref_shares_with_origin() {
+    let out = compile_and_run(
+        "<?php $vars = ['a' => 1, 'b' => 'x']; $scoped = []; \
+         foreach ($vars as $name => &$value) { $scoped[$name] =& $value; } unset($value); \
+         $scoped['a'] = 99; echo $vars['a'], '|', $scoped['a'], '|', $vars['b'], '|', $scoped['b'];",
+    );
+    assert_eq!(out, "99|99|x|x");
+}

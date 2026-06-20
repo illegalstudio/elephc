@@ -134,6 +134,7 @@ mod mixed_numeric_binops;
 mod mixed_strict_eq;
 mod mixed_unbox;
 mod mixed_write_stdout;
+mod promote_entry_to_refcell;
 mod refcell_alloc;
 mod refcell_free_deep;
 mod refcell_load;
@@ -285,6 +286,8 @@ pub use decref_any::emit_decref_any;
 pub use decref_mixed::emit_decref_mixed;
 /// Emit Mixed reference decrement helper.
 pub use decref_refcell::emit_decref_refcell;
+/// Emit hash-entry reference-cell promotion helper.
+pub use promote_entry_to_refcell::emit_promote_entry_to_refcell;
 /// Emit reference-cell decrement helper.
 pub use refcell_alloc::emit_refcell_alloc;
 /// Emit reference-cell allocation helper.

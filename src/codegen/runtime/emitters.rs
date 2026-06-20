@@ -280,6 +280,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_decref_mixed(emitter);
     arrays::emit_decref_refcell(emitter);
     arrays::emit_refcell_alloc(emitter);
+    arrays::emit_promote_entry_to_refcell(emitter);
     arrays::emit_refcell_free_deep(emitter);
     arrays::emit_refcell_load(emitter);
     arrays::emit_refcell_store(emitter);
