@@ -193,6 +193,7 @@ pub struct ElephcEvalContext {
     native_methods: HashMap<(String, String), NativeCallableSignature>,
     native_static_methods: HashMap<(String, String), NativeCallableSignature>,
     native_constructors: HashMap<String, NativeCallableSignature>,
+    native_class_parents: HashMap<String, String>,
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
     static_properties: HashMap<(String, String), RuntimeCellHandle>,
     class_constants: HashMap<(String, String), RuntimeCellHandle>,
@@ -241,6 +242,7 @@ impl ElephcEvalContext {
             native_methods: HashMap::new(),
             native_static_methods: HashMap::new(),
             native_constructors: HashMap::new(),
+            native_class_parents: HashMap::new(),
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
             class_constants: HashMap::new(),
@@ -290,6 +292,7 @@ impl ElephcEvalContext {
             native_methods: HashMap::new(),
             native_static_methods: HashMap::new(),
             native_constructors: HashMap::new(),
+            native_class_parents: HashMap::new(),
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
             class_constants: HashMap::new(),
@@ -1548,6 +1551,25 @@ impl ElephcEvalContext {
         self.native_constructors
             .get(&normalize_class_name(class_name))
             .cloned()
+    }
+
+    /// Defines generated AOT parent metadata for eval `parent::` resolution.
+    pub fn define_native_class_parent(&mut self, class_name: &str, parent_name: &str) -> bool {
+        let class_key = normalize_class_name(class_name);
+        let parent_name = parent_name.trim_start_matches('\\');
+        if class_key.is_empty() || parent_name.is_empty() {
+            return false;
+        }
+        self.native_class_parents
+            .insert(class_key, parent_name.to_string())
+            .is_none()
+    }
+
+    /// Returns generated AOT parent metadata by PHP class name.
+    pub fn native_class_parent(&self, class_name: &str) -> Option<&str> {
+        self.native_class_parents
+            .get(&normalize_class_name(class_name))
+            .map(String::as_str)
     }
 
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.

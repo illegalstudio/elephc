@@ -4507,6 +4507,77 @@ echo (new EvalMethodObjectArgBox())->run();
     assert_eq!(out, "Obj:Obj!");
 }
 
+/// Verifies eval fragments inherit lexical `self::` from an AOT instance method.
+#[test]
+fn test_eval_fragment_in_aot_method_resolves_self_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotScopeSelfBox {
+    public static function tag(): string {
+        return "self";
+    }
+
+    public function run() {
+        return eval('return self::class . ":" . self::tag();');
+    }
+}
+
+echo (new EvalAotScopeSelfBox())->run();
+"#,
+    );
+    assert_eq!(out, "EvalAotScopeSelfBox:self");
+}
+
+/// Verifies eval fragments inherit late-static `static::` from an AOT instance method.
+#[test]
+fn test_eval_fragment_in_aot_method_resolves_late_static_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotScopeStaticBase {
+    public static function tag(): string {
+        return "base";
+    }
+
+    public function run(): void {
+        echo eval('return self::class . ":" . static::class . ":" . static::tag();');
+    }
+}
+
+class EvalAotScopeStaticChild extends EvalAotScopeStaticBase {
+    public static function tag(): string {
+        return "child";
+    }
+}
+
+(new EvalAotScopeStaticChild())->run();
+"#,
+    );
+    assert_eq!(out, "EvalAotScopeStaticBase:EvalAotScopeStaticChild:child");
+}
+
+/// Verifies eval fragments resolve `parent::` through AOT parent metadata.
+#[test]
+fn test_eval_fragment_in_aot_method_resolves_parent_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotScopeParentBase {
+    public static function tag(): string {
+        return "parent";
+    }
+}
+
+class EvalAotScopeParentChild extends EvalAotScopeParentBase {
+    public function run() {
+        return eval('return parent::tag();');
+    }
+}
+
+echo (new EvalAotScopeParentChild())->run();
+"#,
+    );
+    assert_eq!(out, "parent");
+}
+
 /// Verifies eval fragments can unpack numeric arrays into public AOT method calls.
 #[test]
 fn test_eval_fragment_can_call_this_public_method_with_spread_args() {

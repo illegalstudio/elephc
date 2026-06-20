@@ -151,6 +151,31 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param(
     .unwrap_or(0)
 }
 
+/// Registers generated native PHP parent-class metadata in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Class and parent name pointers
+/// must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_class_parent(
+    ctx: *mut ElephcEvalContext,
+    class_name_ptr: *const u8,
+    class_name_len: u64,
+    parent_name_ptr: *const u8,
+    parent_name_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_class_parent_inner(
+            ctx,
+            class_name_ptr,
+            class_name_len,
+            parent_name_ptr,
+            parent_name_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
 /// Runs native method registration after installing a panic boundary.
 ///
 /// # Safety
@@ -180,11 +205,7 @@ unsafe fn register_native_method_inner(
     };
     let signature = NativeCallableSignature::new(param_count);
     if is_static {
-        i32::from(context.define_native_static_method_signature(
-            class_name,
-            method_name,
-            signature,
-        ))
+        i32::from(context.define_native_static_method_signature(class_name, method_name, signature))
     } else {
         i32::from(context.define_native_method_signature(class_name, method_name, signature))
     }
@@ -297,6 +318,33 @@ unsafe fn register_native_constructor_param_inner(
         return 0;
     };
     i32::from(context.define_native_constructor_param(&class_name, param_index, param_name))
+}
+
+/// Runs native parent-class registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_class_parent`; invalid handles or
+/// names fail closed as `false`.
+unsafe fn register_native_class_parent_inner(
+    ctx: *mut ElephcEvalContext,
+    class_name_ptr: *const u8,
+    class_name_len: u64,
+    parent_name_ptr: *const u8,
+    parent_name_len: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(class_name) = abi_name_to_string(class_name_ptr, class_name_len) else {
+        return 0;
+    };
+    let Ok(parent_name) = abi_name_to_string(parent_name_ptr, parent_name_len) else {
+        return 0;
+    };
+    i32::from(context.define_native_class_parent(&class_name, &parent_name))
 }
 
 /// Splits one generated `ClassName::methodName` metadata key into class and method pieces.

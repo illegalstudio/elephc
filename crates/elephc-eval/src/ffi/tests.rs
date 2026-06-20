@@ -112,6 +112,34 @@ fn context_set_global_scope_records_handle() {
     );
 }
 
+/// Verifies generated class scopes are pushed and popped through the context ABI.
+#[test]
+fn context_push_class_scope_records_self_and_called_class() {
+    let mut ctx = ElephcEvalContext::new();
+    let class_name = b"AotBase";
+    let called_class_name = b"AotChild";
+
+    let push_status = unsafe {
+        __elephc_eval_context_push_class_scope(
+            &mut ctx,
+            class_name.as_ptr(),
+            class_name.len() as u64,
+            called_class_name.as_ptr(),
+            called_class_name.len() as u64,
+        )
+    };
+
+    assert_eq!(push_status, EvalStatus::Ok.code());
+    assert_eq!(ctx.current_class_scope(), Some("AotBase"));
+    assert_eq!(ctx.current_called_class_scope(), Some("AotChild"));
+
+    let pop_status = unsafe { __elephc_eval_context_pop_class_scope(&mut ctx) };
+
+    assert_eq!(pop_status, EvalStatus::Ok.code());
+    assert_eq!(ctx.current_class_scope(), None);
+    assert_eq!(ctx.current_called_class_scope(), None);
+}
+
 /// Verifies the function-exists ABI probes eval-declared functions by folded name.
 #[test]
 fn function_exists_reports_declared_eval_function() {
@@ -311,6 +339,27 @@ fn register_native_methods_record_signature_metadata() {
             .param_names(),
         &["value".to_string()]
     );
+}
+
+/// Verifies native AOT parent metadata is available for eval static-scope resolution.
+#[test]
+fn register_native_class_parent_records_metadata() {
+    let mut ctx = ElephcEvalContext::new();
+    let class = b"KnownChild";
+    let parent = b"KnownParent";
+
+    let registered = unsafe {
+        __elephc_eval_register_native_class_parent(
+            &mut ctx,
+            class.as_ptr(),
+            class.len() as u64,
+            parent.as_ptr(),
+            parent.len() as u64,
+        )
+    };
+
+    assert_eq!(registered, 1);
+    assert_eq!(ctx.native_class_parent("knownchild"), Some("KnownParent"));
 }
 
 /// Verifies scope allocation returns an empty opaque activation scope handle.
