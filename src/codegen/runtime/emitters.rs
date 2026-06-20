@@ -315,6 +315,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     objects::emit_stdclass_from_hash(emitter);
     objects::emit_stdclass_get(emitter);
     objects::emit_stdclass_set(emitter);
+    objects::emit_stdclass_set_ref(emitter);
     objects::emit_mixed_property_get(emitter);
     objects::emit_mixed_property_set(emitter);
     objects::emit_mixed_array_get(emitter);

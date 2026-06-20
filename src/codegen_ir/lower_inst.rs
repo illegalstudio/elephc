@@ -82,6 +82,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::AliasLocalRefCell => lower_alias_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
         Op::RefAssignElement => hashes::lower_ref_assign_element(ctx, &inst),
+        Op::RefAssignProperty => hashes::lower_ref_assign_property(ctx, &inst),
         Op::MixedToOwnedHash => hashes::lower_mixed_to_owned_hash(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::StoreGlobal => lower_store_global(ctx, &inst),

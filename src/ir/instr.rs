@@ -171,6 +171,7 @@ pub enum Op {
     AliasLocalRefCell,
     ReleaseLocalRefCell,
     RefAssignElement,
+    RefAssignProperty,
     MixedToOwnedHash,
     LoadGlobal,
     StoreGlobal,
@@ -385,6 +386,15 @@ impl Op {
                     | E::REFCOUNT_OP
                     | E::MAY_FATAL
             }
+            RefAssignProperty => {
+                E::READS_LOCAL
+                    | E::WRITES_LOCAL
+                    | E::READS_HEAP
+                    | E::WRITES_HEAP
+                    | E::ALLOC_HEAP
+                    | E::REFCOUNT_OP
+                    | E::MAY_FATAL
+            }
             MixedToOwnedHash => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL
             }
@@ -489,6 +499,7 @@ impl Op {
             AliasLocalRefCell => "alias_local_ref_cell",
             ReleaseLocalRefCell => "release_local_ref_cell",
             RefAssignElement => "ref_assign_element",
+            RefAssignProperty => "ref_assign_property",
             MixedToOwnedHash => "mixed_to_owned_hash",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",

@@ -702,3 +702,118 @@ fn emit_stdclass_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return (no return value)
 }
+
+/// Emit `__rt_stdclass_set_ref(obj, name_ptr, name_len, cell)`.
+///
+/// Stores a reference cell (heap kind 6) pointer in the stdClass's dynamic-property hash under the
+/// given key with per-entry value_tag 11, so `$obj->prop =& $v` aliases the property and the source
+/// variable to the same cell. Mirrors `__rt_stdclass_set` (lazy hash allocation, `__rt_hash_set`
+/// insertion, write-back to obj+8) but stores a reference entry instead of a boxed Mixed value.
+pub fn emit_stdclass_set_ref(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_stdclass_set_ref_x86_64(emitter);
+        return;
+    }
+    emit_stdclass_set_ref_aarch64(emitter);
+}
+
+/// ARM64 code emitter for `__rt_stdclass_set_ref`.
+///
+/// Inputs: `x0` = obj, `x1` = name_ptr, `x2` = name_len, `x3` = reference cell pointer.
+/// Lazily allocates the property hash if `obj+8` is null, then calls `__rt_hash_set` to insert the
+/// reference cell under the given key with value_tag 11. No return value.
+fn emit_stdclass_set_ref_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: stdclass_set_ref ---");
+    emitter.label_global("__rt_stdclass_set_ref");
+
+    // Stack:
+    //   [sp, #0]  = obj
+    //   [sp, #8]  = name_ptr
+    //   [sp, #16] = name_len
+    //   [sp, #24] = cell
+    //   [sp, #32] = saved x29
+    //   [sp, #40] = saved x30
+    emitter.instruction("sub sp, sp, #48");                                     // reserve frame: 4 inputs + saved fp/lr
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // set new frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save obj
+    emitter.instruction("str x1, [sp, #8]");                                    // save name_ptr
+    emitter.instruction("str x2, [sp, #16]");                                   // save name_len
+    emitter.instruction("str x3, [sp, #24]");                                   // save the reference cell pointer
+
+    emitter.instruction("ldr x9, [x0, #8]");                                    // load current hash_ptr from obj+8
+    emitter.instruction("cbnz x9, __rt_stdclass_set_ref_have_hash");            // already allocated → skip lazy init
+
+    emitter.instruction("mov x0, #8");                                          // initial capacity = 8 slots
+    emitter.instruction("mov x1, #7");                                          // value_type = 7 (boxed Mixed default)
+    emitter.instruction("bl __rt_hash_new");                                    // x0 = empty hash pointer
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload obj
+    emitter.instruction("str x0, [x10, #8]");                                   // store the new hash_ptr at obj+8
+
+    emitter.label("__rt_stdclass_set_ref_have_hash");
+
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload obj
+    emitter.instruction("ldr x0, [x10, #8]");                                   // x0 = current hash_ptr
+    emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = name_ptr (key_lo)
+    emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = name_len (key_hi)
+    emitter.instruction("ldr x3, [sp, #24]");                                   // x3 = value_lo = the reference cell pointer
+    emitter.instruction("mov x4, #0");                                          // value_hi = 0 for a reference entry
+    emitter.instruction("mov x5, #11");                                         // value_tag = 11 (reference)
+    emitter.instruction("bl __rt_hash_set");                                    // x0 = updated hash pointer
+
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload obj
+    emitter.instruction("str x0, [x10, #8]");                                   // update obj+8 with the latest hash pointer
+
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return (no return value)
+}
+
+/// x86_64 code emitter for `__rt_stdclass_set_ref`.
+///
+/// Inputs (SysV): `rdi` = obj, `rsi` = name_ptr, `rdx` = name_len, `rcx` = reference cell pointer.
+/// Lazily allocates the property hash if `obj+8` is null, then calls `__rt_hash_set` to insert the
+/// reference cell under the given key with value_tag 11. No return value.
+fn emit_stdclass_set_ref_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: stdclass_set_ref ---");
+    emitter.label_global("__rt_stdclass_set_ref");
+
+    // Inputs (SysV): rdi=obj, rsi=name_ptr, rdx=name_len, rcx=cell.
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
+    emitter.instruction("sub rsp, 32");                                         // reserve slots for the 4 saved inputs (16-byte aligned)
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save obj
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save name_ptr
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save name_len
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the reference cell pointer
+
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load current hash_ptr from obj+8
+    emitter.instruction("test r10, r10");                                       // already allocated?
+    emitter.instruction("jne __rt_stdclass_set_ref_have_hash");                 // skip lazy init when present
+
+    emitter.instruction("mov rax, 8");                                          // initial capacity = 8 slots
+    emitter.instruction("mov rdi, 7");                                          // value_type = 7 (boxed Mixed default)
+    emitter.instruction("call __rt_hash_new");                                  // rax = empty hash pointer
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload obj
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // store the new hash_ptr at obj+8
+
+    emitter.label("__rt_stdclass_set_ref_have_hash");
+
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload obj
+    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // rdi = current hash_ptr
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // rsi = name_ptr (key_lo)
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // rdx = name_len (key_hi)
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // rcx = value_lo = the reference cell pointer
+    emitter.instruction("xor r8, r8");                                          // value_hi = 0 for a reference entry
+    emitter.instruction("mov r9, 11");                                          // value_tag = 11 (reference)
+    emitter.instruction("call __rt_hash_set");                                  // rax = updated hash pointer
+
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload obj
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // update obj+8 with the latest hash pointer
+
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return (no return value)
+}

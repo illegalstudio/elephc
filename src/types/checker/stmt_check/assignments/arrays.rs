@@ -270,9 +270,8 @@ pub(super) fn check_ref_assign_target(
             "Reference assignment into an array element or object property is not yet supported",
         )
     };
-    let ExprKind::ArrayAccess { array, index } = &target.kind else {
-        return Err(unsupported());
-    };
+    // The source must be a scalar local for every supported target shape (array element or object
+    // property): a reference entry stores the value through a boxed reference cell.
     let source_ty = env
         .get(source)
         .cloned()
@@ -283,21 +282,56 @@ pub(super) fn check_ref_assign_target(
     ) {
         return Err(unsupported());
     }
-    match &array.kind {
-        // Single-level target `$base[$index] =& $source`.
-        ExprKind::Variable(array_name) => {
-            check_single_level_ref_assign_target(checker, array_name, index, span, env)
+    match &target.kind {
+        ExprKind::ArrayAccess { array, index } => match &array.kind {
+            // Single-level target `$base[$index] =& $source`.
+            ExprKind::Variable(array_name) => {
+                check_single_level_ref_assign_target(checker, array_name, index, span, env)
+            }
+            // Two-level nested target `$base[$outer][$inner] =& $source` with a plain `Variable` base.
+            ExprKind::ArrayAccess {
+                array: inner_array,
+                index: outer_index,
+            } => {
+                let ExprKind::Variable(array_name) = &inner_array.kind else {
+                    return Err(unsupported());
+                };
+                check_nested_ref_assign_target(checker, array_name, outer_index, index, span, env)
+            }
+            _ => Err(unsupported()),
+        },
+        // Object dynamic-property target `$object->property =& $source` (stdClass hash path).
+        ExprKind::PropertyAccess { object, .. } => {
+            check_property_ref_assign_target(checker, object, span, env)
         }
-        // Two-level nested target `$base[$outer][$inner] =& $source` with a plain `Variable` base.
-        ExprKind::ArrayAccess {
-            array: inner_array,
-            index: outer_index,
-        } => {
-            let ExprKind::Variable(array_name) = &inner_array.kind else {
-                return Err(unsupported());
-            };
-            check_nested_ref_assign_target(checker, array_name, outer_index, index, span, env)
-        }
+        _ => Err(unsupported()),
+    }
+}
+
+/// Validates the receiver for an object-property reference target `$object->property =& $source`.
+///
+/// Only a statically-typed `stdClass` instance is supported: its dynamic properties live in a hash
+/// of boxed Mixed values that can hold a tag-11 reference entry, and the receiver is a raw object
+/// pointer the codegen reads `obj+8` from directly. Declared typed-class properties are packed
+/// fields (not hash entries), and a `Mixed` receiver is a boxed pointer the property-hash codegen
+/// cannot dereference, so both return the "not yet supported" diagnostic. The object expression is
+/// inferred for its assignment effects; no environment widening is needed because dynamic properties
+/// are already typed `mixed`.
+fn check_property_ref_assign_target(
+    checker: &mut Checker,
+    object: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let unsupported = || {
+        CompileError::new(
+            span,
+            "Reference assignment into an array element or object property is not yet supported",
+        )
+    };
+    let object_ty = checker.infer_type_with_assignment_effects(object, env)?;
+    match &object_ty {
+        PhpType::Object(class_name) if class_name.trim_start_matches('\\') == "stdClass" => Ok(()),
         _ => Err(unsupported()),
     }
 }

@@ -217,6 +217,73 @@ pub(super) fn lower_ref_assign_element(
     Ok(())
 }
 
+/// Lowers `$object->property =& $source` for a dynamic-property object target (`stdClass`) with a
+/// scalar local source.
+///
+/// Promotes the source local into a shared boxed REFCELL, then stores the cell into the object's
+/// dynamic-property hash under the property name with per-entry value_tag 11 via
+/// `__rt_stdclass_set_ref` (which lazily allocates the hash, inserts the reference entry, and writes
+/// the possibly-grown table back to `obj+8`). The source local is marked a by-reference alias by the
+/// promotion helper, so its subsequent reads/writes dereference the cell; property reads dereference
+/// the reference through the existing `__rt_stdclass_get` → `__rt_hash_get` tag-11 path. The object
+/// pointer itself is stable across the call, so no local write-back is required.
+pub(super) fn lower_ref_assign_property(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let propname = expect_operand(inst, 1)?;
+    let source_slot = expect_local_slot(inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_ref_assign_property_aarch64(ctx, object, propname, source_slot),
+        Arch::X86_64 => lower_ref_assign_property_x86_64(ctx, object, propname, source_slot),
+    }
+}
+
+/// AArch64 body of `lower_ref_assign_property`.
+fn lower_ref_assign_property_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    propname: ValueId,
+    source_slot: LocalSlotId,
+) -> Result<()> {
+    if ctx.is_foreach_hash_ref_slot(source_slot) {
+        promote_foreach_entry_source_aarch64(ctx, source_slot)?;
+    } else {
+        promote_source_to_boxed_refcell_aarch64(ctx, source_slot)?;
+    }
+    abi::emit_push_reg(ctx.emitter, "x0");                                      // save the new reference cell pointer across name + object materialization
+    materialize_hash_key_aarch64(ctx, propname)?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                          // preserve the property name (ptr, len) across the object load
+    ctx.load_value_to_reg(object, "x0")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                           // restore name_ptr and name_len
+    abi::emit_pop_reg(ctx.emitter, "x3");                                      // x3 = the reference cell pointer (the property hash slot becomes an owner)
+    abi::emit_call_label(ctx.emitter, "__rt_stdclass_set_ref");               // store (tag 11, cell) into the dynamic-property hash under the name
+    Ok(())
+}
+
+/// x86_64 body of `lower_ref_assign_property`.
+fn lower_ref_assign_property_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    propname: ValueId,
+    source_slot: LocalSlotId,
+) -> Result<()> {
+    if ctx.is_foreach_hash_ref_slot(source_slot) {
+        promote_foreach_entry_source_x86_64(ctx, source_slot)?;
+    } else {
+        promote_source_to_boxed_refcell_x86_64(ctx, source_slot)?;
+    }
+    abi::emit_push_reg(ctx.emitter, "rax");                                     // save the new reference cell pointer across name + object materialization
+    materialize_hash_key_x86_64(ctx, propname)?;
+    abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");                        // preserve the property name (ptr, len) across the object load
+    ctx.load_value_to_reg(object, "rdi")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");                         // restore name_ptr and name_len
+    abi::emit_pop_reg(ctx.emitter, "rcx");                                     // rcx = the reference cell pointer (the property hash slot becomes an owner)
+    abi::emit_call_label(ctx.emitter, "__rt_stdclass_set_ref");               // store (tag 11, cell) into the dynamic-property hash under the name
+    Ok(())
+}
+
 /// AArch64 body of `lower_ref_assign_element`.
 fn lower_ref_assign_element_aarch64(
     ctx: &mut FunctionContext<'_>,

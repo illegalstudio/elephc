@@ -1191,3 +1191,37 @@ fn test_reference_source_foreach_by_ref_shares_with_origin() {
     );
     assert_eq!(out, "99|99|x|x");
 }
+
+/// M5: `$obj->prop =& $v` aliases a stdClass dynamic property to a scalar local through the
+/// object's property hash. Writing the source variable is observed when reading the property back
+/// (the read dereferences the tag-11 reference entry via `__rt_stdclass_get`). Matches `php -r` `5`.
+#[test]
+fn test_reference_into_object_property_shares_source() {
+    let out = compile_and_run(
+        "<?php $o = new stdClass(); $v = 1; $o->p =& $v; $v = 5; echo $o->p;",
+    );
+    assert_eq!(out, "5");
+}
+
+/// M5: writing the aliased property `$obj->prop = 9` propagates back to the source variable, because
+/// the property write overwrites a tag-11 reference entry and `__rt_hash_set` writes through the
+/// shared reference cell (the boxed value is unboxed by `__rt_refcell_store`). Matches `php -r` `9`.
+#[test]
+fn test_reference_into_object_property_write_through_variable() {
+    let out = compile_and_run(
+        "<?php $o = new stdClass(); $v = 1; $o->p =& $v; $o->p = 9; echo $v;",
+    );
+    assert_eq!(out, "9");
+}
+
+/// M5: two distinct properties aliasing two distinct source variables stay independent — each
+/// reference entry shares only its own cell. Writing both sources is observed through both
+/// properties. Matches `php -r` output `10|20`.
+#[test]
+fn test_reference_into_two_object_properties_independent() {
+    let out = compile_and_run(
+        "<?php $o = new stdClass(); $a = 1; $b = 2; $o->x =& $a; $o->y =& $b; \
+         $a = 10; $b = 20; echo $o->x, '|', $o->y;",
+    );
+    assert_eq!(out, "10|20");
+}

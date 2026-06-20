@@ -39,11 +39,25 @@ fn test_error_reference_assignment_into_deep_nested_array_element_is_gated() {
     );
 }
 
-/// Tests that a reference assignment into an object property is gated with the same diagnostic.
+/// Tests that a reference assignment into a *declared* typed-class property is gated: declared
+/// properties are packed fields, not dynamic-property hash entries, so they cannot hold a reference
+/// cell. (A `stdClass` dynamic property is supported and exercised by the codegen tests.)
 #[test]
-fn test_error_reference_assignment_into_property_is_gated() {
+fn test_error_reference_assignment_into_declared_property_is_gated() {
     expect_error(
-        "<?php $v = 1; $o = new stdClass(); $o->p =& $v;",
+        "<?php class C { public int $p = 0; } $v = 1; $o = new C(); $o->p =& $v;",
+        "Reference assignment into an array element or object property is not yet supported",
+    );
+}
+
+/// Tests that a reference assignment into a property of a `Mixed`-typed receiver (e.g. a
+/// `json_decode()` object result) is gated: a boxed Mixed pointer is not a raw object pointer the
+/// dynamic-property-hash codegen can dereference, so the unsupported diagnostic is emitted instead
+/// of miscompiling.
+#[test]
+fn test_error_reference_assignment_into_mixed_receiver_property_is_gated() {
+    expect_error(
+        "<?php $o = json_decode('{}'); $v = 1; $o->p =& $v;",
         "Reference assignment into an array element or object property is not yet supported",
     );
 }

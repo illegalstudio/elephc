@@ -356,26 +356,74 @@ fn lower_ref_assign_target(
     source: &str,
     span: Span,
 ) {
-    let ExprKind::ArrayAccess { array, index } = &target.kind else {
-        return;
-    };
-    match &array.kind {
-        // Single-level target `$base[$index] =& $source`.
-        ExprKind::Variable(array_name) => {
-            lower_single_level_ref_assign(ctx, array_name, index, source, span);
-        }
-        // Two-level nested target `$base[$outer][$inner] =& $source` with a plain `Variable` base.
-        ExprKind::ArrayAccess {
-            array: inner_array,
-            index: outer_index,
-        } => {
-            let ExprKind::Variable(array_name) = &inner_array.kind else {
-                return;
-            };
-            lower_nested_ref_assign(ctx, array_name, outer_index, index, source, span);
+    match &target.kind {
+        // Array-element target `$base[$index] =& $source` (single- or two-level nested).
+        ExprKind::ArrayAccess { array, index } => match &array.kind {
+            // Single-level target `$base[$index] =& $source`.
+            ExprKind::Variable(array_name) => {
+                lower_single_level_ref_assign(ctx, array_name, index, source, span);
+            }
+            // Two-level nested target `$base[$outer][$inner] =& $source` with a plain `Variable` base.
+            ExprKind::ArrayAccess {
+                array: inner_array,
+                index: outer_index,
+            } => {
+                let ExprKind::Variable(array_name) = &inner_array.kind else {
+                    return;
+                };
+                lower_nested_ref_assign(ctx, array_name, outer_index, index, source, span);
+            }
+            _ => {}
+        },
+        // Object dynamic-property target `$object->property =& $source` (stdClass hash path).
+        ExprKind::PropertyAccess { object, property } => {
+            lower_property_ref_assign(ctx, object, property, source, span);
         }
         _ => {}
     }
+}
+
+/// Lowers `$object->property =& $source` for a dynamic-property object target (`stdClass`).
+///
+/// The property reference rides the object's dynamic-property hash: the source local is promoted to
+/// a shared boxed REFCELL and stored into the hash under the property name with per-entry value_tag
+/// 11 (codegen `RefAssignProperty` → `__rt_stdclass_set_ref`). The property name is materialized as
+/// a string constant and passed as the second operand; the source slot travels in the immediate, so
+/// the instruction shape mirrors `RefAssignElement`. The source is then marked a by-reference alias
+/// so later reads/writes dereference the cell, and property reads dereference through the existing
+/// `__rt_stdclass_get` → `__rt_hash_get` tag-11 path.
+fn lower_property_ref_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    source: &str,
+    span: Span,
+) {
+    let object = lower_expr(ctx, object);
+    let data = ctx.intern_string(property);
+    let propname = ctx
+        .builder
+        .emit_with_effects(
+            Op::ConstStr,
+            Vec::new(),
+            Some(Immediate::Data(data)),
+            IrType::Str,
+            PhpType::Str,
+            Ownership::Persistent,
+            Op::ConstStr.default_effects(),
+            Some(span),
+        )
+        .expect("const_str produces a value");
+    let source_ty = ctx.local_type(source);
+    let source_slot = ctx.declare_local(source, source_ty);
+    ctx.emit_void(
+        Op::RefAssignProperty,
+        vec![object.value, propname],
+        Some(Immediate::LocalSlot(source_slot)),
+        Op::RefAssignProperty.default_effects(),
+        Some(span),
+    );
+    ctx.mark_ref_bound_local(source);
 }
 
 /// Lowers a single-level reference assignment `$base[$index] =& $source`.

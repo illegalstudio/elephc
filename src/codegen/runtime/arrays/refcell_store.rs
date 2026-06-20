@@ -40,7 +40,25 @@ pub fn emit_refcell_store(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #16]");                                   // save the new value low word across helper calls
     emitter.instruction("str x3, [sp, #24]");                                   // save the new value high word across helper calls
 
+    // -- if the new value is a boxed Mixed (tag 7), unbox it so the cell holds the underlying value
+    //    triple directly; a typed reader then reconstructs the scalar instead of seeing a box pointer.
+    //    The box's inner is transferred to the cell, so only the orphaned box shell is freed --
+    emitter.instruction("ldr x9, [sp, #8]");                                    // load the new value tag
+    emitter.instruction("cmp x9, #7");                                          // is the new value a boxed Mixed cell?
+    emitter.instruction("b.ne __rt_refcell_store_unboxed");                     // non-boxed values are already a raw triple
+    emitter.instruction("ldr x10, [sp, #16]");                                  // x10 = the boxed Mixed pointer (new value_lo)
+    emitter.instruction("ldr x11, [x10]");                                      // load the boxed inner value tag from box[0]
+    emitter.instruction("str x11, [sp, #8]");                                   // overwrite the saved new tag with the unboxed inner tag
+    emitter.instruction("ldr x11, [x10, #8]");                                  // load the boxed inner low word from box[8]
+    emitter.instruction("str x11, [sp, #16]");                                  // overwrite the saved new low word
+    emitter.instruction("ldr x11, [x10, #16]");                                 // load the boxed inner high word from box[16]
+    emitter.instruction("str x11, [sp, #24]");                                  // overwrite the saved new high word
+    emitter.instruction("mov x0, x10");                                         // free the now-orphaned box shell (its inner moved into the cell)
+    emitter.instruction("bl __rt_heap_free");                                   // release just the box shell, never its transferred inner
+    emitter.label("__rt_refcell_store_unboxed");
+
     // -- release the value currently referenced by the cell (the new value is transferred, not retained) --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the reference cell pointer (the unbox path clobbers x0)
     emitter.instruction("ldr x9, [x0]");                                        // load the cell's current inner value tag
     emitter.instruction("cmp x9, #1");                                          // is the current inner value a string?
     emitter.instruction("b.eq __rt_refcell_store_rel_string");                  // strings release through heap_free_safe
@@ -99,7 +117,25 @@ fn emit_refcell_store_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the new value low word across helper calls
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the new value high word across helper calls
 
+    // -- if the new value is a boxed Mixed (tag 7), unbox it so the cell holds the underlying value
+    //    triple directly; a typed reader then reconstructs the scalar instead of seeing a box pointer.
+    //    The box's inner is transferred to the cell, so only the orphaned box shell is freed --
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // load the new value tag
+    emitter.instruction("cmp r10, 7");                                          // is the new value a boxed Mixed cell?
+    emitter.instruction("jne __rt_refcell_store_unboxed");                      // non-boxed values are already a raw triple
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // r11 = the boxed Mixed pointer (new value_lo)
+    emitter.instruction("mov r10, QWORD PTR [r11]");                            // load the boxed inner value tag from box[0]
+    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // overwrite the saved new tag with the unboxed inner tag
+    emitter.instruction("mov r10, QWORD PTR [r11 + 8]");                        // load the boxed inner low word from box[8]
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // overwrite the saved new low word
+    emitter.instruction("mov r10, QWORD PTR [r11 + 16]");                       // load the boxed inner high word from box[16]
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // overwrite the saved new high word
+    emitter.instruction("mov rax, r11");                                        // free the now-orphaned box shell (its inner moved into the cell)
+    emitter.instruction("call __rt_heap_free");                                 // release just the box shell, never its transferred inner
+    emitter.label("__rt_refcell_store_unboxed");
+
     // -- release the value currently referenced by the cell (the new value is transferred, not retained) --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the reference cell pointer (the unbox path clobbers rdi)
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the cell's current inner value tag
     emitter.instruction("cmp r10, 1");                                          // is the current inner value a string?
     emitter.instruction("je __rt_refcell_store_rel_string");                    // strings release through heap_free_safe
