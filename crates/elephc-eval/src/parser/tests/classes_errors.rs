@@ -384,13 +384,57 @@ fn parse_fragment_accepts_constructor_promoted_properties() {
     );
 }
 
+/// Verifies by-reference promoted constructor parameters lower to property aliases.
+#[test]
+fn parse_fragment_accepts_by_reference_constructor_promoted_properties() {
+    let program = parse_fragment(
+        br#"class DynEvalPromotedRef {
+    public function __construct(public int &$id) {}
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(EvalClass::new(
+            "DynEvalPromotedRef",
+            vec![
+                EvalClassProperty::with_visibility_static_final_and_readonly(
+                    "id",
+                    EvalVisibility::Public,
+                    false,
+                    false,
+                    false,
+                    None,
+                )
+                .with_type(Some(EvalParameterType::new(
+                    vec![EvalParameterTypeVariant::Int],
+                    false
+                )))
+                .with_promoted()
+            ],
+            vec![EvalClassMethod::new(
+                "__construct",
+                vec!["id".to_string()],
+                vec![EvalStmt::PropertyReferenceBind {
+                    object: EvalExpr::LoadVar("this".to_string()),
+                    property: "id".to_string(),
+                    source: "id".to_string(),
+                }],
+            )
+            .with_parameter_types(vec![Some(EvalParameterType::new(
+                vec![EvalParameterTypeVariant::Int],
+                false
+            ))])
+            .with_parameter_by_ref_flags(vec![true])]
+        ))]
+    );
+}
+
 /// Verifies eval rejects promoted parameter forms that the eval runtime cannot model yet.
 #[test]
 fn parse_fragment_rejects_unsupported_constructor_promotion_forms() {
     parse_fragment(b"class DynEvalPromotedMethod { public function run(public int $id) {} }")
         .expect_err("promotion is only valid on constructors");
-    parse_fragment(b"class DynEvalPromotedRef { public function __construct(public &$id) {} }")
-        .expect_err("promoted by-reference parameters need property alias storage");
     parse_fragment(
         b"class DynEvalPromotedVariadic { public function __construct(public ...$ids) {} }",
     )

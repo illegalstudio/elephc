@@ -8384,6 +8384,25 @@ return $box->x;');
     assert_eq!(out, "DynEvalSupported:9:Y10:12:12");
 }
 
+/// Verifies eval-declared by-reference promoted properties remain aliased after construction.
+#[test]
+fn test_eval_declared_class_aliases_by_reference_promoted_property() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class DynEvalPromotedRefSupported {
+    public function __construct(public &$value) {}
+}');
+echo eval('$value = 1;
+$box = new DynEvalPromotedRefSupported($value);
+$box->value = 5;
+echo $value . ":";
+$value = 7;
+return $box->value;');
+"#,
+    );
+    assert_eq!(out, "5:7");
+}
+
 /// Verifies eval can construct an AOT class with no declared constructor.
 #[test]
 fn test_eval_dynamic_new_constructs_aot_class() {

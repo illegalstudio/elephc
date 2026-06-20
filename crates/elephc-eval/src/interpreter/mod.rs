@@ -29,7 +29,8 @@ mod scope_cells;
 mod statements;
 
 use crate::context::{
-    ElephcEvalContext, ElephcEvalExecutionScope, NativeCallableSignature, NativeFunction,
+    ElephcEvalContext, ElephcEvalExecutionScope, EvalReferenceTarget, NativeCallableSignature,
+    NativeFunction,
 };
 use crate::errors::{EvalParseError, EvalStatus};
 use crate::eval_ir::{
@@ -51,7 +52,7 @@ use constants::*;
 pub use control::EvalOutcome;
 use control::{
     BoundMethodArg, EvalArraySpliceDirectArgs, EvalControl, EvalPredefinedConstant,
-    EvalSprintfSpec, EvaluatedCallArg, EvaluatedCallRefTarget, EvaluatedCallable,
+    EvalSprintfSpec, EvaluatedCallArg, EvaluatedCallable,
 };
 use core_builtins::*;
 use debug_output::*;

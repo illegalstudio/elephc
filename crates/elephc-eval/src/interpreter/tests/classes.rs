@@ -34,6 +34,126 @@ return $user->label();"#,
     assert_eq!(values.get(result), FakeValue::String("7:Ada".to_string()));
 }
 
+/// Verifies by-reference promoted properties stay aliased to caller variables.
+#[test]
+fn execute_program_aliases_by_reference_promoted_variable_properties() {
+    let program = parse_fragment(
+        br#"class EvalPromotedRefBox {
+    public function __construct(public &$value) {}
+}
+$value = 1;
+$box = new EvalPromotedRefBox($value);
+$box->value = 5;
+echo $value; echo ":";
+$value = 7;
+echo $box->value;
+return $box->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "5:7");
+    assert_eq!(values.get(result), FakeValue::Int(7));
+}
+
+/// Verifies by-reference promoted properties can alias caller array elements.
+#[test]
+fn execute_program_aliases_by_reference_promoted_array_element_properties() {
+    let program = parse_fragment(
+        br#"class EvalPromotedArrayRefBox {
+    public function __construct(public &$value) {}
+}
+$items = [1];
+$box = new EvalPromotedArrayRefBox($items[0]);
+$box->value = 5;
+echo $items[0]; echo ":";
+$items[0] = 7;
+echo $box->value;
+return $box->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "5:7");
+    assert_eq!(values.get(result), FakeValue::Int(7));
+}
+
+/// Verifies by-reference promoted properties can alias caller object properties.
+#[test]
+fn execute_program_aliases_by_reference_promoted_object_property_properties() {
+    let program = parse_fragment(
+        br#"class EvalPromotedObjectRefHolder {
+    public $value = 1;
+}
+class EvalPromotedObjectRefBox {
+    public function __construct(public &$value) {}
+}
+$holder = new EvalPromotedObjectRefHolder();
+$box = new EvalPromotedObjectRefBox($holder->value);
+$box->value = 5;
+echo $holder->value; echo ":";
+$holder->value = 7;
+echo $box->value;
+return $box->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "5:7");
+    assert_eq!(values.get(result), FakeValue::Int(7));
+}
+
+/// Verifies by-reference promoted defaults use internal property alias storage.
+#[test]
+fn execute_program_aliases_by_reference_promoted_default_properties() {
+    let program = parse_fragment(
+        br#"class EvalPromotedDefaultRefBox {
+    public function __construct(public &$value = null) {}
+}
+$box = new EvalPromotedDefaultRefBox();
+$box->value = 5;
+echo $box->value;
+return $box->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "5");
+    assert_eq!(values.get(result), FakeValue::Int(5));
+}
+
+/// Verifies readonly by-reference promotion fails when the constructor creates the alias.
+#[test]
+fn execute_program_rejects_readonly_by_reference_promoted_properties() {
+    let program = parse_fragment(
+        br#"class EvalPromotedReadonlyRefBox {
+    public function __construct(public readonly int &$value) {}
+}
+$value = 1;
+new EvalPromotedReadonlyRefBox($value);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("readonly by-reference promoted property should fail at construction");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies promoted readonly properties keep the normal constructor-only write rule.
 #[test]
 fn execute_program_rejects_promoted_readonly_property_write_after_constructor() {

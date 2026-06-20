@@ -36,6 +36,28 @@ pub struct ElephcEvalExecutionScope {
     called_class_stack: Vec<String>,
 }
 
+/// Caller-side storage target that can remain linked to an eval object property.
+#[derive(Clone)]
+pub enum EvalReferenceTarget {
+    Variable {
+        scope: *mut ElephcEvalScope,
+        name: String,
+    },
+    ArrayElement {
+        scope: *mut ElephcEvalScope,
+        array_name: String,
+        index: RuntimeCellHandle,
+    },
+    ObjectProperty {
+        object: RuntimeCellHandle,
+        property: String,
+        access_scope: ElephcEvalExecutionScope,
+    },
+    Cell {
+        cell: RuntimeCellHandle,
+    },
+}
+
 /// Native AOT function callback metadata visible to runtime eval fragments.
 #[derive(Clone)]
 pub struct NativeFunction {
@@ -160,6 +182,7 @@ pub struct ElephcEvalContext {
     class_constants: HashMap<(String, String), RuntimeCellHandle>,
     included_files: HashSet<String>,
     dynamic_objects: HashMap<u64, String>,
+    dynamic_property_aliases: HashMap<(u64, String), EvalReferenceTarget>,
     eval_reflection_attributes: HashMap<u64, EvalAttribute>,
     eval_reflection_classes: HashMap<u64, String>,
     eval_reflection_functions: HashMap<u64, String>,
@@ -207,6 +230,7 @@ impl ElephcEvalContext {
             class_constants: HashMap::new(),
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
+            dynamic_property_aliases: HashMap::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
             eval_reflection_functions: HashMap::new(),
@@ -255,6 +279,7 @@ impl ElephcEvalContext {
             class_constants: HashMap::new(),
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
+            dynamic_property_aliases: HashMap::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
             eval_reflection_functions: HashMap::new(),
@@ -541,6 +566,51 @@ impl ElephcEvalContext {
         self.dynamic_objects
             .get(&identity)
             .and_then(|class_key| self.classes.get(class_key))
+    }
+
+    /// Binds one eval object property slot to a persistent PHP reference target.
+    pub fn bind_dynamic_property_alias(
+        &mut self,
+        identity: u64,
+        storage_property_name: &str,
+        target: EvalReferenceTarget,
+    ) -> Option<EvalReferenceTarget> {
+        self.dynamic_property_aliases
+            .insert((identity, storage_property_name.to_string()), target)
+    }
+
+    /// Returns the persistent reference target bound to one eval object property slot.
+    pub fn dynamic_property_alias(
+        &self,
+        identity: u64,
+        storage_property_name: &str,
+    ) -> Option<&EvalReferenceTarget> {
+        self.dynamic_property_aliases
+            .get(&(identity, storage_property_name.to_string()))
+    }
+
+    /// Removes the persistent reference target for one eval object property slot.
+    pub fn remove_dynamic_property_alias(
+        &mut self,
+        identity: u64,
+        storage_property_name: &str,
+    ) -> Option<EvalReferenceTarget> {
+        self.dynamic_property_aliases
+            .remove(&(identity, storage_property_name.to_string()))
+    }
+
+    /// Copies persistent property aliases from a source object identity to a clone identity.
+    pub fn clone_dynamic_property_aliases(&mut self, source_identity: u64, clone_identity: u64) {
+        let aliases = self
+            .dynamic_property_aliases
+            .iter()
+            .filter_map(|((identity, property), target)| {
+                (*identity == source_identity).then(|| (property.clone(), target.clone()))
+            })
+            .collect::<Vec<_>>();
+        for (property, target) in aliases {
+            self.bind_dynamic_property_alias(clone_identity, &property, target);
+        }
     }
 
     /// Records eval-declared attribute metadata for one synthetic ReflectionAttribute object.

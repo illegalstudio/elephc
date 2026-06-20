@@ -102,6 +102,11 @@ pub enum EvalStmt {
         target: String,
         source: String,
     },
+    PropertyReferenceBind {
+        object: EvalExpr,
+        property: String,
+        source: String,
+    },
     PropertySet {
         object: EvalExpr,
         property: String,

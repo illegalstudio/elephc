@@ -1853,7 +1853,7 @@ impl Parser {
             let TokenKind::DollarIdent(name) = self.current() else {
                 return Err(EvalParseError::ExpectedVariable);
             };
-            if promotion.is_some() && (is_by_ref || is_variadic) {
+            if promotion.is_some() && is_variadic {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
             if let Some((visibility, is_readonly)) = promotion {
@@ -1870,7 +1870,7 @@ impl Parser {
                     .with_promoted()
                     .with_attributes(attributes.clone()),
                 );
-                promoted_assignments.push(promoted_property_assignment(name));
+                promoted_assignments.push(promoted_property_assignment(name, is_by_ref));
             }
             params.push(name.clone());
             parameter_attributes.push(attributes);
@@ -2527,11 +2527,19 @@ fn property_hook_set_method(property_name: &str) -> String {
     format!("__propset_{property_name}")
 }
 
-/// Builds the implicit `$this->name = $name` assignment for a promoted parameter.
-fn promoted_property_assignment(name: &str) -> EvalStmt {
-    EvalStmt::PropertySet {
-        object: EvalExpr::LoadVar("this".to_string()),
-        property: name.to_string(),
-        value: EvalExpr::LoadVar(name.to_string()),
+/// Builds the implicit constructor assignment or alias for a promoted parameter.
+fn promoted_property_assignment(name: &str, is_by_ref: bool) -> EvalStmt {
+    if is_by_ref {
+        EvalStmt::PropertyReferenceBind {
+            object: EvalExpr::LoadVar("this".to_string()),
+            property: name.to_string(),
+            source: name.to_string(),
+        }
+    } else {
+        EvalStmt::PropertySet {
+            object: EvalExpr::LoadVar("this".to_string()),
+            property: name.to_string(),
+            value: EvalExpr::LoadVar(name.to_string()),
+        }
     }
 }

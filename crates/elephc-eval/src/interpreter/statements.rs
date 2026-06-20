@@ -189,6 +189,15 @@ pub(in crate::interpreter) fn execute_stmt(
             }
             Ok(EvalControl::None)
         }
+        EvalStmt::PropertyReferenceBind {
+            object,
+            property,
+            source,
+        } => {
+            let object = eval_expr(object, context, scope, values)?;
+            eval_property_reference_bind_result(object, property, source, context, scope, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::StaticVar { name, init } => {
             execute_static_var_stmt(name, init, context, scope, values)?;
             Ok(EvalControl::None)
@@ -1774,6 +1783,12 @@ pub(in crate::interpreter) fn eval_property_get_result(
             return Ok(result);
         }
     }
+    if let Some(target) = context
+        .dynamic_property_alias(identity, &storage_property_name)
+        .cloned()
+    {
+        return eval_reference_target_value(&target, context, values);
+    }
     values.property_get(object, &storage_property_name)
 }
 
@@ -1861,7 +1876,125 @@ pub(in crate::interpreter) fn eval_property_set_result(
     {
         return Ok(());
     }
+    if let Some(target) = context
+        .dynamic_property_alias(identity, &storage_property_name)
+        .cloned()
+    {
+        eval_reference_target_write(
+            identity,
+            &storage_property_name,
+            target,
+            value,
+            context,
+            values,
+        )?;
+        return values.property_set(object, &storage_property_name, value);
+    }
     values.property_set(object, &storage_property_name, value)
+}
+
+/// Binds one eval object property to a by-reference source parameter.
+fn eval_property_reference_bind_result(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    source_name: &str,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let identity = values.object_identity(object)?;
+    let class = context
+        .dynamic_object_class(identity)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let object_class_name = class.name().to_string();
+    if context.has_enum(&object_class_name) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let (declaring_class, property) =
+        eval_dynamic_property_for_access(&object_class_name, property_name, context)
+            .ok_or(EvalStatus::RuntimeFatal)?;
+    validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+    if property.is_readonly() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
+    let target = eval_property_reference_target(source_name, context, scope, values)?;
+    let value = eval_reference_target_value(&target, context, values)?;
+    context.bind_dynamic_property_alias(identity, &storage_property_name, target);
+    values.property_set(object, &storage_property_name, value)
+}
+
+/// Resolves a local by-reference source into a persistent property alias target.
+fn eval_property_reference_target(
+    source_name: &str,
+    context: &ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalReferenceTarget, EvalStatus> {
+    if let Some(target) = scope.reference_target(source_name).cloned() {
+        return Ok(target);
+    }
+    let cell = visible_scope_cell(context, scope, source_name).map_or_else(|| values.null(), Ok)?;
+    Ok(EvalReferenceTarget::Cell { cell })
+}
+
+/// Reads the current value from a persistent reference target.
+fn eval_reference_target_value(
+    target: &EvalReferenceTarget,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match target {
+        EvalReferenceTarget::Variable { scope, name } => {
+            let Some(scope) = (unsafe { scope.as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            visible_scope_cell(context, scope, name).map_or_else(|| values.null(), Ok)
+        }
+        EvalReferenceTarget::ArrayElement {
+            scope,
+            array_name,
+            index,
+        } => {
+            let Some(scope) = (unsafe { scope.as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let array =
+                visible_scope_cell(context, scope, array_name).map_or_else(|| values.null(), Ok)?;
+            values.array_get(array, *index)
+        }
+        EvalReferenceTarget::ObjectProperty {
+            object,
+            property,
+            access_scope,
+        } => {
+            let previous_scope = context.replace_execution_scope(access_scope.clone());
+            let result = eval_property_get_result(*object, property, context, values);
+            context.replace_execution_scope(previous_scope);
+            result
+        }
+        EvalReferenceTarget::Cell { cell } => Ok(*cell),
+    }
+}
+
+/// Writes a new value to a persistent reference target.
+fn eval_reference_target_write(
+    object_identity: u64,
+    storage_property_name: &str,
+    target: EvalReferenceTarget,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if matches!(target, EvalReferenceTarget::Cell { .. }) {
+        context.bind_dynamic_property_alias(
+            object_identity,
+            storage_property_name,
+            EvalReferenceTarget::Cell { cell: value },
+        );
+        return Ok(());
+    }
+    write_back_method_ref_target(&target, value, context, values)
 }
 
 /// Evaluates PHP `isset($object->property)` without forcing `__get()` first.
@@ -1928,6 +2061,7 @@ pub(in crate::interpreter) fn eval_property_unset_result(
             validate_eval_readonly_property_write(&declaring_class, &property, context)?;
             let storage_property_name =
                 eval_instance_property_storage_name(&declaring_class, &property);
+            context.remove_dynamic_property_alias(identity, &storage_property_name);
             let null = values.null()?;
             return values.property_set(object, &storage_property_name, null);
         }
@@ -2685,6 +2819,7 @@ pub(in crate::interpreter) fn eval_object_clone_result(
     if let Some(class_name) = dynamic_class_name {
         let clone_identity = values.object_identity(clone)?;
         context.register_dynamic_object(clone_identity, &class_name);
+        context.clone_dynamic_property_aliases(identity, clone_identity);
         if let Some((declaring_class, method)) = clone_method {
             eval_dynamic_method_with_values(
                 &declaring_class,
@@ -3338,6 +3473,9 @@ pub(in crate::interpreter) fn bind_method_scope_args(
                 bound_arg.value,
                 ScopeCellOwnership::Borrowed,
             );
+            if let Some(target) = bound_arg.ref_target.clone() {
+                method_scope.set_reference_target(name.clone(), target);
+            }
         } else {
             method_scope.set(name.clone(), bound_arg.value, ScopeCellOwnership::Borrowed);
         }
@@ -3379,30 +3517,34 @@ fn alias_duplicate_method_ref_args(
 }
 
 /// Returns true when two evaluated arguments target the same caller-side variable.
-fn same_method_ref_target(left: &EvaluatedCallRefTarget, right: &EvaluatedCallRefTarget) -> bool {
+fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalReferenceTarget) -> bool {
     match (left, right) {
         (
-            EvaluatedCallRefTarget::Variable {
+            EvalReferenceTarget::Variable {
                 scope: left_scope,
                 name: left_name,
             },
-            EvaluatedCallRefTarget::Variable {
+            EvalReferenceTarget::Variable {
                 scope: right_scope,
                 name: right_name,
             },
         ) => left_scope == right_scope && left_name == right_name,
         (
-            EvaluatedCallRefTarget::ArrayElement {
+            EvalReferenceTarget::ArrayElement {
                 scope: left_scope,
                 array_name: left_name,
                 index: left_index,
             },
-            EvaluatedCallRefTarget::ArrayElement {
+            EvalReferenceTarget::ArrayElement {
                 scope: right_scope,
                 array_name: right_name,
                 index: right_index,
             },
         ) => left_scope == right_scope && left_name == right_name && left_index == right_index,
+        (
+            EvalReferenceTarget::Cell { cell: left_cell },
+            EvalReferenceTarget::Cell { cell: right_cell },
+        ) => left_cell == right_cell,
         _ => false,
     }
 }
@@ -3462,13 +3604,13 @@ fn write_back_method_variadic_ref_args(
 
 /// Stores one by-reference method result in the original caller-side variable.
 fn write_back_method_ref_target(
-    target: &EvaluatedCallRefTarget,
+    target: &EvalReferenceTarget,
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     match target {
-        EvaluatedCallRefTarget::Variable { scope, name } => {
+        EvalReferenceTarget::Variable { scope, name } => {
             let Some(scope) = (unsafe { scope.as_mut() }) else {
                 return Err(EvalStatus::RuntimeFatal);
             };
@@ -3483,7 +3625,7 @@ fn write_back_method_ref_target(
             }
             Ok(())
         }
-        EvaluatedCallRefTarget::ArrayElement {
+        EvalReferenceTarget::ArrayElement {
             scope,
             array_name,
             index,
@@ -3495,7 +3637,7 @@ fn write_back_method_ref_target(
                 scope, array_name, *index, value, context, values,
             )
         }
-        EvaluatedCallRefTarget::ObjectProperty {
+        EvalReferenceTarget::ObjectProperty {
             object,
             property,
             access_scope,
@@ -3507,6 +3649,7 @@ fn write_back_method_ref_target(
             context,
             values,
         ),
+        EvalReferenceTarget::Cell { .. } => Ok(()),
     }
 }
 

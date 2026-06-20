@@ -89,14 +89,14 @@ fn eval_call_arg_value(
     context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
-) -> Result<(RuntimeCellHandle, Option<EvaluatedCallRefTarget>), EvalStatus> {
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
     match expr {
         EvalExpr::LoadVar(name) => {
             let value = visible_scope_cell(context, caller_scope, name)
                 .map_or_else(|| values.null(), Ok)?;
             Ok((
                 value,
-                Some(EvaluatedCallRefTarget::Variable {
+                Some(EvalReferenceTarget::Variable {
                     scope: caller_scope as *mut ElephcEvalScope,
                     name: name.clone(),
                 }),
@@ -112,7 +112,7 @@ fn eval_call_arg_value(
             let value = values.array_get(array, index)?;
             Ok((
                 value,
-                Some(EvaluatedCallRefTarget::ArrayElement {
+                Some(EvalReferenceTarget::ArrayElement {
                     scope: caller_scope as *mut ElephcEvalScope,
                     array_name: array_name.clone(),
                     index,
@@ -126,7 +126,7 @@ fn eval_call_arg_value(
             validate_property_ref_target(object, property, context, values)?;
             Ok((
                 value,
-                Some(EvaluatedCallRefTarget::ObjectProperty {
+                Some(EvalReferenceTarget::ObjectProperty {
                     object,
                     property: property.clone(),
                     access_scope,
@@ -347,7 +347,7 @@ fn bind_dynamic_positional_method_arg(
     next_positional: &mut usize,
     next_variadic_index: &mut i64,
     value: RuntimeCellHandle,
-    ref_target: Option<EvaluatedCallRefTarget>,
+    ref_target: Option<EvalReferenceTarget>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -398,7 +398,7 @@ fn bind_dynamic_named_method_arg(
     bound_args: &mut [Option<BoundMethodArg>],
     name: &str,
     value: RuntimeCellHandle,
-    ref_target: Option<EvaluatedCallRefTarget>,
+    ref_target: Option<EvalReferenceTarget>,
     variadic_named_args: &mut std::collections::HashSet<String>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -435,8 +435,8 @@ fn bind_dynamic_named_method_arg(
 fn method_parameter_ref_target(
     parameter_is_by_ref: &[bool],
     param_index: Option<usize>,
-    ref_target: Option<EvaluatedCallRefTarget>,
-) -> Result<Option<EvaluatedCallRefTarget>, EvalStatus> {
+    ref_target: Option<EvalReferenceTarget>,
+) -> Result<Option<EvalReferenceTarget>, EvalStatus> {
     let Some(param_index) = param_index else {
         return Ok(None);
     };
@@ -484,7 +484,7 @@ fn bind_dynamic_variadic_arg(
     variadic_index: Option<usize>,
     key: RuntimeCellHandle,
     value: RuntimeCellHandle,
-    ref_target: Option<EvaluatedCallRefTarget>,
+    ref_target: Option<EvalReferenceTarget>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let index = variadic_index.ok_or(EvalStatus::RuntimeFatal)?;
@@ -1012,6 +1012,7 @@ fn collect_static_var_names(body: &[EvalStmt], names: &mut std::collections::Has
             | EvalStmt::Expr(_)
             | EvalStmt::Global { .. }
             | EvalStmt::InterfaceDecl(_)
+            | EvalStmt::PropertyReferenceBind { .. }
             | EvalStmt::PropertySet { .. }
             | EvalStmt::ReferenceAssign { .. }
             | EvalStmt::Return(_)

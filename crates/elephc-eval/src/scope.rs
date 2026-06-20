@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 
+use crate::context::EvalReferenceTarget;
 use crate::value::RuntimeCellHandle;
 
 /// Records whether a scope entry owns or borrows its runtime cell.
@@ -141,6 +142,7 @@ impl ScopeEntry {
 pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
     global_aliases: HashMap<String, String>,
+    reference_targets: HashMap<String, EvalReferenceTarget>,
     generation: u64,
 }
 
@@ -150,6 +152,7 @@ impl ElephcEvalScope {
         Self {
             entries: HashMap::new(),
             global_aliases: HashMap::new(),
+            reference_targets: HashMap::new(),
             generation: 0,
         }
     }
@@ -252,12 +255,24 @@ impl ElephcEvalScope {
         owned_cells_except([previous_source, previous_target], cell)
     }
 
+    /// Records the caller-side storage target for one by-reference local variable.
+    pub fn set_reference_target(&mut self, name: impl Into<String>, target: EvalReferenceTarget) {
+        self.reference_targets.insert(name.into(), target);
+    }
+
+    /// Returns the caller-side storage target associated with one by-reference local.
+    pub fn reference_target(&self, name: &str) -> Option<&EvalReferenceTarget> {
+        self.reference_targets.get(name)
+    }
+
     /// Marks a named variable as unset while preserving the fact that eval touched it.
     pub fn unset(&mut self, name: impl Into<String>) -> Option<RuntimeCellHandle> {
         self.bump_generation();
+        let name = name.into();
+        self.reference_targets.remove(&name);
         let previous = self
             .entries
-            .insert(name.into(), ScopeEntry::unset(self.generation));
+            .insert(name, ScopeEntry::unset(self.generation));
         owned_cell(previous)
     }
 
@@ -293,6 +308,7 @@ impl ElephcEvalScope {
                 break;
             }
         }
+        self.reference_targets.remove(&name);
         let previous = self
             .entries
             .insert(name, ScopeEntry::unset(self.generation));
@@ -367,6 +383,7 @@ impl ElephcEvalScope {
 
     /// Removes every entry and returns runtime cells owned by the scope.
     pub fn drain_owned_cells(&mut self) -> Vec<RuntimeCellHandle> {
+        self.reference_targets.clear();
         self.entries
             .drain()
             .filter_map(|(_, entry)| owned_cell(Some(entry)))
