@@ -164,6 +164,28 @@ echo $b[0];   // 9
 
 The same applies to function parameters and mutating built-ins (`array_push()`, `sort()`, `shuffle()`, etc.).
 
+## References to array elements and object properties
+An array element (or a `stdClass` dynamic property) can be bound by reference to a variable with `=&`, so the two share one underlying value — writing either is observed through the other:
+```php
+<?php
+$total = 0;
+$report = ['label' => 'sales', 'total' => 0];
+$report['total'] =& $total;   // element and variable now share a value
+$total += 42;
+echo $report['total'];        // 42 — written through $total
+$report['total'] += 8;
+echo $total;                  // 50 — written back through the element
+
+$score = 1;
+$player = new stdClass();
+$player->score =& $score;     // dynamic property aliased to the variable
+$score = 100;
+echo $player->score;          // 100
+```
+The shared value lives in a reference cell co-owned by the container and the source variable; copying the array preserves the reference (a copy-on-write split keeps the element shared), matching PHP.
+
+The source must be a scalar (`int`, `bool`, `float`) or a `mixed` value, and the property form requires a statically-typed `stdClass` receiver. The following are not yet supported and are reported at compile time: a `string` source; a reference into a declared typed-class property or a `mixed`-typed object; and reference *return* values (`$x =& f()`). Reading a variable again in the same scope after writing through its alias on the other side, and `unset()` of a referenced source variable, may not reflect the latest value; bind the reference close to where it is used.
+
 ## Multi-dimensional arrays
 ```php
 <?php

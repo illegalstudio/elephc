@@ -353,6 +353,21 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 
 Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[user_ptr - 12]`. Each heap allocation starts with refcount 1. When a reference is shared (e.g., assigned to another variable or passed to a function), `__rt_incref` bumps it. When the reference goes away, `__rt_decref_any` can dispatch through the uniform heap-kind tag to the concrete string/array/hash/object/mixed release path. Arrays, hashes, objects, and boxed mixed cells still use ordinary reference counting first, but when a decref sees a container/object graph that can contain nested heap-backed values, the runtime can invoke `__rt_gc_collect_cycles` to clear transient metadata, count heap-only incoming edges, mark externally reachable blocks, and deep-free the remaining unreachable array/hash/object/mixed island.
 
+### Reference cells (heap kind 6)
+
+PHP reference assignment into storage — `$arr[$key] =& $v` and `$obj->prop =& $v` — needs an array element (or property) and a variable to alias one shared, mutable value. A plain element holds its value inline, so elephc boxes the shared value in a **reference cell**: a refcounted heap allocation of kind 6 whose 24-byte body is a value triple `[tag@0][lo@8][hi@16]` (the same shape as a boxed `mixed` cell, so every value-tag dispatch table applies to the inner value). The aliasing array entry stores the cell pointer with per-entry value tag **11** (`reference`); reads of that entry dereference the cell, and writes overwrite the cell in place so all owners observe the new value. References never nest (the inner tag is never 11).
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_refcell_alloc` | Allocate a kind-6 cell holding a value triple, retaining any heap inner | `x0`=tag, `x1`=lo, `x2`=hi | `x0` = cell |
+| `__rt_refcell_load` | Dereference a cell to its value triple (null → null triple) | `x0` = cell | `x0`=tag, `x1`=lo, `x2`=hi |
+| `__rt_refcell_store` | Write-through: release the old inner, store the new triple (unboxing a boxed `mixed`) | `x0`=cell, `x1`=tag, `x2`=lo, `x3`=hi | — |
+| `__rt_promote_entry_to_refcell` | Promote a hash entry value slot (or a foreach-by-reference interior pointer) into a shared cell | `x0` = interior pointer | `x0` = cell |
+| `__rt_decref_refcell` | Decrement the cell refcount, deep-free at zero (cyclic-aware for heap inners) | `x0` = cell | — |
+| `__rt_refcell_free_deep` | Release the cell's inner value and free the cell | `x0` = cell | — |
+
+The cell is co-owned by the container holding the tag-11 entry and the aliased source variable; it is reclaimed once, through `__rt_decref_any` (kind 6 → `__rt_decref_refcell`) when its owning container is deep-freed. `__rt_stdclass_set_ref` stores a reference entry into a `stdClass` dynamic-property hash, so the object-property form rides the same hash path as the array-element form.
+
 ## System routines
 
 **Source:** `src/codegen/runtime/system/` (40 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, and `json_encode_str/` subdirectories)

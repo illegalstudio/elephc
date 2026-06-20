@@ -21,3 +21,5 @@ mod growth;
 mod heap;
 #[path = "runtime_gc/heap_codegen.rs"]
 mod heap_codegen;
+#[path = "runtime_gc/references.rs"]
+mod references;
