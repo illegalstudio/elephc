@@ -80,7 +80,13 @@ pub enum EvalStmt {
     },
     FunctionDecl {
         name: String,
+        attributes: Vec<EvalAttribute>,
         params: Vec<String>,
+        parameter_attributes: Vec<Vec<EvalAttribute>>,
+        parameter_types: Vec<Option<EvalParameterType>>,
+        parameter_defaults: Vec<Option<EvalExpr>>,
+        parameter_is_by_ref: Vec<bool>,
+        parameter_is_variadic: Vec<bool>,
         body: Vec<EvalStmt>,
     },
     Global {
@@ -150,18 +156,74 @@ pub struct EvalCatch {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalFunction {
     name: String,
+    attributes: Vec<EvalAttribute>,
     params: Vec<String>,
+    parameter_attributes: Vec<Vec<EvalAttribute>>,
+    parameter_types: Vec<Option<EvalParameterType>>,
+    parameter_defaults: Vec<Option<EvalExpr>>,
+    parameter_is_by_ref: Vec<bool>,
+    parameter_is_variadic: Vec<bool>,
     body: Vec<EvalStmt>,
 }
 
 impl EvalFunction {
     /// Creates a dynamic eval function with source-order parameters and body.
     pub fn new(name: impl Into<String>, params: Vec<String>, body: Vec<EvalStmt>) -> Self {
+        let parameter_attributes = vec![Vec::new(); params.len()];
+        let parameter_types = vec![None; params.len()];
+        let parameter_defaults = vec![None; params.len()];
+        let parameter_is_by_ref = vec![false; params.len()];
+        let parameter_is_variadic = vec![false; params.len()];
         Self {
             name: name.into(),
+            attributes: Vec::new(),
             params,
+            parameter_attributes,
+            parameter_types,
+            parameter_defaults,
+            parameter_is_by_ref,
+            parameter_is_variadic,
             body,
         }
+    }
+
+    /// Returns a copy of this function with declaration attributes attached.
+    pub fn with_attributes(mut self, attributes: Vec<EvalAttribute>) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
+    /// Returns a copy of this function with source-order parameter attributes.
+    pub fn with_parameter_attributes(
+        mut self,
+        parameter_attributes: Vec<Vec<EvalAttribute>>,
+    ) -> Self {
+        self.parameter_attributes = parameter_attributes;
+        self
+    }
+
+    /// Returns a copy of this function with source-order parameter type metadata.
+    pub fn with_parameter_types(mut self, parameter_types: Vec<Option<EvalParameterType>>) -> Self {
+        self.parameter_types = parameter_types;
+        self
+    }
+
+    /// Returns a copy of this function with source-order default expressions.
+    pub fn with_parameter_defaults(mut self, parameter_defaults: Vec<Option<EvalExpr>>) -> Self {
+        self.parameter_defaults = parameter_defaults;
+        self
+    }
+
+    /// Returns a copy of this function with source-order by-reference flags.
+    pub fn with_parameter_by_ref_flags(mut self, parameter_is_by_ref: Vec<bool>) -> Self {
+        self.parameter_is_by_ref = parameter_is_by_ref;
+        self
+    }
+
+    /// Returns a copy of this function with source-order variadic flags.
+    pub fn with_parameter_variadic_flags(mut self, parameter_is_variadic: Vec<bool>) -> Self {
+        self.parameter_is_variadic = parameter_is_variadic;
+        self
     }
 
     /// Returns the original source spelling of this eval-declared function name.
@@ -169,9 +231,39 @@ impl EvalFunction {
         &self.name
     }
 
+    /// Returns attributes declared directly on this eval function.
+    pub fn attributes(&self) -> &[EvalAttribute] {
+        &self.attributes
+    }
+
     /// Returns source-order parameter names without leading `$`.
     pub fn params(&self) -> &[String] {
         &self.params
+    }
+
+    /// Returns source-order parameter attributes.
+    pub fn parameter_attributes(&self) -> &[Vec<EvalAttribute>] {
+        &self.parameter_attributes
+    }
+
+    /// Returns source-order parameter type metadata.
+    pub fn parameter_types(&self) -> &[Option<EvalParameterType>] {
+        &self.parameter_types
+    }
+
+    /// Returns default expressions declared for each source-order parameter.
+    pub fn parameter_defaults(&self) -> &[Option<EvalExpr>] {
+        &self.parameter_defaults
+    }
+
+    /// Returns source-order flags for whether each parameter was declared by reference.
+    pub fn parameter_is_by_ref(&self) -> &[bool] {
+        &self.parameter_is_by_ref
+    }
+
+    /// Returns source-order flags for whether each parameter was declared variadic.
+    pub fn parameter_is_variadic(&self) -> &[bool] {
+        &self.parameter_is_variadic
     }
 
     /// Returns the dynamic EvalIR statements that form the function body.

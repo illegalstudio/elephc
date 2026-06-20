@@ -171,6 +171,9 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "trait") => {
                 self.parse_trait_decl_stmt_with_attributes(attributes)
             }
+            TokenKind::Ident(name) if ident_eq(name, "function") => {
+                self.parse_function_decl_stmt_with_attributes(attributes)
+            }
             _ => Err(EvalParseError::UnsupportedConstruct),
         }
     }
@@ -1488,6 +1491,14 @@ impl Parser {
 
     /// Parses `function name($param, ...) { ... }` declarations.
     pub(super) fn parse_function_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.parse_function_decl_stmt_with_attributes(Vec::new())
+    }
+
+    /// Parses `function name($param, ...) { ... }` declarations with attributes.
+    pub(super) fn parse_function_decl_stmt_with_attributes(
+        &mut self,
+        attributes: Vec<EvalAttribute>,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -1495,9 +1506,31 @@ impl Parser {
         let name = self.qualify_name_in_current_namespace(name);
         self.advance();
         self.expect(TokenKind::LParen)?;
-        let params = self.parse_function_params()?;
+        let ParsedMethodParams {
+            params,
+            parameter_attributes,
+            parameter_types,
+            parameter_defaults,
+            parameter_is_by_ref,
+            parameter_is_variadic,
+            promoted_properties,
+            promoted_assignments,
+        } = self.parse_method_params("")?;
+        if !promoted_properties.is_empty() || !promoted_assignments.is_empty() {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
         let body = self.parse_block()?;
-        Ok(vec![EvalStmt::FunctionDecl { name, params, body }])
+        Ok(vec![EvalStmt::FunctionDecl {
+            name,
+            attributes,
+            params,
+            parameter_attributes,
+            parameter_types,
+            parameter_defaults,
+            parameter_is_by_ref,
+            parameter_is_variadic,
+            body,
+        }])
     }
 
     /// Parses `namespace Name;` or `namespace Name { ... }` eval namespace blocks.
@@ -1781,29 +1814,6 @@ impl Parser {
             class_names.push(self.resolve_class_name(class_name));
         }
         Ok(class_names)
-    }
-
-    /// Parses a dynamic function declaration parameter list after `(`.
-    pub(super) fn parse_function_params(&mut self) -> Result<Vec<String>, EvalParseError> {
-        let mut params = Vec::new();
-        if self.consume(TokenKind::RParen) {
-            return Ok(params);
-        }
-        loop {
-            let TokenKind::DollarIdent(name) = self.current() else {
-                return Err(EvalParseError::ExpectedVariable);
-            };
-            params.push(name.clone());
-            self.advance();
-            if !self.consume(TokenKind::Comma) {
-                break;
-            }
-            if matches!(self.current(), TokenKind::RParen) {
-                return Err(EvalParseError::ExpectedVariable);
-            }
-        }
-        self.expect(TokenKind::RParen)?;
-        Ok(params)
     }
 
     /// Parses a method parameter list and records metadata plus promotion side effects.

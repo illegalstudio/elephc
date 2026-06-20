@@ -5,8 +5,8 @@
 //! - `cargo test -p elephc-eval` through Rust's test harness.
 //!
 //! Key details:
-//! - Free eval functions retain only parameter names today, so required counts
-//!   match the visible parameter list until richer function metadata exists.
+//! - Free eval functions retain function and parameter metadata used by
+//!   ReflectionFunction and ReflectionParameter.
 
 use super::super::*;
 use super::support::*;
@@ -39,5 +39,82 @@ return true;"#,
         values.output,
         "eval_reflect_free:2:2:2:left:1:ReflectionFunction:eval_reflect_free"
     );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval-declared function metadata includes attributes, types, defaults, and flags.
+#[test]
+fn execute_program_reflects_eval_function_signature_metadata() {
+    let program = parse_fragment(
+        br#"class EvalFuncAttr {
+    public $label;
+    public function __construct($label) { $this->label = $label; }
+    public function label() { return $this->label; }
+}
+#[EvalFuncAttr("free")]
+function eval_reflect_rich(#[EvalFuncAttr("first")] string $name, int $count = 3, &...$items) {
+    return $count;
+}
+$ref = new ReflectionFunction("eval_reflect_rich");
+$attrs = $ref->getAttributes();
+$params = $ref->getParameters();
+echo count($attrs); echo ":";
+echo $attrs[0]->getName(); echo ":";
+echo $attrs[0]->newInstance()->label(); echo ":";
+echo $ref->getNumberOfParameters(); echo ":";
+echo $ref->getNumberOfRequiredParameters(); echo ":";
+echo $params[0]->hasType() ? "T" : "t"; echo ":";
+echo $params[0]->getType()->getName(); echo ":";
+$paramAttrs = $params[0]->getAttributes();
+echo count($paramAttrs); echo ":";
+echo $paramAttrs[0]->newInstance()->label(); echo ":";
+echo $params[1]->isOptional() ? "O" : "o"; echo ":";
+echo $params[1]->getDefaultValue(); echo ":";
+echo $params[2]->isVariadic() ? "V" : "v"; echo ":";
+echo $params[2]->isPassedByReference() ? "R" : "r";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "1:EvalFuncAttr:free:3:1:T:string:1:first:O:3:V:R"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval-declared functions bind named, default, by-reference, and variadic arguments.
+#[test]
+fn execute_program_calls_eval_function_with_rich_argument_binding() {
+    let program = parse_fragment(
+        br#"function eval_signature_call(string $name, &$value, int $count = 2, ...$rest) {
+    $value = $value + $count;
+    echo $name; echo ":";
+    echo $count; echo ":";
+    echo count($rest); echo ":";
+}
+function eval_signature_array(string $name, int $count = 2, ...$rest) {
+    echo $name; echo ":";
+    echo $count; echo ":";
+    echo count($rest); echo ":";
+    echo $rest["extra"];
+}
+$seed = 4;
+eval_signature_call(name: "ok", value: $seed, extra: "z");
+echo $seed; echo ":";
+call_user_func_array("eval_signature_array", ["extra" => "z", "name" => "cb"]);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "ok:2:1:6:cb:2:1:z");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

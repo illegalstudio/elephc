@@ -137,12 +137,28 @@ pub(in crate::interpreter) fn execute_stmt(
             scope,
             values,
         ),
-        EvalStmt::FunctionDecl { name, params, body } => {
+        EvalStmt::FunctionDecl {
+            name,
+            attributes,
+            params,
+            parameter_attributes,
+            parameter_types,
+            parameter_defaults,
+            parameter_is_by_ref,
+            parameter_is_variadic,
+            body,
+        } => {
             let key = name.to_ascii_lowercase();
             context
                 .define_function(
                     key,
-                    EvalFunction::new(name.clone(), params.clone(), body.clone()),
+                    EvalFunction::new(name.clone(), params.clone(), body.clone())
+                        .with_attributes(attributes.clone())
+                        .with_parameter_attributes(parameter_attributes.clone())
+                        .with_parameter_types(parameter_types.clone())
+                        .with_parameter_defaults(parameter_defaults.clone())
+                        .with_parameter_by_ref_flags(parameter_is_by_ref.clone())
+                        .with_parameter_variadic_flags(parameter_is_variadic.clone()),
                 )
                 .map_err(|_| EvalStatus::RuntimeFatal)?;
             Ok(EvalControl::None)
@@ -3299,7 +3315,7 @@ fn eval_classes_are_related(left: &str, right: &str, context: &ElephcEvalContext
 }
 
 /// Binds method parameters into a fresh method scope and marks by-reference params as aliases.
-fn bind_method_scope_args(
+pub(in crate::interpreter) fn bind_method_scope_args(
     method_scope: &mut ElephcEvalScope,
     params: &[String],
     parameter_is_by_ref: &[bool],
@@ -3383,7 +3399,7 @@ fn same_method_ref_target(left: &EvaluatedCallRefTarget, right: &EvaluatedCallRe
 }
 
 /// Writes completed by-reference method parameter values back to their caller-side variables.
-fn write_back_method_ref_args(
+pub(in crate::interpreter) fn write_back_method_ref_args(
     params: &[String],
     bound_args: &[BoundMethodArg],
     method_scope: &ElephcEvalScope,

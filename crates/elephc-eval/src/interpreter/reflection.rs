@@ -1138,11 +1138,25 @@ fn eval_reflection_function_new(
     let requested_name = eval_reflection_string_arg(args[0], values)?;
     let lookup_name = requested_name.trim_start_matches('\\').to_ascii_lowercase();
     if let Some(function) = context.function(&lookup_name).cloned() {
-        let parameters =
-            eval_reflection_function_parameters(function.name(), function.params(), Vec::new());
+        let required_parameter_count = eval_reflection_required_parameter_count(
+            function.parameter_defaults(),
+            function.parameter_is_variadic(),
+        );
+        let parameters = eval_reflection_function_parameters(
+            function.name(),
+            function.params(),
+            function.attributes().to_vec(),
+            function.parameter_attributes(),
+            function.parameter_types(),
+            function.parameter_defaults(),
+            function.parameter_is_by_ref(),
+            function.parameter_is_variadic(),
+        );
         return eval_reflection_function_object_result(
             function.name(),
+            function.attributes(),
             &parameters,
+            required_parameter_count,
             context,
             values,
         )
@@ -1151,11 +1165,28 @@ fn eval_reflection_function_new(
     if let Some(function) = context.native_function(&lookup_name) {
         let reflected_name = requested_name.trim_start_matches('\\');
         let parameter_names = eval_reflection_native_function_parameter_names(&function);
-        let parameters =
-            eval_reflection_function_parameters(reflected_name, &parameter_names, Vec::new());
+        let parameter_attributes = vec![Vec::new(); parameter_names.len()];
+        let parameter_types: Vec<Option<EvalParameterType>> = vec![None; parameter_names.len()];
+        let parameter_defaults = vec![None; parameter_names.len()];
+        let parameter_is_by_ref = vec![false; parameter_names.len()];
+        let parameter_is_variadic = vec![false; parameter_names.len()];
+        let required_parameter_count =
+            eval_reflection_required_parameter_count(&parameter_defaults, &parameter_is_variadic);
+        let parameters = eval_reflection_function_parameters(
+            reflected_name,
+            &parameter_names,
+            Vec::new(),
+            &parameter_attributes,
+            &parameter_types,
+            &parameter_defaults,
+            &parameter_is_by_ref,
+            &parameter_is_variadic,
+        );
         return eval_reflection_function_object_result(
             reflected_name,
+            &[],
             &parameters,
+            required_parameter_count,
             context,
             values,
         )
@@ -1181,14 +1212,16 @@ fn eval_reflection_native_function_parameter_names(function: &NativeFunction) ->
 /// Builds one `ReflectionFunction` object from retained eval function metadata.
 fn eval_reflection_function_object_result(
     function_name: &str,
+    attributes: &[EvalAttribute],
     parameters: &[EvalReflectionParameterMetadata],
+    required_parameter_count: usize,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_FUNCTION,
         function_name,
-        &[],
+        attributes,
         &[],
         &[],
         &[],
@@ -1198,7 +1231,7 @@ fn eval_reflection_function_object_result(
         None,
         None,
         0,
-        parameters.len() as u64,
+        required_parameter_count as u64,
         0,
         None,
         None,
@@ -3657,25 +3690,34 @@ fn eval_reflection_parameters_from_names_and_type_flags(
 fn eval_reflection_function_parameters(
     function_name: &str,
     names: &[String],
-    attributes: Vec<EvalAttribute>,
+    function_attributes: Vec<EvalAttribute>,
+    parameter_attributes: &[Vec<EvalAttribute>],
+    parameter_types: &[Option<EvalParameterType>],
+    defaults: &[Option<EvalExpr>],
+    by_ref_flags: &[bool],
+    variadic_flags: &[bool],
 ) -> Vec<EvalReflectionParameterMetadata> {
+    let has_type_flags = parameter_types
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
     let declaring_function = EvalReflectionDeclaringFunctionMetadata {
         name: function_name.to_string(),
         declaring_class_name: None,
-        attributes,
+        attributes: function_attributes,
         flags: 0,
-        required_parameter_count: names.len(),
+        required_parameter_count: eval_reflection_required_parameter_count(defaults, variadic_flags),
     };
     eval_reflection_parameters_from_names_and_type_flags(
         None,
         Some(&declaring_function),
         names,
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
+        &has_type_flags,
+        parameter_types,
+        parameter_attributes,
+        defaults,
+        by_ref_flags,
+        variadic_flags,
         &[],
     )
 }

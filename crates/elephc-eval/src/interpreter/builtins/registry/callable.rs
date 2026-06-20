@@ -268,8 +268,12 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
         return Ok(result);
     }
     if let Some(function) = context.function(name).cloned() {
-        let evaluated_args = bind_evaluated_function_args(function.params(), evaluated_args)?;
-        return eval_dynamic_function_with_values(&function, evaluated_args, context, values);
+        return eval_dynamic_function_with_evaluated_args(
+            &function,
+            evaluated_args,
+            context,
+            values,
+        );
     }
     if let Some(function) = context.native_function(name) {
         if function.param_names().len() != function.param_count() {

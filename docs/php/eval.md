@@ -271,17 +271,17 @@ reflected method is `__construct` or `__destruct`.
 `ReflectionFunction::getName()`, `ReflectionFunction::getParameters()`,
 `ReflectionMethod::getParameters()`, `getNumberOfParameters()`, and
 `getNumberOfRequiredParameters()` report retained eval-declared function and
-method metadata. Free eval functions expose the reflected function name,
-parameter names, and positions from their currently retained function signature;
-eval methods also expose declared-type presence, simple named type metadata through
+method metadata. Eval-declared functions and methods expose declared-type
+presence, simple named type metadata through
 `ReflectionParameter::getType()` / `ReflectionNamedType::getName()`,
 `allowsNull()`, and `isBuiltin()`, and multi-member union metadata through
 `ReflectionUnionType::getTypes()` and `allowsNull()`. Intersection parameter
 metadata is exposed through `ReflectionIntersectionType::getTypes()` and
-`allowsNull()`. Eval method parameter attributes are exposed through
-`ReflectionParameter::getAttributes()` using materialized `ReflectionAttribute`
-objects. `ReflectionParameter::getDeclaringClass()` returns the declaring
-class-like symbol for eval method parameters, and
+`allowsNull()`. Function, method, and parameter attributes are exposed through
+`getAttributes()` using materialized `ReflectionAttribute` objects. Parameter
+default values, optionality, variadic flags, and by-reference flags are retained
+for eval-declared functions and methods. `ReflectionParameter::getDeclaringClass()`
+returns the declaring class-like symbol for eval method parameters, and
 `ReflectionParameter::getDeclaringFunction()` returns a `ReflectionFunction`
 object for eval free-function parameters or a `ReflectionMethod` object for the
 declaring eval method. Defaulted eval method parameters are bound

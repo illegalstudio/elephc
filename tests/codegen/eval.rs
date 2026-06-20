@@ -7652,6 +7652,81 @@ echo $declaring->getName();');
     );
 }
 
+/// Verifies eval ReflectionFunction preserves rich eval-declared function signatures.
+#[test]
+fn test_eval_reflection_function_reports_signature_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalFuncAttr {
+    public $label;
+    public function __construct($label) { $this->label = $label; }
+    public function label() { return $this->label; }
+}
+#[EvalFuncAttr("free")]
+function eval_reflect_rich(#[EvalFuncAttr("first")] string $name, int $count = 3, &...$items) {
+    return $count;
+}
+$ref = new ReflectionFunction("eval_reflect_rich");
+$attrs = $ref->getAttributes();
+$params = $ref->getParameters();
+echo count($attrs) . ":";
+echo $attrs[0]->getName() . ":";
+echo $attrs[0]->newInstance()->label() . ":";
+echo $ref->getNumberOfParameters() . ":";
+echo $ref->getNumberOfRequiredParameters() . ":";
+echo ($params[0]->hasType() ? "T" : "t") . ":";
+echo $params[0]->getType()->getName() . ":";
+$paramAttrs = $params[0]->getAttributes();
+echo count($paramAttrs) . ":";
+echo $paramAttrs[0]->newInstance()->label() . ":";
+echo ($params[1]->isOptional() ? "O" : "o") . ":";
+echo $params[1]->getDefaultValue() . ":";
+echo ($params[2]->isVariadic() ? "V" : "v") . ":";
+echo $params[2]->isPassedByReference() ? "R" : "r";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "1:EvalFuncAttr:free:3:1:T:string:1:first:O:3:V:R"
+    );
+}
+
+/// Verifies eval-declared functions share method-style named/default/ref/variadic binding.
+#[test]
+fn test_eval_declared_function_rich_argument_binding() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('function eval_signature_call(string $name, &$value, int $count = 2, ...$rest) {
+    $value = $value + $count;
+    echo $name . ":";
+    echo $count . ":";
+    echo count($rest) . ":";
+}
+function eval_signature_array(string $name, int $count = 2, ...$rest) {
+    echo $name . ":";
+    echo $count . ":";
+    echo count($rest) . ":";
+    echo $rest["extra"];
+}
+$seed = 4;
+eval_signature_call(name: "ok", value: $seed, extra: "z");
+echo $seed . ":";
+call_user_func_array("eval_signature_array", ["extra" => "z", "name" => "cb"]);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "ok:2:1:6:cb:2:1:z");
+}
+
 /// Verifies eval ReflectionClass::isCloneable uses eval class metadata through the bridge.
 #[test]
 fn test_eval_reflection_class_cloneable_predicate() {

@@ -18,7 +18,13 @@ fn parse_fragment_accepts_function_declaration_source() {
         program.statements(),
         &[EvalStmt::FunctionDecl {
             name: "dyn".to_string(),
+            attributes: Vec::new(),
             params: vec!["x".to_string()],
+            parameter_attributes: vec![Vec::new()],
+            parameter_types: vec![None],
+            parameter_defaults: vec![None],
+            parameter_is_by_ref: vec![false],
+            parameter_is_variadic: vec![false],
             body: vec![EvalStmt::Return(Some(EvalExpr::Binary {
                 op: EvalBinOp::Add,
                 left: Box::new(EvalExpr::LoadVar("x".to_string())),
@@ -41,7 +47,13 @@ return dyn();"#,
         &[
             EvalStmt::FunctionDecl {
                 name: "Eval\\Ns\\dyn".to_string(),
+                attributes: Vec::new(),
                 params: Vec::new(),
+                parameter_attributes: Vec::new(),
+                parameter_types: Vec::new(),
+                parameter_defaults: Vec::new(),
+                parameter_is_by_ref: Vec::new(),
+                parameter_is_variadic: Vec::new(),
                 body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::String(
                     "Eval\\Ns".to_string()
                 ))))],
@@ -226,7 +238,13 @@ function dyn() { return alias(); }"#,
         program.statements(),
         &[EvalStmt::FunctionDecl {
             name: "Eval\\UseNs\\dyn".to_string(),
+            attributes: Vec::new(),
             params: Vec::new(),
+            parameter_attributes: Vec::new(),
+            parameter_types: Vec::new(),
+            parameter_defaults: Vec::new(),
+            parameter_is_by_ref: Vec::new(),
+            parameter_is_variadic: Vec::new(),
             body: vec![EvalStmt::Return(Some(EvalExpr::Call {
                 name: "lib\\target".to_string(),
                 args: Vec::new(),

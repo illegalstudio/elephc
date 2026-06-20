@@ -18,9 +18,8 @@ pub(in crate::interpreter) fn eval_dynamic_function(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args =
-        eval_function_call_args(function.params(), args, context, caller_scope, values)?;
-    eval_dynamic_function_with_values(function, evaluated_args, context, values)
+    let evaluated_args = eval_call_arg_values(args, context, caller_scope, values)?;
+    eval_dynamic_function_with_evaluated_args(function, evaluated_args, context, values)
 }
 
 /// Evaluates and binds function-like arguments to parameter order.
@@ -851,12 +850,49 @@ pub(super) fn eval_dynamic_function_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut function_scope = ElephcEvalScope::new();
-    for (name, value) in function.params().iter().zip(evaluated_args) {
-        function_scope.set(name.clone(), value, ScopeCellOwnership::Borrowed);
-    }
+    let evaluated_args = evaluated_args
+        .into_iter()
+        .map(|value| EvaluatedCallArg {
+            name: None,
+            value,
+            ref_target: None,
+        })
+        .collect();
+    eval_dynamic_function_with_evaluated_args(function, evaluated_args, context, values)
+}
+
+/// Evaluates an eval-declared function after call arguments preserve names and ref targets.
+pub(super) fn eval_dynamic_function_with_evaluated_args(
+    function: &EvalFunction,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let static_names = static_var_names(function.body());
     context.push_function(function.name());
+    let evaluated_args = match bind_evaluated_method_args(
+        function.params(),
+        function.parameter_types(),
+        function.parameter_defaults(),
+        function.parameter_is_by_ref(),
+        function.parameter_is_variadic(),
+        evaluated_args,
+        context,
+        values,
+    ) {
+        Ok(args) => args,
+        Err(status) => {
+            context.pop_function();
+            return Err(status);
+        }
+    };
+    let mut function_scope = ElephcEvalScope::new();
+    bind_method_scope_args(
+        &mut function_scope,
+        function.params(),
+        function.parameter_is_by_ref(),
+        &evaluated_args,
+    );
     let result = execute_statements(function.body(), context, &mut function_scope, values);
     let persist_result = persist_static_locals(
         context,
@@ -865,8 +901,16 @@ pub(super) fn eval_dynamic_function_with_values(
         &function_scope,
         values,
     );
+    let writeback_result = write_back_method_ref_args(
+        function.params(),
+        &evaluated_args,
+        &function_scope,
+        context,
+        values,
+    );
     context.pop_function();
     persist_result?;
+    writeback_result?;
     match result? {
         EvalControl::None => values.null(),
         EvalControl::Return(result) => Ok(result),
