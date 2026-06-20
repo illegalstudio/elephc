@@ -58,6 +58,11 @@ pub(in crate::interpreter) fn eval_symbols_builtin_with_values(
         "class_implements" | "class_parents" | "class_uses" => {
             eval_class_relation_result(name, evaluated_args, context, values)?
         }
+        "method_exists" | "property_exists" => {
+            eval_member_exists_result(name, evaluated_args, context, values)?
+        }
+        "get_class_methods" => eval_get_class_methods_result(evaluated_args, context, values)?,
+        "get_object_vars" => eval_get_object_vars_result(evaluated_args, context, values)?,
         "enum_exists" | "trait_exists" => {
             eval_class_like_exists_result(name, evaluated_args, context, values)?
         }

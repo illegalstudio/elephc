@@ -1,0 +1,544 @@
+//! Purpose:
+//! Implements eval OOP introspection builtins for class/object members and
+//! visible object variables.
+//!
+//! Called from:
+//! - `crate::interpreter::builtins::class_metadata` re-exports.
+//!
+//! Key details:
+//! - `method_exists()` distinguishes object targets from class-string targets
+//!   because PHP exposes inherited private methods only on object targets.
+//! - `get_object_vars()` filters declared storage slots so inaccessible
+//!   protected/private eval properties do not leak as dynamic properties.
+
+use super::super::super::*;
+use super::{eval_class_metadata_name, eval_class_relation_name_exists};
+use std::collections::HashSet;
+
+const EVAL_CLASS_METADATA_FLAG_PUBLIC: u64 = 2;
+
+/// Evaluates `method_exists()` or `property_exists()` from eval expressions.
+pub(in crate::interpreter) fn eval_builtin_member_exists(
+    name: &str,
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [target, member] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let target = eval_expr(target, context, scope, values)?;
+    let member = eval_expr(member, context, scope, values)?;
+    eval_member_exists_result(name, &[target, member], context, values)
+}
+
+/// Evaluates materialized `method_exists()` or `property_exists()` arguments.
+pub(in crate::interpreter) fn eval_member_exists_result(
+    name: &str,
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [target, member] = evaluated_args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let member = eval_class_metadata_name(*member, values)?;
+    let exists = match name {
+        "method_exists" => eval_method_exists_target(*target, &member, context, values)?,
+        "property_exists" => eval_property_exists_target(*target, &member, context, values)?,
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    values.bool_value(exists)
+}
+
+/// Evaluates `get_class_methods()` from eval expressions.
+pub(in crate::interpreter) fn eval_builtin_get_class_methods(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [target] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let target = eval_expr(target, context, scope, values)?;
+    eval_get_class_methods_result(&[target], context, values)
+}
+
+/// Evaluates materialized `get_class_methods()` arguments.
+pub(in crate::interpreter) fn eval_get_class_methods_result(
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [target] = evaluated_args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let (class_name, target_is_object) = eval_class_metadata_target_name(*target, context, values)?;
+    if !target_is_object && !eval_class_relation_name_exists(&class_name, context, values)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let names = eval_class_method_names_for_scope(&class_name, context, values)?;
+    eval_indexed_string_array_result(&names, values)
+}
+
+/// Evaluates `get_object_vars()` from eval expressions.
+pub(in crate::interpreter) fn eval_builtin_get_object_vars(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [object] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let object = eval_expr(object, context, scope, values)?;
+    eval_get_object_vars_result(&[object], context, values)
+}
+
+/// Evaluates materialized `get_object_vars()` arguments.
+pub(in crate::interpreter) fn eval_get_object_vars_result(
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [object] = evaluated_args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if values.type_tag(*object)? != EVAL_TAG_OBJECT {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let Ok(identity) = values.object_identity(*object) else {
+        return eval_public_object_vars_result(*object, values);
+    };
+    let Some(class) = context.dynamic_object_class(identity) else {
+        return eval_public_object_vars_result(*object, values);
+    };
+    let class_name = class.name().to_string();
+    eval_dynamic_object_vars_result(*object, &class_name, context, values)
+}
+
+/// Resolves a `method_exists()` target and applies PHP object-vs-string lookup rules.
+fn eval_method_exists_target(
+    target: RuntimeCellHandle,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    match values.type_tag(target)? {
+        EVAL_TAG_OBJECT => {
+            let class_name = eval_object_class_metadata_name(target, context, values)?;
+            eval_method_exists_on_class(&class_name, method_name, true, context, values)
+        }
+        EVAL_TAG_STRING => {
+            let class_name = eval_resolved_class_metadata_name(target, context, values)?;
+            eval_method_exists_on_class(&class_name, method_name, false, context, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Resolves a `property_exists()` target and applies declared and dynamic-property lookup rules.
+fn eval_property_exists_target(
+    target: RuntimeCellHandle,
+    property_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    match values.type_tag(target)? {
+        EVAL_TAG_OBJECT => {
+            let class_name = eval_object_class_metadata_name(target, context, values)?;
+            if eval_property_exists_on_class(&class_name, property_name, context, values)? {
+                return Ok(true);
+            }
+            eval_object_public_property_exists(target, property_name, values)
+        }
+        EVAL_TAG_STRING => {
+            let class_name = eval_resolved_class_metadata_name(target, context, values)?;
+            eval_property_exists_on_class(&class_name, property_name, context, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Checks method metadata for one resolved class-like name.
+fn eval_method_exists_on_class(
+    class_name: &str,
+    method_name: &str,
+    target_is_object: bool,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if context.has_class(class_name) || context.has_enum(class_name) {
+        if target_is_object {
+            return Ok(context
+                .class_method_names(class_name)
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(method_name)));
+        }
+        if context
+            .class_method_names(class_name)
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(method_name))
+        {
+            let Some((declaring_class, method)) = context.class_method(class_name, method_name)
+            else {
+                return Ok(true);
+            };
+            return Ok(method.visibility() != EvalVisibility::Private
+                || declaring_class
+                    .trim_start_matches('\\')
+                    .eq_ignore_ascii_case(class_name.trim_start_matches('\\')));
+        }
+        return Ok(false);
+    }
+    if context.has_interface(class_name) {
+        return Ok(context
+            .interface_method_names(class_name)
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(method_name)));
+    }
+    if context.has_trait(class_name) {
+        return Ok(context
+            .trait_method_names(class_name)
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(method_name)));
+    }
+    values
+        .reflection_method_flags(class_name, method_name)
+        .map(|flags| flags.is_some())
+}
+
+/// Checks property metadata for one resolved class-like name.
+fn eval_property_exists_on_class(
+    class_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if context.has_class(class_name) || context.has_enum(class_name) {
+        return Ok(context
+            .class_property_names(class_name)
+            .iter()
+            .any(|name| name == property_name));
+    }
+    if context.has_interface(class_name) {
+        return Ok(context
+            .interface_property_names(class_name)
+            .iter()
+            .any(|name| name == property_name));
+    }
+    if context.has_trait(class_name) {
+        return Ok(context
+            .trait_property_names(class_name)
+            .iter()
+            .any(|name| name == property_name));
+    }
+    values
+        .reflection_property_flags(class_name, property_name)
+        .map(|flags| flags.is_some())
+}
+
+/// Resolves an object-or-class argument to a PHP class name and records whether it was an object.
+fn eval_class_metadata_target_name(
+    target: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(String, bool), EvalStatus> {
+    match values.type_tag(target)? {
+        EVAL_TAG_OBJECT => Ok((
+            eval_object_class_metadata_name(target, context, values)?,
+            true,
+        )),
+        EVAL_TAG_STRING => Ok((
+            eval_resolved_class_metadata_name(target, context, values)?,
+            false,
+        )),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Resolves an object cell to its eval or runtime class name.
+fn eval_object_class_metadata_name(
+    object: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let identity = values.object_identity(object)?;
+    if let Some(class) = context.dynamic_object_class(identity) {
+        return Ok(class.name().trim_start_matches('\\').to_string());
+    }
+    let class_name = values.object_class_name(object)?;
+    let class_name_bytes = values.string_bytes(class_name);
+    values.release(class_name)?;
+    let class_name = String::from_utf8(class_name_bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+    Ok(class_name.trim_start_matches('\\').to_string())
+}
+
+/// Reads a class-name cell and applies eval alias resolution.
+fn eval_resolved_class_metadata_name(
+    name: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let name = eval_class_metadata_name(name, values)?;
+    Ok(context.resolve_class_name(&name).unwrap_or(name))
+}
+
+/// Collects PHP-visible methods for `get_class_methods()` in the current eval scope.
+fn eval_class_method_names_for_scope(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    if context.has_class(class_name) || context.has_enum(class_name) {
+        let mut names = Vec::new();
+        for name in context.class_method_names(class_name) {
+            let Some((declaring_class, method)) = context.class_method(class_name, &name) else {
+                names.push(name);
+                continue;
+            };
+            if validate_eval_member_access(&declaring_class, method.visibility(), context).is_ok() {
+                names.push(name);
+            }
+        }
+        return Ok(names);
+    }
+    if context.has_interface(class_name) {
+        return Ok(context.interface_method_names(class_name));
+    }
+    if let Some(trait_decl) = context.trait_decl(class_name) {
+        return Ok(trait_decl
+            .methods()
+            .iter()
+            .filter(|method| method.visibility() == EvalVisibility::Public)
+            .map(|method| method.name().to_string())
+            .collect());
+    }
+    let method_names = values.reflection_method_names(class_name)?;
+    let names = eval_runtime_string_array_to_vec(method_names, values)?;
+    values.release(method_names)?;
+    eval_public_runtime_method_names(class_name, names, values)
+}
+
+/// Filters generated runtime methods to the public surface visible to eval.
+fn eval_public_runtime_method_names(
+    class_name: &str,
+    names: Vec<String>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let mut result = Vec::new();
+    for name in names {
+        if values
+            .reflection_method_flags(class_name, &name)?
+            .is_some_and(|flags| flags & EVAL_CLASS_METADATA_FLAG_PUBLIC != 0)
+        {
+            result.push(name);
+        }
+    }
+    Ok(result)
+}
+
+/// Builds `get_object_vars()` for an eval-declared object.
+fn eval_dynamic_object_vars_result(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let property_count = values.object_property_len(object)?;
+    let mut result = values.assoc_new(property_count)?;
+    let mut emitted_keys = HashSet::new();
+    let storage_keys = eval_declared_object_storage_names(class_name, context);
+    result = eval_add_enum_object_vars(
+        result,
+        object,
+        class_name,
+        &mut emitted_keys,
+        context,
+        values,
+    )?;
+    result = eval_add_declared_object_vars(
+        result,
+        object,
+        class_name,
+        &mut emitted_keys,
+        context,
+        values,
+    )?;
+    eval_add_dynamic_object_vars(result, object, &mut emitted_keys, &storage_keys, values)
+}
+
+/// Adds synthetic enum properties exposed by PHP enum case objects.
+fn eval_add_enum_object_vars(
+    mut result: RuntimeCellHandle,
+    object: RuntimeCellHandle,
+    class_name: &str,
+    emitted_keys: &mut HashSet<String>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(enum_decl) = context.enum_decl(class_name) else {
+        return Ok(result);
+    };
+    let is_backed = enum_decl.backing_type().is_some();
+    result = eval_add_object_var(result, object, "name", emitted_keys, context, values)?;
+    if is_backed {
+        result = eval_add_object_var(result, object, "value", emitted_keys, context, values)?;
+    }
+    Ok(result)
+}
+
+/// Adds declared instance properties visible from the current eval scope.
+fn eval_add_declared_object_vars(
+    mut result: RuntimeCellHandle,
+    object: RuntimeCellHandle,
+    class_name: &str,
+    emitted_keys: &mut HashSet<String>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    for class in context.class_chain(class_name) {
+        for property in class.properties() {
+            if property.is_static()
+                || validate_eval_member_access(class.name(), property.visibility(), context)
+                    .is_err()
+                || emitted_keys.contains(property.name())
+            {
+                continue;
+            }
+            result = eval_add_object_var(
+                result,
+                object,
+                property.name(),
+                emitted_keys,
+                context,
+                values,
+            )?;
+        }
+    }
+    Ok(result)
+}
+
+/// Adds one visible object variable to an associative result array.
+fn eval_add_object_var(
+    result: RuntimeCellHandle,
+    object: RuntimeCellHandle,
+    property_name: &str,
+    emitted_keys: &mut HashSet<String>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    emitted_keys.insert(property_name.to_string());
+    let key = values.string(property_name)?;
+    let value = eval_property_get_result(object, property_name, context, values)?;
+    values.array_set(result, key, value)
+}
+
+/// Adds public dynamic properties that are not declared storage slots.
+fn eval_add_dynamic_object_vars(
+    mut result: RuntimeCellHandle,
+    object: RuntimeCellHandle,
+    emitted_keys: &mut HashSet<String>,
+    storage_keys: &HashSet<String>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let property_count = values.object_property_len(object)?;
+    for position in 0..property_count {
+        let key = values.object_property_iter_key(object, position)?;
+        let key_bytes = values.string_bytes(key);
+        values.release(key)?;
+        let key_name = String::from_utf8(key_bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+        if key_name.contains('\0')
+            || storage_keys.contains(&key_name)
+            || !emitted_keys.insert(key_name.clone())
+        {
+            continue;
+        }
+        let key = values.string(&key_name)?;
+        let value = values.property_get(object, &key_name)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
+/// Returns physical storage names used by declared eval object properties.
+fn eval_declared_object_storage_names(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for class in context.class_chain(class_name) {
+        for property in class.properties() {
+            names.insert(eval_instance_property_storage_name(class.name(), property));
+        }
+    }
+    names
+}
+
+/// Builds `get_object_vars()` for runtime objects with public bridge-visible properties.
+fn eval_public_object_vars_result(
+    object: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let property_count = values.object_property_len(object)?;
+    let mut result = values.assoc_new(property_count)?;
+    for position in 0..property_count {
+        let key = values.object_property_iter_key(object, position)?;
+        let key_bytes = values.string_bytes(key);
+        values.release(key)?;
+        let key_name = String::from_utf8(key_bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let key = values.string(&key_name)?;
+        let value = values.property_get(object, &key_name)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
+/// Returns whether an object has a public bridge-visible property by exact name.
+fn eval_object_public_property_exists(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let property_count = values.object_property_len(object)?;
+    for position in 0..property_count {
+        let key = values.object_property_iter_key(object, position)?;
+        let key_bytes = values.string_bytes(key);
+        values.release(key)?;
+        if key_bytes? == property_name.as_bytes() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Builds an indexed PHP array from owned Rust strings.
+fn eval_indexed_string_array_result(
+    names: &[String],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(names.len())?;
+    for (index, name) in names.iter().enumerate() {
+        let key = values.int(index as i64)?;
+        let value = values.string(name)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
+/// Copies a runtime string array into Rust-owned strings for class metadata helpers.
+fn eval_runtime_string_array_to_vec(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut result = Vec::with_capacity(len);
+    for position in 0..len {
+        let key = values.int(position as i64)?;
+        let value = values.array_get(array, key)?;
+        result.push(eval_class_metadata_name(value, values)?);
+    }
+    Ok(result)
+}

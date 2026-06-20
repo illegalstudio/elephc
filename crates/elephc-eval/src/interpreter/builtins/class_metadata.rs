@@ -14,6 +14,10 @@
 use super::super::*;
 use super::*;
 
+mod oop_introspection;
+
+pub(in crate::interpreter) use oop_introspection::*;
+
 /// Evaluates `class_implements()`, `class_parents()`, or `class_uses()`.
 pub(in crate::interpreter) fn eval_builtin_class_relation(
     name: &str,

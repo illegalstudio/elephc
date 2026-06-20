@@ -5103,6 +5103,73 @@ echo $box->readProtected(2);');
     assert_eq!(out.stdout, "7:7");
 }
 
+/// Verifies eval OOP introspection builtins preserve PHP visibility and scope rules.
+#[test]
+fn test_eval_declared_oop_introspection_builtins() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalOopIntrospectBase {
+    private $baseSecret = "bp";
+    protected $baseProtected = "bq";
+    public $basePublic = "br";
+    private function basePrivate() {}
+    protected function baseProtectedMethod() {}
+    public function basePublicMethod() {}
+    public function parentView() {
+        $vars = get_object_vars($this);
+        ksort($vars);
+        echo implode(",", array_keys($vars));
+    }
+}
+class EvalOopIntrospectChild extends EvalOopIntrospectBase {
+    private $childSecret = "cp";
+    protected $childProtected = "cq";
+    public $childPublic = "cr";
+    private function childPrivate() {}
+    protected function childProtectedMethod() {}
+    public function childPublicMethod() {}
+    public function childView() {
+        $methods = get_class_methods($this);
+        sort($methods);
+        echo implode(",", $methods); echo "|";
+        $vars = get_object_vars($this);
+        ksort($vars);
+        echo implode(",", array_keys($vars));
+    }
+}
+$object = new EvalOopIntrospectChild();
+$object->dynamic = "dyn";
+echo method_exists("EvalOopIntrospectChild", "basePrivate") ? "bad" : "noParentPrivateMethod"; echo ":";
+echo method_exists($object, "basePrivate") ? "objectParentPrivateMethod" : "bad"; echo ":";
+echo method_exists("EvalOopIntrospectChild", "baseProtectedMethod") ? "classProtectedMethod" : "bad"; echo ":";
+echo property_exists("EvalOopIntrospectChild", "baseSecret") ? "bad" : "noParentPrivateProperty"; echo ":";
+echo property_exists($object, "baseSecret") ? "bad" : "noObjectParentPrivateProperty"; echo ":";
+echo property_exists($object, "dynamic") ? "dynamicProperty" : "bad"; echo ":";
+$methods = get_class_methods("EvalOopIntrospectChild");
+sort($methods);
+echo implode(",", $methods); echo ":";
+$vars = get_object_vars($object);
+ksort($vars);
+echo implode(",", array_keys($vars)); echo ":";
+$object->childView(); echo ":";
+$object->parentView(); echo ":";
+echo call_user_func("method_exists", $object, "childPrivate") ? "callMethod" : "bad"; echo ":";
+echo call_user_func_array("property_exists", ["property" => "dynamic", "object_or_class" => $object]) ? "namedProperty" : "bad"; echo ":";
+echo function_exists("method_exists"); echo function_exists("property_exists");
+echo function_exists("get_class_methods"); echo function_exists("get_object_vars");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "noParentPrivateMethod:objectParentPrivateMethod:classProtectedMethod:noParentPrivateProperty:noObjectParentPrivateProperty:dynamicProperty:basepublicmethod,childpublicmethod,childview,parentview:basePublic,childPublic,dynamic:baseprotectedmethod,basepublicmethod,childprivate,childprotectedmethod,childpublicmethod,childview,parentview|baseProtected,basePublic,childProtected,childPublic,childSecret,dynamic:baseProtected,basePublic,baseSecret,childProtected,childPublic,dynamic:callMethod:namedProperty:1111"
+    );
+}
+
 /// Verifies eval-declared private parent properties keep separate storage when a child shadows them.
 #[test]
 fn test_eval_declared_private_parent_property_shadowing() {

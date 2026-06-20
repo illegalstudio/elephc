@@ -598,6 +598,11 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "class_implements" | "class_parents" | "class_uses" => {
             eval_builtin_class_relation(name, args, context, scope, values)
         }
+        "method_exists" | "property_exists" => {
+            eval_builtin_member_exists(name, args, context, scope, values)
+        }
+        "get_class_methods" => eval_builtin_get_class_methods(args, context, scope, values),
+        "get_object_vars" => eval_builtin_get_object_vars(args, context, scope, values),
         "interface_exists" => eval_builtin_interface_exists(args, context, scope, values),
         "trait_exists" | "enum_exists" => {
             eval_builtin_class_like_exists(name, args, context, scope, values)

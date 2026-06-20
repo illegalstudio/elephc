@@ -138,6 +138,8 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
         "settype" => Some(&["var", "type"]),
         "get_class" => Some(&["object"]),
+        "get_class_methods" => Some(&["object_or_class"]),
+        "get_object_vars" => Some(&["object"]),
         "get_parent_class" => Some(&["object_or_class"]),
         "call_user_func" => Some(&["callback"]),
         "call_user_func_array" => Some(&["callback", "args"]),
@@ -148,6 +150,8 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "class_implements" | "class_parents" | "class_uses" => {
             Some(&["object_or_class", "autoload"])
         }
+        "method_exists" => Some(&["object_or_class", "method"]),
+        "property_exists" => Some(&["object_or_class", "property"]),
         "enum_exists" => Some(&["enum", "autoload"]),
         "interface_exists" => Some(&["interface", "autoload"]),
         "trait_exists" => Some(&["trait", "autoload"]),
