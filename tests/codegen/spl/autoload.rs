@@ -1770,6 +1770,70 @@ fn test_autoload_tolerant_skip_does_not_suppress_referenced_class_failure() {
     assert!(result.is_err(), "referenced broken class must hard-fail, got Ok");
 }
 
+/// Verifies that a provided-function polyfill guard is pruned before the autoload
+/// reference graph is collected, so the class its wrapper body delegates to is
+/// never pulled into the compile. The `deepclone_to_array` wrapper references
+/// `App\HeavyDelegate`, whose PSR-4 target `src/HeavyDelegate.php` is unparseable;
+/// because elephc provides `deepclone_to_array`, the whole guard is removed and the
+/// broken class is never loaded, so autoload succeeds.
+#[test]
+fn test_provided_function_polyfill_guard_is_pruned_before_class_load() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+            ),
+            (
+                "bootstrap.php",
+                "<?php\nif (!function_exists('deepclone_to_array')) {\n    function deepclone_to_array() { return \\App\\HeavyDelegate::run(); }\n}\n",
+            ),
+            (
+                "src/HeavyDelegate.php",
+                "<?php\nnamespace App;\n$x = \"unterminated;\n",
+            ),
+            ("main.php", "<?php\necho \"ok\";\n"),
+        ],
+        "main.php",
+    );
+    assert!(
+        result.is_ok(),
+        "provided-function guard should be pruned so the broken delegate class is never loaded, got {:?}",
+        result.err(),
+    );
+}
+
+/// Control for the prune: a guard for a function elephc does NOT provide is left
+/// intact, so its wrapper body still references `App\HeavyDelegate` and the
+/// unparseable `src/HeavyDelegate.php` is loaded and hard-fails. This confirms the
+/// prune is specific to the provided allowlist rather than dropping every
+/// `function_exists` guard.
+#[test]
+fn test_unprovided_function_polyfill_guard_still_loads_referenced_class() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+            ),
+            (
+                "bootstrap.php",
+                "<?php\nif (!function_exists('some_app_helper')) {\n    function some_app_helper() { return \\App\\HeavyDelegate::run(); }\n}\n",
+            ),
+            (
+                "src/HeavyDelegate.php",
+                "<?php\nnamespace App;\n$x = \"unterminated;\n",
+            ),
+            ("main.php", "<?php\necho \"ok\";\n"),
+        ],
+        "main.php",
+    );
+    assert!(
+        result.is_err(),
+        "an unprovided-function guard must keep its class reference and fail to load the broken class",
+    );
+}
+
 /// Verifies the tolerant skip returns a `CompileWarning` naming the skipped
 /// helper. The unresolvable `src/broken.php` helper produces exactly one warning
 /// whose message contains the file path and the word "skipped"; the loadable

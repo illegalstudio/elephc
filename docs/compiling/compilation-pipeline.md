@@ -60,6 +60,19 @@ PHP source
   are injected only when referenced, and namespace/`use` rules rewrite
   references to fully-qualified names. Autoloading is wired in around these
   steps.
+- **autoload-run** — Composer autoload mappings are interpreted at compile time:
+  `autoload.files` helpers are prefixed, and classes the program references are
+  located through the classmap/PSR-4 index, parsed, and spliced in on demand.
+  Before the reference graph is collected, elephc prunes PHP polyfill
+  redefinition guards (`if (!function_exists('X')) { function X(...) { ... } }`)
+  for functions it provides — currently the PHP 8.5 `deepclone` surface
+  (`deepclone_to_array`, `deepclone_from_array`, `deepclone_hydrate`). The wrapper
+  bodies are never materialized, so the classes they delegate to (such as the
+  large `symfony/polyfill-deepclone` `DeepClone` class) stay out of the
+  closed-world compile when nothing calls those functions. The companion
+  [`extension_loaded()`](../php/system-and-io.md#system-functions) builtin reports
+  no loaded extensions, so a polyfill's `extension_loaded` guard selects its
+  userland fallback path consistently.
 - **typecheck** — the [Type Checker](../internals/the-type-checker.md) infers and
   validates types and emits warnings.
 

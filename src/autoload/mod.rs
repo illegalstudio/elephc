@@ -12,6 +12,7 @@
 mod alias;
 mod index;
 mod interpret;
+mod polyfill_prune;
 mod registry;
 mod rule;
 mod walk;
@@ -146,6 +147,12 @@ pub fn run(
         prefix.extend(program);
         program = prefix;
     }
+
+    // Remove PHP polyfill redefinition guards for functions elephc provides. The
+    // guarded wrapper bodies are never materialized, so dropping them keeps the
+    // classes they delegate to (e.g. the 97 KB `DeepClone` polyfill) out of the
+    // reference graph collected below.
+    program = polyfill_prune::prune_provided_function_polyfills(program);
 
     for _ in 0..MAX_ITERATIONS {
         let mut declared = collect_declared_fqns(&program);
