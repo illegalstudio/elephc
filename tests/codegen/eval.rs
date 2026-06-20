@@ -8612,6 +8612,42 @@ return $box->value;');
     assert_eq!(out, "5:7");
 }
 
+/// Verifies eval `class_alias()` supports class-like interface, trait, enum, and class targets.
+#[test]
+fn test_eval_class_alias_supports_class_like_targets() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('interface EvalAliasIface {}
+trait EvalAliasTrait {}
+enum EvalAliasEnum: string { case Ready = "ready"; }
+class EvalAliasClass {}
+echo class_alias("EvalAliasIface", "EvalAliasIfaceCopy") ? "I" : "i"; echo ":";
+echo interface_exists("EvalAliasIfaceCopy") ? "IE" : "ie"; echo ":";
+echo class_exists("EvalAliasIfaceCopy") ? "bad" : "IC"; echo ":";
+echo is_a("EvalAliasIfaceCopy", "EvalAliasIface", true) ? "II" : "ii"; echo ":";
+echo (new ReflectionClass("EvalAliasIfaceCopy"))->isInterface() ? "IR" : "ir"; echo ":";
+echo class_alias("EvalAliasTrait", "EvalAliasTraitCopy") ? "T" : "t"; echo ":";
+echo trait_exists("EvalAliasTraitCopy") ? "TE" : "te"; echo ":";
+echo class_exists("EvalAliasTraitCopy") ? "bad" : "TC"; echo ":";
+echo is_a("EvalAliasTraitCopy", "EvalAliasTrait", true) ? "TI" : "ti"; echo ":";
+echo class_alias("EvalAliasEnum", "EvalAliasEnumCopy") ? "E" : "e"; echo ":";
+echo enum_exists("EvalAliasEnumCopy") ? "EE" : "ee"; echo ":";
+echo class_exists("EvalAliasEnumCopy") ? "EC" : "bad"; echo ":";
+echo (new ReflectionClass("EvalAliasEnumCopy"))->getName(); echo ":";
+echo EvalAliasEnumCopy::Ready->value; echo ":";
+echo class_alias("EvalAliasClass", "EvalAliasClassCopy") ? "C" : "c"; echo ":";
+echo class_exists("EvalAliasClassCopy") ? "CE" : "ce"; echo ":";
+echo count(get_declared_classes()); echo ":";
+echo count(get_declared_interfaces()); echo ":";
+return count(get_declared_traits());');
+"#,
+    );
+    assert_eq!(
+        out,
+        "I:IE:IC:II:IR:T:TE:TC:TI:E:EE:EC:EvalAliasEnum:ready:C:CE:2:1:1"
+    );
+}
+
 /// Verifies eval can construct an AOT class with no declared constructor.
 #[test]
 fn test_eval_dynamic_new_constructs_aot_class() {

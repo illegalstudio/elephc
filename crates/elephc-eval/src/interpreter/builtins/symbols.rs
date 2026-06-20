@@ -229,13 +229,25 @@ pub(in crate::interpreter) fn eval_class_alias_result(
     };
     let class = eval_class_alias_name(class, values)?;
     let alias = eval_class_alias_name(alias, values)?;
-    if alias.is_empty() || context.has_class(&alias) || values.class_exists(&alias)? {
+    if alias.is_empty()
+        || context.resolve_class_like_name(&alias).is_some()
+        || values.class_exists(&alias)?
+        || values.interface_exists(&alias)?
+        || values.trait_exists(&alias)?
+        || values.enum_exists(&alias)?
+    {
         return values.bool_value(false);
     }
-    let aliased = if context.has_class(&class) {
+    let aliased = if context.resolve_class_like_name(&class).is_some() {
         context.define_class_alias(&class, &alias)
+    } else if values.enum_exists(&class)? {
+        context.define_external_enum_alias(&class, &alias)
     } else if values.class_exists(&class)? {
         context.define_external_class_alias(&class, &alias)
+    } else if values.interface_exists(&class)? {
+        context.define_external_interface_alias(&class, &alias)
+    } else if values.trait_exists(&class)? {
+        context.define_external_trait_alias(&class, &alias)
     } else {
         false
     };
@@ -436,7 +448,7 @@ pub(in crate::interpreter) fn eval_is_a_relation_result(
     let target_class = String::from_utf8(target_class).map_err(|_| EvalStatus::RuntimeFatal)?;
     let target_class = target_class.trim_start_matches('\\');
     let resolved_target_class = context
-        .resolve_class_name(target_class)
+        .resolve_class_like_name(target_class)
         .unwrap_or_else(|| target_class.to_string());
     let is_object = values.type_tag(object_or_class)? == 6;
     let exclude_self = name == "is_subclass_of";
@@ -455,8 +467,21 @@ pub(in crate::interpreter) fn eval_is_a_relation_result(
     } else if allow_string && values.type_tag(object_or_class)? == EVAL_TAG_STRING {
         let source_class = values.string_bytes(object_or_class)?;
         let source_class = String::from_utf8(source_class).map_err(|_| EvalStatus::RuntimeFatal)?;
-        if context.class(&source_class).is_some() {
-            context.class_is_a(&source_class, &resolved_target_class, exclude_self)
+        let resolved_source_class = context
+            .resolve_class_like_name(&source_class)
+            .unwrap_or_else(|| source_class.trim_start_matches('\\').to_string());
+        if context.class(&resolved_source_class).is_some() {
+            context.class_is_a(&resolved_source_class, &resolved_target_class, exclude_self)
+        } else if context.interface(&resolved_source_class).is_some() {
+            eval_interface_string_is_a(
+                &resolved_source_class,
+                &resolved_target_class,
+                exclude_self,
+                context,
+            )
+        } else if context.trait_decl(&resolved_source_class).is_some() {
+            !exclude_self
+                && eval_class_like_name_matches(&resolved_source_class, &resolved_target_class)
         } else {
             values.object_is_a(object_or_class, &resolved_target_class, exclude_self)?
         }
@@ -466,6 +491,28 @@ pub(in crate::interpreter) fn eval_is_a_relation_result(
         false
     };
     values.bool_value(result)
+}
+
+/// Returns whether an interface string source satisfies a class-like target.
+fn eval_interface_string_is_a(
+    source_class: &str,
+    target_class: &str,
+    exclude_self: bool,
+    context: &ElephcEvalContext,
+) -> bool {
+    if !exclude_self && eval_class_like_name_matches(source_class, target_class) {
+        return true;
+    }
+    context
+        .interface_parent_names(source_class)
+        .iter()
+        .any(|parent| eval_class_like_name_matches(parent, target_class))
+}
+
+/// Returns whether two class-like names match PHP's case-insensitive class-name rules.
+fn eval_class_like_name_matches(left: &str, right: &str) -> bool {
+    left.trim_start_matches('\\')
+        .eq_ignore_ascii_case(right.trim_start_matches('\\'))
 }
 
 /// Returns whether an eval-created object matches a dynamic class/interface target.
