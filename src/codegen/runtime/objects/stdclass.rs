@@ -248,6 +248,18 @@ fn emit_stdclass_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=value_lo, x2=value_hi, x3=value_tag
 
     emitter.instruction("cbz x0, __rt_stdclass_get_null");                      // not found → Mixed(null)
+    // A reference entry (tag 11) stores a reference-cell pointer, not a value. Dereference it and box
+    // a fresh snapshot so the reader observes the current value rather than a live alias to the cell.
+    emitter.instruction("cmp x3, #11");                                         // is the stored entry a reference cell?
+    emitter.instruction("b.ne __rt_stdclass_get_value");                        // no → return the stored boxed Mixed value directly
+    emitter.instruction("mov x0, x1");                                          // x0 = the reference cell pointer
+    emitter.instruction("bl __rt_refcell_load");                                // dereference: x0=tag, x1=value_lo, x2=value_hi
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the dereferenced value into a fresh Mixed snapshot
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
+
+    emitter.label("__rt_stdclass_get_value");
     emitter.instruction("mov x0, x1");                                          // hit: stored value is the boxed Mixed pointer
     emitter.instruction("bl __rt_incref");                                      // retain the stored property cell so the caller owns the result
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
@@ -541,6 +553,19 @@ fn emit_stdclass_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // hit?
     emitter.instruction("je __rt_stdclass_get_null");                           // not found → Mixed(null)
 
+    // A reference entry (tag 11) stores a reference-cell pointer, not a value. Dereference it and box
+    // a fresh snapshot so the reader observes the current value rather than a live alias to the cell.
+    emitter.instruction("cmp rcx, 11");                                         // is the stored entry a reference cell?
+    emitter.instruction("jne __rt_stdclass_get_value");                         // no → return the stored boxed Mixed value directly
+    emitter.instruction("mov rax, rdi");                                        // rax = the reference cell pointer (value_lo)
+    emitter.instruction("call __rt_refcell_load");                              // dereference: rax=tag, rdi=value_lo, rdx=value_hi
+    emitter.instruction("mov rsi, rdx");                                        // mixed_from_value takes value_hi in rsi
+    emitter.instruction("call __rt_mixed_from_value");                          // box the dereferenced value into a fresh Mixed snapshot
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
+
+    emitter.label("__rt_stdclass_get_value");
     emitter.instruction("mov rax, rdi");                                        // return value = boxed Mixed pointer
     abi::emit_push_reg(emitter, "rax");
     emitter.instruction("call __rt_incref");                                    // retain the stored property cell so the caller owns the result

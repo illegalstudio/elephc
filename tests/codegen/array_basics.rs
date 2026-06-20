@@ -1256,3 +1256,15 @@ fn test_foreach_by_ref_value_read_is_fresh_after_cross_write() {
     );
     assert_eq!(out, "9");
 }
+
+/// Regression: reading a referenced object property into another variable takes a value snapshot,
+/// not a live alias to the shared reference cell — `__rt_stdclass_get` dereferences a tag-11 entry
+/// and boxes a fresh Mixed. A later write through the reference must not change the snapshot.
+/// Matches `php -r` `1`.
+#[test]
+fn test_reference_object_property_read_is_a_snapshot() {
+    let out = compile_and_run(
+        "<?php $o = new stdClass(); $v = 1; $o->p =& $v; $first = $o->p; $v = 9; echo $first;",
+    );
+    assert_eq!(out, "1");
+}
