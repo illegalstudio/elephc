@@ -7168,6 +7168,35 @@ echo $listed->isDestructor() ? "D" : "d";');
     assert_eq!(out.stdout, "Cd:cD:cd:Cd");
 }
 
+/// Verifies eval ReflectionMethod keeps declared name case after case-insensitive lookup.
+#[test]
+fn test_eval_reflection_method_preserves_declared_name_case() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectMethodCaseBase {
+    public function MiXeDCase() { return "base"; }
+}
+class EvalReflectMethodCaseChild extends EvalReflectMethodCaseBase {
+    public function childCase() { return "child"; }
+}
+$object = new EvalReflectMethodCaseChild();
+$direct = new ReflectionMethod("EvalReflectMethodCaseChild", "mixedcase");
+echo $direct->getName() . ":";
+echo $direct->getShortName() . ":";
+echo $direct->invoke($object) . ":";
+$listed = (new ReflectionClass("EvalReflectMethodCaseChild"))->getMethod("CHILDCASE");
+echo $listed->getName() . ":";
+echo $listed->invoke($object);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "MiXeDCase:MiXeDCase:base:childCase:child");
+}
+
 /// Verifies eval-declared final properties cannot be redeclared by subclasses.
 #[test]
 fn test_eval_declared_final_property_override_fails() {
