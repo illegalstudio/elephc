@@ -152,6 +152,7 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "class_parents",
     "class_uses",
     "enum_exists",
+    "extension_loaded",
     "function_exists",
     "get_class",
     "get_parent_class",

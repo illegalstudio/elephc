@@ -329,6 +329,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "json_last_error_msg" => json::lower_json_last_error_msg(ctx, inst),
         "json_validate" => json::lower_json_validate(ctx, inst),
         "function_exists" => lower_function_exists(ctx, inst),
+        "extension_loaded" => lower_extension_loaded(ctx, inst),
         "class_exists" | "interface_exists" | "trait_exists" | "enum_exists" => {
             lower_class_like_exists(ctx, inst, key.as_str())
         }
@@ -863,6 +864,40 @@ fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
             || crate::name_resolver::is_date_procedural_alias(&function_name);
         emit_static_bool(ctx, exists);
     }
+    store_if_result(ctx, inst)
+}
+
+/// Extension names elephc reports as loaded for `extension_loaded()`.
+///
+/// elephc is a closed-world AOT compiler with no dynamically loaded PHP
+/// extensions, so this set is conservatively empty: every query resolves to
+/// `false`. PHP polyfills guarded by `if (!extension_loaded('x'))` therefore
+/// keep their userland fallback, while elephc-provided functions are surfaced
+/// through `function_exists()` and the builtin catalog instead. Extend this set
+/// only when elephc genuinely emulates a named extension's full surface.
+const LOADED_EXTENSIONS: &[&str] = &[];
+
+/// Returns whether elephc reports the named PHP extension as loaded.
+///
+/// The comparison is case-insensitive to match PHP, which treats extension
+/// names case-insensitively in `extension_loaded()`.
+fn extension_is_loaded(name: &str) -> bool {
+    let key = name.trim_start_matches('\\').to_ascii_lowercase();
+    LOADED_EXTENSIONS
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(&key))
+}
+
+/// Lowers `extension_loaded("name")` to a compile-time constant boolean.
+///
+/// In the closed-world AOT model the loaded-extension set is fixed at compile
+/// time, so the result is materialized as a static `0`/`1` rather than a
+/// runtime query.
+fn lower_extension_loaded(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "extension_loaded", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let extension_name = const_string_operand(ctx, value)?;
+    emit_static_bool(ctx, extension_is_loaded(&extension_name));
     store_if_result(ctx, inst)
 }
 

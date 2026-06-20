@@ -125,6 +125,16 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Str))
         }
+        "extension_loaded" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "extension_loaded() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Bool))
+        }
         "class_attribute_names" => {
             if args.len() != 1 {
                 return Err(CompileError::new(

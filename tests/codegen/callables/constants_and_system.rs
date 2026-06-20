@@ -2456,3 +2456,30 @@ fn test_passthru() {
     let out = compile_and_run("<?php passthru(\"echo bye\");");
     assert_eq!(out, "bye\n");
 }
+
+/// Verifies `extension_loaded()` reports unknown extensions as not loaded, matching
+/// the closed-world AOT model where no dynamic PHP extensions are present.
+#[test]
+fn test_extension_loaded_reports_false() {
+    let out = compile_and_run(
+        "<?php echo extension_loaded('deepclone') ? '1' : '0'; echo extension_loaded('mbstring') ? '1' : '0';",
+    );
+    assert_eq!(out, "00");
+}
+
+/// Verifies `extension_loaded()` returns a real boolean usable as an `if` condition,
+/// so polyfill `if (!extension_loaded('x'))` guards take their userland branch.
+#[test]
+fn test_extension_loaded_drives_polyfill_guard() {
+    let out = compile_and_run(
+        "<?php if (!extension_loaded('json')) { echo 'fallback'; } else { echo 'native'; }",
+    );
+    assert_eq!(out, "fallback");
+}
+
+/// Verifies `extension_loaded()` matches extension names case-insensitively, as PHP does.
+#[test]
+fn test_extension_loaded_is_case_insensitive() {
+    let out = compile_and_run("<?php var_dump(extension_loaded('DeepClone'));");
+    assert_eq!(out, "bool(false)\n");
+}
