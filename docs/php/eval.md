@@ -257,7 +257,10 @@ attribute, property type, or property default-value metadata.
 `ReflectionMethod::getDeclaringClass()` and
 `ReflectionProperty::getDeclaringClass()` return a materialized
 `ReflectionClass` for the symbol that declares the reflected
-member. `ReflectionClass::getConstructor()` returns a materialized
+member. `ReflectionMethod::hasPrototype()` and `getPrototype()` expose
+eval parent-class overrides and interface implementation prototypes; inherited
+methods that are not overridden report no prototype, matching PHP reflection.
+`ReflectionClass::getConstructor()` returns a materialized
 `ReflectionMethod` for direct, inherited, interface, and trait constructors, or
 `null` when no constructor is visible. `ReflectionClass::getParentClass()`
 returns a materialized `ReflectionClass` for eval-declared parent classes or

@@ -722,6 +722,59 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
     }
 }
 
+/// Handles eval-backed `ReflectionMethod::hasPrototype()` and `getPrototype()` calls.
+pub(in crate::interpreter) fn eval_reflection_method_prototype_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let is_has_prototype = method_name.eq_ignore_ascii_case("hasPrototype");
+    let is_get_prototype = method_name.eq_ignore_ascii_case("getPrototype");
+    if !is_has_prototype && !is_get_prototype {
+        return Ok(None);
+    }
+    let Some((declaring_class, reflected_method)) = context
+        .eval_reflection_method(identity)
+        .map(|(declaring_class, method_name)| (declaring_class.to_string(), method_name.to_string()))
+    else {
+        return Ok(None);
+    };
+    eval_reflection_bind_no_args(evaluated_args)?;
+    let Some((prototype_class, prototype_method)) =
+        eval_reflection_method_prototype_target(&declaring_class, &reflected_method, context)
+    else {
+        if is_has_prototype {
+            return values.bool_value(false).map(Some);
+        }
+        return eval_throw_reflection_exception(
+            &format!(
+                "Method {}::{} does not have a prototype",
+                declaring_class, reflected_method
+            ),
+            context,
+            values,
+        );
+    };
+    if is_has_prototype {
+        return values.bool_value(true).map(Some);
+    }
+    let Some(metadata) =
+        eval_reflection_method_metadata(&prototype_class, &prototype_method, context)
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    eval_reflection_member_object_result(
+        EVAL_REFLECTION_OWNER_METHOD,
+        &prototype_method,
+        &metadata,
+        context,
+        values,
+    )
+    .map(Some)
+}
+
 /// Handles PHP's no-op `ReflectionMethod/Property::setAccessible()` calls.
 pub(in crate::interpreter) fn eval_reflection_set_accessible_result(
     identity: u64,
@@ -4069,6 +4122,89 @@ fn eval_reflection_namespace_name(name: &str) -> String {
         .map_or_else(String::new, |(namespace_name, _)| {
             namespace_name.to_string()
         })
+}
+
+/// Finds the PHP ReflectionMethod prototype target for an eval-declared method.
+fn eval_reflection_method_prototype_target(
+    declaring_class: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<(String, String)> {
+    if !(context.has_class(declaring_class) || context.has_enum(declaring_class)) {
+        return None;
+    }
+    eval_reflection_parent_method_prototype_target(declaring_class, method_name, context)
+        .or_else(|| {
+            eval_reflection_interface_method_prototype_target(
+                declaring_class,
+                method_name,
+                context,
+            )
+        })
+}
+
+/// Finds the nearest parent-class method prototype for an eval-declared override.
+fn eval_reflection_parent_method_prototype_target(
+    declaring_class: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<(String, String)> {
+    for parent_class in context.class_parent_names(declaring_class) {
+        if let Some((prototype_class, prototype_method)) =
+            context.class_own_method(&parent_class, method_name)
+        {
+            return Some((prototype_class, prototype_method.name().to_string()));
+        }
+    }
+    None
+}
+
+/// Finds the interface method prototype for an eval-declared class method.
+fn eval_reflection_interface_method_prototype_target(
+    declaring_class: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<(String, String)> {
+    let mut seen = std::collections::HashSet::new();
+    for interface_name in context.class_interface_names(declaring_class) {
+        if let Some(prototype) = eval_reflection_interface_declared_method_target(
+            &interface_name,
+            method_name,
+            context,
+            &mut seen,
+        ) {
+            return Some(prototype);
+        }
+    }
+    None
+}
+
+/// Finds the interface that actually declares a method in an interface hierarchy.
+fn eval_reflection_interface_declared_method_target(
+    interface_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    seen: &mut std::collections::HashSet<String>,
+) -> Option<(String, String)> {
+    let interface = context.interface(interface_name)?;
+    if !seen.insert(interface.name().to_ascii_lowercase()) {
+        return None;
+    }
+    if let Some(method) = interface
+        .methods()
+        .iter()
+        .find(|method| method.name().eq_ignore_ascii_case(method_name))
+    {
+        return Some((interface.name().to_string(), method.name().to_string()));
+    }
+    for parent in interface.parents() {
+        if let Some(prototype) =
+            eval_reflection_interface_declared_method_target(parent, method_name, context, seen)
+        {
+            return Some(prototype);
+        }
+    }
+    None
 }
 
 /// Packs ReflectionMethod/ReflectionProperty predicate flags for the runtime owner factory.

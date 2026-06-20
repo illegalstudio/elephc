@@ -277,6 +277,66 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod exposes eval parent and interface prototypes.
+#[test]
+fn execute_program_reflection_method_reports_eval_prototypes() {
+    let program = parse_fragment(
+        br#"interface EvalProtoParentIface {
+    public function parented();
+}
+interface EvalProtoChildIface extends EvalProtoParentIface {}
+interface EvalProtoIface {
+    public function iface();
+}
+class EvalProtoBase {
+    public function run() {}
+    public function inherited() {}
+}
+class EvalProtoChild extends EvalProtoBase implements EvalProtoIface, EvalProtoChildIface {
+    public function run() {}
+    public function iface() {}
+    public function parented() {}
+    public function own() {}
+}
+$override = new ReflectionMethod("EvalProtoChild", "run");
+$overrideProto = $override->getPrototype();
+echo $override->hasPrototype() ? "Y" : "N"; echo ":";
+echo $overrideProto->getDeclaringClass()->getName(); echo "::";
+echo $overrideProto->getName(); echo ":";
+$iface = new ReflectionMethod("EvalProtoChild", "iface");
+$ifaceProto = $iface->getPrototype();
+echo $iface->hasPrototype() ? "Y" : "N"; echo ":";
+echo $ifaceProto->getDeclaringClass()->getName(); echo "::";
+echo $ifaceProto->getName(); echo ":";
+$parentIface = new ReflectionMethod("EvalProtoChild", "parented");
+$parentIfaceProto = $parentIface->getPrototype();
+echo $parentIfaceProto->getDeclaringClass()->getName(); echo "::";
+echo $parentIfaceProto->getName(); echo ":";
+$own = new ReflectionMethod("EvalProtoChild", "own");
+echo $own->hasPrototype() ? "Y" : "N"; echo ":";
+try {
+    $own->getPrototype();
+} catch (ReflectionException $e) {
+    echo "E";
+}
+echo ":";
+$inherited = new ReflectionMethod("EvalProtoChild", "inherited");
+echo $inherited->hasPrototype() ? "Y" : "N";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Y:EvalProtoBase::run:Y:EvalProtoIface::iface:EvalProtoParentIface::parented:N:E:N"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass exposes eval class namespace-derived name parts.
 #[test]
 fn execute_program_reflects_eval_class_name_parts() {

@@ -3044,6 +3044,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     )? {
         return Ok(result);
     }
+    if let Some(result) = eval_reflection_method_prototype_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
     if let Some(result) = eval_reflection_set_accessible_result(
         identity,
         method_name,

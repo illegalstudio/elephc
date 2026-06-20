@@ -7794,6 +7794,65 @@ echo $method->getTentativeReturnType() === null ? "Q" : "q";');
     );
 }
 
+/// Verifies eval ReflectionMethod hasPrototype/getPrototype follow PHP inheritance rules.
+#[test]
+fn test_eval_reflection_method_reports_eval_prototypes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalProtoParentIface {
+    public function parented();
+}
+interface EvalProtoChildIface extends EvalProtoParentIface {}
+interface EvalProtoIface {
+    public function iface();
+}
+class EvalProtoBase {
+    public function run() {}
+    public function inherited() {}
+}
+class EvalProtoChild extends EvalProtoBase implements EvalProtoIface, EvalProtoChildIface {
+    public function run() {}
+    public function iface() {}
+    public function parented() {}
+    public function own() {}
+}
+$override = new ReflectionMethod("EvalProtoChild", "run");
+$overrideProto = $override->getPrototype();
+echo ($override->hasPrototype() ? "Y" : "N") . ":";
+echo $overrideProto->getDeclaringClass()->getName() . "::";
+echo $overrideProto->getName() . ":";
+$iface = new ReflectionMethod("EvalProtoChild", "iface");
+$ifaceProto = $iface->getPrototype();
+echo ($iface->hasPrototype() ? "Y" : "N") . ":";
+echo $ifaceProto->getDeclaringClass()->getName() . "::";
+echo $ifaceProto->getName() . ":";
+$parentIface = new ReflectionMethod("EvalProtoChild", "parented");
+$parentIfaceProto = $parentIface->getPrototype();
+echo $parentIfaceProto->getDeclaringClass()->getName() . "::";
+echo $parentIfaceProto->getName() . ":";
+$own = new ReflectionMethod("EvalProtoChild", "own");
+echo ($own->hasPrototype() ? "Y" : "N") . ":";
+try {
+    $own->getPrototype();
+} catch (ReflectionException $e) {
+    echo "E";
+}
+echo ":";
+$inherited = new ReflectionMethod("EvalProtoChild", "inherited");
+echo $inherited->hasPrototype() ? "Y" : "N";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Y:EvalProtoBase::run:Y:EvalProtoIface::iface:EvalProtoParentIface::parented:N:E:N"
+    );
+}
+
 /// Verifies eval-declared functions share method-style named/default/ref/variadic binding.
 #[test]
 fn test_eval_declared_function_rich_argument_binding() {
