@@ -8400,6 +8400,35 @@ echo $plainCopy->name;');
     assert_eq!(out, "A:2:A:copy:12:S:S:copy");
 }
 
+/// Verifies eval `clone` invokes public AOT `__clone()` hooks after storage copying.
+#[test]
+fn test_eval_clone_aot_object_runs_clone_hook() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCloneAotHookBox {
+    public string $name;
+
+    public function __construct(string $name) {
+        $this->name = $name;
+    }
+
+    public function __clone(): void {
+        $this->name = $this->name . ":hook";
+    }
+
+    public function run(): void {
+        eval('$copy = clone $this;
+echo $this->name; echo ":";
+echo $copy->name;');
+    }
+}
+
+(new EvalCloneAotHookBox("A"))->run();
+"#,
+    );
+    assert_eq!(out, "A:A:hook");
+}
+
 /// Verifies eval ReflectionClass::isIterable reports eval and builtin class metadata.
 #[test]
 fn test_eval_reflection_class_iterable_predicate() {

@@ -3606,8 +3606,8 @@ fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("str x14, [x11, x10]");                                 // store the property high word on the clone
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the property-tag descriptor pointer
     emitter.instruction("ldrb w14, [x11, x12]");                                // load the compile-time ownership tag for this slot
-    emitter.instruction("cmp x14, #1");                                         // does the slot hold a retained string payload?
-    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); // retained string slots need an extra owner reference
+    emitter.instruction("cmp x14, #1");                                         // does the slot hold an owned string payload?
+    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_string"); // string slots need an independent payload copy
     emitter.instruction("cmp x14, #4");                                         // does the slot hold a retained indexed-array payload?
     emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); // retained array slots need an extra owner reference
     emitter.instruction("cmp x14, #5");                                         // does the slot hold a retained associative-array payload?
@@ -3617,6 +3617,21 @@ fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("cmp x14, #7");                                         // does the slot hold a retained boxed Mixed payload?
     emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); // retained Mixed slots need an extra owner reference
     emitter.instruction("b __elephc_eval_value_object_clone_shallow_next");     // scalar slots are copied without ownership changes
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_string");
+    emitter.instruction("str x12, [sp, #32]");                                  // preserve property index across string persistence
+    emitter.instruction("str x10, [sp, #40]");                                  // preserve the high-word slot offset across the helper
+    emitter.instruction("mov x1, x15");                                         // pass the source string pointer to the persistence helper
+    emitter.instruction("ldr x2, [x9, x10]");                                   // pass the source string length to the persistence helper
+    emitter.instruction("bl __rt_str_persist");                                 // duplicate the string payload for clone ownership
+    emitter.instruction("ldr x10, [sp, #40]");                                  // restore the high-word slot offset after persistence
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the clone object pointer after persistence
+    emitter.instruction("sub x10, x10, #8");                                    // move back to the low-word string pointer slot
+    emitter.instruction("str x1, [x11, x10]");                                  // install the persisted string pointer on the clone
+    emitter.instruction("add x10, x10, #8");                                    // move to the high-word string length slot
+    emitter.instruction("str x2, [x11, x10]");                                  // install the persisted string length on the clone
+    emitter.instruction("ldr x12, [sp, #32]");                                  // restore property index after string persistence
+    emitter.instruction("b __elephc_eval_value_object_clone_shallow_next");     // continue with the next declared property
 
     emitter.label("__elephc_eval_value_object_clone_shallow_retain");
     emitter.instruction("str x12, [sp, #32]");                                  // preserve property index across the retain helper
@@ -3720,8 +3735,8 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r8 + rcx + 8], rdx");                   // store the property high word on the clone
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the property-tag descriptor pointer
     emitter.instruction("movzx r11, BYTE PTR [r9 + r10]");                      // load the compile-time ownership tag for this slot
-    emitter.instruction("cmp r11, 1");                                          // does the slot hold a retained string payload?
-    emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); // retained string slots need an extra owner reference
+    emitter.instruction("cmp r11, 1");                                          // does the slot hold an owned string payload?
+    emitter.instruction("je __elephc_eval_value_object_clone_shallow_string_x86"); // string slots need an independent payload copy
     emitter.instruction("cmp r11, 4");                                          // does the slot hold a retained indexed-array payload?
     emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); // retained array slots need an extra owner reference
     emitter.instruction("cmp r11, 5");                                          // does the slot hold a retained associative-array payload?
@@ -3731,6 +3746,16 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 7");                                          // does the slot hold a retained boxed Mixed payload?
     emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); // retained Mixed slots need an extra owner reference
     emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_next_x86"); // scalar slots are copied without ownership changes
+
+    emitter.label("__elephc_eval_value_object_clone_shallow_string_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve property index across string persistence
+    emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // preserve the low-word slot offset across the helper
+    emitter.instruction("call __rt_str_persist");                               // duplicate the string payload for clone ownership
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // restore the low-word slot offset after persistence
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the clone object pointer after persistence
+    emitter.instruction("mov QWORD PTR [r8 + rcx], rax");                       // install the persisted string pointer on the clone
+    emitter.instruction("mov QWORD PTR [r8 + rcx + 8], rdx");                   // install the persisted string length on the clone
+    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_next_x86"); // continue with the next declared property
 
     emitter.label("__elephc_eval_value_object_clone_shallow_retain_x86");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve property index across the retain helper

@@ -1528,6 +1528,18 @@ fn eval_reflection_aot_method_metadata_if_exists(
     )))
 }
 
+/// Returns generated/AOT method dispatch metadata for interpreter-only runtime decisions.
+pub(in crate::interpreter) fn eval_aot_method_dispatch_metadata(
+    class_name: &str,
+    method_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(EvalVisibility, bool, bool)>, EvalStatus> {
+    Ok(
+        eval_reflection_aot_method_metadata_if_exists(class_name, method_name, values)?
+            .map(|member| (member.visibility, member.is_static, member.is_abstract)),
+    )
+}
+
 /// Converts AOT method flag metadata into the eval ReflectionMethod shape.
 fn eval_reflection_aot_method_metadata(
     class_name: &str,

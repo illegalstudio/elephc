@@ -2870,6 +2870,11 @@ pub(in crate::interpreter) fn eval_object_clone_result(
     if let Some((declaring_class, method)) = &clone_method {
         validate_eval_member_access(declaring_class, method.visibility(), context)?;
     }
+    let should_call_aot_clone_hook = if dynamic_class_name.is_none() {
+        eval_aot_clone_hook_is_callable(object, values)?
+    } else {
+        false
+    };
 
     let clone = values.object_clone_shallow(object)?;
     if let Some(class_name) = dynamic_class_name {
@@ -2887,8 +2892,39 @@ pub(in crate::interpreter) fn eval_object_clone_result(
                 values,
             )?;
         }
+    } else if should_call_aot_clone_hook {
+        let result = values.method_call(clone, "__clone", Vec::new())?;
+        values.release(result)?;
     }
     Ok(clone)
+}
+
+/// Returns whether a public instance AOT `__clone()` hook should run.
+fn eval_aot_clone_hook_is_callable(
+    object: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let class_name = eval_runtime_object_class_name(object, values)?;
+    let Some((visibility, is_static, is_abstract)) =
+        eval_aot_method_dispatch_metadata(&class_name, "__clone", values)?
+    else {
+        return Ok(false);
+    };
+    if visibility != EvalVisibility::Public || is_static || is_abstract {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(true)
+}
+
+/// Reads the PHP-visible runtime class name for one AOT object handle.
+fn eval_runtime_object_class_name(
+    object: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let class_name = values.object_class_name(object)?;
+    let bytes = values.string_bytes(class_name)?;
+    values.release(class_name)?;
+    String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
 }
 
 /// Creates a backing object for an eval-declared class without running its constructor.

@@ -49,6 +49,25 @@ echo $a->n . "|" . $b->n;
     assert_eq!(out, "hook;1|11");
 }
 
+/// Verifies `__clone()` can replace a string property without corrupting the source object.
+#[test]
+fn test_clone_persists_string_property_before_magic_clone_mutation() {
+    let out = compile_and_run(
+        r#"<?php
+class LabelBox {
+    public string $label = "A";
+    public function __clone(): void {
+        $this->label = $this->label . ":copy";
+    }
+}
+$a = new LabelBox();
+$b = clone $a;
+echo $a->label . "|" . $b->label;
+"#,
+    );
+    assert_eq!(out, "A|A:copy");
+}
+
 /// Verifies object-valued properties are shallow-copied, so nested object mutations remain shared.
 #[test]
 fn test_clone_keeps_nested_objects_shared() {
