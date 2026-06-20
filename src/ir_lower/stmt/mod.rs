@@ -875,6 +875,34 @@ fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) -> PhpType 
 
 /// Lowers a nested array assignment that already carries an expression target.
 fn lower_nested_array_assign(ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span) {
+    // A nested element write `$base[$k1][$k2] = $v` (and deeper) must write through the shared inner
+    // container, not a detached snapshot of the leaf cell. Lowering the whole target as an rvalue
+    // reads the leaf via `__rt_mixed_array_get`, which for a precise-typed (non-tag-7) inner entry
+    // re-boxes a *copy* of the value; a write into that copy is silently lost. This is why a literal
+    // base `['a' => ['x' => 1], 'b' => 2]` discarded `$m['a']['x'] = 99` while a `json_decode()` base
+    // (already tag-7 shared) kept it.
+    //
+    // Split the outermost `[$key]` off the target and lower the write as
+    // `__rt_mixed_array_set($parent, $key, $v)`, which unboxes the parent to the shared inner hash
+    // and writes the entry in place — so the mutation reaches the container the parent wraps. Only
+    // applies when the parent reads as a Mixed/Union box (the case `__rt_mixed_array_set` handles);
+    // other shapes keep the leaf-cell write path.
+    if let ExprKind::ArrayAccess { array, index } = &target.kind {
+        let parent = lower_expr(ctx, array);
+        let parent_ty = ctx.builder.value_php_type(parent.value).codegen_repr();
+        if matches!(parent_ty, PhpType::Mixed | PhpType::Union(_)) {
+            let index = lower_expr(ctx, index);
+            let value = lower_expr(ctx, value);
+            ctx.emit_void(
+                Op::RuntimeCall,
+                vec![parent.value, index.value, value.value],
+                None,
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            return;
+        }
+    }
     let target = lower_expr(ctx, target);
     let value = lower_expr(ctx, value);
     ctx.emit_void(

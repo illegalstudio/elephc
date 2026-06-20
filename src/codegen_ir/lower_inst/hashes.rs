@@ -1144,6 +1144,12 @@ fn materialize_hash_mixed_value_aarch64(
         ctx.emitter.instruction("mov x4, xzr");                                 // boxed tagged-scalar Mixed cells do not use the high payload word
         return Ok(());
     }
+    if mixed_storage_boxes_container(value_ty, storage_value_ty) {
+        box_hash_value_for_mixed_storage(ctx, value, value_ty)?;
+        ctx.emitter.instruction("mov x3, x0");                                  // pass the boxed container Mixed cell as the hash value low word
+        ctx.emitter.instruction("mov x4, xzr");                                 // boxed container Mixed cells do not use the high payload word
+        return Ok(());
+    }
     materialize_hash_concrete_value_aarch64(ctx, value, value_ty)
 }
 
@@ -1175,6 +1181,12 @@ fn materialize_hash_mixed_value_x86_64(
         ctx.emitter.instruction("xor r8, r8");                                  // boxed tagged-scalar Mixed cells do not use the high payload word
         return Ok(());
     }
+    if mixed_storage_boxes_container(value_ty, storage_value_ty) {
+        box_hash_value_for_mixed_storage(ctx, value, value_ty)?;
+        ctx.emitter.instruction("mov rcx, rax");                                // pass the boxed container Mixed cell as the hash value low word
+        ctx.emitter.instruction("xor r8, r8");                                  // boxed container Mixed cells do not use the high payload word
+        return Ok(());
+    }
     materialize_hash_concrete_value_x86_64(ctx, value, value_ty)
 }
 
@@ -1196,13 +1208,33 @@ fn box_hash_value_for_mixed_storage(
 /// Returns the runtime value tag to store for one hash-set payload.
 fn hash_set_value_tag(value_ty: &PhpType, storage_value_ty: &PhpType) -> i64 {
     if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable) {
-        if value_ty.codegen_repr() == PhpType::TaggedScalar {
+        if value_ty.codegen_repr() == PhpType::TaggedScalar
+            || mixed_storage_boxes_container(value_ty, storage_value_ty)
+        {
             return crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64;
         }
         crate::codegen::runtime_value_tag(&value_ty.codegen_repr()) as i64
     } else {
         crate::codegen::runtime_value_tag(storage_value_ty) as i64
     }
+}
+
+/// Returns whether a heap container value (`Array`/`AssocArray`/`Object`) stored into a Mixed-valued
+/// hash entry must be boxed into a Mixed cell (per-entry tag 7) instead of stored with its natural
+/// heap tag (4/5/6).
+///
+/// Boxing wraps the inner container in a Mixed cell that owns it (container refcount 1), matching the
+/// representation `json_decode()` produces. A raw container stored under a Mixed type is incref'd when
+/// read back into a transient box, which raises its refcount above one and makes a later in-place
+/// `__rt_hash_set` copy-on-write into a detached clone — silently losing nested writes such as
+/// `$m['a']['x'] = 99` on a literal base. Boxing the container at store time keeps the inner container
+/// uniquely owned by the cell, so the nested write reaches the shared storage.
+fn mixed_storage_boxes_container(value_ty: &PhpType, storage_value_ty: &PhpType) -> bool {
+    storage_value_ty.codegen_repr() == PhpType::Mixed
+        && matches!(
+            value_ty.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+        )
 }
 
 /// Materializes a concrete payload for a Mixed-capable AArch64 hash entry.

@@ -478,7 +478,15 @@ unset($b);
 }
 
 /// Verifies that a cycle between two Mixed hashes (`$a["peer"] = $b; $b["peer"] = $a`)
-/// allocates 1 extra slot for boxed Mixed conversion compared to the acyclic case.
+/// allocates 2 extra slots for boxed Mixed conversion compared to the acyclic case, and stays
+/// leak-free (allocs == frees) despite forming a reference cycle.
+///
+/// Each store of a container value into a Mixed-valued hash entry boxes the container into its own
+/// Mixed cell — the uniform tag-7 representation `json_decode()` also produces, required so a nested
+/// element write reaches the shared inner storage instead of a detached copy. The acyclic program
+/// performs one such store (`$a["peer"] = $b`); the cyclic program performs two
+/// (`$a["peer"] = $b` and `$b["peer"] = $a`), so it allocates exactly two more boxed cells. The cycle
+/// collector still reclaims everything, so `frees` tracks `allocs` in both cases.
 #[test]
 fn test_cow_hash_assignment_detaches_before_forming_cycle() {
     let acyclic = compile_and_run_with_gc_stats(
@@ -512,8 +520,10 @@ unset($b);
     let (cyclic_allocs, cyclic_frees) = parse_gc_stats(&cyclic.stderr);
     assert_eq!(acyclic.stdout, "");
     assert_eq!(cyclic.stdout, "");
-    assert_eq!(cyclic_allocs, acyclic_allocs + 1);
-    assert_eq!(cyclic_frees, acyclic_frees + 1);
+    assert_eq!(cyclic_allocs, acyclic_allocs + 2);
+    assert_eq!(cyclic_frees, acyclic_frees + 2);
+    assert_eq!(acyclic_allocs, acyclic_frees);
+    assert_eq!(cyclic_allocs, cyclic_frees);
 }
 
 /// Verifies that a cycle between a Mixed-hash and an object (`$h = ["node" => $n];

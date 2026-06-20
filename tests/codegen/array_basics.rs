@@ -1268,3 +1268,26 @@ fn test_reference_object_property_read_is_a_snapshot() {
     );
     assert_eq!(out, "1");
 }
+
+/// Regression: a nested element write through a literal heterogeneous base
+/// (`$m = ['a' => ['x' => 1], 'b' => 2]; $m['a']['x'] = 99;`) must reach the shared inner container,
+/// not a detached snapshot. The inner array is boxed into a Mixed cell at store time (the tag-7
+/// representation `json_decode()` produces), and the write lowers through `__rt_mixed_array_set` on
+/// the parent so it mutates the shared hash in place. Matches `php -r` `{"a":{"x":99},"b":2}`.
+#[test]
+fn test_nested_write_through_literal_mixed_base_reaches_storage() {
+    let out = compile_and_run(
+        "<?php $m = ['a' => ['x' => 1], 'b' => 2]; $m['a']['x'] = 99; echo json_encode($m);",
+    );
+    assert_eq!(out, "{\"a\":{\"x\":99},\"b\":2}");
+}
+
+/// Regression: the same literal base read without a nested write is unchanged — boxing the inner
+/// container at store time must not alter the observable value. Matches `php -r` `{"a":{"x":1},"b":2}`.
+#[test]
+fn test_literal_mixed_base_read_only_is_unchanged() {
+    let out = compile_and_run(
+        "<?php $m = ['a' => ['x' => 1], 'b' => 2]; echo json_encode($m);",
+    );
+    assert_eq!(out, "{\"a\":{\"x\":1},\"b\":2}");
+}
