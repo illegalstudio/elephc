@@ -9185,6 +9185,23 @@ echo eval('$box = new EvalDynamicNewManyArgCtor(1, 2, 3, "!"); return $box->labe
     assert_eq!(out, "6!");
 }
 
+/// Verifies inherited AOT methods returning eval results keep the boxed Mixed return ABI.
+#[test]
+fn test_eval_fragment_in_inherited_aot_method_returns_late_static_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalInheritedAotScopeReturnBase {
+    public function run() {
+        return eval('return static::class;');
+    }
+}
+class EvalInheritedAotScopeReturnChild extends EvalInheritedAotScopeReturnBase {}
+echo (new EvalInheritedAotScopeReturnChild())->run();
+"#,
+    );
+    assert_eq!(out, "EvalInheritedAotScopeReturnChild");
+}
+
 /// Verifies eval ReflectionClass::newInstanceArgs forwards named args to AOT constructors.
 #[test]
 fn test_eval_reflection_class_new_instance_args_constructs_aot_class() {
