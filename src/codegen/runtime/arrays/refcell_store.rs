@@ -9,8 +9,11 @@
 //!   when a reference-aliased local is assigned a new value.
 //!
 //! Key details:
-//! - Releases the previously referenced value by its tag, retains/persists the new value the same
-//!   way `__rt_refcell_alloc` does, then overwrites the cell's `[tag][lo][hi]` triple in place.
+//! - Releases the previously referenced value by its tag, then overwrites the cell's `[tag][lo][hi]`
+//!   triple in place, taking ownership of the handed-off value (a transfer — no retain/persist).
+//!   Callers always pass a freshly-computed owned value (the RHS of a write-through assignment), so
+//!   retaining it would over-own; this is the one way it differs from `__rt_refcell_alloc`, whose
+//!   caller keeps a live copy of the value and therefore must retain.
 //! - The cell pointer and refcount are untouched; only the boxed inner value changes.
 
 use crate::codegen::emit::Emitter;
@@ -37,58 +40,33 @@ pub fn emit_refcell_store(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #16]");                                   // save the new value low word across helper calls
     emitter.instruction("str x3, [sp, #24]");                                   // save the new value high word across helper calls
 
-    // -- release the value currently referenced by the cell --
+    // -- release the value currently referenced by the cell (the new value is transferred, not retained) --
     emitter.instruction("ldr x9, [x0]");                                        // load the cell's current inner value tag
     emitter.instruction("cmp x9, #1");                                          // is the current inner value a string?
     emitter.instruction("b.eq __rt_refcell_store_rel_string");                  // strings release through heap_free_safe
     emitter.instruction("cmp x9, #4");                                          // does the current inner value hold a heap-backed child?
-    emitter.instruction("b.lo __rt_refcell_store_retain");                      // scalars/bools/floats/null need no release
+    emitter.instruction("b.lo __rt_refcell_store_write");                       // scalars/bools/floats/null need no release
     emitter.instruction("cmp x9, #7");                                          // do heap-backed inner tags stay within the supported range?
     emitter.instruction("b.ls __rt_refcell_store_rel_any");                     // tags 4-7 release through the uniform dispatcher
     emitter.instruction("cmp x9, #10");                                         // is the current inner value a callable descriptor?
     emitter.instruction("b.eq __rt_refcell_store_rel_callable");                // callable descriptors release through the helper
-    emitter.instruction("b __rt_refcell_store_retain");                         // unknown tags need no release
+    emitter.instruction("b __rt_refcell_store_write");                          // unknown tags need no release
 
     emitter.label("__rt_refcell_store_rel_string");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the current inner string pointer
     emitter.instruction("bl __rt_heap_free_safe");                              // release the previously referenced string payload
-    emitter.instruction("b __rt_refcell_store_retain");                         // continue with retaining the new value
+    emitter.instruction("b __rt_refcell_store_write");                          // continue to write the transferred new value
 
     emitter.label("__rt_refcell_store_rel_any");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the current inner heap child pointer
     emitter.instruction("bl __rt_decref_any");                                  // release the previously referenced heap child
-    emitter.instruction("b __rt_refcell_store_retain");                         // continue with retaining the new value
+    emitter.instruction("b __rt_refcell_store_write");                          // continue to write the transferred new value
 
     emitter.label("__rt_refcell_store_rel_callable");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the current inner callable descriptor pointer
     emitter.instruction("bl __rt_callable_descriptor_release");                 // release the previously referenced descriptor
 
-    // -- retain/persist the new value before storing it --
-    emitter.label("__rt_refcell_store_retain");
-    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the new value tag
-    emitter.instruction("cmp x9, #1");                                          // does the new value hold a string?
-    emitter.instruction("b.eq __rt_refcell_store_new_string");                  // strings must be persisted for the cell owner
-    emitter.instruction("cmp x9, #4");                                          // does the new value hold a heap-backed child?
-    emitter.instruction("b.lo __rt_refcell_store_write");                       // scalars/bools/floats/null need no retention
-    emitter.instruction("cmp x9, #7");                                          // do heap-backed new tags stay within the supported range?
-    emitter.instruction("b.ls __rt_refcell_store_new_retain");                  // tags 4-7 must be retained for the cell owner
-    emitter.instruction("cmp x9, #10");                                         // does the new value hold a callable descriptor?
-    emitter.instruction("b.eq __rt_refcell_store_new_retain");                  // callable descriptors are retained for the cell owner
-    emitter.instruction("b __rt_refcell_store_write");                          // scalars can be written without retention
-
-    emitter.label("__rt_refcell_store_new_string");
-    emitter.instruction("ldr x1, [sp, #16]");                                   // load the new string pointer for persistence
-    emitter.instruction("ldr x2, [sp, #24]");                                   // load the new string length for persistence
-    emitter.instruction("bl __rt_str_persist");                                 // duplicate the new string payload for the cell owner
-    emitter.instruction("str x1, [sp, #16]");                                   // replace the saved low word with the owned string pointer
-    emitter.instruction("str x2, [sp, #24]");                                   // replace the saved high word with the owned string length
-    emitter.instruction("b __rt_refcell_store_write");                          // continue once the string payload is safely owned
-
-    emitter.label("__rt_refcell_store_new_retain");
-    emitter.instruction("ldr x0, [sp, #16]");                                   // load the new heap child pointer
-    emitter.instruction("bl __rt_incref");                                      // retain the shared new child pointer for the cell owner
-
-    // -- overwrite the cell's inner triple in place --
+    // -- overwrite the cell's inner triple in place, taking ownership of the handed-off value --
     emitter.label("__rt_refcell_store_write");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the reference cell pointer
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the new value tag
@@ -103,8 +81,8 @@ pub fn emit_refcell_store(emitter: &mut Emitter) {
 }
 
 /// x86_64 Linux variant of `__rt_refcell_store`.
-/// Releases the cell's current inner value, retains/persists the new value, and overwrites the
-/// cell's triple in place. The refcount and cell pointer are unchanged.
+/// Releases the cell's current inner value, then overwrites the cell's triple in place, taking
+/// ownership of the handed-off value (a transfer, no retain). The refcount and cell pointer are unchanged.
 /// Input: rdi = reference cell pointer, rsi = new value_tag, rdx = new value_lo, rcx = new value_hi
 /// Output: none
 /// Clobbers: r10 as scratch during the final triple write.
@@ -121,61 +99,36 @@ fn emit_refcell_store_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the new value low word across helper calls
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the new value high word across helper calls
 
-    // -- release the value currently referenced by the cell --
+    // -- release the value currently referenced by the cell (the new value is transferred, not retained) --
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the cell's current inner value tag
     emitter.instruction("cmp r10, 1");                                          // is the current inner value a string?
     emitter.instruction("je __rt_refcell_store_rel_string");                    // strings release through heap_free_safe
     emitter.instruction("cmp r10, 4");                                          // does the current inner value hold a heap-backed child?
-    emitter.instruction("jb __rt_refcell_store_retain");                        // scalars/bools/floats/null need no release
+    emitter.instruction("jb __rt_refcell_store_write");                         // scalars/bools/floats/null need no release
     emitter.instruction("cmp r10, 7");                                          // do heap-backed inner tags stay within the supported range?
     emitter.instruction("jbe __rt_refcell_store_rel_any");                      // tags 4-7 release through the uniform dispatcher
     emitter.instruction("cmp r10, 10");                                         // is the current inner value a callable descriptor?
     emitter.instruction("je __rt_refcell_store_rel_callable");                  // callable descriptors release through the helper
-    emitter.instruction("jmp __rt_refcell_store_retain");                       // unknown tags need no release
+    emitter.instruction("jmp __rt_refcell_store_write");                        // unknown tags need no release
 
     emitter.label("__rt_refcell_store_rel_string");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the cell pointer to read its inner string pointer
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the current inner string pointer
     emitter.instruction("call __rt_heap_free_safe");                            // release the previously referenced string payload
-    emitter.instruction("jmp __rt_refcell_store_retain");                       // continue with retaining the new value
+    emitter.instruction("jmp __rt_refcell_store_write");                        // continue to write the transferred new value
 
     emitter.label("__rt_refcell_store_rel_any");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the cell pointer to read its inner child pointer
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the current inner heap child pointer
     emitter.instruction("call __rt_decref_any");                                // release the previously referenced heap child
-    emitter.instruction("jmp __rt_refcell_store_retain");                       // continue with retaining the new value
+    emitter.instruction("jmp __rt_refcell_store_write");                        // continue to write the transferred new value
 
     emitter.label("__rt_refcell_store_rel_callable");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the cell pointer to read its inner descriptor pointer
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the current inner callable descriptor pointer
     emitter.instruction("call __rt_callable_descriptor_release");               // release the previously referenced descriptor
 
-    // -- retain/persist the new value before storing it --
-    emitter.label("__rt_refcell_store_retain");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the new value tag
-    emitter.instruction("cmp r10, 1");                                          // does the new value hold a string?
-    emitter.instruction("je __rt_refcell_store_new_string");                    // strings must be persisted for the cell owner
-    emitter.instruction("cmp r10, 4");                                          // does the new value hold a heap-backed child?
-    emitter.instruction("jb __rt_refcell_store_write");                         // scalars/bools/floats/null need no retention
-    emitter.instruction("cmp r10, 7");                                          // do heap-backed new tags stay within the supported range?
-    emitter.instruction("jbe __rt_refcell_store_new_retain");                   // tags 4-7 must be retained for the cell owner
-    emitter.instruction("cmp r10, 10");                                         // does the new value hold a callable descriptor?
-    emitter.instruction("je __rt_refcell_store_new_retain");                    // callable descriptors are retained for the cell owner
-    emitter.instruction("jmp __rt_refcell_store_write");                        // scalars can be written without retention
-
-    emitter.label("__rt_refcell_store_new_string");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // move the new string pointer into the string helper input register
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // move the new string length into the paired string helper register
-    emitter.instruction("call __rt_str_persist");                               // duplicate the new string payload for the cell owner
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // replace the saved low word with the owned string pointer
-    emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // replace the saved high word with the owned string length
-    emitter.instruction("jmp __rt_refcell_store_write");                        // continue once the string payload is safely owned
-
-    emitter.label("__rt_refcell_store_new_retain");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the new heap child pointer
-    emitter.instruction("call __rt_incref");                                    // retain the shared new child pointer for the cell owner
-
-    // -- overwrite the cell's inner triple in place --
+    // -- overwrite the cell's inner triple in place, taking ownership of the handed-off value --
     emitter.label("__rt_refcell_store_write");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the reference cell pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the new value tag

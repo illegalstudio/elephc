@@ -1115,3 +1115,14 @@ fn test_reference_into_nested_accumulates_under_same_outer_key() {
     );
     assert_eq!(out, "10|20");
 }
+
+/// Verifies M3 reference write-through: assigning a plain value to a reference element updates the
+/// shared cell in place rather than replacing the entry, so the aliased source observes the new
+/// value. `$a['x'] =& $v; $a['x'] = 9;` makes `$v` read back as 9. Matches `php -r` output `9|9`.
+#[test]
+fn test_write_through_reference_element_updates_source() {
+    let out = compile_and_run(
+        "<?php $a = []; $v = 1; $a['x'] =& $v; $a['x'] = 9; echo $v, '|', $a['x'];",
+    );
+    assert_eq!(out, "9|9");
+}
