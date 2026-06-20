@@ -4918,6 +4918,146 @@ echo count($implements) . ":" . $implements["EvalDynNamedReader"] . ":" . $imple
     );
 }
 
+/// Verifies eval-declared method overrides enforce covariant return types.
+#[test]
+fn test_eval_declared_method_return_type_override_contracts() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReturnBase {
+    public function id(): ?int { return 1; }
+    public function make(): EvalReturnBase { return $this; }
+    public function selfType(): self { return $this; }
+}
+class EvalReturnChild extends EvalReturnBase {
+    public function id(): int { return 2; }
+    public function make(): EvalReturnChild { return $this; }
+    public function selfType(): static { return $this; }
+}
+class EvalReturnParentRoot {}
+class EvalReturnParentBase extends EvalReturnParentRoot {
+    public function parentKeyword(): EvalReturnParentRoot { return new EvalReturnParentRoot(); }
+}
+class EvalReturnParentChild extends EvalReturnParentBase {
+    public function parentKeyword(): parent { return new EvalReturnParentBase(); }
+}
+class EvalReturnMixedBase {
+    public function maybe(): mixed { return null; }
+}
+class EvalReturnMixedChild extends EvalReturnMixedBase {
+    public function maybe(): ?int { return null; }
+}
+$child = new EvalReturnChild();
+echo $child->id();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "2");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalReturnNarrowBase {
+    public function id(): int { return 1; }
+}
+class EvalReturnWiderNullable extends EvalReturnNarrowBase {
+    public function id(): ?int { return 2; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalReturnStaticBase {
+    public function make(): static { return $this; }
+}
+class EvalReturnSelfChild extends EvalReturnStaticBase {
+    public function make(): self { return $this; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalReturnNullableBase {
+    public function maybe(): ?int { return null; }
+}
+class EvalReturnMixedChildBad extends EvalReturnNullableBase {
+    public function maybe(): mixed { return null; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval-declared interface methods enforce covariant return types.
+#[test]
+fn test_eval_declared_interface_return_type_contracts() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalReturnReadable {
+    function read(): int|string;
+}
+class EvalReturnReader implements EvalReturnReadable {
+    public function read(): int {
+        return 7;
+    }
+}
+$reader = new EvalReturnReader();
+echo $reader->read();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "7");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalNeedsReturn {
+    function read(): string;
+}
+class EvalMissingReturnImpl implements EvalNeedsReturn {
+    public function read() { return "bad"; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalNeedsStringReturn {
+    function read(): string;
+}
+class EvalWiderReturnImpl implements EvalNeedsStringReturn {
+    public function read(): int|string { return "bad"; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared abstract classes can defer interface methods to concrete children.
 #[test]
 fn test_eval_declared_abstract_class_and_final_method_contracts() {

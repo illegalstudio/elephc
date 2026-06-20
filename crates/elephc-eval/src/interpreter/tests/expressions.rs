@@ -893,6 +893,109 @@ class EvalArityChild extends EvalArityBase {
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies eval accepts covariant method return type overrides.
+#[test]
+fn execute_program_accepts_covariant_method_return_type_overrides() {
+    let program = parse_fragment(
+        br#"class EvalReturnBase {
+    public function id(): ?int { return 1; }
+    public function make(): EvalReturnBase { return $this; }
+    public function selfType(): self { return $this; }
+}
+class EvalReturnChild extends EvalReturnBase {
+    public function id(): int { return 2; }
+    public function make(): EvalReturnChild { return $this; }
+    public function selfType(): static { return $this; }
+}
+class EvalReturnParentRoot {}
+class EvalReturnParentBase extends EvalReturnParentRoot {
+    public function parentKeyword(): EvalReturnParentRoot { return new EvalReturnParentRoot(); }
+}
+class EvalReturnParentChild extends EvalReturnParentBase {
+    public function parentKeyword(): parent { return new EvalReturnParentBase(); }
+}
+class EvalReturnMixedBase {
+    public function maybe(): mixed { return null; }
+}
+class EvalReturnMixedChild extends EvalReturnMixedBase {
+    public function maybe(): ?int { return null; }
+}
+$child = new EvalReturnChild();
+return $child->id();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Int(2));
+}
+
+/// Verifies eval rejects method overrides that widen declared return types.
+#[test]
+fn execute_program_rejects_incompatible_method_return_type_overrides() {
+    let wider_nullable = parse_fragment(
+        br#"class EvalReturnNarrowBase {
+    public function id(): int { return 1; }
+}
+class EvalReturnWiderNullable extends EvalReturnNarrowBase {
+    public function id(): ?int { return 2; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&wider_nullable, &mut scope, &mut values)
+        .expect_err("wider nullable return type should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let missing_return = parse_fragment(
+        br#"class EvalReturnRequiredBase {
+    public function label(): string { return "base"; }
+}
+class EvalReturnMissingChild extends EvalReturnRequiredBase {
+    public function label() { return "child"; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&missing_return, &mut scope, &mut values)
+        .expect_err("missing return type should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let static_to_self = parse_fragment(
+        br#"class EvalReturnStaticBase {
+    public function make(): static { return $this; }
+}
+class EvalReturnSelfChild extends EvalReturnStaticBase {
+    public function make(): self { return $this; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&static_to_self, &mut scope, &mut values)
+        .expect_err("static return type should not widen to self");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let nullable_to_mixed = parse_fragment(
+        br#"class EvalReturnNullableBase {
+    public function maybe(): ?int { return null; }
+}
+class EvalReturnMixedChildBad extends EvalReturnNullableBase {
+    public function maybe(): mixed { return null; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&nullable_to_mixed, &mut scope, &mut values)
+        .expect_err("mixed return type should widen nullable int");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval rejects classes missing methods required by eval interfaces.
 #[test]
 fn execute_program_rejects_missing_dynamic_interface_method() {
@@ -909,6 +1012,64 @@ class EvalMissingRead implements EvalNeedsRead {}"#,
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("missing interface method should fail");
 
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies eval accepts covariant return types for interface method contracts.
+#[test]
+fn execute_program_accepts_covariant_interface_method_return_type() {
+    let program = parse_fragment(
+        br#"interface EvalReturnReadable {
+    function read(): int|string;
+}
+class EvalReturnReader implements EvalReturnReadable {
+    public function read(): int {
+        return 7;
+    }
+}
+$reader = new EvalReturnReader();
+return $reader->read();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Int(7));
+}
+
+/// Verifies eval rejects missing or wider return types for interface method contracts.
+#[test]
+fn execute_program_rejects_incompatible_interface_method_return_type() {
+    let missing_return = parse_fragment(
+        br#"interface EvalNeedsReturn {
+    function read(): string;
+}
+class EvalMissingReturnImpl implements EvalNeedsReturn {
+    public function read() { return "bad"; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&missing_return, &mut scope, &mut values)
+        .expect_err("missing interface return type should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let wider_return = parse_fragment(
+        br#"interface EvalNeedsStringReturn {
+    function read(): string;
+}
+class EvalWiderReturnImpl implements EvalNeedsStringReturn {
+    public function read(): int|string { return "bad"; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&wider_return, &mut scope, &mut values)
+        .expect_err("wider interface return type should fail");
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
