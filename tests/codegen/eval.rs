@@ -7696,6 +7696,50 @@ echo $params[2]->isPassedByReference() ? "R" : "r";');
     );
 }
 
+/// Verifies eval Reflection origin metadata APIs are present on supported owners.
+#[test]
+fn test_eval_reflection_origin_metadata_defaults() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectOriginTarget {
+    public $id;
+    public const ANSWER = 42;
+    public function run() {}
+}
+function eval_reflect_origin_function() {}
+enum EvalReflectOriginCase: string {
+    case Ready = "ready";
+}
+$class = new ReflectionClass("EvalReflectOriginTarget");
+$function = new ReflectionFunction("eval_reflect_origin_function");
+$method = new ReflectionMethod("EvalReflectOriginTarget", "run");
+$property = new ReflectionProperty("EvalReflectOriginTarget", "id");
+$constant = new ReflectionClassConstant("EvalReflectOriginTarget", "ANSWER");
+$unit = new ReflectionEnumUnitCase("EvalReflectOriginCase", "Ready");
+$backed = new ReflectionEnumBackedCase("EvalReflectOriginCase", "Ready");
+echo ($class->getDocComment() === false) ? "C" : "c"; echo ":";
+echo ($function->getDocComment() === false) ? "F" : "f"; echo ":";
+echo ($method->getDocComment() === false) ? "M" : "m"; echo ":";
+echo ($property->getDocComment() === false) ? "P" : "p"; echo ":";
+echo ($constant->getDocComment() === false) ? "K" : "k"; echo ":";
+echo ($unit->getDocComment() === false) ? "U" : "u"; echo ":";
+echo ($backed->getDocComment() === false) ? "B" : "b"; echo ":";
+echo ($class->getExtensionName() === false) ? "E" : "e"; echo ":";
+echo ($function->getExtensionName() === false) ? "N" : "n"; echo ":";
+echo ($method->getExtensionName() === false) ? "O" : "o"; echo ":";
+echo ($class->getExtension() === null) ? "X" : "x"; echo ":";
+echo ($function->getExtension() === null) ? "Y" : "y"; echo ":";
+echo ($method->getExtension() === null) ? "Z" : "z";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "C:F:M:P:K:U:B:E:N:O:X:Y:Z");
+}
+
 /// Verifies eval-declared functions share method-style named/default/ref/variadic binding.
 #[test]
 fn test_eval_declared_function_rich_argument_binding() {

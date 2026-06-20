@@ -277,6 +277,11 @@ fn bool_type() -> TypeExpr {
     TypeExpr::Bool
 }
 
+/// Returns a `TypeExpr` for Reflection APIs whose PHP return is `string|false`.
+fn string_or_bool_type() -> TypeExpr {
+    TypeExpr::Union(vec![TypeExpr::Str, TypeExpr::Bool])
+}
+
 /// Returns a private parameterless `__construct` method for `ReflectionAttribute`.
 fn builtin_reflection_attribute_constructor_method() -> ClassMethod {
     builtin_reflection_private_constructor_method()
@@ -459,9 +464,7 @@ fn builtin_reflection_class_new_instance_without_constructor_method() -> ClassMe
     }
 }
 
-/// Builds the `ReflectionClass` shell with a private resolved-name slot,
-/// private attribute array slot, public constructor, `getName()`, and
-/// `getAttributes()`.
+/// Builds the `ReflectionClass` shell with retained eval metadata accessors.
 fn builtin_reflection_class() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionClass".to_string(),
@@ -672,6 +675,9 @@ fn builtin_reflection_class() -> FlattenedClass {
                 false,
             )]),
             builtin_reflection_class_string_method("getName", "__name"),
+            builtin_reflection_constant_false_union_method("getDocComment"),
+            builtin_reflection_constant_false_union_method("getExtensionName"),
+            builtin_reflection_constant_null_mixed_method("getExtension"),
             builtin_reflection_class_string_method("getShortName", "__short_name"),
             builtin_reflection_class_string_method("getNamespaceName", "__namespace_name"),
             builtin_reflection_class_bool_method("inNamespace", "__in_namespace"),
@@ -1741,6 +1747,48 @@ fn builtin_reflection_constant_bool_method(method_name: &str, value: bool) -> Cl
     }
 }
 
+/// Returns a public Reflection method that always reports PHP `false` as `string|false`.
+fn builtin_reflection_constant_false_union_method(method_name: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(string_or_bool_type()),
+        body: vec![Stmt::new(StmtKind::Return(false_bool()), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public Reflection method that always reports PHP `null` as mixed.
+fn builtin_reflection_constant_null_mixed_method(method_name: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        body: vec![Stmt::new(StmtKind::Return(null_expr()), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a `ReflectionMethod` predicate derived from its case-insensitive method name.
 fn builtin_reflection_method_name_predicate_method(
     method_name: &str,
@@ -1831,6 +1879,19 @@ fn builtin_reflection_owner_class(
         ));
         methods.push(builtin_reflection_class_string_method("getName", "__name"));
     }
+    if reflection_owner_has_doc_comment_method(name) {
+        methods.push(builtin_reflection_constant_false_union_method(
+            "getDocComment",
+        ));
+    }
+    if reflection_owner_has_extension_methods(name) {
+        methods.push(builtin_reflection_constant_false_union_method(
+            "getExtensionName",
+        ));
+        methods.push(builtin_reflection_constant_null_mixed_method(
+            "getExtension",
+        ));
+    }
     add_reflection_member_flag_methods(name, &mut properties, &mut methods);
     if matches!(
         name,
@@ -1895,6 +1956,24 @@ fn builtin_reflection_owner_class(
         constants: reflection_owner_constants(name),
         used_traits: Vec::new(),
     }
+}
+
+/// Returns true when PHP exposes `getDocComment()` on this synthetic reflection owner.
+fn reflection_owner_has_doc_comment_method(class_name: &str) -> bool {
+    matches!(
+        class_name,
+        "ReflectionFunction"
+            | "ReflectionMethod"
+            | "ReflectionProperty"
+            | "ReflectionClassConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
+    )
+}
+
+/// Returns true when PHP exposes extension-origin APIs on this reflection owner.
+fn reflection_owner_has_extension_methods(class_name: &str) -> bool {
+    matches!(class_name, "ReflectionFunction" | "ReflectionMethod")
 }
 
 /// Returns public class constants exposed by a synthetic reflection owner.
@@ -2593,6 +2672,21 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getName")) {
                     sig.return_type = PhpType::Str;
                 }
+            }
+            if let Some(sig) = class_info
+                .methods
+                .get_mut(&php_symbol_key("getDocComment"))
+            {
+                sig.return_type = PhpType::Union(vec![PhpType::Str, PhpType::Bool]);
+            }
+            if let Some(sig) = class_info
+                .methods
+                .get_mut(&php_symbol_key("getExtensionName"))
+            {
+                sig.return_type = PhpType::Union(vec![PhpType::Str, PhpType::Bool]);
+            }
+            if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getExtension")) {
+                sig.return_type = PhpType::Mixed;
             }
             if class_name == "ReflectionClass" {
                 for method_name in [

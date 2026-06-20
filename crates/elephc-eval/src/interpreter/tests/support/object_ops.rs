@@ -136,6 +136,10 @@ impl FakeOps {
             (FakeValue::Object(properties), "getname") if args.is_empty() => {
                 Self::object_property(&properties, "__name").map_or_else(|| self.string(""), Ok)
             }
+            (FakeValue::Object(_), "getdoccomment" | "getextensionname") if args.is_empty() => {
+                self.bool_value(false)
+            }
+            (FakeValue::Object(_), "getextension") if args.is_empty() => self.null(),
             (FakeValue::Object(properties), "getshortname") if args.is_empty() => {
                 Self::object_property(&properties, "__short_name")
                     .map_or_else(|| self.string(""), Ok)

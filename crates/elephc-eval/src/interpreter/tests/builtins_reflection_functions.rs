@@ -87,6 +87,27 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionFunction origin metadata APIs report eval user-defined defaults.
+#[test]
+fn execute_program_reflection_function_reports_origin_metadata_defaults() {
+    let program = parse_fragment(
+        br#"function eval_reflect_origin_defaults() {}
+$ref = new ReflectionFunction("eval_reflect_origin_defaults");
+echo ($ref->getDocComment() === false) ? "D" : "d"; echo ":";
+echo ($ref->getExtensionName() === false) ? "E" : "e"; echo ":";
+echo ($ref->getExtension() === null) ? "X" : "x";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "D:E:X");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval-declared functions bind named, default, by-reference, and variadic arguments.
 #[test]
 fn execute_program_calls_eval_function_with_rich_argument_binding() {

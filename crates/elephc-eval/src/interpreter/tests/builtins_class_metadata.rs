@@ -202,6 +202,46 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies reflection owner origin metadata APIs report eval user-defined defaults.
+#[test]
+fn execute_program_reflection_owners_report_origin_metadata_defaults() {
+    let program = parse_fragment(
+        br#"class EvalReflectOriginTarget {
+    public $id;
+    public const ANSWER = 42;
+    public function run() {}
+}
+enum EvalReflectOriginCase: string {
+    case Ready = "ready";
+}
+$class = new ReflectionClass("EvalReflectOriginTarget");
+$method = new ReflectionMethod("EvalReflectOriginTarget", "run");
+$property = new ReflectionProperty("EvalReflectOriginTarget", "id");
+$constant = new ReflectionClassConstant("EvalReflectOriginTarget", "ANSWER");
+$unit = new ReflectionEnumUnitCase("EvalReflectOriginCase", "Ready");
+$backed = new ReflectionEnumBackedCase("EvalReflectOriginCase", "Ready");
+echo ($class->getDocComment() === false) ? "C" : "c"; echo ":";
+echo ($method->getDocComment() === false) ? "M" : "m"; echo ":";
+echo ($property->getDocComment() === false) ? "P" : "p"; echo ":";
+echo ($constant->getDocComment() === false) ? "K" : "k"; echo ":";
+echo ($unit->getDocComment() === false) ? "U" : "u"; echo ":";
+echo ($backed->getDocComment() === false) ? "B" : "b"; echo ":";
+echo ($class->getExtensionName() === false) ? "E" : "e"; echo ":";
+echo ($method->getExtensionName() === false) ? "N" : "n"; echo ":";
+echo ($class->getExtension() === null) ? "X" : "x"; echo ":";
+echo ($method->getExtension() === null) ? "Y" : "y";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "C:M:P:K:U:B:E:N:X:Y");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass exposes eval class namespace-derived name parts.
 #[test]
 fn execute_program_reflects_eval_class_name_parts() {

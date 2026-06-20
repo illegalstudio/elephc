@@ -178,7 +178,13 @@ child methods and public access see the child property.
 expose eval-retained class, method, property, and method-parameter attributes
 for eval-declared class-like symbols when their arguments fit the same literal
 subset, and `getName()` returns the reflected class, member, or parameter name
-for those owners. `ReflectionClass::getShortName()`,
+for those owners. `ReflectionClass`, `ReflectionFunction`, `ReflectionMethod`,
+`ReflectionProperty`, `ReflectionClassConstant`, `ReflectionEnumUnitCase`, and
+`ReflectionEnumBackedCase` expose `getDocComment()` and report `false` because
+eval does not retain docblock text. `ReflectionClass`, `ReflectionFunction`,
+and `ReflectionMethod` expose `getExtensionName()` and `getExtension()` and
+report `false` / `null` for eval-declared user symbols.
+`ReflectionClass::getShortName()`,
 `ReflectionClass::getNamespaceName()`, and `ReflectionClass::inNamespace()`
 derive namespace-aware parts from the resolved eval class-like name.
 `ReflectionClass::isFinal()`, `ReflectionClass::isAbstract()`,
