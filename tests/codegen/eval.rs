@@ -7447,6 +7447,41 @@ foreach ($params as $param) {
     );
 }
 
+/// Verifies eval ReflectionMethod exposes eval-declared return type metadata.
+#[test]
+fn test_eval_reflection_method_reports_return_type_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalReflectReturnIface {
+    public function read(): string;
+}
+class EvalReflectReturnTarget implements EvalReflectReturnIface {
+    public function read(): string { return "ok"; }
+    public function selfReturn(): static { return $this; }
+    public function done(): void {}
+}
+$iface = new ReflectionMethod("EvalReflectReturnIface", "read");
+$ifaceType = $iface->getReturnType();
+echo ($iface->hasReturnType() ? "I" : "i") . ":";
+echo $ifaceType->getName() . ":";
+echo ($ifaceType->isBuiltin() ? "B" : "b") . ":";
+$self = (new ReflectionMethod("EvalReflectReturnTarget", "selfReturn"))->getReturnType();
+echo $self->getName() . ":";
+echo ($self->isBuiltin() ? "B" : "b") . ":";
+$void = (new ReflectionMethod("EvalReflectReturnTarget", "done"))->getReturnType();
+echo $void->getName() . ":";
+echo ($void->allowsNull() ? "N" : "n") . ":";
+echo $void->isBuiltin() ? "B" : "b";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "I:string:B:static:b:void:n:B");
+}
+
 /// Verifies eval ReflectionProperty materializes property type metadata through the bridge.
 #[test]
 fn test_eval_reflection_property_get_type_metadata() {
@@ -7790,6 +7825,45 @@ echo $params[2]->isPassedByReference() ? "R" : "r";');
         out.stdout,
         "1:EvalFuncAttr:free:3:1:T:string:1:first:O:3:V:R"
     );
+}
+
+/// Verifies eval ReflectionFunction exposes eval-declared return type metadata.
+#[test]
+fn test_eval_reflection_function_reports_return_type_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('function eval_reflect_return_named(): ?int { return 1; }
+function eval_reflect_return_union(): int|string { return 1; }
+function eval_reflect_return_never(): never { throw new Exception("stop"); }
+function eval_reflect_return_plain() {}
+$namedRef = new ReflectionFunction("eval_reflect_return_named");
+$named = $namedRef->getReturnType();
+echo ($namedRef->hasReturnType() ? "T" : "t") . ":";
+echo $named->getName() . ":";
+echo ($named->allowsNull() ? "N" : "n") . ":";
+echo ($named->isBuiltin() ? "B" : "b") . ":";
+$union = (new ReflectionFunction("eval_reflect_return_union"))->getReturnType();
+echo count($union->getTypes()) . ":";
+foreach ($union->getTypes() as $type) {
+    echo $type->getName();
+    echo $type->isBuiltin() ? "B" : "b";
+}
+echo ":";
+$never = (new ReflectionFunction("eval_reflect_return_never"))->getReturnType();
+echo $never->getName() . ":";
+echo ($never->allowsNull() ? "N" : "n") . ":";
+echo ($never->isBuiltin() ? "B" : "b") . ":";
+$plain = new ReflectionFunction("eval_reflect_return_plain");
+echo ($plain->hasReturnType() ? "P" : "p") . ":";
+echo $plain->getReturnType() === null ? "Q" : "q";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "T:int:N:B:2:intBstringB:never:n:B:p:Q");
 }
 
 /// Verifies eval Reflection origin metadata APIs are present on supported owners.

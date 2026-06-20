@@ -68,6 +68,7 @@ struct EvalReflectionMemberMetadata {
     is_promoted: bool,
     modifiers: u64,
     type_metadata: Option<EvalReflectionParameterTypeMetadata>,
+    return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     default_value: Option<EvalExpr>,
     required_parameter_count: usize,
     parameters: Vec<EvalReflectionParameterMetadata>,
@@ -100,11 +101,13 @@ struct EvalReflectionDeclaringFunctionMetadata {
 }
 
 /// Eval metadata needed to materialize one parameter `ReflectionType` object.
+#[derive(Clone)]
 struct EvalReflectionParameterTypeMetadata {
     kind: EvalReflectionParameterTypeKind,
 }
 
 /// Eval reflection parameter type object variants.
+#[derive(Clone)]
 enum EvalReflectionParameterTypeKind {
     Named(EvalReflectionNamedTypeMetadata),
     Union(EvalReflectionUnionTypeMetadata),
@@ -112,6 +115,7 @@ enum EvalReflectionParameterTypeKind {
 }
 
 /// Eval metadata needed to materialize one `ReflectionNamedType` object.
+#[derive(Clone)]
 struct EvalReflectionNamedTypeMetadata {
     name: String,
     allows_null: bool,
@@ -120,17 +124,27 @@ struct EvalReflectionNamedTypeMetadata {
 
 /// Registered ReflectionFunctionAbstract target metadata for simple method dispatch.
 enum EvalReflectionFunctionMethodTarget {
-    Function { name: String, is_variadic: bool },
-    Method { name: String, is_variadic: bool },
+    Function {
+        name: String,
+        is_variadic: bool,
+        return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
+    },
+    Method {
+        name: String,
+        is_variadic: bool,
+        return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
+    },
 }
 
 /// Eval metadata needed to materialize one `ReflectionUnionType` object.
+#[derive(Clone)]
 struct EvalReflectionUnionTypeMetadata {
     types: Vec<EvalReflectionNamedTypeMetadata>,
     allows_null: bool,
 }
 
 /// Eval metadata needed to materialize one `ReflectionIntersectionType` object.
+#[derive(Clone)]
 struct EvalReflectionIntersectionTypeMetadata {
     types: Vec<EvalReflectionNamedTypeMetadata>,
 }
@@ -694,9 +708,17 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
                 .bool_value(!eval_reflection_function_method_namespace_name(&target).is_empty())
                 .map(Some)
         }
-        "isinternal" | "isclosure" | "isdeprecated" | "returnsreference" | "hasreturntype"
-        | "isgenerator" | "hastentativereturntype" => {
-            eval_reflection_false_metadata_result(evaluated_args, values)
+        "isinternal"
+        | "isclosure"
+        | "isdeprecated"
+        | "returnsreference"
+        | "isgenerator"
+        | "hastentativereturntype" => eval_reflection_false_metadata_result(evaluated_args, values),
+        "hasreturntype" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values
+                .bool_value(eval_reflection_function_method_return_type(&target).is_some())
+                .map(Some)
         }
         "isuserdefined" => {
             eval_reflection_bind_no_args(evaluated_args)?;
@@ -714,7 +736,16 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
             }
             EvalReflectionFunctionMethodTarget::Method { .. } => Ok(None),
         },
-        "getreturntype" | "gettentativereturntype" => {
+        "getreturntype" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            match eval_reflection_function_method_return_type(&target) {
+                Some(type_metadata) => {
+                    eval_reflection_type_object_result(type_metadata, values).map(Some)
+                }
+                None => values.null().map(Some),
+            }
+        }
+        "gettentativereturntype" => {
             eval_reflection_bind_no_args(evaluated_args)?;
             values.null().map(Some)
         }
@@ -735,9 +766,12 @@ pub(in crate::interpreter) fn eval_reflection_method_prototype_result(
     if !is_has_prototype && !is_get_prototype {
         return Ok(None);
     }
-    let Some((declaring_class, reflected_method)) = context
-        .eval_reflection_method(identity)
-        .map(|(declaring_class, method_name)| (declaring_class.to_string(), method_name.to_string()))
+    let Some((declaring_class, reflected_method)) =
+        context
+            .eval_reflection_method(identity)
+            .map(|(declaring_class, method_name)| {
+                (declaring_class.to_string(), method_name.to_string())
+            })
     else {
         return Ok(None);
     };
@@ -1517,6 +1551,7 @@ fn eval_reflection_aot_method_metadata(
         is_promoted: false,
         modifiers: eval_reflection_method_modifiers_from_flags(flags),
         type_metadata: None,
+        return_type_metadata: None,
         default_value: None,
         required_parameter_count: 0,
         parameters: Vec::new(),
@@ -1573,6 +1608,7 @@ fn eval_reflection_aot_property_metadata(
             false,
         ),
         type_metadata: None,
+        return_type_metadata: None,
         default_value: None,
         required_parameter_count: 0,
         parameters: Vec::new(),
@@ -3044,6 +3080,9 @@ fn eval_reflection_method_metadata(
                     method.is_abstract(),
                     false,
                 );
+                let return_type_metadata = method
+                    .return_type()
+                    .and_then(eval_reflection_parameter_type_metadata);
                 let declaring_function = EvalReflectionDeclaringFunctionMetadata {
                     name: method.name().to_string(),
                     declaring_class_name: Some(declaring_class.clone()),
@@ -3084,6 +3123,7 @@ fn eval_reflection_method_metadata(
                         method.is_abstract(),
                     ),
                     type_metadata: None,
+                    return_type_metadata,
                     default_value: None,
                     required_parameter_count,
                     parameters,
@@ -3107,6 +3147,9 @@ fn eval_reflection_method_metadata(
                     true,
                     false,
                 );
+                let return_type_metadata = method
+                    .return_type()
+                    .and_then(eval_reflection_parameter_type_metadata);
                 let declaring_function = EvalReflectionDeclaringFunctionMetadata {
                     name: method.name().to_string(),
                     declaring_class_name: Some(class_name.to_string()),
@@ -3142,6 +3185,7 @@ fn eval_reflection_method_metadata(
                         true,
                     ),
                     type_metadata: None,
+                    return_type_metadata,
                     default_value: None,
                     required_parameter_count,
                     parameters,
@@ -3165,6 +3209,9 @@ fn eval_reflection_method_metadata(
                     method.is_abstract(),
                     false,
                 );
+                let return_type_metadata = method
+                    .return_type()
+                    .and_then(eval_reflection_parameter_type_metadata);
                 let declaring_function = EvalReflectionDeclaringFunctionMetadata {
                     name: method.name().to_string(),
                     declaring_class_name: Some(trait_decl.name().to_string()),
@@ -3202,6 +3249,7 @@ fn eval_reflection_method_metadata(
                         method.is_abstract(),
                     ),
                     type_metadata: None,
+                    return_type_metadata,
                     default_value: None,
                     required_parameter_count,
                     parameters,
@@ -3240,6 +3288,7 @@ fn eval_reflection_property_metadata(
                     type_metadata: property
                         .property_type()
                         .and_then(eval_reflection_parameter_type_metadata),
+                    return_type_metadata: None,
                     default_value,
                     required_parameter_count: 0,
                     parameters: Vec::new(),
@@ -3272,6 +3321,7 @@ fn eval_reflection_property_metadata(
                 type_metadata: property
                     .property_type()
                     .and_then(eval_reflection_parameter_type_metadata),
+                return_type_metadata: None,
                 default_value: None,
                 required_parameter_count: 0,
                 parameters: Vec::new(),
@@ -3304,6 +3354,7 @@ fn eval_reflection_property_metadata(
                     type_metadata: property
                         .property_type()
                         .and_then(eval_reflection_parameter_type_metadata),
+                    return_type_metadata: None,
                     default_value,
                     required_parameter_count: 0,
                     parameters: Vec::new(),
@@ -4016,12 +4067,14 @@ fn eval_reflection_named_type_variant_metadata(
             Some(eval_reflection_builtin_named_type("iterable", allows_null))
         }
         EvalParameterTypeVariant::Mixed => Some(eval_reflection_builtin_named_type("mixed", true)),
+        EvalParameterTypeVariant::Never => Some(eval_reflection_builtin_named_type("never", false)),
         EvalParameterTypeVariant::Object => {
             Some(eval_reflection_builtin_named_type("object", allows_null))
         }
         EvalParameterTypeVariant::String => {
             Some(eval_reflection_builtin_named_type("string", allows_null))
         }
+        EvalParameterTypeVariant::Void => Some(eval_reflection_builtin_named_type("void", false)),
     }
 }
 
@@ -4043,27 +4096,35 @@ fn eval_reflection_function_method_target(
     context: &ElephcEvalContext,
 ) -> Option<EvalReflectionFunctionMethodTarget> {
     if let Some(name) = context.eval_reflection_function_name(identity) {
-        let is_variadic = context
-            .function(&name.to_ascii_lowercase())
+        let function = context.function(&name.to_ascii_lowercase());
+        let is_variadic = function
             .is_some_and(|function| function.parameter_is_variadic().iter().any(|flag| *flag));
+        let return_type_metadata = function
+            .and_then(EvalFunction::return_type)
+            .and_then(eval_reflection_parameter_type_metadata);
         return Some(EvalReflectionFunctionMethodTarget::Function {
             name: name.to_string(),
             is_variadic,
+            return_type_metadata,
         });
     }
     context
         .eval_reflection_method(identity)
         .map(|(declaring_class, method_name)| {
-            let is_variadic = eval_reflection_method_metadata(declaring_class, method_name, context)
-                .is_some_and(|method| {
-                    method
-                        .parameters
-                        .iter()
-                        .any(|parameter| parameter.is_variadic)
-                });
+            let method_metadata =
+                eval_reflection_method_metadata(declaring_class, method_name, context);
+            let is_variadic = method_metadata.as_ref().is_some_and(|method| {
+                method
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.is_variadic)
+            });
+            let return_type_metadata =
+                method_metadata.and_then(|method| method.return_type_metadata);
             EvalReflectionFunctionMethodTarget::Method {
                 name: method_name.to_string(),
                 is_variadic,
+                return_type_metadata,
             }
         })
 }
@@ -4117,6 +4178,22 @@ fn eval_reflection_function_method_is_variadic(
     }
 }
 
+/// Returns the retained return type metadata for a reflected function or method.
+fn eval_reflection_function_method_return_type(
+    target: &EvalReflectionFunctionMethodTarget,
+) -> Option<&EvalReflectionParameterTypeMetadata> {
+    match target {
+        EvalReflectionFunctionMethodTarget::Function {
+            return_type_metadata,
+            ..
+        }
+        | EvalReflectionFunctionMethodTarget::Method {
+            return_type_metadata,
+            ..
+        } => return_type_metadata.as_ref(),
+    }
+}
+
 /// Returns the final namespace segment-free name component from a PHP symbol name.
 fn eval_reflection_short_name(name: &str) -> String {
     let name = name.trim_start_matches('\\');
@@ -4144,14 +4221,9 @@ fn eval_reflection_method_prototype_target(
     if !(context.has_class(declaring_class) || context.has_enum(declaring_class)) {
         return None;
     }
-    eval_reflection_parent_method_prototype_target(declaring_class, method_name, context)
-        .or_else(|| {
-            eval_reflection_interface_method_prototype_target(
-                declaring_class,
-                method_name,
-                context,
-            )
-        })
+    eval_reflection_parent_method_prototype_target(declaring_class, method_name, context).or_else(
+        || eval_reflection_interface_method_prototype_target(declaring_class, method_name, context),
+    )
 }
 
 /// Finds the nearest parent-class method prototype for an eval-declared override.

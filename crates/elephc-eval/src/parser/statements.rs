@@ -41,6 +41,13 @@ struct ParsedClassBody {
     trait_adaptations: Vec<EvalTraitAdaptation>,
 }
 
+/// Type-declaration position controls PHP-only atoms such as `void` and `never`.
+#[derive(Clone, Copy)]
+enum EvalTypePosition {
+    Parameter,
+    Return,
+}
+
 impl Parser {
     /// Parses one source statement, expanding `unset($a, $b)` to one statement per variable.
     pub(super) fn parse_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
@@ -844,6 +851,7 @@ impl Parser {
         if !promoted_properties.is_empty() && (is_abstract || is_static) {
             return Err(EvalParseError::UnsupportedConstruct);
         }
+        let return_type = self.parse_optional_return_type()?;
         let body = if is_abstract {
             self.expect_semicolon()?;
             Vec::new()
@@ -869,7 +877,8 @@ impl Parser {
             .with_parameter_attributes(parameter_attributes)
             .with_parameter_defaults(parameter_defaults)
             .with_parameter_by_ref_flags(parameter_is_by_ref)
-            .with_parameter_variadic_flags(parameter_is_variadic),
+            .with_parameter_variadic_flags(parameter_is_variadic)
+            .with_return_type(return_type),
             promoted_properties,
         ))
     }
@@ -1402,6 +1411,7 @@ impl Parser {
         if !promoted_properties.is_empty() || !promoted_assignments.is_empty() {
             return Err(EvalParseError::UnsupportedConstruct);
         }
+        let return_type = self.parse_optional_return_type()?;
         self.expect_semicolon()?;
         Ok(EvalInterfaceMethod::new(name, params)
             .with_static(is_static)
@@ -1409,7 +1419,8 @@ impl Parser {
             .with_parameter_attributes(parameter_attributes)
             .with_parameter_defaults(parameter_defaults)
             .with_parameter_by_ref_flags(parameter_is_by_ref)
-            .with_parameter_variadic_flags(parameter_is_variadic))
+            .with_parameter_variadic_flags(parameter_is_variadic)
+            .with_return_type(return_type))
     }
 
     /// Parses one interface property hook contract.
@@ -1519,6 +1530,7 @@ impl Parser {
         if !promoted_properties.is_empty() || !promoted_assignments.is_empty() {
             return Err(EvalParseError::UnsupportedConstruct);
         }
+        let return_type = self.parse_optional_return_type()?;
         let body = self.parse_block()?;
         Ok(vec![EvalStmt::FunctionDecl {
             name,
@@ -1529,6 +1541,7 @@ impl Parser {
             parameter_defaults,
             parameter_is_by_ref,
             parameter_is_variadic,
+            return_type,
             body,
         }])
     }
@@ -1978,11 +1991,27 @@ impl Parser {
         ) {
             return Ok(None);
         }
+        self.parse_type_decl(EvalTypePosition::Parameter)
+    }
+
+    /// Consumes a supported function or method return type after `:`.
+    fn parse_optional_return_type(&mut self) -> Result<Option<EvalParameterType>, EvalParseError> {
+        if !self.consume(TokenKind::Colon) {
+            return Ok(None);
+        }
+        self.parse_type_decl(EvalTypePosition::Return)
+    }
+
+    /// Parses one PHP type declaration and returns retained eval metadata.
+    fn parse_type_decl(
+        &mut self,
+        position: EvalTypePosition,
+    ) -> Result<Option<EvalParameterType>, EvalParseError> {
         let nullable_shorthand = self.consume(TokenKind::Question);
         if nullable_shorthand && matches!(self.current(), TokenKind::DollarIdent(_)) {
             return Err(EvalParseError::UnexpectedToken);
         }
-        let first = self.parse_parameter_type_name()?;
+        let first = self.parse_type_name(position)?;
         let mut variants = Vec::new();
         let mut allows_null = nullable_shorthand || matches!(first, None);
         if let Some(first) = first {
@@ -2001,18 +2030,26 @@ impl Parser {
             && !self.next_token_starts_parameter_storage()
         {
             while self.consume(TokenKind::Ampersand) {
-                let Some(variant) = self.parse_parameter_type_name()? else {
+                let Some(variant) = self.parse_type_name(position)? else {
                     return Err(EvalParseError::UnsupportedConstruct);
                 };
                 variants.push(variant);
             }
+            if type_variants_contain_standalone_return_only_atoms(&variants) {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
             return Ok(Some(EvalParameterType::intersection(variants)));
         }
         while self.consume(TokenKind::Pipe) {
-            match self.parse_parameter_type_name()? {
+            match self.parse_type_name(position)? {
                 Some(variant) => variants.push(variant),
                 None => allows_null = true,
             }
+        }
+        if type_variants_contain_standalone_return_only_atoms(&variants)
+            && (variants.len() != 1 || allows_null)
+        {
+            return Err(EvalParseError::UnsupportedConstruct);
         }
         Ok(Some(EvalParameterType::new(variants, allows_null)))
     }
@@ -2022,23 +2059,25 @@ impl Parser {
         matches!(self.peek(), TokenKind::DollarIdent(_) | TokenKind::Ellipsis)
     }
 
-    /// Consumes one simple qualified method parameter type name.
-    fn parse_parameter_type_name(
+    /// Consumes one simple qualified method type name.
+    fn parse_type_name(
         &mut self,
+        position: EvalTypePosition,
     ) -> Result<Option<EvalParameterTypeVariant>, EvalParseError> {
         match self.current() {
             TokenKind::Ident(_) | TokenKind::Backslash => {
                 let name = self.parse_qualified_name()?;
-                self.parameter_type_from_name(name)
+                self.type_variant_from_name(name, position)
             }
             _ => Err(EvalParseError::UnexpectedToken),
         }
     }
 
-    /// Converts one parsed PHP parameter type name to retained eval metadata.
-    fn parameter_type_from_name(
+    /// Converts one parsed PHP type name to retained eval metadata.
+    fn type_variant_from_name(
         &self,
         name: ParsedQualifiedName,
+        position: EvalTypePosition,
     ) -> Result<Option<EvalParameterTypeVariant>, EvalParseError> {
         if !name.absolute {
             let lower = name.name.to_ascii_lowercase();
@@ -2050,9 +2089,15 @@ impl Parser {
                 "int" => Some(EvalParameterTypeVariant::Int),
                 "iterable" => Some(EvalParameterTypeVariant::Iterable),
                 "mixed" => Some(EvalParameterTypeVariant::Mixed),
+                "never" if matches!(position, EvalTypePosition::Return) => {
+                    Some(EvalParameterTypeVariant::Never)
+                }
                 "null" => return Ok(None),
                 "object" => Some(EvalParameterTypeVariant::Object),
                 "string" => Some(EvalParameterTypeVariant::String),
+                "void" if matches!(position, EvalTypePosition::Return) => {
+                    Some(EvalParameterTypeVariant::Void)
+                }
                 "void" | "never" => return Err(EvalParseError::UnsupportedConstruct),
                 "self" | "parent" | "static" => {
                     Some(EvalParameterTypeVariant::Class(lower.to_string()))
@@ -2488,6 +2533,18 @@ fn eval_array_element_default_is_supported(element: &EvalArrayElement) -> bool {
                 && eval_constant_expression_default_is_supported(value)
         }
     }
+}
+
+/// Returns whether a type list contains return-only standalone atoms.
+fn type_variants_contain_standalone_return_only_atoms(
+    variants: &[EvalParameterTypeVariant],
+) -> bool {
+    variants.iter().any(|variant| {
+        matches!(
+            variant,
+            EvalParameterTypeVariant::Never | EvalParameterTypeVariant::Void
+        )
+    })
 }
 
 /// Returns whether a class-like receiver is legal in a compile-time method default.

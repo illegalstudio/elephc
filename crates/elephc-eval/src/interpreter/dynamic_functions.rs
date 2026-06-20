@@ -576,6 +576,7 @@ fn eval_method_parameter_variant_accepts_exact(
             eval_method_parameter_class_accepts(value, tag, "Iterator", context, values)
         }
         EvalParameterTypeVariant::Mixed => Ok(true),
+        EvalParameterTypeVariant::Never | EvalParameterTypeVariant::Void => Ok(false),
         EvalParameterTypeVariant::Object => Ok(tag == EVAL_TAG_OBJECT),
         EvalParameterTypeVariant::String => Ok(tag == EVAL_TAG_STRING),
     }

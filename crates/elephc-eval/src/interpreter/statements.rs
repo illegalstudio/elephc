@@ -146,6 +146,7 @@ pub(in crate::interpreter) fn execute_stmt(
             parameter_defaults,
             parameter_is_by_ref,
             parameter_is_variadic,
+            return_type,
             body,
         } => {
             let key = name.to_ascii_lowercase();
@@ -158,7 +159,8 @@ pub(in crate::interpreter) fn execute_stmt(
                         .with_parameter_types(parameter_types.clone())
                         .with_parameter_defaults(parameter_defaults.clone())
                         .with_parameter_by_ref_flags(parameter_is_by_ref.clone())
-                        .with_parameter_variadic_flags(parameter_is_variadic.clone()),
+                        .with_parameter_variadic_flags(parameter_is_variadic.clone())
+                        .with_return_type(return_type.clone()),
                 )
                 .map_err(|_| EvalStatus::RuntimeFatal)?;
             Ok(EvalControl::None)

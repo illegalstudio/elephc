@@ -195,8 +195,11 @@ while `ReflectionMethod::getNamespaceName()` reports an empty string and
 `inNamespace()` reports `false`, matching PHP's method reflection behavior.
 `ReflectionFunction` and `ReflectionMethod` report eval user-symbol defaults
 through `isInternal()`, `isUserDefined()`, `isClosure()`, `isDeprecated()`,
-`returnsReference()`, `hasReturnType()`, `getReturnType()`, `isGenerator()`,
-`isVariadic()`, `hasTentativeReturnType()`, and `getTentativeReturnType()`.
+`returnsReference()`, `isGenerator()`, `isVariadic()`,
+`hasTentativeReturnType()`, and `getTentativeReturnType()`. `hasReturnType()`
+and `getReturnType()` expose retained eval return type metadata for supported
+named, nullable, union, and intersection declarations, including `void` and
+`never` as builtin non-nullable named types.
 `ReflectionFunction::isDisabled()` reports `false` for eval-visible functions.
 `ReflectionClass::isFinal()`, `ReflectionClass::isAbstract()`,
 `ReflectionClass::isInterface()`, `ReflectionClass::isTrait()`, and
@@ -292,7 +295,7 @@ reflected method is `__construct` or `__destruct`.
 `ReflectionMethod::getParameters()`, `getNumberOfParameters()`, and
 `getNumberOfRequiredParameters()` report retained eval-declared function and
 method metadata. Eval-declared functions and methods expose declared-type
-presence, simple named type metadata through
+presence for parameters and return types, simple named type metadata through
 `ReflectionParameter::getType()` / `ReflectionNamedType::getName()`,
 `allowsNull()`, and `isBuiltin()`, and multi-member union metadata through
 `ReflectionUnionType::getTypes()` and `allowsNull()`. Intersection parameter
@@ -527,7 +530,8 @@ broader parameter/return ABI shapes are still outside that bridge.
 Eval class support is still smaller than the full static class system. The main
 remaining class-system gaps are broader reflection APIs beyond the supported
 ReflectionClass/Function/Method/Parameter/Property/NamedType/UnionType/IntersectionType
-and attribute slice, Reflection type APIs beyond parameter/property metadata, broader
+and attribute slice, Reflection type APIs beyond retained parameter, property,
+and function/method return metadata, broader
 parameter default-value objects beyond the eval-supported
 constant-expression subset, and broader generated/AOT method bridge signatures beyond the current public
 non-by-reference fixed scalar/Mixed slice. Eval object cloning currently covers

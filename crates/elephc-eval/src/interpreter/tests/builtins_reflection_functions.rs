@@ -87,6 +87,46 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionFunction exposes eval-declared return type metadata.
+#[test]
+fn execute_program_reflection_function_reports_return_type_metadata() {
+    let program = parse_fragment(
+        br#"function eval_reflect_return_named(): ?int { return 1; }
+function eval_reflect_return_union(): int|string { return 1; }
+function eval_reflect_return_never(): never { throw new Exception("stop"); }
+function eval_reflect_return_plain() {}
+$namedRef = new ReflectionFunction("eval_reflect_return_named");
+$named = $namedRef->getReturnType();
+echo $namedRef->hasReturnType() ? "T" : "t"; echo ":";
+echo $named->getName(); echo ":";
+echo $named->allowsNull() ? "N" : "n"; echo ":";
+echo $named->isBuiltin() ? "B" : "b"; echo ":";
+$union = (new ReflectionFunction("eval_reflect_return_union"))->getReturnType();
+echo count($union->getTypes()); echo ":";
+foreach ($union->getTypes() as $type) {
+    echo $type->getName();
+    echo $type->isBuiltin() ? "B" : "b";
+}
+echo ":";
+$never = (new ReflectionFunction("eval_reflect_return_never"))->getReturnType();
+echo $never->getName(); echo ":";
+echo $never->allowsNull() ? "N" : "n"; echo ":";
+echo $never->isBuiltin() ? "B" : "b"; echo ":";
+$plain = new ReflectionFunction("eval_reflect_return_plain");
+echo $plain->hasReturnType() ? "P" : "p"; echo ":";
+echo $plain->getReturnType() === null ? "Q" : "q";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "T:int:N:B:2:intBstringB:never:n:B:p:Q");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionFunction origin metadata APIs report eval user-defined defaults.
 #[test]
 fn execute_program_reflection_function_reports_origin_metadata_defaults() {

@@ -41,6 +41,81 @@ fn parse_fragment_accepts_class_extends_and_implements_source() {
     );
 }
 
+/// Verifies function, interface, and class method return types are retained.
+#[test]
+fn parse_fragment_accepts_return_type_metadata() {
+    let program = parse_fragment(
+        br#"function DynEvalReturn(): ?int { return 1; }
+interface DynEvalReturnIface {
+    public function read(): string;
+}
+class DynEvalReturnClass {
+    public function selfReturn(): static { return $this; }
+    public function done(): void {}
+}"#,
+    )
+    .expect("fragment should parse");
+    let statements = program.statements();
+    let EvalStmt::FunctionDecl {
+        return_type: Some(function_return_type),
+        ..
+    } = &statements[0]
+    else {
+        panic!("expected function declaration with return type");
+    };
+    assert_eq!(
+        function_return_type.variants(),
+        &[EvalParameterTypeVariant::Int]
+    );
+    assert!(function_return_type.allows_null());
+
+    let EvalStmt::InterfaceDecl(interface) = &statements[1] else {
+        panic!("expected interface declaration");
+    };
+    let interface_return_type = interface.methods()[0]
+        .return_type()
+        .expect("interface method return type");
+    assert_eq!(
+        interface_return_type.variants(),
+        &[EvalParameterTypeVariant::String]
+    );
+
+    let EvalStmt::ClassDecl(class) = &statements[2] else {
+        panic!("expected class declaration");
+    };
+    let self_return_type = class.methods()[0]
+        .return_type()
+        .expect("class method return type");
+    assert_eq!(
+        self_return_type.variants(),
+        &[EvalParameterTypeVariant::Class("static".to_string())]
+    );
+    let void_return_type = class.methods()[1]
+        .return_type()
+        .expect("void method return type");
+    assert_eq!(
+        void_return_type.variants(),
+        &[EvalParameterTypeVariant::Void]
+    );
+}
+
+/// Verifies return-only type atoms reject nullable, union, and intersection forms.
+#[test]
+fn parse_fragment_rejects_invalid_void_and_never_return_type_forms() {
+    for source in [
+        b"function DynEvalBadVoid(): ?void {}" as &[u8],
+        b"function DynEvalBadVoidUnion(): void|null {}",
+        b"function DynEvalBadNeverUnion(): never|int {}",
+        b"function DynEvalBadNeverIntersection(): never&Countable {}",
+        b"function DynEvalBadVoidParam(void $value) {}",
+    ] {
+        assert_eq!(
+            parse_fragment(source),
+            Err(EvalParseError::UnsupportedConstruct)
+        );
+    }
+}
+
 /// Verifies class attributes lower to eval class metadata with supported literal args.
 #[test]
 fn parse_fragment_accepts_class_attribute_metadata() {

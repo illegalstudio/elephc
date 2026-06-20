@@ -87,6 +87,7 @@ pub enum EvalStmt {
         parameter_defaults: Vec<Option<EvalExpr>>,
         parameter_is_by_ref: Vec<bool>,
         parameter_is_variadic: Vec<bool>,
+        return_type: Option<EvalParameterType>,
         body: Vec<EvalStmt>,
     },
     Global {
@@ -168,6 +169,7 @@ pub struct EvalFunction {
     parameter_defaults: Vec<Option<EvalExpr>>,
     parameter_is_by_ref: Vec<bool>,
     parameter_is_variadic: Vec<bool>,
+    return_type: Option<EvalParameterType>,
     body: Vec<EvalStmt>,
 }
 
@@ -188,6 +190,7 @@ impl EvalFunction {
             parameter_defaults,
             parameter_is_by_ref,
             parameter_is_variadic,
+            return_type: None,
             body,
         }
     }
@@ -231,6 +234,12 @@ impl EvalFunction {
         self
     }
 
+    /// Returns a copy of this function with retained return type metadata.
+    pub fn with_return_type(mut self, return_type: Option<EvalParameterType>) -> Self {
+        self.return_type = return_type;
+        self
+    }
+
     /// Returns the original source spelling of this eval-declared function name.
     pub fn name(&self) -> &str {
         &self.name
@@ -271,6 +280,11 @@ impl EvalFunction {
         &self.parameter_is_variadic
     }
 
+    /// Returns retained return type metadata, if the function declared one.
+    pub const fn return_type(&self) -> Option<&EvalParameterType> {
+        self.return_type.as_ref()
+    }
+
     /// Returns the dynamic EvalIR statements that form the function body.
     pub fn body(&self) -> &[EvalStmt] {
         &self.body
@@ -288,8 +302,10 @@ pub enum EvalParameterTypeVariant {
     Int,
     Iterable,
     Mixed,
+    Never,
     Object,
     String,
+    Void,
 }
 
 /// How multiple eval parameter type atoms combine.
@@ -717,6 +733,7 @@ pub struct EvalInterfaceMethod {
     parameter_defaults: Vec<Option<EvalExpr>>,
     parameter_is_by_ref: Vec<bool>,
     parameter_is_variadic: Vec<bool>,
+    return_type: Option<EvalParameterType>,
 }
 
 impl EvalInterfaceMethod {
@@ -739,6 +756,7 @@ impl EvalInterfaceMethod {
             parameter_defaults,
             parameter_is_by_ref,
             parameter_is_variadic,
+            return_type: None,
         }
     }
 
@@ -794,6 +812,12 @@ impl EvalInterfaceMethod {
         self
     }
 
+    /// Returns a copy of this interface method with retained return type metadata.
+    pub fn with_return_type(mut self, return_type: Option<EvalParameterType>) -> Self {
+        self.return_type = return_type;
+        self
+    }
+
     /// Returns the PHP-visible method name.
     pub fn name(&self) -> &str {
         &self.name
@@ -842,6 +866,11 @@ impl EvalInterfaceMethod {
     /// Returns source-order flags for whether each parameter was declared variadic.
     pub fn parameter_is_variadic(&self) -> &[bool] {
         &self.parameter_is_variadic
+    }
+
+    /// Returns retained return type metadata, if the method declared one.
+    pub const fn return_type(&self) -> Option<&EvalParameterType> {
+        self.return_type.as_ref()
     }
 }
 
@@ -1582,6 +1611,7 @@ pub struct EvalClassMethod {
     parameter_defaults: Vec<Option<EvalExpr>>,
     parameter_is_by_ref: Vec<bool>,
     parameter_is_variadic: Vec<bool>,
+    return_type: Option<EvalParameterType>,
     body: Vec<EvalStmt>,
 }
 
@@ -1640,6 +1670,7 @@ impl EvalClassMethod {
             parameter_defaults,
             parameter_is_by_ref,
             parameter_is_variadic,
+            return_type: None,
             body,
         }
     }
@@ -1692,6 +1723,12 @@ impl EvalClassMethod {
     /// Returns a copy of this method with source-order variadic flags.
     pub fn with_parameter_variadic_flags(mut self, parameter_is_variadic: Vec<bool>) -> Self {
         self.parameter_is_variadic = parameter_is_variadic;
+        self
+    }
+
+    /// Returns a copy of this method with retained return type metadata.
+    pub fn with_return_type(mut self, return_type: Option<EvalParameterType>) -> Self {
+        self.return_type = return_type;
         self
     }
 
@@ -1767,6 +1804,11 @@ impl EvalClassMethod {
     /// Returns source-order flags for whether each parameter was declared variadic.
     pub fn parameter_is_variadic(&self) -> &[bool] {
         &self.parameter_is_variadic
+    }
+
+    /// Returns retained return type metadata, if the method declared one.
+    pub const fn return_type(&self) -> Option<&EvalParameterType> {
+        self.return_type.as_ref()
     }
 
     /// Returns the dynamic EvalIR statements that form the method body.

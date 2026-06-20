@@ -25,6 +25,7 @@ fn parse_fragment_accepts_function_declaration_source() {
             parameter_defaults: vec![None],
             parameter_is_by_ref: vec![false],
             parameter_is_variadic: vec![false],
+            return_type: None,
             body: vec![EvalStmt::Return(Some(EvalExpr::Binary {
                 op: EvalBinOp::Add,
                 left: Box::new(EvalExpr::LoadVar("x".to_string())),
@@ -54,6 +55,7 @@ return dyn();"#,
                 parameter_defaults: Vec::new(),
                 parameter_is_by_ref: Vec::new(),
                 parameter_is_variadic: Vec::new(),
+                return_type: None,
                 body: vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::String(
                     "Eval\\Ns".to_string()
                 ))))],
@@ -245,6 +247,7 @@ function dyn() { return alias(); }"#,
             parameter_defaults: Vec::new(),
             parameter_is_by_ref: Vec::new(),
             parameter_is_variadic: Vec::new(),
+            return_type: None,
             body: vec![EvalStmt::Return(Some(EvalExpr::Call {
                 name: "lib\\target".to_string(),
                 args: Vec::new(),

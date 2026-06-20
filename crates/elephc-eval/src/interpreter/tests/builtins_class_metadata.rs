@@ -1459,6 +1459,42 @@ return true;"##,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod exposes eval-declared return type metadata.
+#[test]
+fn execute_program_reflection_method_reports_return_type_metadata() {
+    let program = parse_fragment(
+        br#"interface EvalReflectReturnIface {
+    public function read(): string;
+}
+class EvalReflectReturnTarget implements EvalReflectReturnIface {
+    public function read(): string { return "ok"; }
+    public function selfReturn(): static { return $this; }
+    public function done(): void {}
+}
+$iface = new ReflectionMethod("EvalReflectReturnIface", "read");
+$ifaceType = $iface->getReturnType();
+echo $iface->hasReturnType() ? "I" : "i"; echo ":";
+echo $ifaceType->getName(); echo ":";
+echo $ifaceType->isBuiltin() ? "B" : "b"; echo ":";
+$self = (new ReflectionMethod("EvalReflectReturnTarget", "selfReturn"))->getReturnType();
+echo $self->getName(); echo ":";
+echo $self->isBuiltin() ? "B" : "b"; echo ":";
+$void = (new ReflectionMethod("EvalReflectReturnTarget", "done"))->getReturnType();
+echo $void->getName(); echo ":";
+echo $void->allowsNull() ? "N" : "n"; echo ":";
+echo $void->isBuiltin() ? "B" : "b";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "I:string:B:static:b:void:n:B");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionParameter reports eval constructor-promotion metadata.
 #[test]
 fn execute_program_reflection_parameter_reports_eval_promoted_metadata() {
