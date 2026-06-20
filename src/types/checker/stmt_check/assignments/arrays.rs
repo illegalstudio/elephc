@@ -277,7 +277,10 @@ pub(super) fn check_ref_assign_target(
         .get(source)
         .cloned()
         .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", source)))?;
-    if !matches!(source_ty, PhpType::Int | PhpType::Bool) {
+    if !matches!(
+        source_ty,
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Mixed
+    ) {
         return Err(unsupported());
     }
     match &array.kind {

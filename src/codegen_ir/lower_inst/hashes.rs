@@ -162,18 +162,32 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     Ok(())
 }
 
-/// Returns the REFCELL inner value tag for a scalar source/value, rejecting unsupported shapes.
+/// Returns the REFCELL inner value tag for a reference source/value, rejecting unsupported shapes.
 ///
-/// M2 only supports plain scalar (int/bool) reference sources; richer payloads (strings, floats,
-/// arrays, objects) are gated in the type checker and lowered in a later milestone.
+/// Supports the inline scalars (int/bool/float) plus `Mixed` (a boxed-Mixed pointer carried in the
+/// `value_lo` word, runtime tag 7). String/array/object reference sources stay gated in the type
+/// checker and are lowered in a later milestone.
 fn scalar_refcell_tag(ty: &PhpType, role: &str) -> Result<i64> {
     match ty {
-        PhpType::Int | PhpType::Bool => Ok(crate::codegen::runtime_value_tag(ty) as i64),
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Mixed => {
+            Ok(crate::codegen::runtime_value_tag(ty) as i64)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "reference assignment into an array element with a {:?} {} is not yet supported",
             other, role
         ))),
     }
+}
+
+/// Returns whether a REFCELL source of `ty` is a boxed Mixed that must be unboxed before it is
+/// stored into a reference cell.
+///
+/// A `Mixed` local holds a boxed-Mixed pointer, but a reference cell stores the *unboxed* value
+/// triple (so reads reconstruct the value directly). The promotion unboxes the source, allocates the
+/// cell from the unboxed triple, and frees the original box (a move that balances the cell's retain
+/// of any heap inner). Inline scalars are stored directly.
+fn refcell_source_is_boxed_mixed(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Mixed)
 }
 
 /// Lowers `$hash[$key] =& $source` for an associative-array target with a scalar local source.
@@ -255,10 +269,25 @@ fn promote_source_to_boxed_refcell_aarch64(
     let ty = ctx.local_php_type(slot)?.codegen_repr();
     let tag = scalar_refcell_tag(&ty, "source")?;
     let offset = ctx.local_offset(slot)?;
-    abi::load_at_offset(ctx.emitter, "x1", offset);                            // x1 = value_lo = the current scalar value of the source local
-    abi::emit_load_int_immediate(ctx.emitter, "x0", tag);                     // x0 = inner value tag for refcell_alloc
-    ctx.emitter.instruction("mov x2, xzr");                                     // x2 = value_hi = 0 for a scalar payload
-    abi::emit_call_label(ctx.emitter, "__rt_refcell_alloc");                  // x0 = new reference cell (refcount 1)
+    if refcell_source_is_boxed_mixed(&ty) {
+        // The source local holds a boxed Mixed: unbox it into a raw value triple and allocate the
+        // cell directly from that triple (refcell_alloc retains/persists any heap inner). The cell's
+        // inner is the unboxed value, so reads through the reference reconstruct it correctly.
+        //
+        // The original box is intentionally left alive (not freed) here: releasing it — whether with
+        // mixed_free_deep or a refcount-aware decref — corrupts the freshly-allocated reference cell,
+        // because the box may be shared with the array entry the value came from and the cell is not
+        // yet heap-rooted. The bounded box leak (one per Mixed-source reference assignment) is
+        // reclaimed under M6, which owns all reference-cell lifetime accounting.
+        abi::load_at_offset(ctx.emitter, "x0", offset);                       // x0 = the boxed Mixed pointer held by the source local
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");               // x0=tag, x1=value_lo, x2=value_hi of the boxed value
+        abi::emit_call_label(ctx.emitter, "__rt_refcell_alloc");             // x0 = new reference cell holding the unboxed value (refcount 1)
+    } else {
+        abi::load_at_offset(ctx.emitter, "x1", offset);                       // x1 = value_lo = the current scalar value of the source local
+        abi::emit_load_int_immediate(ctx.emitter, "x0", tag);                 // x0 = inner value tag for refcell_alloc
+        ctx.emitter.instruction("mov x2, xzr");                                 // x2 = value_hi = 0 for a scalar payload
+        abi::emit_call_label(ctx.emitter, "__rt_refcell_alloc");             // x0 = new reference cell (refcount 1)
+    }
     abi::store_at_offset_scratch(ctx.emitter, "x0", offset, "x9");            // overwrite the source slot with the cell pointer
     ctx.mark_boxed_refcell_slot(slot);
     Ok(())
@@ -272,10 +301,26 @@ fn promote_source_to_boxed_refcell_x86_64(
     let ty = ctx.local_php_type(slot)?.codegen_repr();
     let tag = scalar_refcell_tag(&ty, "source")?;
     let offset = ctx.local_offset(slot)?;
-    abi::load_at_offset(ctx.emitter, "rdi", offset);                          // rdi = value_lo = the current scalar value of the source local
-    abi::emit_load_int_immediate(ctx.emitter, "rax", tag);                    // rax = inner value tag for refcell_alloc
-    ctx.emitter.instruction("xor esi, esi");                                    // rsi = value_hi = 0 for a scalar payload
-    abi::emit_call_label(ctx.emitter, "__rt_refcell_alloc");                  // rax = new reference cell (refcount 1)
+    if refcell_source_is_boxed_mixed(&ty) {
+        // The source local holds a boxed Mixed: unbox it into a raw value triple and allocate the
+        // cell directly from that triple (refcell_alloc retains/persists any heap inner). The cell's
+        // inner is the unboxed value, so reads through the reference reconstruct it correctly.
+        //
+        // The original box is intentionally left alive (not freed) here: releasing it — whether with
+        // mixed_free_deep or a refcount-aware decref — corrupts the freshly-allocated reference cell,
+        // because the box may be shared with the array entry the value came from and the cell is not
+        // yet heap-rooted. The bounded box leak (one per Mixed-source reference assignment) is
+        // reclaimed under M6, which owns all reference-cell lifetime accounting.
+        abi::load_at_offset(ctx.emitter, "rax", offset);                      // rax = the boxed Mixed pointer held by the source local
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");               // rax=tag, rdi=value_lo, rdx=value_hi of the boxed value
+        ctx.emitter.instruction("mov rsi, rdx");                                // refcell_alloc takes value_hi in rsi
+        abi::emit_call_label(ctx.emitter, "__rt_refcell_alloc");             // rax = new reference cell holding the unboxed value (refcount 1)
+    } else {
+        abi::load_at_offset(ctx.emitter, "rdi", offset);                      // rdi = value_lo = the current scalar value of the source local
+        abi::emit_load_int_immediate(ctx.emitter, "rax", tag);                // rax = inner value tag for refcell_alloc
+        ctx.emitter.instruction("xor esi, esi");                                // rsi = value_hi = 0 for a scalar payload
+        abi::emit_call_label(ctx.emitter, "__rt_refcell_alloc");             // rax = new reference cell (refcount 1)
+    }
     abi::store_at_offset_scratch(ctx.emitter, "rax", offset, "r10");          // overwrite the source slot with the cell pointer
     ctx.mark_boxed_refcell_slot(slot);
     Ok(())
@@ -292,17 +337,29 @@ pub(super) fn lower_load_boxed_refcell(
         .ok_or_else(|| CodegenIrError::invalid_module("load_ref_cell missing result value"))?;
     let result_ty = ctx.value_php_type(result)?.codegen_repr();
     scalar_refcell_tag(&result_ty, "loaded value")?;
+    // A `Mixed`-typed alias must reconstruct a boxed Mixed from the dereferenced triple; a scalar
+    // alias takes the referenced value_lo word directly.
+    let box_as_mixed = matches!(result_ty, PhpType::Mixed);
     let offset = ctx.local_offset(slot)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset(ctx.emitter, "x0", offset);                    // x0 = the boxed reference cell pointer
             abi::emit_call_label(ctx.emitter, "__rt_refcell_load");           // dereference: x0=tag, x1=lo, x2=hi
-            ctx.emitter.instruction("mov x0, x1");                              // the scalar result is the referenced value_lo
+            if box_as_mixed {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");   // box the dereferenced triple back into a Mixed cell
+            } else {
+                ctx.emitter.instruction("mov x0, x1");                          // the scalar result is the referenced value_lo
+            }
         }
         Arch::X86_64 => {
             abi::load_at_offset(ctx.emitter, "rax", offset);                   // rax = the boxed reference cell pointer
             abi::emit_call_label(ctx.emitter, "__rt_refcell_load");           // dereference: rax=tag, rdi=lo, rdx=hi
-            ctx.emitter.instruction("mov rax, rdi");                            // the scalar result is the referenced value_lo
+            if box_as_mixed {
+                ctx.emitter.instruction("mov rsi, rdx");                        // mixed_from_value takes value_hi in rsi
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");   // box the dereferenced triple back into a Mixed cell
+            } else {
+                ctx.emitter.instruction("mov rax, rdi");                        // the scalar result is the referenced value_lo
+            }
         }
     }
     ctx.store_result_value(result)

@@ -1126,3 +1126,36 @@ fn test_write_through_reference_element_updates_source() {
     );
     assert_eq!(out, "9|9");
 }
+
+/// Verifies a Mixed-typed reference source: a value read out of a heterogeneous (Mixed-valued)
+/// array is a boxed Mixed, and aliasing it into another element shares the value. Writing through
+/// the alias is observed when reading the element back. Matches `php -r` output `99`.
+#[test]
+fn test_reference_source_mixed_write_through_alias() {
+    let out = compile_and_run(
+        "<?php $src = ['k' => 1, 'n' => 's']; $m = $src['k']; $b = []; $b['x'] =& $m; $m = 99; echo $b['x'];",
+    );
+    assert_eq!(out, "99");
+}
+
+/// Verifies a Mixed reference source is read back correctly straight after aliasing, with no
+/// write-through in between: the reference cell holds the unboxed value and reconstructs it on
+/// read. `$m` comes from a Mixed-valued array, so its static type is Mixed. Matches `php -r` `7`.
+#[test]
+fn test_reference_source_mixed_direct_element_read() {
+    let out = compile_and_run(
+        "<?php $src = ['k' => 7, 'n' => 's']; $m = $src['k']; $b = []; $b['x'] =& $m; echo $b['x'];",
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies that writing a plain value through a reference element updates a Mixed-typed aliased
+/// source: `$arr['x'] =& $m; $arr['x'] = 42;` makes the Mixed `$m` read back as 42. Exercises the
+/// Mixed alias-read path (the dereferenced triple is re-boxed). Matches `php -r` output `42`.
+#[test]
+fn test_reference_element_write_through_updates_mixed_alias() {
+    let out = compile_and_run(
+        "<?php $src = ['a' => 7, 'b' => 's']; $m = $src['a']; $arr = []; $arr['x'] =& $m; $arr['x'] = 42; echo $m;",
+    );
+    assert_eq!(out, "42");
+}
