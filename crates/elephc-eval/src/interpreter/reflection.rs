@@ -629,6 +629,37 @@ pub(in crate::interpreter) fn eval_reflection_method_invoke_result(
     .map(Some)
 }
 
+/// Handles eval-backed `ReflectionFunction::invoke()` and `invokeArgs()` calls.
+pub(in crate::interpreter) fn eval_reflection_function_invoke_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let is_invoke = method_name.eq_ignore_ascii_case("invoke");
+    let is_invoke_args = method_name.eq_ignore_ascii_case("invokeArgs");
+    if !is_invoke && !is_invoke_args {
+        return Ok(None);
+    }
+    let Some(function_name) = context
+        .eval_reflection_function_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let function_args = if is_invoke {
+        evaluated_args
+            .into_iter()
+            .map(eval_reflection_method_forwarded_value_arg)
+            .collect()
+    } else {
+        eval_reflection_function_invoke_args_array(evaluated_args, values)?
+    };
+    eval_reflection_function_invoke_dispatch(&function_name, function_args, context, values)
+        .map(Some)
+}
+
 /// Handles PHP's no-op `ReflectionMethod/Property::setAccessible()` calls.
 pub(in crate::interpreter) fn eval_reflection_set_accessible_result(
     identity: u64,
@@ -3337,6 +3368,36 @@ fn eval_reflection_method_invoke_args_array(
     )?;
     let method_args = eval_array_call_arg_values(args[1], values)?;
     Ok((args[0], method_args))
+}
+
+/// Binds `ReflectionFunction::invokeArgs()` and expands its PHP argument array.
+fn eval_reflection_function_invoke_args_array(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
+    let args = bind_evaluated_function_args(&[String::from("args")], evaluated_args)?;
+    eval_array_call_arg_values(args[0], values)
+}
+
+/// Dispatches one reflected function invocation through eval or registered native functions.
+fn eval_reflection_function_invoke_dispatch(
+    function_name: &str,
+    function_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let function_key = function_name.to_ascii_lowercase();
+    if let Some(function) = context.function(&function_key).cloned() {
+        let by_value_parameters = vec![false; function.params().len()];
+        return eval_dynamic_function_with_evaluated_args_and_ref_flags(
+            &function,
+            &by_value_parameters,
+            function_args,
+            context,
+            values,
+        );
+    }
+    eval_callable_with_call_array_args(&function_key, function_args, context, values)
 }
 
 /// Dispatches one reflected method invocation through eval or public AOT bridges.

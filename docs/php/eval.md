@@ -284,7 +284,9 @@ for eval-declared functions and methods. `ReflectionParameter::getDeclaringClass
 returns the declaring class-like symbol for eval method parameters, and
 `ReflectionParameter::getDeclaringFunction()` returns a `ReflectionFunction`
 object for eval free-function parameters or a `ReflectionMethod` object for the
-declaring eval method. Defaulted eval method parameters are bound
+declaring eval method. `ReflectionFunction::invoke()` and `invokeArgs()`
+dispatch eval-declared functions with the same named/default/variadic argument
+binding used by direct eval function calls. Defaulted eval method parameters are bound
 when omitted and reported through
 `ReflectionParameter::isOptional()`, `isDefaultValueAvailable()`, and
 `getDefaultValue()`. Supported default expressions include

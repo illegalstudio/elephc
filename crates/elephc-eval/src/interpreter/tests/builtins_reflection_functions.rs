@@ -118,3 +118,32 @@ return true;"#,
     assert_eq!(values.output, "ok:2:1:6:cb:2:1:z");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies ReflectionFunction invocation dispatches eval functions with forwarded arguments.
+#[test]
+fn execute_program_reflection_function_invokes_eval_function() {
+    let program = parse_fragment(
+        br#"function eval_reflect_invoke($left = "A", $right = "B", ...$rest) {
+    return $left . $right . count($rest) . $rest["extra"];
+}
+function eval_reflect_no_writeback(&$value) {
+    $value = $value . "!";
+    return $value;
+}
+$ref = new ReflectionFunction("eval_reflect_invoke");
+echo $ref->invoke(right: "2", left: "1", extra: "X"); echo ":";
+echo $ref->invokeArgs(["extra" => "Y", "left" => "3", "right" => "4"]); echo ":";
+$value = "Q";
+$mutate = new ReflectionFunction("eval_reflect_no_writeback");
+echo $mutate->invoke($value); echo ":"; echo $value;
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "121X:341Y:Q!:Q");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}

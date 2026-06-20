@@ -7727,6 +7727,34 @@ call_user_func_array("eval_signature_array", ["extra" => "z", "name" => "cb"]);'
     assert_eq!(out.stdout, "ok:2:1:6:cb:2:1:z");
 }
 
+/// Verifies eval ReflectionFunction::invoke and invokeArgs call eval-declared functions.
+#[test]
+fn test_eval_reflection_function_invoke_calls_eval_function() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('function eval_reflect_invoke($left = "A", $right = "B", ...$rest) {
+    return $left . $right . count($rest) . $rest["extra"];
+}
+function eval_reflect_no_writeback(&$value) {
+    $value = $value . "!";
+    return $value;
+}
+$ref = new ReflectionFunction("eval_reflect_invoke");
+echo $ref->invoke(right: "2", left: "1", extra: "X") . ":";
+echo $ref->invokeArgs(["extra" => "Y", "left" => "3", "right" => "4"]) . ":";
+$value = "Q";
+$mutate = new ReflectionFunction("eval_reflect_no_writeback");
+echo $mutate->invoke($value) . ":" . $value;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "121X:341Y:Q!:Q");
+}
+
 /// Verifies eval ReflectionClass::isCloneable uses eval class metadata through the bridge.
 #[test]
 fn test_eval_reflection_class_cloneable_predicate() {

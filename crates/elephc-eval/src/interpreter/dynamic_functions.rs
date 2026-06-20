@@ -868,13 +868,30 @@ pub(super) fn eval_dynamic_function_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_dynamic_function_with_evaluated_args_and_ref_flags(
+        function,
+        function.parameter_is_by_ref(),
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Evaluates an eval-declared function with caller-selected by-ref binding flags.
+pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_flags(
+    function: &EvalFunction,
+    parameter_is_by_ref: &[bool],
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let static_names = static_var_names(function.body());
     context.push_function(function.name());
     let evaluated_args = match bind_evaluated_method_args(
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
-        function.parameter_is_by_ref(),
+        parameter_is_by_ref,
         function.parameter_is_variadic(),
         evaluated_args,
         context,
@@ -890,7 +907,7 @@ pub(super) fn eval_dynamic_function_with_evaluated_args(
     bind_method_scope_args(
         &mut function_scope,
         function.params(),
-        function.parameter_is_by_ref(),
+        parameter_is_by_ref,
         &evaluated_args,
     );
     let result = execute_statements(function.body(), context, &mut function_scope, values);
