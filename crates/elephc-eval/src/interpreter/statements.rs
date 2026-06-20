@@ -1274,7 +1274,8 @@ fn validate_method_parent_override(
     let Some(parent) = class.parent() else {
         return Ok(());
     };
-    let Some((_, parent_method)) = context.class_method(parent, method.name()) else {
+    let Some((parent_declaring_class, parent_method)) = context.class_method(parent, method.name())
+    else {
         return Ok(());
     };
     if parent_method.visibility() == EvalVisibility::Private {
@@ -1294,14 +1295,28 @@ fn validate_method_parent_override(
     if method.is_abstract() && !parent_method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if !class_method_signature_accepts(method, &parent_method) {
+    if !class_method_signature_accepts(
+        method,
+        class.name(),
+        &parent_method,
+        &parent_declaring_class,
+        Some(class),
+        context,
+    ) {
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(())
 }
 
 /// Returns whether one eval class method can accept every call accepted by its parent method.
-fn class_method_signature_accepts(method: &EvalClassMethod, required: &EvalClassMethod) -> bool {
+fn class_method_signature_accepts(
+    method: &EvalClassMethod,
+    method_owner: &str,
+    required: &EvalClassMethod,
+    required_owner: &str,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+) -> bool {
     method_signature_accepts(
         method.params().len(),
         method.parameter_defaults(),
@@ -1311,6 +1326,13 @@ fn class_method_signature_accepts(method: &EvalClassMethod, required: &EvalClass
         required.parameter_defaults(),
         required.parameter_is_by_ref(),
         required.parameter_is_variadic(),
+    ) && method_return_type_signature_accepts(
+        method.return_type(),
+        method_owner,
+        required.return_type(),
+        required_owner,
+        pending_class,
+        context,
     )
 }
 
@@ -1532,7 +1554,7 @@ fn validate_class_implements_eval_interface(
     context: &ElephcEvalContext,
 ) -> Result<(), EvalStatus> {
     for requirement in context.interface_method_requirements(interface_name) {
-        if !class_has_interface_method(class, &requirement, context) {
+        if !class_has_interface_method(class, interface_name, &requirement, context) {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -1547,6 +1569,7 @@ fn validate_class_implements_eval_interface(
 /// Returns whether a class or its eval parents satisfy one interface method signature.
 fn class_has_interface_method(
     class: &EvalClass,
+    interface_name: &str,
     requirement: &EvalInterfaceMethod,
     context: &ElephcEvalContext,
 ) -> bool {
@@ -1554,23 +1577,41 @@ fn class_has_interface_method(
         return method.visibility() == EvalVisibility::Public
             && method.is_static() == requirement.is_static()
             && !method.is_abstract()
-            && class_method_satisfies_interface_signature(method, requirement);
+            && class_method_satisfies_interface_signature(
+                method,
+                class.name(),
+                requirement,
+                interface_name,
+                Some(class),
+                context,
+            );
     }
     class
         .parent()
         .and_then(|parent| context.class_method(parent, requirement.name()))
-        .is_some_and(|(_, method)| {
+        .is_some_and(|(declaring_class, method)| {
             method.visibility() == EvalVisibility::Public
                 && method.is_static() == requirement.is_static()
                 && !method.is_abstract()
-                && class_method_satisfies_interface_signature(&method, requirement)
+                && class_method_satisfies_interface_signature(
+                    &method,
+                    &declaring_class,
+                    requirement,
+                    interface_name,
+                    Some(class),
+                    context,
+                )
         })
 }
 
 /// Returns whether one class method can accept every call required by an interface method.
 fn class_method_satisfies_interface_signature(
     method: &EvalClassMethod,
+    method_owner: &str,
     requirement: &EvalInterfaceMethod,
+    requirement_owner: &str,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
 ) -> bool {
     method_signature_accepts(
         method.params().len(),
@@ -1581,6 +1622,13 @@ fn class_method_satisfies_interface_signature(
         requirement.parameter_defaults(),
         requirement.parameter_is_by_ref(),
         requirement.parameter_is_variadic(),
+    ) && method_return_type_signature_accepts(
+        method.return_type(),
+        method_owner,
+        requirement.return_type(),
+        requirement_owner,
+        pending_class,
+        context,
     )
 }
 

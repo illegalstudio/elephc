@@ -148,6 +148,9 @@ properties, static methods, static interface method contracts, class, interface,
 trait, and enum constants including `final` constants, class-level attributes,
 `ClassName::class` literals, magic method fallback through `__call()` and
 `__callStatic()`, and magic property fallback through `__get()` and `__set()`.
+Eval validates method override and interface method return types with PHP-style
+covariance for supported declared return type metadata, including nullable,
+union, `mixed`, `self`, `parent`, `static`, class, and interface return types.
 `isset()`, `empty()`, and `unset()` on missing or inaccessible eval properties
 dispatch through `__isset()` and `__unset()` using PHP's `empty()` gate
 ordering. `instanceof` works with eval-declared classes and interfaces,
