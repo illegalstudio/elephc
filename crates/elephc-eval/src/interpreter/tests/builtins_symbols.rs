@@ -306,12 +306,31 @@ fn execute_program_class_alias_registers_aliases() {
     public function __construct($x) { $this->x = $x; }
     public function bump($n) { $this->x = $this->x + $n; return $this->x; }
 }
+interface DynAliasIface {}
+trait DynAliasTrait {}
+enum DynAliasEnum: string {
+    case Ready = "ready";
+}
 echo class_alias("DynAliasBox", "DynAliasCopy") ? "alias" : "bad"; echo ":";
 echo class_exists("DynAliasCopy") ? "exists" : "bad"; echo ":";
 $box = new DynAliasCopy(5);
 echo get_class($box); echo ":";
 echo $box->bump(2); echo ":";
 echo is_a($box, "DynAliasCopy") ? "isa" : "bad"; echo ":";
+echo class_alias("DynAliasIface", "DynAliasIfaceCopy") ? "iface-alias" : "bad"; echo ":";
+echo interface_exists("DynAliasIfaceCopy") ? "iface-exists" : "bad"; echo ":";
+echo class_exists("DynAliasIfaceCopy") ? "bad" : "iface-not-class"; echo ":";
+echo is_a("DynAliasIfaceCopy", "DynAliasIface", true) ? "iface-isa" : "bad"; echo ":";
+echo (new ReflectionClass("DynAliasIfaceCopy"))->isInterface() ? "iface-reflect" : "bad"; echo ":";
+echo class_alias("DynAliasTrait", "DynAliasTraitCopy") ? "trait-alias" : "bad"; echo ":";
+echo trait_exists("DynAliasTraitCopy") ? "trait-exists" : "bad"; echo ":";
+echo class_exists("DynAliasTraitCopy") ? "bad" : "trait-not-class"; echo ":";
+echo is_a("DynAliasTraitCopy", "DynAliasTrait", true) ? "trait-isa" : "bad"; echo ":";
+echo class_alias("DynAliasEnum", "DynAliasEnumCopy") ? "enum-alias" : "bad"; echo ":";
+echo enum_exists("DynAliasEnumCopy") ? "enum-exists" : "bad"; echo ":";
+echo class_exists("DynAliasEnumCopy") ? "enum-class" : "bad"; echo ":";
+echo (new ReflectionClass("DynAliasEnumCopy"))->getName(); echo ":";
+echo DynAliasEnumCopy::Ready->value; echo ":";
 echo class_alias("DynAliasBox", "DynAliasCopy") ? "bad" : "duplicate"; echo ":";
 echo class_alias("MissingAliasSource", "MissingAliasTarget") ? "bad" : "missing"; echo ":";
 echo call_user_func("class_alias", "DynAliasBox", "DynAliasCall") ? "call" : "bad"; echo ":";
@@ -330,7 +349,7 @@ return is_callable("class_alias");"#,
 
     assert_eq!(
         values.output,
-        "alias:exists:DynAliasBox:7:isa:duplicate:missing:call:call-exists:aot:known:1"
+        "alias:exists:DynAliasBox:7:isa:iface-alias:iface-exists:iface-not-class:iface-isa:iface-reflect:trait-alias:trait-exists:trait-not-class:trait-isa:enum-alias:enum-exists:enum-class:DynAliasEnum:ready:duplicate:missing:call:call-exists:aot:known:1"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
@@ -345,10 +364,8 @@ $classes = get_declared_classes();
 echo count($classes); echo ":";
 echo $classes[0]; echo ":";
 echo $classes[1]; echo ":";
-echo $classes[2]; echo ":";
 $call = call_user_func("get_declared_classes");
 echo count($call); echo ":";
-echo $call[2]; echo ":";
 echo count(get_declared_interfaces()); echo ":";
 echo count(call_user_func_array("get_declared_traits", [])); echo ":";
 echo function_exists("get_declared_classes");
@@ -361,10 +378,7 @@ return is_callable("get_declared_traits");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(
-        values.output,
-        "3:DeclaredOne:DeclaredTwo:DeclaredAlias:3:DeclaredAlias:0:0:11"
-    );
+    assert_eq!(values.output, "2:DeclaredOne:DeclaredTwo:2:0:0:11");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies duplicate eval-declared class names fail through runtime status.

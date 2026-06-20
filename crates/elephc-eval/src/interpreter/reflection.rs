@@ -1190,13 +1190,17 @@ fn eval_reflection_class_new(
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("class_name")], evaluated_args)?;
     let class_name = eval_reflection_string_arg(args[0], values)?;
-    let Some(metadata) = eval_reflection_class_like_attributes(&class_name, context) else {
-        let Some((flags, modifiers)) = eval_reflection_aot_class_flags(&class_name, values)? else {
+    let reflected_name = context
+        .resolve_class_like_name(&class_name)
+        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) else {
+        let Some((flags, modifiers)) = eval_reflection_aot_class_flags(&reflected_name, values)?
+        else {
             return Ok(None);
         };
         return eval_reflection_owner_object(
             EVAL_REFLECTION_OWNER_CLASS,
-            class_name.trim_start_matches('\\'),
+            &reflected_name,
             &[],
             &[],
             &[],

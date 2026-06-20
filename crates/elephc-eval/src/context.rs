@@ -153,6 +153,22 @@ impl NativeCallableSignature {
     }
 }
 
+/// PHP class-like declaration kind targeted by a dynamic `class_alias()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvalClassAliasKind {
+    Class,
+    Interface,
+    Trait,
+    Enum,
+}
+
+/// Dynamic alias target and kind recorded for eval-visible class-like symbols.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EvalClassAlias {
+    target: String,
+    kind: EvalClassAliasKind,
+}
+
 /// Process-level eval context passed opaquely across the C ABI.
 ///
 /// Generated code never inspects this layout directly; it only passes pointers
@@ -161,7 +177,7 @@ impl NativeCallableSignature {
 pub struct ElephcEvalContext {
     abi_version: u32,
     classes: HashMap<String, EvalClass>,
-    class_aliases: HashMap<String, String>,
+    class_aliases: HashMap<String, EvalClassAlias>,
     declared_class_names: Vec<String>,
     interfaces: HashMap<String, EvalInterface>,
     declared_interface_names: Vec<String>,
@@ -325,7 +341,13 @@ impl ElephcEvalContext {
     /// Returns true when this eval context has a dynamic class or alias with the requested name.
     pub fn has_class(&self, name: &str) -> bool {
         let key = normalize_class_name(name);
-        self.classes.contains_key(&key) || self.class_aliases.contains_key(&key)
+        self.classes.contains_key(&key)
+            || self.class_aliases.get(&key).is_some_and(|alias| {
+                matches!(
+                    alias.kind,
+                    EvalClassAliasKind::Class | EvalClassAliasKind::Enum
+                )
+            })
     }
 
     /// Returns a dynamic eval class by PHP case-insensitive class name or alias.
@@ -334,9 +356,14 @@ impl ElephcEvalContext {
         if let Some(class) = self.classes.get(&key) {
             return Some(class);
         }
-        self.class_aliases
-            .get(&key)
-            .and_then(|target| self.classes.get(&normalize_class_name(target)))
+        let alias = self.class_aliases.get(&key)?;
+        if !matches!(
+            alias.kind,
+            EvalClassAliasKind::Class | EvalClassAliasKind::Enum
+        ) {
+            return None;
+        }
+        self.classes.get(&normalize_class_name(&alias.target))
     }
 
     /// Resolves a PHP class name or alias to the canonical target spelling stored by eval.
@@ -345,7 +372,13 @@ impl ElephcEvalContext {
         if let Some(class) = self.classes.get(&key) {
             return Some(class.name().to_string());
         }
-        self.class_aliases.get(&key).cloned()
+        self.class_aliases.get(&key).and_then(|alias| {
+            matches!(
+                alias.kind,
+                EvalClassAliasKind::Class | EvalClassAliasKind::Enum
+            )
+            .then(|| alias.target.clone())
+        })
     }
 
     /// Resolves a PHP class-like name to eval class, interface, trait, or alias spelling.
@@ -363,19 +396,69 @@ impl ElephcEvalContext {
         if let Some(enum_decl) = self.enums.get(&key) {
             return Some(enum_decl.name().to_string());
         }
-        self.class_aliases.get(&key).cloned()
+        self.class_aliases
+            .get(&key)
+            .map(|alias| alias.target.clone())
     }
 
     /// Defines an alias for an eval-declared class or an already known alias.
     pub fn define_class_alias(&mut self, original: &str, alias: &str) -> bool {
-        let Some(target) = self.resolve_class_name(original) else {
+        let Some((target, kind)) = self.resolve_class_like_alias_target(original) else {
             return false;
         };
-        self.define_external_class_alias(&target, alias)
+        self.define_class_alias_with_kind(&target, alias, kind)
     }
 
     /// Defines an alias for a runtime-visible class whose metadata lives outside eval.
     pub fn define_external_class_alias(&mut self, original: &str, alias: &str) -> bool {
+        self.define_class_alias_with_kind(original, alias, EvalClassAliasKind::Class)
+    }
+
+    /// Defines an alias for a runtime-visible interface whose metadata lives outside eval.
+    pub fn define_external_interface_alias(&mut self, original: &str, alias: &str) -> bool {
+        self.define_class_alias_with_kind(original, alias, EvalClassAliasKind::Interface)
+    }
+
+    /// Defines an alias for a runtime-visible trait whose metadata lives outside eval.
+    pub fn define_external_trait_alias(&mut self, original: &str, alias: &str) -> bool {
+        self.define_class_alias_with_kind(original, alias, EvalClassAliasKind::Trait)
+    }
+
+    /// Defines an alias for a runtime-visible enum whose metadata lives outside eval.
+    pub fn define_external_enum_alias(&mut self, original: &str, alias: &str) -> bool {
+        self.define_class_alias_with_kind(original, alias, EvalClassAliasKind::Enum)
+    }
+
+    /// Resolves the canonical target and declaration kind for a class-like alias source.
+    fn resolve_class_like_alias_target(
+        &self,
+        original: &str,
+    ) -> Option<(String, EvalClassAliasKind)> {
+        let key = normalize_class_name(original);
+        if let Some(enum_decl) = self.enums.get(&key) {
+            return Some((enum_decl.name().to_string(), EvalClassAliasKind::Enum));
+        }
+        if let Some(class) = self.classes.get(&key) {
+            return Some((class.name().to_string(), EvalClassAliasKind::Class));
+        }
+        if let Some(interface) = self.interfaces.get(&key) {
+            return Some((interface.name().to_string(), EvalClassAliasKind::Interface));
+        }
+        if let Some(trait_decl) = self.traits.get(&key) {
+            return Some((trait_decl.name().to_string(), EvalClassAliasKind::Trait));
+        }
+        self.class_aliases
+            .get(&key)
+            .map(|alias| (alias.target.clone(), alias.kind))
+    }
+
+    /// Defines one class-like alias after the caller has resolved the target kind.
+    fn define_class_alias_with_kind(
+        &mut self,
+        original: &str,
+        alias: &str,
+        kind: EvalClassAliasKind,
+    ) -> bool {
         let alias_key = normalize_class_name(alias);
         if alias_key.is_empty()
             || self.classes.contains_key(&alias_key)
@@ -386,10 +469,13 @@ impl ElephcEvalContext {
         {
             return false;
         }
-        self.class_aliases
-            .insert(alias_key, original.trim_start_matches('\\').to_string());
-        self.declared_class_names
-            .push(alias.trim_start_matches('\\').to_string());
+        self.class_aliases.insert(
+            alias_key,
+            EvalClassAlias {
+                target: original.trim_start_matches('\\').to_string(),
+                kind,
+            },
+        );
         true
     }
 
@@ -417,12 +503,24 @@ impl ElephcEvalContext {
 
     /// Returns true when this eval context has a dynamic interface with the requested name.
     pub fn has_interface(&self, name: &str) -> bool {
-        self.interfaces.contains_key(&normalize_class_name(name))
+        let key = normalize_class_name(name);
+        self.interfaces.contains_key(&key)
+            || self
+                .class_aliases
+                .get(&key)
+                .is_some_and(|alias| alias.kind == EvalClassAliasKind::Interface)
     }
 
     /// Returns a dynamic eval interface by PHP case-insensitive interface name.
     pub fn interface(&self, name: &str) -> Option<&EvalInterface> {
-        self.interfaces.get(&normalize_class_name(name))
+        let key = normalize_class_name(name);
+        if let Some(interface) = self.interfaces.get(&key) {
+            return Some(interface);
+        }
+        let alias = self.class_aliases.get(&key)?;
+        (alias.kind == EvalClassAliasKind::Interface)
+            .then(|| self.interfaces.get(&normalize_class_name(&alias.target)))
+            .flatten()
     }
 
     /// Returns interface names declared through eval in PHP-visible order.
@@ -449,12 +547,24 @@ impl ElephcEvalContext {
 
     /// Returns true when this eval context has a dynamic trait with the requested name.
     pub fn has_trait(&self, name: &str) -> bool {
-        self.traits.contains_key(&normalize_class_name(name))
+        let key = normalize_class_name(name);
+        self.traits.contains_key(&key)
+            || self
+                .class_aliases
+                .get(&key)
+                .is_some_and(|alias| alias.kind == EvalClassAliasKind::Trait)
     }
 
     /// Returns a dynamic eval trait by PHP case-insensitive trait name.
     pub fn trait_decl(&self, name: &str) -> Option<&EvalTrait> {
-        self.traits.get(&normalize_class_name(name))
+        let key = normalize_class_name(name);
+        if let Some(trait_decl) = self.traits.get(&key) {
+            return Some(trait_decl);
+        }
+        let alias = self.class_aliases.get(&key)?;
+        (alias.kind == EvalClassAliasKind::Trait)
+            .then(|| self.traits.get(&normalize_class_name(&alias.target)))
+            .flatten()
     }
 
     /// Returns trait names declared through eval in PHP-visible order.
@@ -485,12 +595,35 @@ impl ElephcEvalContext {
 
     /// Returns true when this eval context has a dynamic enum with the requested name.
     pub fn has_enum(&self, name: &str) -> bool {
-        self.enums.contains_key(&normalize_class_name(name))
+        let key = normalize_class_name(name);
+        self.enums.contains_key(&key)
+            || self
+                .class_aliases
+                .get(&key)
+                .is_some_and(|alias| alias.kind == EvalClassAliasKind::Enum)
     }
 
     /// Returns a dynamic eval enum by PHP case-insensitive enum name.
     pub fn enum_decl(&self, name: &str) -> Option<&EvalEnum> {
-        self.enums.get(&normalize_class_name(name))
+        let key = normalize_class_name(name);
+        if let Some(enum_decl) = self.enums.get(&key) {
+            return Some(enum_decl);
+        }
+        let alias = self.class_aliases.get(&key)?;
+        (alias.kind == EvalClassAliasKind::Enum)
+            .then(|| self.enums.get(&normalize_class_name(&alias.target)))
+            .flatten()
+    }
+
+    /// Resolves an enum name or enum alias to the canonical eval enum spelling.
+    pub fn resolve_enum_name(&self, name: &str) -> Option<String> {
+        let key = normalize_class_name(name);
+        if let Some(enum_decl) = self.enums.get(&key) {
+            return Some(enum_decl.name().to_string());
+        }
+        self.class_aliases.get(&key).and_then(|alias| {
+            (alias.kind == EvalClassAliasKind::Enum).then(|| alias.target.clone())
+        })
     }
 
     /// Returns enum names declared through eval in PHP-visible order.
@@ -500,9 +633,12 @@ impl ElephcEvalContext {
 
     /// Returns a materialized singleton case object for one eval enum case.
     pub fn enum_case(&self, enum_name: &str, case_name: &str) -> Option<RuntimeCellHandle> {
+        let enum_name = self
+            .resolve_enum_name(enum_name)
+            .unwrap_or_else(|| enum_name.trim_start_matches('\\').to_string());
         self.enum_cases
             .get(&(
-                normalize_class_name(enum_name),
+                normalize_class_name(&enum_name),
                 normalize_enum_case_name(case_name),
             ))
             .copied()
@@ -527,9 +663,12 @@ impl ElephcEvalContext {
 
     /// Returns a materialized backing value for one eval backed-enum case.
     pub fn enum_case_value(&self, enum_name: &str, case_name: &str) -> Option<RuntimeCellHandle> {
+        let enum_name = self
+            .resolve_enum_name(enum_name)
+            .unwrap_or_else(|| enum_name.trim_start_matches('\\').to_string());
         self.enum_case_values
             .get(&(
-                normalize_class_name(enum_name),
+                normalize_class_name(&enum_name),
                 normalize_enum_case_name(case_name),
             ))
             .copied()
@@ -1194,7 +1333,7 @@ impl ElephcEvalContext {
         };
         let target = normalize_class_name(
             &self
-                .resolve_class_name(target)
+                .resolve_class_like_name(target)
                 .unwrap_or_else(|| target.trim_start_matches('\\').to_string()),
         );
         if !exclude_self && normalize_class_name(class.name()) == target {

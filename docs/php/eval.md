@@ -377,10 +377,13 @@ AOT and eval-declared class-name probes are visible through `class_exists()`.
 Eval object relation probes through `instanceof`, `is_a()`, and `is_subclass_of()` use
 generated AOT class/interface metadata and eval-created object metadata.
 `interface_exists()`, `trait_exists()`, and `enum_exists()` can probe generated
-AOT metadata. Eval-declared classes, interfaces, traits, and class aliases are
-visible through the corresponding eval and post-barrier native metadata probes.
-Eval-declared enums are visible inside eval through `enum_exists()` and through
-class-like probes such as `class_exists()`.
+AOT metadata. `class_alias()` can alias eval-declared and generated/AOT
+classes, interfaces, traits, and enums, preserving the target class-like kind
+for the corresponding metadata probes. Aliases are usable for class-like
+lookups but are not added to `get_declared_classes()`,
+`get_declared_interfaces()`, or `get_declared_traits()`. Eval-declared enums are
+visible inside eval through `enum_exists()` and through class-like probes such
+as `class_exists()`.
 `method_exists()` and `property_exists()` inspect eval-declared class/interface/
 trait/enum metadata and generated runtime metadata. Object targets also see
 dynamic public properties. `get_class_methods()` and `get_object_vars()` follow
@@ -449,7 +452,7 @@ where listed below unless a note says otherwise.
 | Arrays and sorting | `array_sum()`, `array_product()`, `array_chunk()`, `array_column()`, `array_combine()`, `array_fill()`, `array_fill_keys()`, `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `array_flip()`, `array_keys()`, `array_values()`, `array_diff()`, `array_intersect()`, `array_diff_key()`, `array_intersect_key()`, `range()`, `array_merge()`, `array_pad()`, `array_reverse()`, `array_slice()`, `array_splice()`, `array_unique()`, `array_key_exists()`, `array_rand()`, `in_array()`, `array_search()`, `array_pop()`, `array_shift()`, `array_push()`, `array_unshift()`, `arsort()`, `asort()`, `krsort()`, `ksort()`, `natcasesort()`, `natsort()`, `rsort()`, `shuffle()`, `sort()`, `uasort()`, `uksort()`, `usort()`, `count()` |
 | Iterators and SPL | `iterator_count()`, `iterator_to_array()`, `iterator_apply()`, `spl_classes()`, `spl_object_id()`, `spl_object_hash()` |
 | Math and random | `abs()`, `sqrt()`, `floor()`, `ceil()`, `round()`, `pow()`, `clamp()`, `min()`, `max()`, `pi()`, `sin()`, `cos()`, `tan()`, `asin()`, `acos()`, `atan()`, `atan2()`, `sinh()`, `cosh()`, `tanh()`, `log()`, `log2()`, `log10()`, `exp()`, `deg2rad()`, `rad2deg()`, `hypot()`, `intdiv()`, `fdiv()`, `fmod()`, `rand()`, `mt_rand()`, `random_int()` |
-| Types, metadata, and dynamic calls | `intval()`, `floatval()`, `strval()`, `boolval()`, `settype()`, `gettype()`, `get_class()`, `get_parent_class()`, `get_class_methods()`, `get_object_vars()`, `get_resource_type()`, `get_resource_id()`, `function_exists()`, `is_callable()`, `class_exists()`, `interface_exists()`, `trait_exists()`, `enum_exists()`, `method_exists()`, `property_exists()`, `is_a()`, `is_subclass_of()`, `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, `call_user_func()`, `call_user_func_array()`, `is_int()`, `is_integer()`, `is_long()`, `is_float()`, `is_double()`, `is_real()`, `is_nan()`, `is_finite()`, `is_infinite()`, `is_string()`, `is_bool()`, `is_null()`, `is_array()`, `is_object()`, `is_iterable()`, `is_numeric()`, `is_resource()` |
+| Types, metadata, and dynamic calls | `intval()`, `floatval()`, `strval()`, `boolval()`, `settype()`, `gettype()`, `get_class()`, `get_parent_class()`, `get_class_methods()`, `get_object_vars()`, `get_resource_type()`, `get_resource_id()`, `function_exists()`, `is_callable()`, `class_exists()`, `interface_exists()`, `trait_exists()`, `enum_exists()`, `class_alias()`, `class_implements()`, `class_parents()`, `class_uses()`, `get_declared_classes()`, `get_declared_interfaces()`, `get_declared_traits()`, `method_exists()`, `property_exists()`, `is_a()`, `is_subclass_of()`, `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, `call_user_func()`, `call_user_func_array()`, `is_int()`, `is_integer()`, `is_long()`, `is_float()`, `is_double()`, `is_real()`, `is_nan()`, `is_finite()`, `is_infinite()`, `is_string()`, `is_bool()`, `is_null()`, `is_array()`, `is_object()`, `is_iterable()`, `is_numeric()`, `is_resource()` |
 | Debug output | `print_r()`, `var_dump()` |
 | Constants | `define()`, `defined()` |
 
