@@ -1159,3 +1159,20 @@ fn test_reference_element_write_through_updates_mixed_alias() {
     );
     assert_eq!(out, "42");
 }
+
+/// Verifies the reverse-direction reference assignment `$r =& $a[0]`: the variable aliases the
+/// array element, so writing through the element is observed when reading the variable. This is the
+/// M3 milestone shape. Matches `php -r` output `9`.
+#[test]
+fn test_reference_reverse_direction_aliases_element() {
+    let out = compile_and_run("<?php $a = [1, 2]; $r =& $a[0]; $a[0] = 9; echo $r;");
+    assert_eq!(out, "9");
+}
+
+/// Verifies the reverse-direction reference also shares in the other direction: writing through the
+/// aliasing variable `$r` updates the array element it was bound to. Matches `php -r` output `7|7`.
+#[test]
+fn test_reference_reverse_direction_write_through_variable() {
+    let out = compile_and_run("<?php $a = [10, 20]; $r =& $a[0]; $r = 7; echo $a[0], '|', $r;");
+    assert_eq!(out, "7|7");
+}

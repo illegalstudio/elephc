@@ -48,6 +48,17 @@ fn test_error_reference_assignment_into_property_is_gated() {
     );
 }
 
+/// Tests that the reverse-direction reference source `$r =& $a[<expr>]` is gated when re-evaluating
+/// the source lvalue would run user code. The lowering evaluates the source twice, so a call in the
+/// subscript must be rejected rather than silently evaluated twice.
+#[test]
+fn test_error_reference_reverse_source_with_side_effects_is_gated() {
+    expect_error(
+        "<?php $a = [1, 2]; $r =& $a[strlen('x')];",
+        "Reference assignment from an array or property element with side effects is not yet supported",
+    );
+}
+
 /// Tests that two `use` statements with the same alias name produce a
 /// "Duplicate import alias" error.
 #[test]
