@@ -2210,6 +2210,7 @@ $params = (new ReflectionMethod(ReflectParamTypeTarget::class, "run"))->getParam
 foreach ($params as $param) {
     echo $param->getName() . ":";
     echo $param->hasType() ? "T:" : "t:";
+    echo $param->allowsNull() ? "N:" : "n:";
     $type = $param->getType();
     if ($type instanceof ReflectionNamedType) {
         echo $type->getName();
@@ -2248,7 +2249,7 @@ if ($directType instanceof ReflectionNamedType) {
     );
     assert_eq!(
         out.stdout,
-        "id:T:int!B|name:T:string?B|dep:T:ReflectParamTypeDep!C|plain:t:null|union:T:union!:intB:stringB|nullableUnion:T:union?:intB:stringB|intersection:T:intersection!:ReflectParamTypeAC:ReflectParamTypeBC|direct:ReflectParamTypeDep"
+        "id:T:n:int!B|name:T:N:string?B|dep:T:n:ReflectParamTypeDep!C|plain:t:N:null|union:T:n:union!:intB:stringB|nullableUnion:T:N:union?:intB:stringB|intersection:T:n:intersection!:ReflectParamTypeAC:ReflectParamTypeBC|direct:ReflectParamTypeDep"
     );
 }
 

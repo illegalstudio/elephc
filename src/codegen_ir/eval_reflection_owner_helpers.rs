@@ -737,10 +737,10 @@ fn emit_aarch64_owner_kind_body(
     emit_set_owner_constant_value_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_backing_value_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_required_parameter_count_property_aarch64(emitter, layout);
+    emit_set_owner_named_type_flags_property_aarch64(emitter, layout);
     emit_set_owner_parameter_property_aarch64(emitter, layout);
     emit_set_owner_parameter_type_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_parameter_default_property_aarch64(emitter, layout, fail_label);
-    emit_set_owner_named_type_flags_property_aarch64(emitter, layout);
     emit_set_owner_metadata_arrays_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_constructor_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_parent_class_property_aarch64(emitter, layout, fail_label);
@@ -769,10 +769,10 @@ fn emit_x86_64_owner_kind_body(
     emit_set_owner_constant_value_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_backing_value_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_required_parameter_count_property_x86_64(emitter, layout);
+    emit_set_owner_named_type_flags_property_x86_64(emitter, layout);
     emit_set_owner_parameter_property_x86_64(emitter, layout);
     emit_set_owner_parameter_type_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_parameter_default_property_x86_64(emitter, layout, fail_label);
-    emit_set_owner_named_type_flags_property_x86_64(emitter, layout);
     emit_set_owner_metadata_arrays_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_constructor_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_parent_class_property_x86_64(emitter, layout, fail_label);
@@ -811,7 +811,7 @@ fn emit_alloc_reflection_owner_object_x86_64(
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
         (X86_64_HEAP_MAGIC_HI32 << 32) | 4
-    )); // materialize the x86_64 object heap kind word
+    ));                                                                         // materialize the x86_64 object heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the object heap header before the payload
     emitter.instruction(&format!("mov r10, {}", layout.class_id));              // materialize the Reflection owner class id
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at object payload offset zero
@@ -1521,6 +1521,8 @@ fn emit_set_owner_parameter_property_aarch64(
         Some(has_default_value_hi),
         Some(is_promoted_lo),
         Some(is_promoted_hi),
+        Some(allows_null_lo),
+        Some(allows_null_hi),
     ) = (
         layout.position_lo,
         layout.position_hi,
@@ -1536,6 +1538,8 @@ fn emit_set_owner_parameter_property_aarch64(
         layout.has_default_value_hi,
         layout.is_promoted_lo,
         layout.is_promoted_hi,
+        layout.allows_null_lo,
+        layout.allows_null_hi,
     )
     else {
         return;
@@ -1568,6 +1572,10 @@ fn emit_set_owner_parameter_property_aarch64(
     emitter.instruction("and x10, x10, #1");                                    // extract the promoted-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_promoted_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_promoted_hi);
+    emitter.instruction("lsr x10, x11, #6");                                    // move the nullable-parameter bit into position
+    emitter.instruction("and x10, x10, #1");                                    // extract the nullable-parameter flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", allows_null_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", allows_null_hi);
 }
 
 /// Stores incoming ARM64 ReflectionParameter type metadata.
@@ -1652,6 +1660,8 @@ fn emit_set_owner_parameter_property_x86_64(emitter: &mut Emitter, layout: &Refl
         Some(has_default_value_hi),
         Some(is_promoted_lo),
         Some(is_promoted_hi),
+        Some(allows_null_lo),
+        Some(allows_null_hi),
     ) = (
         layout.position_lo,
         layout.position_hi,
@@ -1667,6 +1677,8 @@ fn emit_set_owner_parameter_property_x86_64(emitter: &mut Emitter, layout: &Refl
         layout.has_default_value_hi,
         layout.is_promoted_lo,
         layout.is_promoted_hi,
+        layout.allows_null_lo,
+        layout.allows_null_hi,
     )
     else {
         return;
@@ -1705,6 +1717,11 @@ fn emit_set_owner_parameter_property_x86_64(emitter: &mut Emitter, layout: &Refl
     emitter.instruction("and rax, 1");                                          // extract the promoted-parameter flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_promoted_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_promoted_hi);
+    emitter.instruction("mov rax, r11");                                        // copy flags before extracting the nullable bit
+    emitter.instruction("shr rax, 6");                                          // move the nullable-parameter bit into position
+    emitter.instruction("and rax, 1");                                          // extract the nullable-parameter flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", allows_null_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", allows_null_hi);
 }
 
 /// Stores incoming x86_64 ReflectionParameter type metadata.

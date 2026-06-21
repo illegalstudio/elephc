@@ -2329,6 +2329,12 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
             false_bool(),
         ),
         builtin_property(
+            "__allows_null",
+            Visibility::Private,
+            Some(bool_type()),
+            true_bool(),
+        ),
+        builtin_property(
             "__has_default_value",
             Visibility::Private,
             Some(bool_type()),
@@ -2365,6 +2371,7 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
         builtin_reflection_class_bool_method("isPassedByReference", "__is_passed_by_reference"),
         builtin_reflection_class_bool_method("isPromoted", "__is_promoted"),
         builtin_reflection_class_bool_method("hasType", "__has_type"),
+        builtin_reflection_class_bool_method("allowsNull", "__allows_null"),
         builtin_reflection_class_mixed_method("getType", "__type"),
         builtin_reflection_owner_get_attributes_method(),
         builtin_reflection_class_bool_method("isDefaultValueAvailable", "__has_default_value"),
@@ -2891,6 +2898,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "isvariadic",
                     "ispassedbyreference",
                     "hastype",
+                    "allowsnull",
                     "isdefaultvalueavailable",
                 ] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {

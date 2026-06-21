@@ -46,6 +46,7 @@ const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
 const EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE: u64 = 8;
 const EVAL_REFLECTION_PARAMETER_FLAG_HAS_DEFAULT_VALUE: u64 = 16;
 const EVAL_REFLECTION_PARAMETER_FLAG_PROMOTED: u64 = 32;
+const EVAL_REFLECTION_PARAMETER_FLAG_ALLOWS_NULL: u64 = 64;
 const EVAL_REFLECTION_NAMED_TYPE_FLAG_ALLOWS_NULL: u64 = 1;
 const EVAL_REFLECTION_NAMED_TYPE_FLAG_BUILTIN: u64 = 2;
 
@@ -92,6 +93,7 @@ struct EvalReflectionParameterMetadata {
     is_passed_by_reference: bool,
     is_promoted: bool,
     has_type: bool,
+    allows_null: bool,
     type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     default_value: Option<EvalExpr>,
 }
@@ -4328,29 +4330,39 @@ fn eval_reflection_parameters_from_names_and_type_flags(
     names
         .iter()
         .enumerate()
-        .map(|(position, name)| EvalReflectionParameterMetadata {
-            name: name.clone(),
-            declaring_class_name: declaring_class_name.map(str::to_string),
-            declaring_function: declaring_function.cloned(),
-            attributes: parameter_attributes
-                .get(position)
-                .cloned()
-                .unwrap_or_default(),
-            position,
-            is_optional: defaults.get(position).is_some_and(Option::is_some)
-                || variadic_flags.get(position).copied().unwrap_or(false),
-            is_variadic: variadic_flags.get(position).copied().unwrap_or(false),
-            is_passed_by_reference: by_ref_flags.get(position).copied().unwrap_or(false),
-            is_promoted: promoted_parameter_names
-                .iter()
-                .any(|promoted_name| promoted_name == name),
-            has_type: has_type_flags.get(position).copied().unwrap_or(false),
-            type_metadata: parameter_types
+        .map(|(position, name)| {
+            let has_type = has_type_flags.get(position).copied().unwrap_or(false);
+            let default_value = defaults.get(position).and_then(Clone::clone);
+            let type_metadata = parameter_types
                 .get(position)
                 .and_then(Option::as_ref)
                 .and_then(eval_reflection_parameter_type_metadata)
-                .filter(|_| has_type_flags.get(position).copied().unwrap_or(false)),
-            default_value: defaults.get(position).and_then(Clone::clone),
+                .filter(|_| has_type);
+            EvalReflectionParameterMetadata {
+                name: name.clone(),
+                declaring_class_name: declaring_class_name.map(str::to_string),
+                declaring_function: declaring_function.cloned(),
+                attributes: parameter_attributes
+                    .get(position)
+                    .cloned()
+                    .unwrap_or_default(),
+                position,
+                is_optional: defaults.get(position).is_some_and(Option::is_some)
+                    || variadic_flags.get(position).copied().unwrap_or(false),
+                is_variadic: variadic_flags.get(position).copied().unwrap_or(false),
+                is_passed_by_reference: by_ref_flags.get(position).copied().unwrap_or(false),
+                is_promoted: promoted_parameter_names
+                    .iter()
+                    .any(|promoted_name| promoted_name == name),
+                has_type,
+                allows_null: eval_reflection_parameter_allows_null(
+                    has_type,
+                    type_metadata.as_ref(),
+                    default_value.as_ref(),
+                ),
+                type_metadata,
+                default_value,
+            }
         })
         .collect()
 }
@@ -4470,6 +4482,26 @@ fn eval_reflection_parameter_type_metadata(
             allows_null,
         }),
     })
+}
+
+/// Returns PHP's `ReflectionParameter::allowsNull()` value for retained metadata.
+fn eval_reflection_parameter_allows_null(
+    has_type: bool,
+    type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
+    default_value: Option<&EvalExpr>,
+) -> bool {
+    !has_type
+        || default_value.is_some_and(|default| matches!(default, EvalExpr::Const(EvalConst::Null)))
+        || type_metadata.is_some_and(eval_reflection_type_allows_null)
+}
+
+/// Returns whether one retained ReflectionType metadata value accepts null.
+fn eval_reflection_type_allows_null(type_metadata: &EvalReflectionParameterTypeMetadata) -> bool {
+    match &type_metadata.kind {
+        EvalReflectionParameterTypeKind::Named(named_type) => named_type.allows_null,
+        EvalReflectionParameterTypeKind::Union(union_type) => union_type.allows_null,
+        EvalReflectionParameterTypeKind::Intersection(_) => false,
+    }
 }
 
 /// Converts one eval parameter type variant into `ReflectionNamedType` metadata.
@@ -4783,6 +4815,9 @@ fn eval_reflection_parameter_flags(parameter: &EvalReflectionParameterMetadata) 
     }
     if parameter.default_value.is_some() {
         flags |= EVAL_REFLECTION_PARAMETER_FLAG_HAS_DEFAULT_VALUE;
+    }
+    if parameter.allows_null {
+        flags |= EVAL_REFLECTION_PARAMETER_FLAG_ALLOWS_NULL;
     }
     flags
 }

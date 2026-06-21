@@ -110,6 +110,7 @@ struct ReflectionParameterMember {
     is_passed_by_reference: bool,
     is_promoted: bool,
     has_type: bool,
+    allows_null: bool,
     type_metadata: Option<ReflectionParameterTypeMetadata>,
     default_value: Option<ReflectionParameterDefaultValue>,
 }
@@ -2562,6 +2563,16 @@ fn reflection_parameter_members_with_declaring_function(
         .map(|(index, (name, ty))| {
             let is_variadic = sig.variadic.as_deref() == Some(name.as_str());
             let has_type = sig.declared_params.get(index).copied().unwrap_or(false);
+            let type_metadata = reflection_parameter_type_metadata(
+                sig.param_type_exprs.get(index).and_then(Option::as_ref),
+                ty,
+            )
+            .filter(|_| has_type);
+            let default_value = sig
+                .defaults
+                .get(index)
+                .and_then(Option::as_ref)
+                .and_then(reflection_parameter_default_value);
             ReflectionParameterMember {
                 name: name.clone(),
                 declaring_class_name: declaring_class_name.map(str::to_string),
@@ -2589,19 +2600,36 @@ fn reflection_parameter_members_with_declaring_function(
                     .iter()
                     .any(|promoted_name| promoted_name == name),
                 has_type,
-                type_metadata: reflection_parameter_type_metadata(
-                    sig.param_type_exprs.get(index).and_then(Option::as_ref),
-                    ty,
-                )
-                .filter(|_| has_type),
-                default_value: sig
-                    .defaults
-                    .get(index)
-                    .and_then(Option::as_ref)
-                    .and_then(reflection_parameter_default_value),
+                allows_null: reflection_parameter_allows_null(
+                    has_type,
+                    type_metadata.as_ref(),
+                    default_value.as_ref(),
+                ),
+                type_metadata,
+                default_value,
             }
         })
         .collect()
+}
+
+/// Returns PHP's `ReflectionParameter::allowsNull()` value for static metadata.
+fn reflection_parameter_allows_null(
+    has_type: bool,
+    type_metadata: Option<&ReflectionParameterTypeMetadata>,
+    default_value: Option<&ReflectionParameterDefaultValue>,
+) -> bool {
+    !has_type
+        || matches!(default_value, Some(ReflectionParameterDefaultValue::Null))
+        || type_metadata.is_some_and(reflection_type_allows_null)
+}
+
+/// Returns whether one retained ReflectionType metadata value accepts null.
+fn reflection_type_allows_null(type_metadata: &ReflectionParameterTypeMetadata) -> bool {
+    match type_metadata {
+        ReflectionParameterTypeMetadata::Named(named_type) => named_type.allows_null,
+        ReflectionParameterTypeMetadata::Union(union_type) => union_type.allows_null,
+        ReflectionParameterTypeMetadata::Intersection(_) => false,
+    }
 }
 
 /// Converts a supported parameter default expression into Reflection metadata.
@@ -3816,8 +3844,8 @@ fn emit_reflection_constant_hash_insert(ctx: &mut FunctionContext<'_>, key: &str
     let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x3, x0"); // pass the boxed Reflection constant value as the hash payload
-            ctx.emitter.instruction("mov x4, xzr"); // boxed Mixed hash payloads do not use the high word
+            ctx.emitter.instruction("mov x3, x0");                              // pass the boxed Reflection constant value as the hash payload
+            ctx.emitter.instruction("mov x4, xzr");                             // boxed Mixed hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
@@ -3829,8 +3857,8 @@ fn emit_reflection_constant_hash_insert(ctx: &mut FunctionContext<'_>, key: &str
             abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rcx, rax"); // pass the boxed Reflection constant value as the hash payload
-            ctx.emitter.instruction("xor r8, r8"); // boxed Mixed hash payloads do not use the high word
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the boxed Reflection constant value as the hash payload
+            ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "rdi");
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
@@ -4032,6 +4060,12 @@ fn emit_reflection_parameter_properties(
         "ReflectionParameter",
         "__has_type",
         parameter.has_type,
+    )?;
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionParameter",
+        "__allows_null",
+        parameter.allows_null,
     )?;
     emit_reflection_parameter_type_property(ctx, parameter)?;
     emit_reflection_owner_bool_property(
@@ -4501,32 +4535,32 @@ fn emit_reflection_string_array(ctx: &mut FunctionContext<'_>, names: &[String])
 
 /// Appends ReflectionClass metadata names to the current ARM64 result array.
 fn emit_reflection_string_array_fill_aarch64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("str x0, [sp, #-16]!"); // park the metadata-name array while appending strings
+    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // park the metadata-name array while appending strings
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("ldr x0, [sp]"); // reload the metadata-name array for this append
+        ctx.emitter.instruction("ldr x0, [sp]");                                // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "x1", &label);
         abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("str x0, [sp]"); // preserve the possibly-grown metadata-name array
+        ctx.emitter.instruction("str x0, [sp]");                                // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("ldr x0, [sp], #16"); // restore the final metadata-name array as the result
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the final metadata-name array as the result
 }
 
 /// Appends ReflectionClass metadata names to the current x86_64 result array.
 fn emit_reflection_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("push rax"); // park the metadata-name array while appending strings
-    ctx.emitter.instruction("sub rsp, 8"); // keep stack alignment stable across append helper calls
+    ctx.emitter.instruction("push rax");                                        // park the metadata-name array while appending strings
+    ctx.emitter.instruction("sub rsp, 8");                                      // keep stack alignment stable across append helper calls
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]"); // reload the metadata-name array for this append
+        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "rsi", &label);
         abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax"); // preserve the possibly-grown metadata-name array
+        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("add rsp, 8"); // drop the temporary alignment slot
-    ctx.emitter.instruction("pop rax"); // restore the final metadata-name array as the result
+    ctx.emitter.instruction("add rsp, 8");                                      // drop the temporary alignment slot
+    ctx.emitter.instruction("pop rax");                                         // restore the final metadata-name array as the result
 }
 
 /// Stores ReflectionMethod/ReflectionProperty boolean predicate slots when supported.

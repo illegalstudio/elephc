@@ -8305,6 +8305,7 @@ foreach ($params as $param) {
     echo $param->isVariadic() ? "V" : "v";
     echo $param->isPassedByReference() ? "R" : "b";
     echo $param->hasType() ? "T" : "t";
+    echo $param->allowsNull() ? "N" : "n";
     $type = $param->getType();
     if ($param->getName() == "union") {
         echo ":union";
@@ -8349,7 +8350,7 @@ foreach ($params as $param) {
     );
     assert_eq!(
         out.stdout,
-        "5/3:first@0rvbT:int!B:A1:EvalParamTag:first:d|union@1rvbT:union!:intB:stringB:A0:d|both@2rvbT:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|second@3OvbT:App\\Name?C:A0:D=null|rest@4OVbt:null:A0:d|"
+        "5/3:first@0rvbTn:int!B:A1:EvalParamTag:first:d|union@1rvbTn:union!:intB:stringB:A0:d|both@2rvbTn:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|second@3OvbTN:App\\Name?C:A0:D=null|rest@4OVbtN:null:A0:d|"
     );
 }
 
