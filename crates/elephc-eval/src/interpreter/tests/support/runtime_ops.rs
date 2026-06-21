@@ -198,6 +198,14 @@ impl RuntimeValueOps for FakeOps {
     ) -> Result<Option<u64>, EvalStatus> {
         self.runtime_reflection_property_flags(class_name, property_name)
     }
+    /// Reports fake generated AOT ReflectionProperty declaring classes for metadata bridge tests.
+    fn reflection_property_declaring_class(
+        &mut self,
+        class_name: &str,
+        property_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        self.runtime_reflection_property_declaring_class(class_name, property_name)
+    }
     /// Reports fake generated AOT ReflectionProperty names for metadata bridge tests.
     fn reflection_property_names(
         &mut self,

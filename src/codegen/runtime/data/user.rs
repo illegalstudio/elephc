@@ -1036,6 +1036,12 @@ fn emit_eval_reflection_property_lookup_data(
             let flags = eval_reflection_instance_property_flags(class_info, slot, property_name);
             let class_label = format!("_eval_reflection_property_class_{}", index);
             let property_label = format!("_eval_reflection_property_name_{}", index);
+            let declaring_class = eval_reflection_instance_property_declaring_class(
+                class_name,
+                class_info,
+                property_name,
+            );
+            let declaring_label = format!("_eval_reflection_property_declaring_class_{}", index);
             out.push_str(&format!(
                 ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
                 class_label,
@@ -1046,12 +1052,19 @@ fn emit_eval_reflection_property_lookup_data(
                 property_label,
                 escaped_ascii(property_name)
             ));
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                declaring_label,
+                escaped_ascii(declaring_class)
+            ));
             entries.push((
                 class_label,
                 class_name.len(),
                 property_label,
                 property_name.len(),
                 flags,
+                declaring_label,
+                declaring_class.len(),
             ));
             index += 1;
         }
@@ -1059,6 +1072,12 @@ fn emit_eval_reflection_property_lookup_data(
             let flags = eval_reflection_static_property_flags(class_info, slot, property_name);
             let class_label = format!("_eval_reflection_property_class_{}", index);
             let property_label = format!("_eval_reflection_property_name_{}", index);
+            let declaring_class = eval_reflection_static_property_declaring_class(
+                class_name,
+                class_info,
+                property_name,
+            );
+            let declaring_label = format!("_eval_reflection_property_declaring_class_{}", index);
             out.push_str(&format!(
                 ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
                 class_label,
@@ -1069,12 +1088,19 @@ fn emit_eval_reflection_property_lookup_data(
                 property_label,
                 escaped_ascii(property_name)
             ));
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                declaring_label,
+                escaped_ascii(declaring_class)
+            ));
             entries.push((
                 class_label,
                 class_name.len(),
                 property_label,
                 property_name.len(),
                 flags,
+                declaring_label,
+                declaring_class.len(),
             ));
             index += 1;
         }
@@ -1084,13 +1110,43 @@ fn emit_eval_reflection_property_lookup_data(
     out.push_str(".globl _eval_reflection_property_count\n_eval_reflection_property_count:\n");
     out.push_str(&format!("    .quad {}\n", entries.len()));
     out.push_str(".globl _eval_reflection_properties\n_eval_reflection_properties:\n");
-    for (class_label, class_len, property_label, property_len, flags) in entries {
+    for (class_label, class_len, property_label, property_len, flags, declaring_label, declaring_len) in
+        entries
+    {
         out.push_str(&format!("    .quad {}\n", class_label));
         out.push_str(&format!("    .quad {}\n", class_len));
         out.push_str(&format!("    .quad {}\n", property_label));
         out.push_str(&format!("    .quad {}\n", property_len));
         out.push_str(&format!("    .quad {}\n", flags));
+        out.push_str(&format!("    .quad {}\n", declaring_label));
+        out.push_str(&format!("    .quad {}\n", declaring_len));
     }
+}
+
+/// Returns the class name that declares one visible instance property.
+fn eval_reflection_instance_property_declaring_class<'a>(
+    reflected_class: &'a str,
+    class_info: &'a ClassInfo,
+    property_name: &str,
+) -> &'a str {
+    class_info
+        .property_declaring_classes
+        .get(property_name)
+        .map(String::as_str)
+        .unwrap_or(reflected_class)
+}
+
+/// Returns the class name that declares one visible static property.
+fn eval_reflection_static_property_declaring_class<'a>(
+    reflected_class: &'a str,
+    class_info: &'a ClassInfo,
+    property_name: &str,
+) -> &'a str {
+    class_info
+        .static_property_declaring_classes
+        .get(property_name)
+        .map(String::as_str)
+        .unwrap_or(reflected_class)
 }
 
 /// Returns eval ReflectionProperty bitflags for one instance property slot.

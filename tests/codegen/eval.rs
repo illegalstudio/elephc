@@ -7383,6 +7383,46 @@ try {
     );
 }
 
+/// Verifies eval reports declaring classes for inherited generated/AOT properties.
+#[test]
+fn test_eval_reflection_property_declaring_class_for_inherited_aot_members() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectPropertyDeclaringBase {
+    public int $base = 1;
+    protected static string $baseStatic = "s";
+}
+class EvalAotReflectPropertyDeclaringChild extends EvalAotReflectPropertyDeclaringBase {
+    public int $own = 2;
+}
+echo eval('$class = new ReflectionClass("EvalAotReflectPropertyDeclaringChild");
+$base = $class->getProperty("base");
+echo $base->getDeclaringClass()->getName() . ":";
+$static = $class->getProperty("baseStatic");
+echo $static->getDeclaringClass()->getName() . ":";
+$own = $class->getProperty("own");
+echo $own->getDeclaringClass()->getName() . ":";
+$listed = null;
+foreach ($class->getProperties() as $property) {
+    if ($property->getName() === "base") {
+        $listed = $property;
+    }
+}
+echo $listed->getDeclaringClass()->getName();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalAotReflectPropertyDeclaringBase:EvalAotReflectPropertyDeclaringBase:EvalAotReflectPropertyDeclaringChild:EvalAotReflectPropertyDeclaringBase"
+    );
+}
+
 /// Verifies eval can probe generated/AOT method predicate metadata through
 /// `ReflectionClass::hasMethod()`, `getMethod()`, and direct `ReflectionMethod`.
 #[test]

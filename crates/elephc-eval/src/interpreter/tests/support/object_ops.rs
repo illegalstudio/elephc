@@ -949,6 +949,18 @@ impl FakeOps {
         }
         Ok(None)
     }
+    /// Reports fake generated AOT ReflectionProperty declaring classes for metadata unit tests.
+    pub(super) fn runtime_reflection_property_declaring_class(
+        &mut self,
+        class_name: &str,
+        property_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        if class_name.eq_ignore_ascii_case("KnownClass") && property_name == "promoted" {
+            Ok(Some("KnownClass".to_string()))
+        } else {
+            Ok(None)
+        }
+    }
     /// Reports fake generated AOT ReflectionProperty names for eval metadata unit tests.
     pub(super) fn runtime_reflection_property_names(
         &mut self,

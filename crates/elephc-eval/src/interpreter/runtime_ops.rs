@@ -166,6 +166,13 @@ pub trait RuntimeValueOps {
         property_name: &str,
     ) -> Result<Option<u64>, EvalStatus>;
 
+    /// Returns the generated AOT declaring class for a class/property pair.
+    fn reflection_property_declaring_class(
+        &mut self,
+        class_name: &str,
+        property_name: &str,
+    ) -> Result<Option<String>, EvalStatus>;
+
     /// Returns generated AOT ReflectionProperty names visible for one class.
     fn reflection_property_names(
         &mut self,

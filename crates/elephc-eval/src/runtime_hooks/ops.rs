@@ -318,6 +318,31 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Ok((flags != 0).then_some(flags))
     }
 
+    /// Returns generated AOT ReflectionProperty declaring class metadata.
+    fn reflection_property_declaring_class(
+        &mut self,
+        class_name: &str,
+        property_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        let ptr = unsafe {
+            __elephc_eval_reflection_property_declaring_class(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+                property_name.as_ptr(),
+                property_name.len() as u64,
+            )
+        };
+        if ptr.is_null() {
+            return Ok(None);
+        }
+        let handle = RuntimeCellHandle::from_raw(ptr);
+        let bytes = self.string_bytes(handle)?;
+        self.release(handle)?;
+        String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| EvalStatus::RuntimeFatal)
+    }
+
     /// Returns generated AOT ReflectionProperty names visible for one class.
     fn reflection_property_names(
         &mut self,

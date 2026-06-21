@@ -1727,8 +1727,11 @@ fn eval_reflection_aot_property_metadata_if_exists(
     let Some(flags) = values.reflection_property_flags(runtime_class_name, property_name)? else {
         return Ok(None);
     };
+    let declaring_class_name = values
+        .reflection_property_declaring_class(runtime_class_name, property_name)?
+        .unwrap_or_else(|| runtime_class_name.to_string());
     Ok(Some(eval_reflection_aot_property_metadata(
-        runtime_class_name,
+        &declaring_class_name,
         flags,
     )))
 }
