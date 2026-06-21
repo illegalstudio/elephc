@@ -2378,7 +2378,7 @@ fn eval_reflection_owner_object_with_members(
         context.register_eval_reflection_function(identity, reflected_name);
     } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
         if let Some(declaring_class) = parent_class_name {
-            if context.has_class(declaring_class) {
+            if eval_reflection_class_like_exists(declaring_class, context) {
                 let identity = values.object_identity(object)?;
                 context.register_eval_reflection_property(
                     identity,
@@ -4166,13 +4166,31 @@ fn eval_reflection_property_for_hooks(
     if context.has_class(declaring_class) || context.has_enum(declaring_class) {
         return context.class_property(declaring_class, property_name);
     }
-    context.trait_decl(declaring_class).and_then(|trait_decl| {
-        trait_decl
-            .properties()
-            .iter()
-            .find(|property| property.name() == property_name)
-            .map(|property| (trait_decl.name().to_string(), property.clone()))
-    })
+    context
+        .trait_decl(declaring_class)
+        .and_then(|trait_decl| {
+            trait_decl
+                .properties()
+                .iter()
+                .find(|property| property.name() == property_name)
+                .map(|property| (trait_decl.name().to_string(), property.clone()))
+        })
+        .or_else(|| {
+            context
+                .interface_property_requirements(declaring_class)
+                .into_iter()
+                .find(|property| property.name() == property_name)
+                .map(|property| {
+                    let property = EvalClassProperty::new(property.name(), None)
+                        .with_type(property.property_type().cloned())
+                        .with_attributes(property.attributes().to_vec())
+                        .with_abstract_hook_contract(
+                            property.requires_get(),
+                            property.requires_set(),
+                        );
+                    (declaring_class.to_string(), property)
+                })
+        })
 }
 
 /// Binds the `PropertyHookType $type` argument used by ReflectionProperty hook APIs.
@@ -4211,10 +4229,10 @@ fn eval_reflection_property_hook_kinds(
     property: &EvalClassProperty,
 ) -> Vec<EvalReflectionPropertyHook> {
     let mut hooks = Vec::new();
-    if property.has_get_hook() {
+    if property.has_get_hook() || property.requires_get_hook() {
         hooks.push(EvalReflectionPropertyHook::Get);
     }
-    if property.has_set_hook() {
+    if property.has_set_hook() || property.requires_set_hook() {
         hooks.push(EvalReflectionPropertyHook::Set);
     }
     hooks
@@ -4226,8 +4244,8 @@ fn eval_reflection_property_has_hook(
     hook: EvalReflectionPropertyHook,
 ) -> bool {
     match hook {
-        EvalReflectionPropertyHook::Get => property.has_get_hook(),
-        EvalReflectionPropertyHook::Set => property.has_set_hook(),
+        EvalReflectionPropertyHook::Get => property.has_get_hook() || property.requires_get_hook(),
+        EvalReflectionPropertyHook::Set => property.has_set_hook() || property.requires_set_hook(),
     }
 }
 
@@ -4286,10 +4304,15 @@ fn eval_reflection_property_hook_method_metadata(
         visibility: property.visibility(),
         is_static: false,
         is_final: false,
-        is_abstract: false,
+        is_abstract: property.is_abstract(),
         is_readonly: false,
         is_promoted: false,
-        modifiers: eval_reflection_method_modifiers(property.visibility(), false, false, false),
+        modifiers: eval_reflection_method_modifiers(
+            property.visibility(),
+            false,
+            false,
+            property.is_abstract(),
+        ),
         type_metadata: None,
         return_type_metadata: eval_reflection_property_hook_return_type(property, hook),
         default_value: None,
