@@ -2592,6 +2592,7 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
     let args = bind_native_callable_args(
         context.native_static_method_signature(&class_name, method_name),
         evaluated_args,
+        values,
     )?;
     values.static_method_call(&class_name, method_name, args)
 }
@@ -3232,6 +3233,7 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         let evaluated_args = bind_native_callable_args(
             context.native_method_signature(&class_name, method_name),
             evaluated_args,
+            values,
         )?;
         return values.method_call(object, method_name, evaluated_args);
     };
@@ -3420,6 +3422,7 @@ fn eval_reflection_class_new_instance_result(
     let args = bind_native_callable_args(
         context.native_constructor_signature(&class_name),
         constructor_args,
+        values,
     )?;
     let instance = values.new_object(&class_name)?;
     values.construct_object(instance, args)?;
@@ -4037,14 +4040,65 @@ pub(in crate::interpreter) fn positional_evaluated_arg_values(
 pub(in crate::interpreter) fn bind_native_callable_args(
     signature: Option<NativeCallableSignature>,
     args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     let Some(signature) = signature else {
         return positional_evaluated_arg_values(args);
     };
     if signature.param_names().len() == signature.param_count() {
-        bind_evaluated_function_args(signature.param_names(), args)
+        bind_native_signature_args(&signature, args, values)
     } else {
         positional_evaluated_arg_values(args)
+    }
+}
+
+/// Binds native AOT callable args and fills omitted scalar defaults from metadata.
+fn bind_native_signature_args(
+    signature: &NativeCallableSignature,
+    args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    let mut bound_args = vec![None; signature.param_count()];
+    let mut next_positional = 0;
+
+    for arg in args {
+        if let Some(name) = arg.name {
+            bind_dynamic_named_arg(signature.param_names(), &mut bound_args, &name, arg.value)?;
+        } else {
+            bind_dynamic_positional_arg(&mut bound_args, &mut next_positional, arg.value)?;
+        }
+    }
+
+    for (position, value) in bound_args.iter_mut().enumerate() {
+        if value.is_some() {
+            continue;
+        }
+        if position < signature.required_param_count() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let Some(default) = signature.param_default(position) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        *value = Some(materialize_native_callable_default(default, values)?);
+    }
+
+    bound_args
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Allocates a fresh runtime cell for one registered native AOT scalar default.
+fn materialize_native_callable_default(
+    default: &NativeCallableDefault,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match default {
+        NativeCallableDefault::Null => values.null(),
+        NativeCallableDefault::Bool(value) => values.bool_value(*value),
+        NativeCallableDefault::Int(value) => values.int(*value),
+        NativeCallableDefault::Float(value) => values.float(*value),
+        NativeCallableDefault::String(value) => values.string(value),
     }
 }
 

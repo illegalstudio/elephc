@@ -7469,6 +7469,47 @@ try {
     );
 }
 
+/// Verifies eval ReflectionMethod::invoke can dispatch public generated/AOT methods.
+#[test]
+fn test_eval_reflection_method_invoke_calls_aot_method() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectInvokeBase {
+    public function who(): string {
+        return static::class;
+    }
+
+    public static function make(string $left, string $right = "S"): string {
+        return static::class . ":" . $left . $right;
+    }
+}
+class EvalAotReflectInvokeChild extends EvalAotReflectInvokeBase {
+    public function join(string $a, string $b = "B"): string {
+        return $a . $b;
+    }
+}
+echo eval('$object = new EvalAotReflectInvokeChild();
+$who = (new ReflectionClass("EvalAotReflectInvokeChild"))->getMethod("who");
+echo $who->invoke($object) . ":";
+$static = new ReflectionMethod("EvalAotReflectInvokeBase", "make");
+echo $static->invoke(null, right: "Y", left: "X") . ":";
+echo $static->invoke($object, "A") . ":";
+$join = new ReflectionMethod("EvalAotReflectInvokeChild", "join");
+echo $join->invoke($object, "Q") . ":";
+return $join->invokeArgs($object, ["b" => "2", "a" => "1"]);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalAotReflectInvokeChild:EvalAotReflectInvokeBase:XY:EvalAotReflectInvokeBase:AS:QB:12"
+    );
+}
+
 /// Verifies eval ReflectionMethod constructor/destructor predicates through the bridge.
 #[test]
 fn test_eval_reflection_method_reports_constructor_and_destructor() {
@@ -9166,6 +9207,26 @@ echo eval('$box = new EvalDynamicNewOneArgCtor(11); return $box->x;');
 "#,
     );
     assert_eq!(out, "11");
+}
+
+/// Verifies eval object construction fills registered AOT constructor defaults.
+#[test]
+fn test_eval_dynamic_new_runs_constructor_with_default_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewDefaultCtor {
+    public string $label = "";
+    public function __construct(string $left, string $right = "B") {
+        $this->label = $left . $right;
+    }
+}
+echo eval('$first = new EvalDynamicNewDefaultCtor("A");
+echo $first->label . ":";
+$second = new EvalDynamicNewDefaultCtor(right: "Y", left: "X");
+return $second->label;');
+"#,
+    );
+    assert_eq!(out, "AB:XY");
 }
 
 /// Verifies eval object construction passes more than two arguments to an AOT constructor.

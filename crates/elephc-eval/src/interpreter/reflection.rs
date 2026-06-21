@@ -3684,6 +3684,7 @@ fn eval_reflection_aot_method_invoke_dispatch(
         let args = bind_native_callable_args(
             context.native_static_method_signature(declaring_class, method_name),
             method_args,
+            values,
         )?;
         return values.static_method_call(declaring_class, method_name, args);
     }
@@ -3703,6 +3704,7 @@ fn eval_reflection_aot_method_invoke_dispatch(
     let args = bind_native_callable_args(
         context.native_method_signature(declaring_class, method_name),
         method_args,
+        values,
     )?;
     values.method_call(object, method_name, args)
 }

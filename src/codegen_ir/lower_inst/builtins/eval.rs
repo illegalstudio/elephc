@@ -19,7 +19,7 @@ use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed};
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Op};
 use crate::names::{function_symbol, ir_global_symbol, php_symbol_key};
-use crate::parser::ast::Visibility;
+use crate::parser::ast::{Expr, ExprKind, Visibility};
 use crate::types::{ClassInfo, FunctionSig, PhpType};
 
 use super::super::super::context::FunctionContext;
@@ -50,6 +50,10 @@ const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 const MAX_EVAL_NATIVE_METHOD_PARAMS: usize = 8;
 const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
+const NATIVE_DEFAULT_NULL: i64 = 0;
+const NATIVE_DEFAULT_BOOL: i64 = 1;
+const NATIVE_DEFAULT_INT: i64 = 2;
+const NATIVE_DEFAULT_FLOAT: i64 = 3;
 
 /// Local slot metadata needed for conservative eval scope synchronization.
 #[derive(Clone)]
@@ -91,6 +95,12 @@ struct EvalNativeMethodRegistration {
 struct EvalNativeConstructorRegistration {
     class_name: String,
     signature: FunctionSig,
+}
+
+/// Scalar native callable default that can be registered with libelephc-eval.
+enum EvalNativeCallableDefault {
+    Scalar { kind: i64, payload: i64 },
+    String(String),
 }
 
 /// Lowers `eval($code)` to the eval bridge ABI and leaves the eval return cell in result registers.
@@ -599,6 +609,50 @@ fn method_signature_can_register_with_eval(signature: &FunctionSig) -> bool {
         && signature.ref_params.iter().all(|is_ref| !*is_ref)
 }
 
+/// Converts a PHP signature default into the compact eval bridge default ABI.
+fn eval_native_callable_default(expr: &Expr) -> Option<EvalNativeCallableDefault> {
+    match &expr.kind {
+        ExprKind::Null => Some(EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_NULL,
+            payload: 0,
+        }),
+        ExprKind::BoolLiteral(value) => Some(EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_BOOL,
+            payload: i64::from(*value),
+        }),
+        ExprKind::IntLiteral(value) => Some(EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_INT,
+            payload: *value,
+        }),
+        ExprKind::FloatLiteral(value) => Some(EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_FLOAT,
+            payload: value.to_bits() as i64,
+        }),
+        ExprKind::StringLiteral(value) => Some(EvalNativeCallableDefault::String(value.clone())),
+        ExprKind::Negate(inner) => eval_native_callable_negated_default(inner),
+        _ => None,
+    }
+}
+
+/// Converts a negated literal default into the compact eval bridge default ABI.
+fn eval_native_callable_negated_default(expr: &Expr) -> Option<EvalNativeCallableDefault> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => {
+            value
+                .checked_neg()
+                .map(|payload| EvalNativeCallableDefault::Scalar {
+                    kind: NATIVE_DEFAULT_INT,
+                    payload,
+                })
+        }
+        ExprKind::FloatLiteral(value) => Some(EvalNativeCallableDefault::Scalar {
+            kind: NATIVE_DEFAULT_FLOAT,
+            payload: (-*value).to_bits() as i64,
+        }),
+        _ => None,
+    }
+}
+
 /// Returns true when an instance method is public in the class metadata.
 fn class_method_is_public(class_info: &ClassInfo, method_name: &str) -> bool {
     class_info
@@ -726,6 +780,20 @@ fn register_eval_native_method(
             param_name,
         );
     }
+    for (index, default) in registration.signature.defaults.iter().enumerate() {
+        let Some(default) = default.as_ref().and_then(eval_native_callable_default) else {
+            continue;
+        };
+        register_eval_native_method_param_default(
+            ctx,
+            context_offset,
+            &method_key_label,
+            method_key_len,
+            registration.is_static,
+            index,
+            &default,
+        );
+    }
 }
 
 /// Emits one native method parameter-name registration call.
@@ -777,6 +845,80 @@ fn register_eval_native_method_param(
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 
+/// Emits one native method parameter-default registration call.
+fn register_eval_native_method_param_default(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    method_key_label: &str,
+    method_key_len: usize,
+    is_static: bool,
+    param_index: usize,
+    default: &EvalNativeCallableDefault,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        method_key_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        method_key_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        param_index as i64,
+    );
+    let symbol = match default {
+        EvalNativeCallableDefault::Scalar { kind, payload } => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 4),
+                *kind,
+            );
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 5),
+                *payload,
+            );
+            if is_static {
+                ctx.emitter.target.extern_symbol(
+                    "__elephc_eval_register_native_static_method_param_default_scalar",
+                )
+            } else {
+                ctx.emitter
+                    .target
+                    .extern_symbol("__elephc_eval_register_native_method_param_default_scalar")
+            }
+        }
+        EvalNativeCallableDefault::String(value) => {
+            let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
+            abi::emit_symbol_address(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 4),
+                &default_label,
+            );
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 5),
+                default_len as i64,
+            );
+            if is_static {
+                ctx.emitter.target.extern_symbol(
+                    "__elephc_eval_register_native_static_method_param_default_string",
+                )
+            } else {
+                ctx.emitter
+                    .target
+                    .extern_symbol("__elephc_eval_register_native_method_param_default_string")
+            }
+        }
+    };
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
 /// Emits one native constructor signature registration call into the eval context.
 fn register_eval_native_constructor(
     ctx: &mut FunctionContext<'_>,
@@ -814,6 +956,19 @@ fn register_eval_native_constructor(
             class_name_len,
             index,
             param_name,
+        );
+    }
+    for (index, default) in registration.signature.defaults.iter().enumerate() {
+        let Some(default) = default.as_ref().and_then(eval_native_callable_default) else {
+            continue;
+        };
+        register_eval_native_constructor_param_default(
+            ctx,
+            context_offset,
+            &class_name_label,
+            class_name_len,
+            index,
+            &default,
         );
     }
 }
@@ -895,6 +1050,67 @@ fn register_eval_native_constructor_param(
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_constructor_param");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native constructor parameter-default registration call.
+fn register_eval_native_constructor_param_default(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    class_name_label: &str,
+    class_name_len: usize,
+    param_index: usize,
+    default: &EvalNativeCallableDefault,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        class_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        class_name_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        param_index as i64,
+    );
+    let symbol = match default {
+        EvalNativeCallableDefault::Scalar { kind, payload } => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 4),
+                *kind,
+            );
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 5),
+                *payload,
+            );
+            ctx.emitter
+                .target
+                .extern_symbol("__elephc_eval_register_native_constructor_param_default_scalar")
+        }
+        EvalNativeCallableDefault::String(value) => {
+            let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
+            abi::emit_symbol_address(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 4),
+                &default_label,
+            );
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 5),
+                default_len as i64,
+            );
+            ctx.emitter
+                .target
+                .extern_symbol("__elephc_eval_register_native_constructor_param_default_string")
+        }
+    };
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 
@@ -1135,17 +1351,17 @@ fn emit_eval_called_class_name_result_aarch64(ctx: &mut FunctionContext<'_>) -> 
     let done = ctx.next_label("eval_called_class_done");
     emit_eval_late_static_class_id_to_reg(ctx, "x12")?;
     abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_name_count", 0);
-    ctx.emitter.instruction("cmp x12, x10");                                    // reject called-class ids outside the class-name table
-    ctx.emitter.instruction(&format!("b.hs {}", missing));                      // fall back to the lexical eval class when metadata is missing
+    ctx.emitter.instruction("cmp x12, x10"); // reject called-class ids outside the class-name table
+    ctx.emitter.instruction(&format!("b.hs {}", missing)); // fall back to the lexical eval class when metadata is missing
     abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_entries");
-    ctx.emitter.instruction("lsl x12, x12, #4");                                // convert class id to a 16-byte class-name table offset
-    ctx.emitter.instruction("add x11, x11, x12");                               // select the called-class metadata row
-    ctx.emitter.instruction("ldr x1, [x11]");                                   // load the called-class name pointer
-    ctx.emitter.instruction("ldr x2, [x11, #8]");                               // load the called-class name length
-    ctx.emitter.instruction(&format!("b {}", done));                            // skip the missing-metadata fallback
+    ctx.emitter.instruction("lsl x12, x12, #4"); // convert class id to a 16-byte class-name table offset
+    ctx.emitter.instruction("add x11, x11, x12"); // select the called-class metadata row
+    ctx.emitter.instruction("ldr x1, [x11]"); // load the called-class name pointer
+    ctx.emitter.instruction("ldr x2, [x11, #8]"); // load the called-class name length
+    ctx.emitter.instruction(&format!("b {}", done)); // skip the missing-metadata fallback
     ctx.emitter.label(&missing);
     abi::emit_symbol_address(ctx.emitter, "x1", "_class_name_missing");
-    ctx.emitter.instruction("mov x2, #0");                                      // empty called-class name triggers lexical fallback in eval
+    ctx.emitter.instruction("mov x2, #0"); // empty called-class name triggers lexical fallback in eval
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -1156,17 +1372,17 @@ fn emit_eval_called_class_name_result_x86_64(ctx: &mut FunctionContext<'_>) -> R
     let done = ctx.next_label("eval_called_class_done");
     emit_eval_late_static_class_id_to_reg(ctx, "r8")?;
     abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_class_name_count", 0);
-    ctx.emitter.instruction("cmp r8, r9");                                      // reject called-class ids outside the class-name table
-    ctx.emitter.instruction(&format!("jae {}", missing));                       // fall back to the lexical eval class when metadata is missing
+    ctx.emitter.instruction("cmp r8, r9"); // reject called-class ids outside the class-name table
+    ctx.emitter.instruction(&format!("jae {}", missing)); // fall back to the lexical eval class when metadata is missing
     abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
-    ctx.emitter.instruction("shl r8, 4");                                       // convert class id to a 16-byte class-name table offset
-    ctx.emitter.instruction("add r10, r8");                                     // select the called-class metadata row
-    ctx.emitter.instruction("mov rax, QWORD PTR [r10]");                        // load the called-class name pointer
-    ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                    // load the called-class name length
-    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the missing-metadata fallback
+    ctx.emitter.instruction("shl r8, 4"); // convert class id to a 16-byte class-name table offset
+    ctx.emitter.instruction("add r10, r8"); // select the called-class metadata row
+    ctx.emitter.instruction("mov rax, QWORD PTR [r10]"); // load the called-class name pointer
+    ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + 8]"); // load the called-class name length
+    ctx.emitter.instruction(&format!("jmp {}", done)); // skip the missing-metadata fallback
     ctx.emitter.label(&missing);
     abi::emit_symbol_address(ctx.emitter, "rax", "_class_name_missing");
-    ctx.emitter.instruction("mov rdx, 0");                                      // empty called-class name triggers lexical fallback in eval
+    ctx.emitter.instruction("mov rdx, 0"); // empty called-class name triggers lexical fallback in eval
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -1595,12 +1811,12 @@ fn emit_branch_if_scope_entry_missing(ctx: &mut FunctionContext<'_>, label: &str
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
-            ctx.emitter.instruction(&format!("b.eq {}", label));                // skip reload when eval unset or omitted the local
+            ctx.emitter.instruction(&format!("b.eq {}", label)); // skip reload when eval unset or omitted the local
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
-            ctx.emitter.instruction(&format!("je {}", label));                  // skip reload when eval unset or omitted the local
+            ctx.emitter.instruction(&format!("je {}", label)); // skip reload when eval unset or omitted the local
         }
     }
 }
@@ -1712,12 +1928,12 @@ fn emit_retain_scope_cell_if_owned(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("b.eq {}", skip));                 // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("b.eq {}", skip)); // borrowed scope entries can be copied back without retaining
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("je {}", skip));                   // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("je {}", skip)); // borrowed scope entries can be copied back without retaining
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_incref");
@@ -1837,13 +2053,13 @@ fn emit_branch_if_eval_status(ctx: &mut FunctionContext<'_>, status: i64, label:
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("cmp {}, #{}", result_reg, status));      // compare the eval bridge status against the handled code
-            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch to the matching eval status handler
+                .instruction(&format!("cmp {}, #{}", result_reg, status)); // compare the eval bridge status against the handled code
+            ctx.emitter.instruction(&format!("b.eq {}", label)); // branch to the matching eval status handler
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("cmp {}, {}", result_reg, status));       // compare the eval bridge status against the handled code
-            ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching eval status handler
+                .instruction(&format!("cmp {}, {}", result_reg, status)); // compare the eval bridge status against the handled code
+            ctx.emitter.instruction(&format!("je {}", label)); // branch to the matching eval status handler
         }
     }
 }
@@ -1871,21 +2087,21 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the eval runtime diagnostic to stderr
+            ctx.emitter.instruction("mov x0, #2"); // write the eval runtime diagnostic to stderr
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len));             // pass the eval runtime diagnostic byte length
+                .instruction(&format!("mov x2, #{}", message_len)); // pass the eval runtime diagnostic byte length
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");                              // write the eval runtime diagnostic to Linux stderr
+            ctx.emitter.instruction("mov edi, 2"); // write the eval runtime diagnostic to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
-                .instruction(&format!("mov edx, {}", message_len));             // pass the eval runtime diagnostic byte length
-            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall");                                 // emit the eval runtime diagnostic before exiting
+                .instruction(&format!("mov edx, {}", message_len)); // pass the eval runtime diagnostic byte length
+            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall"); // emit the eval runtime diagnostic before exiting
             abi::emit_exit(ctx.emitter, 1);
         }
     }

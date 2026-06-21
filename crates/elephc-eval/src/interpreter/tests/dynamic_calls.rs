@@ -299,6 +299,30 @@ fn execute_program_static_runtime_method_hook_binds_named_args() {
     assert_eq!(values.get(result), FakeValue::String("AB".to_string()));
 }
 
+/// Verifies runtime AOT static method fallback fills registered scalar defaults.
+#[test]
+fn execute_program_static_runtime_method_hook_binds_default_args() {
+    let program = parse_fragment(
+        br#"echo KnownClass::join("A"); echo ":";
+return call_user_func_array(["KnownClass", "join"], ["left" => "C"]);"#,
+    )
+    .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut signature = NativeCallableSignature::new(2);
+    assert!(signature.set_param_name(0, "left"));
+    assert!(signature.set_param_name(1, "right"));
+    assert!(signature.set_param_default(1, NativeCallableDefault::String("B".to_string())));
+    assert!(context.define_native_static_method_signature("KnownClass", "join", signature));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("registered AOT defaults should bind");
+
+    assert_eq!(values.output, "AB:");
+    assert_eq!(values.get(result), FakeValue::String("CB".to_string()));
+}
+
 /// Verifies runtime AOT static method fallback rejects named arguments without metadata.
 #[test]
 fn execute_program_static_runtime_method_hook_rejects_unregistered_named_args() {

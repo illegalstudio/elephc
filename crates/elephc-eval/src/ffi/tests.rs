@@ -20,6 +20,7 @@ use crate::abi::{
     ElephcEvalContext, ElephcEvalResult, ElephcEvalScope, ABI_VERSION, SCOPE_FLAG_DIRTY,
     SCOPE_FLAG_OWNED, SCOPE_FLAG_PRESENT, SCOPE_FLAG_UNSET,
 };
+use crate::context::NativeCallableDefault;
 use crate::errors::EvalStatus;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 use std::ffi::c_void;
@@ -314,6 +315,36 @@ fn register_native_methods_record_signature_metadata() {
             value.len() as u64,
         )
     };
+    let method_default_registered = unsafe {
+        __elephc_eval_register_native_method_param_default_string(
+            &mut ctx,
+            method.as_ptr(),
+            method.len() as u64,
+            1,
+            right.as_ptr(),
+            right.len() as u64,
+        )
+    };
+    let static_default_registered = unsafe {
+        __elephc_eval_register_native_static_method_param_default_scalar(
+            &mut ctx,
+            static_method.as_ptr(),
+            static_method.len() as u64,
+            0,
+            2,
+            42,
+        )
+    };
+    let constructor_default_registered = unsafe {
+        __elephc_eval_register_native_constructor_param_default_scalar(
+            &mut ctx,
+            class.as_ptr(),
+            class.len() as u64,
+            0,
+            1,
+            1,
+        )
+    };
 
     assert_eq!(method_registered, 1);
     assert_eq!(method_param_registered, 1);
@@ -321,6 +352,9 @@ fn register_native_methods_record_signature_metadata() {
     assert_eq!(static_param_registered, 1);
     assert_eq!(constructor_registered, 1);
     assert_eq!(constructor_param_registered, 1);
+    assert_eq!(method_default_registered, 1);
+    assert_eq!(static_default_registered, 1);
+    assert_eq!(constructor_default_registered, 1);
     assert_eq!(
         ctx.native_method_signature("knownclass", "JOIN")
             .expect("method metadata")
@@ -338,6 +372,24 @@ fn register_native_methods_record_signature_metadata() {
             .expect("constructor metadata")
             .param_names(),
         &["value".to_string()]
+    );
+    assert_eq!(
+        ctx.native_method_signature("knownclass", "JOIN")
+            .expect("method metadata")
+            .param_default(1),
+        Some(&NativeCallableDefault::String("right".to_string()))
+    );
+    assert_eq!(
+        ctx.native_static_method_signature("KnownClass", "SUM")
+            .expect("static method metadata")
+            .param_default(0),
+        Some(&NativeCallableDefault::Int(42))
+    );
+    assert_eq!(
+        ctx.native_constructor_signature("knownclass")
+            .expect("constructor metadata")
+            .param_default(0),
+        Some(&NativeCallableDefault::Bool(true))
     );
 }
 
