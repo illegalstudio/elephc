@@ -84,6 +84,7 @@ pub(in crate::interpreter) fn eval_expr(
                 let args = bind_native_callable_args(
                     context.native_constructor_signature(&class_name),
                     args,
+                    values,
                 )?;
                 values
                     .new_object(&class_name)

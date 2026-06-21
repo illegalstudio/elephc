@@ -31,8 +31,8 @@ mod scope_cells;
 mod statements;
 
 use crate::context::{
-    ElephcEvalContext, ElephcEvalExecutionScope, EvalReferenceTarget, NativeCallableSignature,
-    NativeFunction,
+    ElephcEvalContext, ElephcEvalExecutionScope, EvalReferenceTarget, NativeCallableDefault,
+    NativeCallableSignature, NativeFunction,
 };
 use crate::errors::{EvalParseError, EvalStatus};
 use crate::eval_ir::{
