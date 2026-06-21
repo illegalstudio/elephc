@@ -280,3 +280,27 @@ fn test_parse_foreach_destructure_keyed_pattern() {
         Some(StmtKind::Synthetic(stmts)) if !stmts.is_empty()
     ));
 }
+
+/// Verifies `goto target;` parses to a `Goto` statement carrying the label name.
+#[test]
+fn test_goto_parses() {
+    let stmts = parse_source("<?php goto target;");
+    assert!(matches!(&stmts[0].kind, StmtKind::Goto(name) if name == "target"));
+}
+
+/// Verifies a bare `name:` at statement position parses to a `Label` statement, distinct from a
+/// constant-expression statement or a static `::` reference.
+#[test]
+fn test_label_parses() {
+    let stmts = parse_source("<?php target: echo 1;");
+    assert!(matches!(&stmts[0].kind, StmtKind::Label(name) if name == "target"));
+    assert!(matches!(&stmts[1].kind, StmtKind::Echo(_)));
+}
+
+/// Verifies an `Identifier ::` reference is not misparsed as a label: `Foo::BAR;` stays an
+/// expression statement because `::` lexes as one `DoubleColon` token, not `Identifier` + `Colon`.
+#[test]
+fn test_static_ref_is_not_label() {
+    let stmts = parse_source("<?php Foo::BAR;");
+    assert!(!matches!(&stmts[0].kind, StmtKind::Label(_)));
+}

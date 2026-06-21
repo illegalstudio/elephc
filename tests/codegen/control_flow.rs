@@ -25,3 +25,5 @@ mod ternary;
 mod closures;
 #[path = "control_flow/expression_statements.rs"]
 mod expression_statements;
+#[path = "control_flow/goto.rs"]
+mod goto;

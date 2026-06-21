@@ -166,6 +166,8 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         },
         StmtKind::Break(levels) => StmtKind::Break(levels),
         StmtKind::Continue(levels) => StmtKind::Continue(levels),
+        StmtKind::Goto(label) => StmtKind::Goto(label),
+        StmtKind::Label(label) => StmtKind::Label(label),
         StmtKind::ExprStmt(expr) => StmtKind::ExprStmt(fold_expr(expr)),
         StmtKind::NamespaceDecl { name } => StmtKind::NamespaceDecl { name },
         StmtKind::NamespaceBlock { name, body } => StmtKind::NamespaceBlock {

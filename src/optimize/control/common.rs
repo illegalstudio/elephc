@@ -284,6 +284,22 @@ fn block_has_level_sensitive_loop_exit(body: &[Stmt]) -> bool {
     body.iter().any(stmt_has_level_sensitive_loop_exit)
 }
 
+/// Returns `true` if any case body or the default body has a `label:` at its top level.
+///
+/// Such labels are `goto` targets; flattening a switch into its executed path would drop the
+/// statements that follow a terminal effect, including the label itself, so the caller keeps the
+/// switch structurally intact instead. Only the top level of each body is inspected: deeper labels
+/// live inside nested blocks that are not subject to switch-path flattening.
+pub(crate) fn switch_contains_top_level_label(
+    cases: &[(Vec<Expr>, Vec<Stmt>)],
+    default: &Option<Vec<Stmt>>,
+) -> bool {
+    let has_top_level_label =
+        |body: &[Stmt]| body.iter().any(|stmt| matches!(stmt.kind, StmtKind::Label(_)));
+    cases.iter().any(|(_, body)| has_top_level_label(body))
+        || default.as_ref().is_some_and(|body| has_top_level_label(body))
+}
+
 /// Returns `true` if the statement contains a level-sensitive loop exit:
 /// `Break(n)` where n > 1, or any `Continue`. Recursively checks nested
 /// structures including synthetic statements, if/ifdef, loops, switch, and try-catch.

@@ -108,6 +108,8 @@ fn hoist_stmt_kind(kind: StmtKind, span: Span, ctx: &mut HoistCtx) -> Result<Stm
         | StmtKind::IfDef { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
         | StmtKind::Global { .. }

@@ -74,6 +74,7 @@ pub(super) fn check_types_impl(
     let mut errors = Vec::new();
 
     errors.extend(validate_yield_contexts(program));
+    errors.extend(super::goto_validation::validate_goto_labels(program));
 
     checker.collect_function_decls(program, &mut errors);
 

@@ -362,6 +362,8 @@ fn discover_stmt(
         | StmtKind::IfDef { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::Global { .. }
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }

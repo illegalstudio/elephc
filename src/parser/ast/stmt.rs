@@ -162,6 +162,8 @@ pub enum StmtKind {
     },
     Break(usize),
     Continue(usize),
+    Goto(String),
+    Label(String),
     ExprStmt(Expr),
     NamespaceDecl {
         name: Option<Name>,

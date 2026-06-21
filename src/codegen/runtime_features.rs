@@ -289,6 +289,8 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         | StmtKind::RefAssign { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
@@ -606,6 +608,8 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
         | StmtKind::RefAssign { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }

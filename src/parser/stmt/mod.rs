@@ -149,6 +149,16 @@ fn parse_stmt_dispatch(
             }
         }
         Token::LBracket => assign::parse_list_unpack(tokens, pos, span),
+        // Label declaration `name:` (a `goto` target). A bare identifier immediately followed by a
+        // single `:` is a PHP label. `::` lexes as one `DoubleColon` token, so this never collides
+        // with a static reference (`Name::x`), and a constant-expression statement is `NAME;`.
+        Token::Identifier(name)
+            if matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::Colon)) =>
+        {
+            let name = name.clone();
+            *pos += 2; // consume the label identifier and its trailing colon
+            Ok(Stmt::new(StmtKind::Label(name), span))
+        }
         Token::Identifier(_)
         | Token::Self_
         | Token::Parent
@@ -199,6 +209,12 @@ fn parse_stmt_dispatch(
             expect_semicolon(tokens, pos)?;
             Ok(Stmt::new(StmtKind::Continue(levels), span))
         }
+        Token::Goto => {
+            *pos += 1; // consume `goto`
+            let label = parse_goto_label(tokens, pos, span)?;
+            expect_semicolon(tokens, pos)?;
+            Ok(Stmt::new(StmtKind::Goto(label), span))
+        }
         // Bare expression statement led by a value or unary operator (e.g.
         // `0 > $T && $T += 0x40;`, `!$ok && fail();`, `new Foo();`). PHP allows any
         // expression as a statement; the keyword/variable/identifier forms are routed by
@@ -243,6 +259,29 @@ fn parse_loop_exit_level(
         _ => Err(CompileError::new(
             expr.span,
             &format!("{} operator requires an integer literal level", keyword),
+        )),
+    }
+}
+
+/// Parses the target label name that follows a `goto` keyword.
+///
+/// PHP labels are plain identifiers, so the next token must be an `Identifier`; anything else
+/// (reserved keyword, operator, end of input) is rejected with a diagnostic pointing at the
+/// `goto` statement. Advances `pos` past the consumed identifier on success.
+fn parse_goto_label(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<String, CompileError> {
+    match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::Identifier(name)) => {
+            let name = name.clone();
+            *pos += 1; // consume the label identifier
+            Ok(name)
+        }
+        _ => Err(CompileError::new(
+            span,
+            "expected a label name after `goto`",
         )),
     }
 }

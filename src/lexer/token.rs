@@ -38,6 +38,7 @@ pub enum Token {
     For,
     Break,
     Continue,
+    Goto,
     Function,
     Return,
     True,

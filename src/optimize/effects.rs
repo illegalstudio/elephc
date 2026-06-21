@@ -183,6 +183,8 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         | StmtKind::Return(None)
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => Effect::PURE,

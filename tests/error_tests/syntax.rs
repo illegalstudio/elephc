@@ -39,6 +39,26 @@ fn test_error_short_ternary_else_invalid_assignment_target() {
     expect_error("<?php false ?: bar() = 5;", "Invalid assignment target");
 }
 
+/// Verifies that `goto` with no following label name is a parse error rather than a silent accept.
+#[test]
+fn test_error_goto_without_label() {
+    expect_error("<?php goto;", "expected a label name after `goto`");
+}
+
+/// Verifies that a `goto` to a label that is never defined in the same scope is reported, instead
+/// of failing an internal EIR block-terminator check.
+#[test]
+fn test_error_goto_undefined_label() {
+    expect_error("<?php echo 1; goto nowhere;", "undefined label 'nowhere'");
+}
+
+/// Verifies that defining the same label twice in one scope is rejected, since it would make any
+/// `goto` to that name an ambiguous jump target.
+#[test]
+fn test_error_duplicate_label() {
+    expect_error("<?php dup: echo 1; dup: echo 2;", "label 'dup' already defined");
+}
+
 /// Verifies the error diagnostic for unterminated string.
 #[test]
 fn test_error_unterminated_string() {

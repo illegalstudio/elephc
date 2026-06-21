@@ -44,10 +44,16 @@ fn env_after_expr_side_effects(env: ConstantEnv, exprs: &[&Expr]) -> ConstantEnv
 /// Iterates through a block of statements, propagating constants and stopping early
 /// when a terminal effect (return, throw, exit) is encountered.
 pub(crate) fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stmt>, ConstantEnv) {
+    // A `label:` is reachable through a `goto` even when the preceding statement terminates, so it
+    // must survive. When the block contains a label, keep every statement (the `Label` arm of
+    // `propagate_stmt` already clears the environment at each join point); labels are rare, so the
+    // retained unreachable statements are an acceptable trade.
+    let block_has_label = body.iter().any(|stmt| matches!(stmt.kind, StmtKind::Label(_)));
     let mut propagated = Vec::new();
     for stmt in body {
         let (stmt, next_env) = propagate_stmt(stmt, env);
-        let stops_here = !matches!(stmt_terminal_effect(&stmt), TerminalEffect::FallsThrough);
+        let stops_here =
+            !block_has_label && !matches!(stmt_terminal_effect(&stmt), TerminalEffect::FallsThrough);
         propagated.push(stmt);
         env = next_env;
         if stops_here {
@@ -222,6 +228,13 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
         } => propagate_try_stmt(try_body, catches, finally_body, span, env),
         StmtKind::Break(levels) => (Stmt::new(StmtKind::Break(levels), span), env),
         StmtKind::Continue(levels) => (Stmt::new(StmtKind::Continue(levels), span), env),
+        // `goto` transfers control unconditionally; the fall-through environment it yields is never
+        // observed (the next statement is unreachable until a label), so pass it through unchanged.
+        StmtKind::Goto(label) => (Stmt::new(StmtKind::Goto(label), span), env),
+        // A label is a join point: a `goto` elsewhere may reach it with a different variable state
+        // than the straight-line predecessor, so no constant known above the label may be assumed
+        // below it. Clear the environment, mirroring `IncludeOnceMark`.
+        StmtKind::Label(label) => (Stmt::new(StmtKind::Label(label), span), HashMap::new()),
         StmtKind::ExprStmt(expr) => {
             let expr = propagate_expr(expr, &env);
             let next_env = if let Some(names) = unset_target_names(&expr) {

@@ -33,6 +33,7 @@ pub(crate) fn bareword_name_from_token(token: &Token) -> Option<String> {
         Token::For => Some("for".to_string()),
         Token::Break => Some("break".to_string()),
         Token::Continue => Some("continue".to_string()),
+        Token::Goto => Some("goto".to_string()),
         Token::Function => Some("function".to_string()),
         Token::Return => Some("return".to_string()),
         Token::True => Some("true".to_string()),

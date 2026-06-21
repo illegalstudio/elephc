@@ -37,11 +37,24 @@ pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
 /// Core DCE loop for a statement block. Iterates statements, applies per-statement DCE,
 /// tracks guard state, handles tail-sinking for if/switch/try, and breaks early on terminal control flow.
 fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
+    // Unstructured control flow (`goto`/`label`) breaks the structured reachability and tail-sinking
+    // model this pass relies on: a `label:` is a jump target reachable even when the textually-
+    // preceding statement terminates, and sinking a tail that contains a label would duplicate or
+    // misplace the target. When this statement list contains any label, fall back to a conservative
+    // mode that keeps every statement (no trailing drop), never tail-sinks, and resets guard state at
+    // each label join point. Labels are rare, so the missed local DCE is an acceptable trade.
+    let block_has_label = body.iter().any(|stmt| matches!(stmt.kind, StmtKind::Label(_)));
     let mut eliminated = Vec::new();
     let mut stmts = body.into_iter().peekable();
     while let Some(stmt) = stmts.next() {
+        if block_has_label && matches!(stmt.kind, StmtKind::Label(_)) {
+            // Join point: a `goto` may reach this label with different variable values than the
+            // straight-line predecessor, so guards established above may not hold here.
+            guards = GuardState::default();
+        }
         let has_tail = stmts.peek().is_some();
-        let use_tail_sink = has_tail
+        let use_tail_sink = !block_has_label
+            && has_tail
             && matches!(
                 stmt.kind,
                 StmtKind::If { .. } | StmtKind::IfDef { .. } | StmtKind::Switch { .. } | StmtKind::Try { .. }
@@ -52,9 +65,10 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
         } else {
             dce_stmt_with_guards(stmt, &guards)
         };
-        let stops_here = dce_stmt
-            .last()
-            .is_some_and(|stmt| !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough));
+        let stops_here = !block_has_label
+            && dce_stmt
+                .last()
+                .is_some_and(|stmt| !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough));
         for stmt in &dce_stmt {
             invalidate_guards_for_stmt(stmt, &mut guards);
         }

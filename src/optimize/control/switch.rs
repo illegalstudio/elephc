@@ -50,6 +50,22 @@ pub(crate) fn prune_switch_stmt(
         }];
     }
 
+    // A `label:` at the top level of a case body is a `goto` target. Flattening the switch into its
+    // executed path would drop statements after a terminal effect (including such a label), so keep
+    // the switch structurally intact whenever any case carries a label. Nested labels are preserved
+    // by the label-aware `prune_block` already applied to each body above.
+    if switch_contains_top_level_label(&cases, &default) {
+        return vec![Stmt {
+            kind: StmtKind::Switch {
+                subject,
+                cases,
+                default,
+            },
+            span,
+            attributes: Vec::new(),
+        }];
+    }
+
     if cases.is_empty() {
         let mut stmts = expr_to_effect_stmt(subject);
         if let Some(default_body) = default {

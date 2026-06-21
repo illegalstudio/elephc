@@ -16,12 +16,18 @@ use super::loop_exit::block_contains_loop_exit;
 /// if a statement has a terminal effect (return, throw, break, etc.) that prevents
 /// fallthrough. Preserves effectful statements even when they produce unused results.
 pub(crate) fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
+    // `goto`/`label` introduce unstructured control flow: a `label:` is reachable through a `goto`
+    // even when the textually-preceding statement terminates, so it must not be dropped as
+    // unreachable trailing code. When this block contains a label, keep every statement (each is
+    // still pruned individually); labels are rare, so the retained dead code is an acceptable trade.
+    let block_has_label = body.iter().any(|stmt| matches!(stmt.kind, StmtKind::Label(_)));
     let mut pruned = Vec::new();
     for stmt in body {
         let pruned_stmt = prune_stmt(stmt);
-        let stops_here = pruned_stmt
-            .last()
-            .is_some_and(|stmt| !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough));
+        let stops_here = !block_has_label
+            && pruned_stmt
+                .last()
+                .is_some_and(|stmt| !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough));
         pruned.extend(pruned_stmt);
         if stops_here {
             break;

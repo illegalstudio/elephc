@@ -30,6 +30,13 @@ use crate::types::PhpType;
 /// Lowers one AST statement into the current EIR insertion block.
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     if ctx.builder.insertion_block_is_terminated() {
+        // A `label:` opens a new block that a `goto` elsewhere may branch into, so it must be lowered
+        // even when the straight-line predecessor already terminated (e.g. the statement right before
+        // it was a `goto`/`return`). Every other statement after a terminator is genuinely unreachable
+        // and is skipped. Lowering the label repositions emission at its (reachable) block.
+        if let StmtKind::Label(label) = &stmt.kind {
+            lower_label(ctx, label);
+        }
         return;
     }
     lower_statement_concat_reset(ctx, stmt.span);
@@ -101,6 +108,8 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         } => lower_try(ctx, try_body, catches, finally_body.as_deref(), stmt.span),
         StmtKind::Break(level) => lower_break(ctx, *level),
         StmtKind::Continue(level) => lower_continue(ctx, *level),
+        StmtKind::Goto(label) => lower_goto(ctx, label),
+        StmtKind::Label(label) => lower_label(ctx, label),
         StmtKind::ExprStmt(expr) => {
             let value = lower_expr(ctx, expr);
             release_expr_statement_result(ctx, value, expr.span);
@@ -250,10 +259,15 @@ fn lower_statement_concat_reset(ctx: &mut LoweringContext<'_, '_>, span: Span) {
 /// Lowers a sequence of statements until the current block terminates.
 fn lower_block(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
     for stmt in body {
-        lower_stmt(ctx, stmt);
-        if ctx.builder.insertion_block_is_terminated() {
-            break;
+        // Once the current block is terminated the remaining statements are unreachable in straight-
+        // line order — except a `label:`, which a `goto` may branch into. Skip unreachable non-label
+        // statements, but still lower labels so their block is opened and emission resumes there.
+        if ctx.builder.insertion_block_is_terminated()
+            && !matches!(stmt.kind, StmtKind::Label(_))
+        {
+            continue;
         }
+        lower_stmt(ctx, stmt);
     }
 }
 
@@ -1839,6 +1853,31 @@ fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
         return;
     };
     terminate_branch(ctx, frame.continue_block);
+}
+
+/// Lowers `goto label;` as an unconditional branch to the label's block.
+///
+/// The target block is shared with the matching `label:` (created lazily by whichever is lowered
+/// first), so forward and backward jumps both resolve to one block. Routed through
+/// `terminate_branch` so the jump runs any pending `finally` bodies exactly as `break`/`continue`
+/// do. PHP variables live in memory slots, not SSA block arguments, so the branch needs no args:
+/// the label block reloads them from the same slots.
+fn lower_goto(ctx: &mut LoweringContext<'_, '_>, label: &str) {
+    let target = ctx.label_block(label);
+    terminate_branch(ctx, target);
+}
+
+/// Lowers a `label:` marker by closing the current straight-line block with a fall-through branch
+/// into the label's (shared) block and continuing emission there.
+///
+/// Uses `branch_to` rather than `terminate_branch`: falling into a label does not leave any
+/// enclosing `try`, so no `finally` runs. If control reaching the label is already terminated
+/// (e.g. the preceding statement was a `return`/`goto`), `branch_to` is a no-op and emission simply
+/// resumes in the label block, which remains reachable through any `goto` that targets it.
+fn lower_label(ctx: &mut LoweringContext<'_, '_>, label: &str) {
+    let target = ctx.label_block(label);
+    branch_to(ctx, target);
+    ctx.builder.position_at_end(target);
 }
 
 /// Lowers a return statement using the current function return contract.

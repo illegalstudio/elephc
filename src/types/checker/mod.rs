@@ -22,6 +22,8 @@ mod builtin_user_filter;
 mod callables;
 /// yield_validation
 pub(crate) mod yield_validation;
+/// goto_validation
+pub(crate) mod goto_validation;
 mod driver;
 mod extern_decl;
 mod functions;

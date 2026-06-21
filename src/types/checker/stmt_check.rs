@@ -92,6 +92,10 @@ impl Checker {
             StmtKind::PackedClassDecl { .. } => Ok(()),
             StmtKind::Break(levels) => self.check_loop_exit(stmt.span, "break", *levels),
             StmtKind::Continue(levels) => self.check_loop_exit(stmt.span, "continue", *levels),
+            // `goto`/label carry no value and reference a control-flow label, not a typed name.
+            // Label resolution (undefined/duplicate target) is validated separately over the whole
+            // function body; nothing to type-check at the individual statement level here.
+            StmtKind::Goto(_) | StmtKind::Label(_) => Ok(()),
             StmtKind::ExprStmt(expr) => {
                 self.infer_type_with_assignment_effects(expr, env)?;
                 Ok(())

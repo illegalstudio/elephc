@@ -403,6 +403,8 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         // Statements with no Expr children or only simple data:
         other @ (StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::UseDecl { .. }
         | StmtKind::Global { .. }
         | StmtKind::PackedClassDecl { .. }

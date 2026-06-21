@@ -234,6 +234,8 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
         },
         StmtKind::Break(levels) => StmtKind::Break(levels),
         StmtKind::Continue(levels) => StmtKind::Continue(levels),
+        StmtKind::Goto(label) => StmtKind::Goto(label),
+        StmtKind::Label(label) => StmtKind::Label(label),
         StmtKind::ExprStmt(expr) => StmtKind::ExprStmt(rewrite_expr(expr, defines)),
         StmtKind::FunctionDecl {
             name,
