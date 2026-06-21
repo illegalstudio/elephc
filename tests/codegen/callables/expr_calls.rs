@@ -1480,3 +1480,34 @@ echo $d(21);
     );
     assert_eq!(out, "42");
 }
+
+/// Verifies invoking the result of an instance method call directly: `$obj->method()(args)` calls
+/// the closure returned by `getCb` with `41`, yielding `42`.
+#[test]
+fn test_invoke_instance_method_call_result() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public function getCb() { return function ($x) { return $x + 1; }; }
+}
+$b = new Box();
+echo $b->getCb()(41);
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies invoking the result of a static method call directly: `Box::make()()` calls the closure
+/// returned by `make`, yielding `"S"`.
+#[test]
+fn test_invoke_static_method_call_result() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public static function make() { return function () { return "S"; }; }
+}
+echo Box::make()();
+"#,
+    );
+    assert_eq!(out, "S");
+}

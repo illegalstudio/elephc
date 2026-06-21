@@ -255,6 +255,9 @@ pub(super) fn parse_expr_bp(
                         | ExprKind::ExprCall { .. }
                         | ExprKind::ClosureCall { .. }
                         | ExprKind::FunctionCall { .. }
+                        | ExprKind::MethodCall { .. }
+                        | ExprKind::NullsafeMethodCall { .. }
+                        | ExprKind::StaticMethodCall { .. }
                 ) {
                     let call_span = tokens[*pos].1;
                     *pos += 1;
