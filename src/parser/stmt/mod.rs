@@ -22,6 +22,7 @@ use crate::names::{Name, NameKind};
 use crate::parser::ast::{AttributeGroup, ExprKind, Stmt, StmtKind};
 use crate::parser::control;
 use crate::parser::expr::parse_expr;
+use crate::parser::expr::token_starts_prefix_expression;
 use crate::span::Span;
 
 pub use ffi::parse_extern_stmts;
@@ -197,6 +198,14 @@ fn parse_stmt_dispatch(
             let levels = parse_loop_exit_level("continue", tokens, pos)?;
             expect_semicolon(tokens, pos)?;
             Ok(Stmt::new(StmtKind::Continue(levels), span))
+        }
+        // Bare expression statement led by a value or unary operator (e.g.
+        // `0 > $T && $T += 0x40;`, `!$ok && fail();`, `new Foo();`). PHP allows any
+        // expression as a statement; the keyword/variable/identifier forms are routed by
+        // the arms above, so anything reaching here that can start a prefix expression is
+        // parsed as `expr ;`. Tokens that cannot begin an expression still error below.
+        other if token_starts_prefix_expression(other) => {
+            simple::parse_expr_stmt(tokens, pos, span)
         }
         other => Err(CompileError::new(
             span,

@@ -5,6 +5,34 @@ sidebar:
   order: 3
 ---
 
+## Expression statements
+
+Any expression can stand alone as a statement, followed by a semicolon — not only
+assignments and function calls. A statement may begin with a literal, a comparison, or a
+unary operator:
+
+```php
+<?php
+$total + 1;      // evaluated, result discarded
+new Logger();    // constructed for its constructor's side effect
+-$balance;       // unary expression statement
+```
+
+This enables the **short-circuit guard** idiom, where the right-hand side runs only when the
+left-hand condition allows it:
+
+```php
+<?php
+// `&&` runs the action only when the condition is true:
+0 > $t && $t += 0x40;            // add 0x40 only when $t is negative
+
+// `||` runs the action only when the condition is false:
+0 === $count || printf("%d items\n", $count);
+```
+
+Both `&&` and `||` short-circuit: the right operand is not evaluated when the left already
+decides the result, so any side effect (assignment, call) on the right is conditional.
+
 ## if / elseif / else
 
 ```php

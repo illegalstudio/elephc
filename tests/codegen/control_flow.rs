@@ -23,3 +23,5 @@ mod nulls;
 mod ternary;
 #[path = "control_flow/closures.rs"]
 mod closures;
+#[path = "control_flow/expression_statements.rs"]
+mod expression_statements;

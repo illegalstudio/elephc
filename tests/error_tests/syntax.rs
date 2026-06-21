@@ -16,6 +16,21 @@ fn test_error_missing_open_tag() {
     expect_error("echo \"hi\";", "<?php");
 }
 
+/// Verifies a token that cannot begin an expression (`=>`) is still rejected at statement
+/// position. The bare-expression-statement fallback only fires for prefix-expression starters,
+/// so genuinely invalid leading tokens keep the "statement position" diagnostic.
+#[test]
+fn test_error_non_expression_token_at_statement_position() {
+    expect_error("<?php => 5;", "statement position");
+}
+
+/// Verifies a value-led bare expression statement still requires its terminating semicolon:
+/// `0 > $x` with no `;` is reported, not silently accepted.
+#[test]
+fn test_error_value_led_statement_missing_semicolon() {
+    expect_error("<?php 0 > $x", "Expected ';'");
+}
+
 /// Verifies the error diagnostic for unterminated string.
 #[test]
 fn test_error_unterminated_string() {
@@ -450,11 +465,13 @@ fn test_error_unexpected_token_in_expr() {
     expect_error("<?php echo ;", "Unexpected token");
 }
 
-/// Verifies the error diagnostic for unexpected token in stmt.
+/// Verifies the error diagnostic for an unexpected token in statement position. A leading
+/// binary operator like `*` cannot begin an expression, so it is rejected. (A bare value
+/// expression such as `42;` is valid PHP and now parses as an expression statement, so it is
+/// no longer an error case.)
 #[test]
 fn test_error_unexpected_token_in_stmt() {
-    // A bare expression statement (e.g., `42;`) in statement position produces "Unexpected token".
-    expect_error("<?php 42;", "Unexpected token");
+    expect_error("<?php * 5;", "Unexpected token");
 }
 
 /// Verifies the error diagnostic for missing function name.

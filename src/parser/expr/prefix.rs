@@ -272,6 +272,92 @@ pub(super) fn parse_prefix(
     }
 }
 
+/// Returns true when `token` can begin a prefix/primary PHP expression — i.e. when
+/// [`parse_prefix`] would accept it as the first token of an expression.
+///
+/// Used by the statement dispatcher to recognise a *bare expression statement* whose leading
+/// token is a value or unary operator (e.g. `0 > $T && $T += 0x40;`, `!$ok && fail();`,
+/// `new Foo();`) rather than a keyword/variable already routed to a dedicated statement parser.
+/// PHP allows any expression as a statement, so keeping this predicate in lockstep with
+/// [`parse_prefix`] ensures such statements are parsed instead of rejected at statement position.
+/// The keyword-led prefix forms (`print`, `throw`, `yield`, `include`/`require`) are listed for
+/// completeness but never reach the predicate: the dispatcher routes them to dedicated parsers
+/// before its fallback arm consults this function.
+pub(crate) fn token_starts_prefix_expression(token: &Token) -> bool {
+    matches!(
+        token,
+        // Unary / prefix operators
+        Token::Minus
+            | Token::Bang
+            | Token::Tilde
+            | Token::At
+            | Token::Print
+            | Token::Throw
+            | Token::PlusPlus
+            | Token::MinusMinus
+            // Literals and boolean/null keywords
+            | Token::True
+            | Token::False
+            | Token::Null
+            | Token::Inf
+            | Token::Nan
+            | Token::StringLiteral(_)
+            | Token::IntLiteral(_)
+            | Token::FloatLiteral(_)
+            // PHP / math named constants lowered at parse time
+            | Token::PhpIntMax
+            | Token::PhpIntMin
+            | Token::PhpFloatMax
+            | Token::PhpFloatMin
+            | Token::PhpFloatEpsilon
+            | Token::MPi
+            | Token::ME
+            | Token::MSqrt2
+            | Token::MPi2
+            | Token::MPi4
+            | Token::MLog2e
+            | Token::MLog10e
+            | Token::Stdin
+            | Token::Stdout
+            | Token::Stderr
+            | Token::PhpEol
+            | Token::PhpOs
+            | Token::DirectorySeparator
+            // Magic constants
+            | Token::DunderLine
+            | Token::DunderDir
+            | Token::DunderFile
+            | Token::DunderFunction
+            | Token::DunderClass
+            | Token::DunderMethod
+            | Token::DunderNamespace
+            | Token::DunderTrait
+            // Variables, grouping, array / closure / match constructs
+            | Token::Variable(_)
+            | Token::LParen
+            | Token::LBracket
+            | Token::Match
+            | Token::Function
+            | Token::Fn
+            | Token::AttrOpen
+            // Names and scope receivers
+            | Token::Identifier(_)
+            | Token::Backslash
+            | Token::Self_
+            | Token::Static
+            | Token::Parent
+            // Object construction / cloning / `$this` / yield / includes
+            | Token::New
+            | Token::Clone
+            | Token::This
+            | Token::Yield
+            | Token::Include
+            | Token::IncludeOnce
+            | Token::Require
+            | Token::RequireOnce
+    )
+}
+
 /// Parses `yield` and `yield from` expressions. Consumes the `yield` token and optionally
 /// parses a following expression or key => value pair. Returns a `Yield` or `YieldFrom` node
 /// using the given span. On end of input or a terminating token, returns bare `Yield { key: None, value: None }`.

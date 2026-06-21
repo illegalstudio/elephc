@@ -14,6 +14,8 @@ mod prefix;
 mod prefix_complex;
 mod pratt;
 
+pub(crate) use prefix::token_starts_prefix_expression;
+
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{Expr, ExprKind};
