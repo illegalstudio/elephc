@@ -7551,6 +7551,55 @@ echo $untyped->getType() === null ? "N" : "n";
     );
 }
 
+/// Verifies eval exposes supported generated/AOT property defaults through
+/// `ReflectionProperty::hasDefaultValue()` and `getDefaultValue()`.
+#[test]
+fn test_eval_reflection_property_exposes_aot_default_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectPropertyDefaultBase {
+    public $implicit;
+    protected int $base = 3;
+}
+class EvalAotReflectPropertyDefaultTarget extends EvalAotReflectPropertyDefaultBase {
+    public int $count = 7;
+    public static string $label = "ok";
+    public ?string $nullable = null;
+    public bool $flag = true;
+    public float $neg = -1.5;
+    public int $typed;
+}
+echo eval('foreach (["count", "label", "nullable", "implicit", "typed", "base", "flag", "neg"] as $name) {
+    $property = new ReflectionProperty("EvalAotReflectPropertyDefaultTarget", $name);
+    echo $name . ":";
+    echo $property->hasDefaultValue() ? "D:" : "d:";
+    $value = $property->getDefaultValue();
+    echo $value === null ? "null" : $value;
+    echo "|";
+}
+$listed = null;
+foreach ((new ReflectionClass("EvalAotReflectPropertyDefaultTarget"))->getProperties() as $property) {
+    if ($property->getName() === "count") {
+        $listed = $property;
+    }
+}
+echo "listed:";
+echo $listed->hasDefaultValue() ? "D:" : "d:";
+echo $listed->getDefaultValue();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "count:D:7|label:D:ok|nullable:D:null|implicit:D:null|typed:d:null|base:D:3|flag:D:1|neg:D:-1.5|listed:D:7"
+    );
+}
+
 /// Verifies eval can probe generated/AOT method predicate metadata through
 /// `ReflectionClass::hasMethod()`, `getMethod()`, and direct `ReflectionMethod`.
 #[test]

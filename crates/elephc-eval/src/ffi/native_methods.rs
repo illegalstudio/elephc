@@ -515,6 +515,56 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_type(
     .unwrap_or(0)
 }
 
+/// Registers one generated native PHP property scalar default in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. The property key must be a
+/// readable `ClassName::propertyName` byte string.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_property_default_scalar(
+    ctx: *mut ElephcEvalContext,
+    property_key_ptr: *const u8,
+    property_key_len: u64,
+    default_kind: u64,
+    default_payload: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_property_default_scalar_inner(
+            ctx,
+            property_key_ptr,
+            property_key_len,
+            default_kind,
+            default_payload,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP property string default in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. The property key and default
+/// string pointers must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_property_default_string(
+    ctx: *mut ElephcEvalContext,
+    property_key_ptr: *const u8,
+    property_key_len: u64,
+    default_ptr: *const u8,
+    default_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_property_default_string_inner(
+            ctx,
+            property_key_ptr,
+            property_key_len,
+            default_ptr,
+            default_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
 /// Runs native method registration after installing a panic boundary.
 ///
 /// # Safety
@@ -1025,6 +1075,73 @@ unsafe fn register_native_property_type_inner(
         return 0;
     };
     i32::from(context.define_native_property_type(class_name, property_name, property_type))
+}
+
+/// Runs native property scalar-default registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_property_default_scalar`; invalid
+/// handles, names, or default kinds fail closed as `false`.
+unsafe fn register_native_property_default_scalar_inner(
+    ctx: *mut ElephcEvalContext,
+    property_key_ptr: *const u8,
+    property_key_len: u64,
+    default_kind: u64,
+    default_payload: u64,
+) -> i32 {
+    let Some(default) = native_callable_scalar_default(default_kind, default_payload) else {
+        return 0;
+    };
+    register_native_property_default_inner(ctx, property_key_ptr, property_key_len, default)
+}
+
+/// Runs native property string-default registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_property_default_string`; invalid
+/// handles, names, or string buffers fail closed as `false`.
+unsafe fn register_native_property_default_string_inner(
+    ctx: *mut ElephcEvalContext,
+    property_key_ptr: *const u8,
+    property_key_len: u64,
+    default_ptr: *const u8,
+    default_len: u64,
+) -> i32 {
+    let Ok(default) = abi_name_to_string(default_ptr, default_len) else {
+        return 0;
+    };
+    register_native_property_default_inner(
+        ctx,
+        property_key_ptr,
+        property_key_len,
+        NativeCallableDefault::String(default),
+    )
+}
+
+/// Records a native property default in the property metadata table.
+///
+/// # Safety
+/// `ctx` and `property_key_ptr` must be valid for their declared use; callers
+/// are the exported ABI wrappers above.
+unsafe fn register_native_property_default_inner(
+    ctx: *mut ElephcEvalContext,
+    property_key_ptr: *const u8,
+    property_key_len: u64,
+    default: NativeCallableDefault,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(property_key) = abi_name_to_string(property_key_ptr, property_key_len) else {
+        return 0;
+    };
+    let Some((class_name, property_name)) = split_property_key(&property_key) else {
+        return 0;
+    };
+    i32::from(context.define_native_property_default(class_name, property_name, default))
 }
 
 /// Decodes scalar default kind/payload ABI fields into native callable metadata.

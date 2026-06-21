@@ -266,9 +266,9 @@ modifier filters. AOT method reflection also exposes registered parameter
 names, declared parameter types, declared return types, required/optional
 counts, and registered scalar or null default values for generated
 constructor, instance-method, and static-method signatures. AOT property
-reflection exposes registered declared property types for supported generated
-property metadata. AOT member reflection does not yet expose AOT attributes or
-property default-value metadata.
+reflection exposes registered declared property types and supported scalar,
+string, or null default values for generated property metadata. AOT member
+reflection does not yet expose AOT attributes.
 `ReflectionMethod::getDeclaringClass()` and
 `ReflectionProperty::getDeclaringClass()` return a materialized
 `ReflectionClass` for the symbol that declares the reflected
@@ -554,7 +554,7 @@ remaining class-system gaps are broader reflection APIs beyond the supported
 ReflectionClass/Function/Method/Parameter/Property/NamedType/UnionType/IntersectionType
 and attribute slice, Reflection type APIs beyond retained parameter, generated
 property, and function/method return metadata, broader
-parameter default-value objects beyond the eval-supported
+parameter and generated property default-value objects beyond the eval-supported
 constant-expression subset, and broader generated/AOT method bridge signatures beyond the current public
 non-by-reference fixed scalar/Mixed/object slice. Generated/AOT method type
 metadata is exposed for registered public bridge signatures, while broader

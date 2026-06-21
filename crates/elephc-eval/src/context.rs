@@ -272,6 +272,7 @@ pub struct ElephcEvalContext {
     native_constructors: HashMap<String, NativeCallableSignature>,
     native_class_parents: HashMap<String, String>,
     native_property_types: HashMap<(String, String), EvalParameterType>,
+    native_property_defaults: HashMap<(String, String), NativeCallableDefault>,
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
     static_properties: HashMap<(String, String), RuntimeCellHandle>,
     class_constants: HashMap<(String, String), RuntimeCellHandle>,
@@ -322,6 +323,7 @@ impl ElephcEvalContext {
             native_constructors: HashMap::new(),
             native_class_parents: HashMap::new(),
             native_property_types: HashMap::new(),
+            native_property_defaults: HashMap::new(),
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
             class_constants: HashMap::new(),
@@ -373,6 +375,7 @@ impl ElephcEvalContext {
             native_constructors: HashMap::new(),
             native_class_parents: HashMap::new(),
             native_property_types: HashMap::new(),
+            native_property_defaults: HashMap::new(),
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
             class_constants: HashMap::new(),
@@ -1781,6 +1784,31 @@ impl ElephcEvalContext {
         property_name: &str,
     ) -> Option<EvalParameterType> {
         self.native_property_types
+            .get(&native_property_key(class_name, property_name))
+            .cloned()
+    }
+
+    /// Defines generated AOT property default metadata for eval reflection.
+    pub fn define_native_property_default(
+        &mut self,
+        class_name: &str,
+        property_name: &str,
+        default: NativeCallableDefault,
+    ) -> bool {
+        let key = native_property_key(class_name, property_name);
+        if key.0.is_empty() || key.1.is_empty() {
+            return false;
+        }
+        self.native_property_defaults.insert(key, default).is_none()
+    }
+
+    /// Returns generated AOT property default metadata by PHP class and property name.
+    pub fn native_property_default(
+        &self,
+        class_name: &str,
+        property_name: &str,
+    ) -> Option<NativeCallableDefault> {
+        self.native_property_defaults
             .get(&native_property_key(class_name, property_name))
             .cloned()
     }
