@@ -414,6 +414,45 @@ pub(in crate::interpreter) fn eval_reflection_class_has_constant_result(
         .map(Some)
 }
 
+/// Handles eval-backed `ReflectionClass::getInterfaces()` and `getTraits()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_get_relation_objects_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let relation_kind = if method_name.eq_ignore_ascii_case("getInterfaces") {
+        "interfaces"
+    } else if method_name.eq_ignore_ascii_case("getTraits") {
+        "traits"
+    } else {
+        return Ok(None);
+    };
+    if !evaluated_args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let names = if let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context)
+    {
+        if relation_kind == "interfaces" {
+            metadata.interface_names
+        } else {
+            metadata.trait_names
+        }
+    } else if relation_kind == "interfaces" {
+        eval_reflection_aot_class_interface_names(&reflected_name, values)?
+    } else {
+        Vec::new()
+    };
+    eval_reflection_class_object_map_result(&names, context, values).map(Some)
+}
+
 /// Handles eval-backed `ReflectionClass::getConstant()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_get_constant_result(
     identity: u64,
@@ -2426,6 +2465,21 @@ fn eval_reflection_string_array_result(
     let mut result = values.string_array_new(names.len())?;
     for name in names {
         result = values.string_array_push(result, name)?;
+    }
+    Ok(result)
+}
+
+/// Builds a name-keyed PHP array of full ReflectionClass objects.
+fn eval_reflection_class_object_map_result(
+    names: &[String],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.assoc_new(names.len())?;
+    for name in names {
+        let key = values.string(name)?;
+        let object = eval_reflection_full_class_object_result(name, context, values)?;
+        result = values.array_set(result, key, object)?;
     }
     Ok(result)
 }

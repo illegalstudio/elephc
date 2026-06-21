@@ -303,9 +303,15 @@ impl FakeOps {
                 Self::object_property(&properties, "__interface_names")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
             }
+            (FakeValue::Object(properties), "getinterfaces") if args.is_empty() => {
+                self.object_relation_reflection_classes(&properties, "__interface_names")
+            }
             (FakeValue::Object(properties), "gettraitnames") if args.is_empty() => {
                 Self::object_property(&properties, "__trait_names")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
+            }
+            (FakeValue::Object(properties), "gettraits") if args.is_empty() => {
+                self.object_relation_reflection_classes(&properties, "__trait_names")
             }
             (FakeValue::Object(properties), "getmethods") if args.is_empty() => {
                 Self::object_property(&properties, "__methods")
@@ -810,6 +816,42 @@ impl FakeOps {
             _ => false,
         };
         self.bool_value(contains)
+    }
+
+    /// Builds a name-keyed fake ReflectionClass map from a private string-array property.
+    fn object_relation_reflection_classes(
+        &mut self,
+        properties: &[(String, RuntimeCellHandle)],
+        property: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let result = self.runtime_assoc_new(0)?;
+        let Some(array) = Self::object_property(properties, property) else {
+            return Ok(result);
+        };
+        let FakeValue::Array(elements) = self.get(array) else {
+            return Err(EvalStatus::UnsupportedConstruct);
+        };
+        for element in elements {
+            let FakeValue::String(name) = self.get(element) else {
+                return Err(EvalStatus::UnsupportedConstruct);
+            };
+            let key = self.runtime_string(&name)?;
+            let object = self.fake_reflection_class_object(&name)?;
+            self.runtime_array_set(result, key, object)?;
+        }
+        Ok(result)
+    }
+
+    /// Builds a minimal fake ReflectionClass object with a working `getName()` slot.
+    fn fake_reflection_class_object(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let name = self.string(class_name)?;
+        let object = self.alloc(FakeValue::Object(vec![("__name".to_string(), name)]));
+        self.object_classes
+            .insert(object.as_ptr() as usize, "ReflectionClass".to_string());
+        Ok(object)
     }
 
     /// Finds one fake ReflectionMethod/ReflectionProperty object by its private name slot.

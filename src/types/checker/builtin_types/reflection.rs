@@ -271,6 +271,14 @@ fn object_array_type(class_name: &str) -> TypeExpr {
     TypeExpr::Array(Box::new(TypeExpr::Named(Name::unqualified(class_name))))
 }
 
+/// Returns `array<string, ReflectionClass>` for name-keyed reflection maps.
+fn reflection_class_object_map_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Object("ReflectionClass".to_string())),
+    }
+}
+
 /// Returns a nullable object type expression for one synthetic reflection class.
 fn nullable_object_type(class_name: &str) -> TypeExpr {
     TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(class_name))))
@@ -603,9 +611,21 @@ fn builtin_reflection_class() -> FlattenedClass {
                 empty_array(),
             ),
             builtin_property(
+                "__interfaces",
+                Visibility::Private,
+                Some(object_array_type("ReflectionClass")),
+                empty_array(),
+            ),
+            builtin_property(
                 "__trait_names",
                 Visibility::Private,
                 Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
+                "__traits",
+                Visibility::Private,
+                Some(object_array_type("ReflectionClass")),
                 empty_array(),
             ),
             builtin_property(
@@ -701,9 +721,19 @@ fn builtin_reflection_class() -> FlattenedClass {
                 string_array_type(),
             ),
             builtin_reflection_class_array_method(
+                "getInterfaces",
+                "__interfaces",
+                object_array_type("ReflectionClass"),
+            ),
+            builtin_reflection_class_array_method(
                 "getTraitNames",
                 "__trait_names",
                 string_array_type(),
+            ),
+            builtin_reflection_class_array_method(
+                "getTraits",
+                "__traits",
+                object_array_type("ReflectionClass"),
             ),
             builtin_reflection_class_bool_method("isFinal", "__is_final"),
             builtin_reflection_class_bool_method("isAbstract", "__is_abstract"),
@@ -2844,6 +2874,11 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 sig.return_type = PhpType::Mixed;
             }
             if class_name == "ReflectionClass" {
+                for (property_name, property_type) in &mut class_info.properties {
+                    if matches!(property_name.as_str(), "__interfaces" | "__traits") {
+                        *property_type = reflection_class_object_map_type();
+                    }
+                }
                 for method_name in [
                     "isfinal",
                     "isabstract",
@@ -2871,6 +2906,11 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 for method_name in ["getinterfacenames", "gettraitnames"] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Array(Box::new(PhpType::Str));
+                    }
+                }
+                for method_name in ["getinterfaces", "gettraits"] {
+                    if let Some(sig) = class_info.methods.get_mut(method_name) {
+                        sig.return_type = reflection_class_object_map_type();
                     }
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getMethods")) {

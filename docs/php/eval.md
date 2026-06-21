@@ -230,13 +230,15 @@ user-defined class-like symbols.
 modifier bitmask for eval class-like metadata.
 `ReflectionClass::getInterfaceNames()` returns implemented interfaces for eval
 and generated/AOT classes, plus parent interfaces for eval and generated/AOT
-interfaces.
+interfaces. `ReflectionClass::getInterfaces()` materializes those names as a
+name-keyed array of `ReflectionClass` objects. `ReflectionClass::getTraitNames()`
+returns traits used directly by eval classes, and `ReflectionClass::getTraits()`
+materializes those direct trait names as `ReflectionClass` objects.
 `ReflectionClass::implementsInterface()` checks those eval relations
 case-insensitively, returns true when reflecting the requested interface itself,
 and checks generated/AOT class-interface relations through runtime metadata. It
 throws catchable `ReflectionException` values when the argument names a class,
-trait, enum, or missing interface, while `ReflectionClass::getTraitNames()`
-returns traits used directly by eval classes.
+trait, enum, or missing interface.
 `ReflectionClass::isSubclassOf()` checks eval parent-class chains and
 implemented or extended interfaces case-insensitively. It excludes the reflected
 symbol itself, returns `false` for trait and enum targets, and throws a

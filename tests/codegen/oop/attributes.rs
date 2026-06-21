@@ -1436,12 +1436,18 @@ $traits = $ref->getTraitNames();
 echo count($interfaces) . ":" . $interfaces[0] . ":";
 echo count($traits) . ":" . $traits[0] . ":";
 $parentInterfaces = (new ReflectionClass(StaticRelationChild::class))->getInterfaceNames();
-echo count($parentInterfaces) . ":" . $parentInterfaces[0];
+echo count($parentInterfaces) . ":" . $parentInterfaces[0] . ":";
+$interfaceObjects = $ref->getInterfaces();
+echo count($interfaceObjects) . ":" . $interfaceObjects["StaticRelationIface"]->getName() . ":";
+$traitObjects = $ref->getTraits();
+echo count($traitObjects) . ":" . $traitObjects["StaticRelationTrait"]->getName() . ":";
+$parentInterfaceObjects = (new ReflectionClass(StaticRelationChild::class))->getInterfaces();
+echo count($parentInterfaceObjects) . ":" . $parentInterfaceObjects["StaticRelationParent"]->getName();
 "#,
     );
     assert_eq!(
         out,
-        "1:StaticRelationIface:1:StaticRelationTrait:1:StaticRelationParent"
+        "1:StaticRelationIface:1:StaticRelationTrait:1:StaticRelationParent:1:StaticRelationIface:1:StaticRelationTrait:1:StaticRelationParent"
     );
 }
 
