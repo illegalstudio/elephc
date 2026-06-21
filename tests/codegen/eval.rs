@@ -6782,6 +6782,32 @@ if ($root === false) {
     assert_eq!(out.stdout, "EvalBridgeParent:false");
 }
 
+/// Verifies eval ReflectionClass::getParentClass materializes generated/AOT parents.
+#[test]
+fn test_eval_reflection_class_get_parent_class_for_aot_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectParentBase {}
+class EvalAotReflectParentChild extends EvalAotReflectParentBase {}
+eval('$parent = (new ReflectionClass("EvalAotReflectParentChild"))->getParentClass();
+if ($parent === false) {
+    echo "missing";
+} else {
+    echo $parent->getName();
+}
+echo ":";
+$root = (new ReflectionClass("EvalAotReflectParentBase"))->getParentClass();
+echo $root === false ? "false" : "bad";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "EvalAotReflectParentBase:false");
+}
+
 /// Verifies eval ReflectionClass::getConstructor crosses the generated runtime bridge.
 #[test]
 fn test_eval_reflection_class_get_constructor() {

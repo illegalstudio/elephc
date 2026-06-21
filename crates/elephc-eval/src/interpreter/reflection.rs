@@ -1243,6 +1243,7 @@ fn eval_reflection_class_new(
             &reflected_name,
             values,
         )?;
+        let parent_class_name = eval_reflection_aot_parent_class_name(&reflected_name, values)?;
         return eval_reflection_owner_object(
             EVAL_REFLECTION_OWNER_CLASS,
             &reflected_name,
@@ -1251,7 +1252,7 @@ fn eval_reflection_class_new(
             &[],
             &method_names,
             &property_names,
-            None,
+            parent_class_name.as_deref(),
             &[],
             None,
             None,
@@ -2137,7 +2138,41 @@ fn eval_reflection_full_class_object_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(metadata) = eval_reflection_class_like_attributes(class_name, context) else {
-        return values.bool_value(false);
+        let Some((flags, modifiers)) = eval_reflection_aot_class_flags(class_name, values)? else {
+            return values.bool_value(false);
+        };
+        let runtime_class_name = class_name.trim_start_matches('\\');
+        let method_names = eval_reflection_aot_member_names(
+            EVAL_REFLECTION_OWNER_METHOD,
+            runtime_class_name,
+            values,
+        )?;
+        let property_names = eval_reflection_aot_member_names(
+            EVAL_REFLECTION_OWNER_PROPERTY,
+            runtime_class_name,
+            values,
+        )?;
+        let parent_class_name = eval_reflection_aot_parent_class_name(runtime_class_name, values)?;
+        return eval_reflection_owner_object(
+            EVAL_REFLECTION_OWNER_CLASS,
+            runtime_class_name,
+            &[],
+            &[],
+            &[],
+            &method_names,
+            &property_names,
+            parent_class_name.as_deref(),
+            &[],
+            None,
+            None,
+            flags,
+            modifiers,
+            0,
+            None,
+            None,
+            context,
+            values,
+        );
     };
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS,
@@ -2214,6 +2249,37 @@ fn eval_reflection_shallow_class_object_result(
         context,
         values,
     )
+}
+
+/// Returns the generated/AOT parent class name for a reflected class, if any.
+fn eval_reflection_aot_parent_class_name(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let class_cell = values.string(runtime_class_name)?;
+    let parent_cell = match values.parent_class_name(class_cell) {
+        Ok(parent_cell) => parent_cell,
+        Err(err) => {
+            values.release(class_cell)?;
+            return Err(err);
+        }
+    };
+    values.release(class_cell)?;
+    let parent_bytes = match values.string_bytes(parent_cell) {
+        Ok(parent_bytes) => parent_bytes,
+        Err(err) => {
+            values.release(parent_cell)?;
+            return Err(err);
+        }
+    };
+    values.release(parent_cell)?;
+    let parent_name = String::from_utf8(parent_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+    if parent_name.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(parent_name))
+    }
 }
 
 /// Builds an indexed PHP string array for ReflectionClass metadata names.

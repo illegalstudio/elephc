@@ -276,8 +276,9 @@ methods that are not overridden report no prototype, matching PHP reflection.
 constructors, including registered generated/AOT constructor parameter names,
 counts, and scalar/null defaults where available; it returns `null` when no
 constructor is visible. `ReflectionClass::getParentClass()`
-returns a materialized `ReflectionClass` for eval-declared parent classes or
-`false` when no parent class exists. `ReflectionClass::newInstance()` constructs
+returns a materialized `ReflectionClass` for eval-declared and generated/AOT
+parent classes or `false` when no parent class exists.
+`ReflectionClass::newInstance()` constructs
 eval-declared reflected classes and forwards constructor arguments through
 eval's positional, named, and unpacking-aware call binding.
 `ReflectionClass::newInstanceArgs()` constructs eval-declared reflected classes
