@@ -6588,7 +6588,13 @@ $traits = $ref->getTraitNames();
 echo count($interfaces) . ":" . $interfaces[0] . ":";
 echo count($traits) . ":" . $traits[0] . ":";
 $parentInterfaces = (new ReflectionClass("EvalRelationChild"))->getInterfaceNames();
-echo count($parentInterfaces) . ":" . $parentInterfaces[0];');
+echo count($parentInterfaces) . ":" . $parentInterfaces[0] . ":";
+$interfaceObjects = $ref->getInterfaces();
+echo count($interfaceObjects) . ":" . $interfaceObjects["EvalRelationIface"]->getName() . ":";
+$traitObjects = $ref->getTraits();
+echo count($traitObjects) . ":" . $traitObjects["EvalRelationTrait"]->getName() . ":";
+$parentInterfaceObjects = (new ReflectionClass("EvalRelationChild"))->getInterfaces();
+echo count($parentInterfaceObjects) . ":" . $parentInterfaceObjects["EvalRelationParent"]->getName();');
 "#,
     );
     assert!(
@@ -6598,7 +6604,7 @@ echo count($parentInterfaces) . ":" . $parentInterfaces[0];');
     );
     assert_eq!(
         out.stdout,
-        "1:EvalRelationIface:1:EvalRelationTrait:1:EvalRelationParent"
+        "1:EvalRelationIface:1:EvalRelationTrait:1:EvalRelationParent:1:EvalRelationIface:1:EvalRelationTrait:1:EvalRelationParent"
     );
 }
 
@@ -6613,7 +6619,11 @@ class EvalAotReflectIfaceTarget implements EvalAotReflectIfaceChild {}
 eval('$interfaces = (new ReflectionClass("EvalAotReflectIfaceTarget"))->getInterfaceNames();
 sort($interfaces);
 echo count($interfaces) . ":";
-echo implode(",", $interfaces);');
+echo implode(",", $interfaces) . ":";
+$interfaceObjects = (new ReflectionClass("EvalAotReflectIfaceTarget"))->getInterfaces();
+ksort($interfaceObjects);
+echo count($interfaceObjects) . ":" . implode(",", array_keys($interfaceObjects)) . ":";
+echo $interfaceObjects["EvalAotReflectIfaceBase"]->getName();');
 "#,
     );
     assert!(
@@ -6623,7 +6633,7 @@ echo implode(",", $interfaces);');
     );
     assert_eq!(
         out.stdout,
-        "2:EvalAotReflectIfaceBase,EvalAotReflectIfaceChild"
+        "2:EvalAotReflectIfaceBase,EvalAotReflectIfaceChild:2:EvalAotReflectIfaceBase,EvalAotReflectIfaceChild:EvalAotReflectIfaceBase"
     );
 }
 

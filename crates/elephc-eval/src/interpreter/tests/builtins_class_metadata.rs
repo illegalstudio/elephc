@@ -498,6 +498,12 @@ echo count($interfaces); echo ":"; echo $interfaces[0]; echo ":";
 echo count($traits); echo ":"; echo $traits[0]; echo ":";
 $parentInterfaces = (new ReflectionClass("EvalRelationChild"))->getInterfaceNames();
 echo count($parentInterfaces); echo ":"; echo $parentInterfaces[0];
+$interfaceObjects = $ref->getInterfaces();
+echo ":"; echo count($interfaceObjects); echo ":"; echo $interfaceObjects["EvalRelationIface"]->getName();
+$traitObjects = $ref->getTraits();
+echo ":"; echo count($traitObjects); echo ":"; echo $traitObjects["EvalRelationTrait"]->getName();
+$parentInterfaceObjects = (new ReflectionClass("EvalRelationChild"))->getInterfaces();
+echo ":"; echo count($parentInterfaceObjects); echo ":"; echo $parentInterfaceObjects["EvalRelationParent"]->getName();
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -508,7 +514,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "1:EvalRelationIface:1:EvalRelationTrait:1:EvalRelationParent"
+        "1:EvalRelationIface:1:EvalRelationTrait:1:EvalRelationParent:1:EvalRelationIface:1:EvalRelationTrait:1:EvalRelationParent"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
@@ -520,7 +526,11 @@ fn execute_program_reflects_aot_class_interface_names() {
         br#"$class_names = (new ReflectionClass("KnownClass"))->getInterfaceNames();
 echo count($class_names); echo ":"; echo $class_names[0]; echo ":";
 $interface_names = (new ReflectionClass("KnownInterface"))->getInterfaceNames();
-echo count($interface_names); echo ":"; echo $interface_names[0];
+echo count($interface_names); echo ":"; echo $interface_names[0]; echo ":";
+$class_objects = (new ReflectionClass("KnownClass"))->getInterfaces();
+echo count($class_objects); echo ":"; echo $class_objects["KnownInterface"]->getName(); echo ":";
+$interface_objects = (new ReflectionClass("KnownInterface"))->getInterfaces();
+echo count($interface_objects); echo ":"; echo $interface_objects["Traversable"]->getName();
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -529,7 +539,10 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "1:KnownInterface:1:Traversable");
+    assert_eq!(
+        values.output,
+        "1:KnownInterface:1:Traversable:1:KnownInterface:1:Traversable"
+    );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

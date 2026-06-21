@@ -284,11 +284,17 @@ fn emit_reflection_owner_object(
                 "__interface_names",
                 &metadata.interface_names,
             )?;
+            emit_reflection_class_array_property_by_name(
+                ctx,
+                "__interfaces",
+                &metadata.interface_names,
+            )?;
             emit_reflection_string_array_property_by_name(
                 ctx,
                 "__trait_names",
                 &metadata.trait_names,
             )?;
+            emit_reflection_class_array_property_by_name(ctx, "__traits", &metadata.trait_names)?;
             emit_reflection_string_array_property_by_name(
                 ctx,
                 "__parent_names",
@@ -3626,6 +3632,40 @@ fn emit_reflection_string_array_property_by_name(
     Ok(())
 }
 
+/// Replaces a ReflectionClass private slot with name-keyed ReflectionClass objects.
+fn emit_reflection_class_array_property_by_name(
+    ctx: &mut FunctionContext<'_>,
+    property_name: &str,
+    names: &[String],
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get("ReflectionClass")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, property_name)?;
+    let high_offset = low_offset + 8;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    emit_reflection_class_array(ctx, names)?;
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_load_int_immediate(ctx.emitter, abi::secondary_scratch_reg(ctx.emitter), 4);
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::secondary_scratch_reg(ctx.emitter),
+        object_reg,
+        high_offset,
+    );
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    Ok(())
+}
+
 /// Replaces a ReflectionClass private slot with an associative constant-value array.
 fn emit_reflection_constant_array_property_by_name(
     ctx: &mut FunctionContext<'_>,
@@ -3924,6 +3964,54 @@ fn emit_reflection_constant_array(
         emit_reflection_constant_hash_insert(ctx, &member.name);
     }
     Ok(())
+}
+
+/// Allocates and populates a name-keyed map of full ReflectionClass objects.
+fn emit_reflection_class_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
+    emit_empty_assoc_array_literal_to_result(
+        ctx,
+        &PhpType::Object("ReflectionClass".to_string()),
+    );
+    for name in names {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        let metadata = reflection_class_metadata_for_name(ctx, name)?;
+        emit_reflection_owner_object(ctx, "ReflectionClass", &metadata)?;
+        emit_reflection_class_hash_insert(ctx, name);
+    }
+    Ok(())
+}
+
+/// Inserts the current ReflectionClass object into the stacked associative array.
+fn emit_reflection_class_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
+    let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x0");                              // pass the ReflectionClass object as the hash payload
+            ctx.emitter.instruction("mov x4, xzr");                             // object hash payloads do not use the high word
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x5",
+                runtime_value_tag(&PhpType::Object("ReflectionClass".to_string())) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the ReflectionClass object as the hash payload
+            ctx.emitter.instruction("xor r8, r8");                              // object hash payloads do not use the high word
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "r9",
+                runtime_value_tag(&PhpType::Object("ReflectionClass".to_string())) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        }
+    }
 }
 
 /// Allocates and populates the associative ReflectionClass default-property map.
