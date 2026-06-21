@@ -8666,9 +8666,17 @@ eval('class EvalReflectHookedProperty {
     }
     public int $plain = 5;
 }
+abstract class EvalReflectAbstractHookProperty {
+    abstract public int $contract { get; set; }
+}
+interface EvalReflectInterfaceHookProperty {
+    public int $iface { get; }
+}
 $hooked = new ReflectionProperty("EvalReflectHookedProperty", "doubled");
 $plain = new ReflectionProperty("EvalReflectHookedProperty", "plain");
 $readonly = new ReflectionProperty("EvalReflectHookedProperty", "readonlyHook");
+$abstract = new ReflectionProperty("EvalReflectAbstractHookProperty", "contract");
+$iface = new ReflectionProperty("EvalReflectInterfaceHookProperty", "iface");
 $getCase = PropertyHookType::Get;
 $setCase = PropertyHookType::Set;
 echo $getCase->name . ":" . $getCase->value . ":";
@@ -8689,7 +8697,18 @@ echo ($readonly->hasHook($getCase) ? "R" : "r") . ":";
 echo ($readonly->hasHook($setCase) ? "w" : "W") . ":";
 echo ($readonly->getHook($setCase) === null ? "N" : "n") . ":";
 echo ($plain->hasHooks() ? "bad" : "plain") . ":";
-echo count($plain->getHooks());');
+echo count($plain->getHooks()) . ":";
+$abstractHooks = $abstract->getHooks();
+echo count($abstractHooks) . ":";
+echo ($abstract->hasHook($getCase) ? "AG" : "ag") . ":";
+echo ($abstract->hasHook($setCase) ? "AS" : "as") . ":";
+echo $abstractHooks["get"]->getName() . ":" . ($abstractHooks["get"]->isAbstract() ? "A" : "a") . ":";
+echo $abstractHooks["set"]->getName() . ":" . ($abstractHooks["set"]->isAbstract() ? "A" : "a") . ":";
+$ifaceHook = $iface->getHook($getCase);
+echo count($iface->getHooks()) . ":";
+echo ($iface->hasHook($getCase) ? "IG" : "ig") . ":";
+echo ($iface->hasHook($setCase) ? "bad" : "is") . ":";
+echo $ifaceHook->isAbstract() ? "IA" : "ia";');
 "#,
     );
     assert!(
@@ -8699,7 +8718,7 @@ echo count($plain->getHooks());');
     );
     assert_eq!(
         out.stdout,
-        "Get:get:H:G:S:2:$doubled::get:$doubled::set:EvalReflectHookedProperty:0:1:value:4:7:R:W:N:plain:0"
+        "Get:get:H:G:S:2:$doubled::get:$doubled::set:EvalReflectHookedProperty:0:1:value:4:7:R:W:N:plain:0:2:AG:AS:$contract::get:A:$contract::set:A:1:IG:is:IA"
     );
 }
 

@@ -1895,9 +1895,17 @@ fn execute_program_reflection_property_gets_eval_hook_metadata() {
     }
     public int $plain = 5;
 }
+abstract class EvalReflectAbstractHookProperty {
+    abstract public int $contract { get; set; }
+}
+interface EvalReflectInterfaceHookProperty {
+    public int $iface { get; }
+}
 $hooked = new ReflectionProperty("EvalReflectHookedProperty", "doubled");
 $plain = new ReflectionProperty("EvalReflectHookedProperty", "plain");
 $readonly = new ReflectionProperty("EvalReflectHookedProperty", "readonlyHook");
+$abstract = new ReflectionProperty("EvalReflectAbstractHookProperty", "contract");
+$iface = new ReflectionProperty("EvalReflectInterfaceHookProperty", "iface");
 $getCase = PropertyHookType::Get;
 $setCase = PropertyHookType::Set;
 echo $getCase->name; echo ":"; echo $getCase->value; echo ":";
@@ -1918,7 +1926,18 @@ echo $readonly->hasHook($getCase) ? "R" : "r"; echo ":";
 echo $readonly->hasHook($setCase) ? "w" : "W"; echo ":";
 echo $readonly->getHook($setCase) === null ? "N" : "n"; echo ":";
 echo $plain->hasHooks() ? "bad" : "plain"; echo ":";
-echo count($plain->getHooks());
+echo count($plain->getHooks()); echo ":";
+$abstractHooks = $abstract->getHooks();
+echo count($abstractHooks); echo ":";
+echo $abstract->hasHook($getCase) ? "AG" : "ag"; echo ":";
+echo $abstract->hasHook($setCase) ? "AS" : "as"; echo ":";
+echo $abstractHooks["get"]->getName(); echo ":"; echo $abstractHooks["get"]->isAbstract() ? "A" : "a"; echo ":";
+echo $abstractHooks["set"]->getName(); echo ":"; echo $abstractHooks["set"]->isAbstract() ? "A" : "a"; echo ":";
+$ifaceHook = $iface->getHook($getCase);
+echo count($iface->getHooks()); echo ":";
+echo $iface->hasHook($getCase) ? "IG" : "ig"; echo ":";
+echo $iface->hasHook($setCase) ? "bad" : "is"; echo ":";
+echo $ifaceHook->isAbstract() ? "IA" : "ia";
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -1929,7 +1948,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "Get:get:H:G:S:2:$doubled::get:$doubled::set:EvalReflectHookedProperty:0:1:value:4:7:R:W:N:plain:0"
+        "Get:get:H:G:S:2:$doubled::get:$doubled::set:EvalReflectHookedProperty:0:1:value:4:7:R:W:N:plain:0:2:AG:AS:$contract::get:A:$contract::set:A:1:IG:is:IA"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
