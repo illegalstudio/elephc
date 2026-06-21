@@ -1233,14 +1233,24 @@ fn eval_reflection_class_new(
         else {
             return Ok(None);
         };
+        let method_names = eval_reflection_aot_member_names(
+            EVAL_REFLECTION_OWNER_METHOD,
+            &reflected_name,
+            values,
+        )?;
+        let property_names = eval_reflection_aot_member_names(
+            EVAL_REFLECTION_OWNER_PROPERTY,
+            &reflected_name,
+            values,
+        )?;
         return eval_reflection_owner_object(
             EVAL_REFLECTION_OWNER_CLASS,
             &reflected_name,
             &[],
             &[],
             &[],
-            &[],
-            &[],
+            &method_names,
+            &property_names,
             None,
             &[],
             None,
@@ -1936,15 +1946,28 @@ fn eval_reflection_owner_object_with_members(
     let trait_names_array = eval_reflection_string_array_result(trait_names, values)?;
     let method_names_array = eval_reflection_string_array_result(method_names, values)?;
     let property_names_array = eval_reflection_string_array_result(property_names, values)?;
+    let is_eval_class = owner_kind == EVAL_REFLECTION_OWNER_CLASS
+        && eval_reflection_class_like_exists(reflected_name, context);
     let method_objects = if owner_kind == EVAL_REFLECTION_OWNER_CLASS && include_class_members {
-        eval_reflection_member_object_array_result(
-            EVAL_REFLECTION_OWNER_METHOD,
-            reflected_name,
-            &method_names,
-            None,
-            context,
-            values,
-        )?
+        if is_eval_class {
+            eval_reflection_member_object_array_result(
+                EVAL_REFLECTION_OWNER_METHOD,
+                reflected_name,
+                method_names,
+                None,
+                context,
+                values,
+            )?
+        } else {
+            eval_reflection_aot_member_object_array_result(
+                EVAL_REFLECTION_OWNER_METHOD,
+                reflected_name,
+                method_names,
+                None,
+                context,
+                values,
+            )?
+        }
     } else if matches!(
         owner_kind,
         EVAL_REFLECTION_OWNER_METHOD | EVAL_REFLECTION_OWNER_FUNCTION
@@ -1959,14 +1982,25 @@ fn eval_reflection_owner_object_with_members(
         values.array_new(0)?
     };
     let property_objects = if owner_kind == EVAL_REFLECTION_OWNER_CLASS && include_class_members {
-        eval_reflection_member_object_array_result(
-            EVAL_REFLECTION_OWNER_PROPERTY,
-            reflected_name,
-            &property_names,
-            None,
-            context,
-            values,
-        )?
+        if is_eval_class {
+            eval_reflection_member_object_array_result(
+                EVAL_REFLECTION_OWNER_PROPERTY,
+                reflected_name,
+                property_names,
+                None,
+                context,
+                values,
+            )?
+        } else {
+            eval_reflection_aot_member_object_array_result(
+                EVAL_REFLECTION_OWNER_PROPERTY,
+                reflected_name,
+                property_names,
+                None,
+                context,
+                values,
+            )?
+        }
     } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
         match default_value {
             Some(default) => eval_method_parameter_default(default, context, values)?,
@@ -2484,6 +2518,22 @@ fn eval_reflection_constructor_object_result(
         return values.null();
     }
     let Some(member) = eval_reflection_method_metadata(class_name, "__construct", context) else {
+        if !eval_reflection_class_like_exists(class_name, context) {
+            if let Some(member) = eval_reflection_aot_method_metadata_with_signature_if_exists(
+                class_name,
+                "__construct",
+                context,
+                values,
+            )? {
+                return eval_reflection_member_object_result(
+                    EVAL_REFLECTION_OWNER_METHOD,
+                    "__construct",
+                    &member,
+                    context,
+                    values,
+                );
+            }
+        }
         return values.null();
     };
     eval_reflection_member_object_result(
