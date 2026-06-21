@@ -253,21 +253,25 @@ Nullsafe access cannot be used as an assignment target or combined with first-cl
 | `--$i` | Pre-decrement | New value |
 | `$i--` | Post-decrement | Old value |
 
-Increment and decrement work on simple variables in any position. They also work
-on object properties and array elements when used as a standalone statement, where
-the returned value is discarded:
+Increment and decrement work on simple variables, object properties (including
+`$this->prop`), and array elements, in both statement and expression position:
 
 ```php
-++$obj->count;   // like $obj->count += 1;
---$obj->count;
-++$arr["k"];     // like $arr["k"] += 1;
+++$obj->count;            // like $obj->count += 1;
+--$arr["k"];
 $arr[0]++;
+
+$next = ++$obj->count;    // prefix: store, then read the NEW value
+$old  = $obj->count++;    // postfix: read the OLD value, then store
+$token = $tokens[$pos++]; // postfix in expression position
 ```
 
-In statement position the prefix (`++$x`) and postfix (`$x++`) forms produce the
-same effect, since the expression result is unused. Using increment/decrement on a
-property or array element where the produced value is read (for example
-`$y = ++$obj->count;`) is not yet supported.
+As in PHP, a prefix `++`/`--` yields the new value and a postfix `++`/`--` yields
+the old value. In statement position the produced value is discarded, so the two
+forms are interchangeable there. The target's receiver or index is evaluated
+exactly once, so `$a[next_index()]++` calls `next_index()` a single time. The
+PHP string-increment behavior (`"a"++` → `"b"`) applies only to plain variables;
+on a property or array element the operation is numeric.
 
 ## Ternary
 

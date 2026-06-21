@@ -282,6 +282,16 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
         return Ok(None);
     }
 
+    // A top-level assignment before the trailing `++`/`--` means this is an assignment
+    // statement whose right-hand side ends in a postfix increment (`$x = $o->n++;`),
+    // not a discarded postfix-increment statement. Defer to the expression parser, which
+    // desugars the complex-l-value postfix increment in value position.
+    if let Some((assign_pos, _)) = find_top_level_assignment(tokens, start) {
+        if assign_pos < incdec_pos {
+            return Ok(None);
+        }
+    }
+
     let lhs = &tokens[start..incdec_pos];
     let contains_complex_target = lhs
         .iter()
@@ -327,12 +337,12 @@ pub(in crate::parser::stmt) fn try_parse_prefix_incdec(
         _ => return Ok(None),
     };
 
-    // The l-value must begin with a variable, and the token after it must be a
-    // complex-target marker (`->`, `?->`, `[`). A bare `++$x;` (marker is `;`)
+    // The l-value must begin with a variable or `$this`, and the token after it must
+    // be a complex-target marker (`->`, `?->`, `[`). A bare `++$x;` (marker is `;`)
     // is left to `parse_incdec_stmt`, which keeps the `PreIncrement` node.
     if !matches!(
         tokens.get(start + 1).map(|(token, _)| token),
-        Some(Token::Variable(_))
+        Some(Token::Variable(_) | Token::This)
     ) {
         return Ok(None);
     }

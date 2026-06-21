@@ -270,6 +270,17 @@ pub(super) fn parse_expr_bp(
                     break;
                 }
             }
+            // Postfix `++`/`--` on a complex l-value (`$obj->p++`, `$a[$i]--`,
+            // `$this->n++`). Bare-variable postfix is consumed earlier in the prefix
+            // parser; a non-local target reaching here cannot be incremented by a
+            // simple node, so desugar to the value-preserving `(L += 1) - 1` form,
+            // which yields the OLD value like PHP while the compound assignment stores.
+            Token::PlusPlus | Token::MinusMinus if is_non_local_assignment_target(&lhs) => {
+                let increment = tokens[*pos].0 == Token::PlusPlus;
+                let span = tokens[*pos].1;
+                *pos += 1;
+                lhs = build_incdec_value(lhs, increment, false, span);
+            }
             _ => break,
         }
     }
@@ -376,67 +387,7 @@ pub(super) fn parse_expr_bp(
             let span = tokens[*pos].1;
             *pos += 1;
             let rhs = parse_expr_bp(tokens, pos, r_bp)?;
-            if is_non_local_assignment_target(&lhs) {
-                let null_coalesce_assign = matches!(op, AssignmentOperator::NullCoalesce);
-
-                let mut lowerer = AssignmentExpressionLowerer::new(span);
-                let target = lowerer.stabilize_non_local_target(lhs, &rhs);
-                let conditional_value_temp =
-                    null_coalesce_assign.then(|| lowerer.reserve_value_temp());
-                let rhs = if null_coalesce_assign {
-                    rhs
-                } else {
-                    lowerer.bind_value(&target, rhs)
-                };
-                let (value, result_target) = match op {
-                    AssignmentOperator::Assign => (rhs.clone(), rhs),
-                    AssignmentOperator::NullCoalesce => {
-                        let value = assignment_value(
-                            target.clone(),
-                            AssignmentOperator::NullCoalesce,
-                            rhs,
-                            span,
-                        );
-                        (value, target.clone())
-                    }
-                    AssignmentOperator::Compound(op) => {
-                        let value = assignment_value(
-                            target.clone(),
-                            AssignmentOperator::Compound(op),
-                            rhs,
-                            span,
-                        );
-                        let result_value = lowerer.bind_result_value(value);
-                        (result_value.clone(), result_value)
-                    }
-                };
-                let prelude = lowerer.finish();
-                lhs = Expr::new(
-                    ExprKind::Assignment {
-                        target: Box::new(target.clone()),
-                        value: Box::new(value),
-                        result_target: Some(Box::new(result_target)),
-                        prelude,
-                        conditional_value_temp,
-                    },
-                    span,
-                );
-            } else {
-                let value = match op {
-                    AssignmentOperator::Assign => rhs,
-                    op => assignment_value(lhs.clone(), op, rhs, span),
-                };
-                lhs = Expr::new(
-                    ExprKind::Assignment {
-                        target: Box::new(lhs),
-                        value: Box::new(value),
-                        result_target: None,
-                        prelude: Vec::new(),
-                        conditional_value_temp: None,
-                    },
-                    span,
-                );
-            }
+            lhs = build_assignment_expression(lhs, op, rhs, span);
             continue;
         }
 
@@ -664,6 +615,105 @@ fn assignment_value(target: Expr, op: AssignmentOperator, rhs: Expr, span: Span)
             span,
         ),
     }
+}
+
+/// Builds an `ExprKind::Assignment` for `target <op> rhs`.
+///
+/// Non-local targets (property/array/static access) are stabilized so any
+/// side-effecting receiver or index is evaluated exactly once, and the result
+/// value is bound so the assignment expression yields the PHP-correct value.
+/// Local (bare-variable) targets take the simple path with no prelude. Shared by
+/// the assignment-operator branch of `parse_expr_bp` and the increment/decrement
+/// desugaring in `build_incdec_value`.
+fn build_assignment_expression(
+    target: Expr,
+    op: AssignmentOperator,
+    rhs: Expr,
+    span: Span,
+) -> Expr {
+    if is_non_local_assignment_target(&target) {
+        let null_coalesce_assign = matches!(op, AssignmentOperator::NullCoalesce);
+
+        let mut lowerer = AssignmentExpressionLowerer::new(span);
+        let target = lowerer.stabilize_non_local_target(target, &rhs);
+        let conditional_value_temp = null_coalesce_assign.then(|| lowerer.reserve_value_temp());
+        let rhs = if null_coalesce_assign {
+            rhs
+        } else {
+            lowerer.bind_value(&target, rhs)
+        };
+        let (value, result_target) = match op {
+            AssignmentOperator::Assign => (rhs.clone(), rhs),
+            AssignmentOperator::NullCoalesce => {
+                let value =
+                    assignment_value(target.clone(), AssignmentOperator::NullCoalesce, rhs, span);
+                (value, target.clone())
+            }
+            AssignmentOperator::Compound(op) => {
+                let value =
+                    assignment_value(target.clone(), AssignmentOperator::Compound(op), rhs, span);
+                let result_value = lowerer.bind_result_value(value);
+                (result_value.clone(), result_value)
+            }
+        };
+        let prelude = lowerer.finish();
+        Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(target.clone()),
+                value: Box::new(value),
+                result_target: Some(Box::new(result_target)),
+                prelude,
+                conditional_value_temp,
+            },
+            span,
+        )
+    } else {
+        let value = match op {
+            AssignmentOperator::Assign => rhs,
+            op => assignment_value(target.clone(), op, rhs, span),
+        };
+        Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(target),
+                value: Box::new(value),
+                result_target: None,
+                prelude: Vec::new(),
+                conditional_value_temp: None,
+            },
+            span,
+        )
+    }
+}
+
+/// Desugars an increment/decrement of a complex l-value (`$obj->p`, `$a[$i]`,
+/// `$this->n`, static property) into compound-assignment form, since elephc has no
+/// in-place increment node for non-local targets.
+///
+/// `++L` / `--L` become `(L += 1)` / `(L -= 1)`, which yield the NEW value. The
+/// postfix forms `L++` / `L--` become `(L += 1) - 1` / `(L -= 1) + 1`, which yield
+/// the OLD value while still performing the store. The compound assignment built by
+/// [`build_assignment_expression`] stabilizes the target, so the receiver/index is
+/// evaluated exactly once, matching PHP. The result is numeric, which covers every
+/// supported use (PHP's string-increment magic applies only to bare variables, which
+/// keep their dedicated `PreIncrement`/`PostIncrement` nodes).
+pub(super) fn build_incdec_value(target: Expr, increment: bool, prefix: bool, span: Span) -> Expr {
+    let bin_op = if increment { BinOp::Add } else { BinOp::Sub };
+    let one = Expr::new(ExprKind::IntLiteral(1), span);
+    let assignment =
+        build_assignment_expression(target, AssignmentOperator::Compound(bin_op), one, span);
+    if prefix {
+        return assignment;
+    }
+    // Postfix yields the old value: undo the in-expression increment numerically.
+    let undo_op = if increment { BinOp::Sub } else { BinOp::Add };
+    Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(assignment),
+            op: undo_op,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(1), span)),
+        },
+        span,
+    )
 }
 
 /// Parses the target of an `instanceof` operator.

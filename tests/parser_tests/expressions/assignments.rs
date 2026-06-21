@@ -338,3 +338,60 @@ fn test_parse_union_typed_assign() {
         other => panic!("Expected typed assign, got {:?}", other),
     }
 }
+
+/// Verifies that a postfix `++` on a complex l-value in expression position desugars to
+/// `(L += 1) - 1`: the assignment statement's value is a `BinaryOp` subtracting `1` from a
+/// compound-assignment expression, so the expression yields the OLD value like PHP.
+#[test]
+fn test_parse_property_post_increment_expression_desugar() {
+    let stmts = parse_source("<?php $x = $o->n++;");
+    let StmtKind::Assign { name, value } = &stmts[0].kind else {
+        panic!("Expected Assign, got {:?}", stmts[0].kind);
+    };
+    assert_eq!(name, "x");
+    match &value.kind {
+        ExprKind::BinaryOp { left, op, right } => {
+            assert_eq!(op, &BinOp::Sub);
+            assert!(matches!(right.kind, ExprKind::IntLiteral(1)));
+            assert!(
+                matches!(left.kind, ExprKind::Assignment { .. }),
+                "postfix increment left operand should be the compound assignment, got {:?}",
+                left.kind
+            );
+        }
+        other => panic!("Expected BinaryOp desugar, got {:?}", other),
+    }
+}
+
+/// Verifies that a prefix `++` on a complex l-value in expression position desugars to the
+/// compound assignment `(L += 1)` directly, so the expression yields the NEW value.
+#[test]
+fn test_parse_property_pre_increment_expression_desugar() {
+    let stmts = parse_source("<?php $x = ++$o->n;");
+    let StmtKind::Assign { name, value } = &stmts[0].kind else {
+        panic!("Expected Assign, got {:?}", stmts[0].kind);
+    };
+    assert_eq!(name, "x");
+    assert!(
+        matches!(value.kind, ExprKind::Assignment { .. }),
+        "prefix increment should desugar to a compound assignment, got {:?}",
+        value.kind
+    );
+}
+
+/// Verifies that bare-variable increment in expression position keeps its dedicated
+/// `PreIncrement`/`PostIncrement` nodes (the complex-l-value desugar must not regress it).
+#[test]
+fn test_parse_bare_variable_increment_expression_keeps_nodes() {
+    let pre = parse_source("<?php $x = ++$i;");
+    let StmtKind::Assign { value, .. } = &pre[0].kind else {
+        panic!("Expected Assign, got {:?}", pre[0].kind);
+    };
+    assert!(matches!(value.kind, ExprKind::PreIncrement(ref n) if n == "i"));
+
+    let post = parse_source("<?php $x = $i++;");
+    let StmtKind::Assign { value, .. } = &post[0].kind else {
+        panic!("Expected Assign, got {:?}", post[0].kind);
+    };
+    assert!(matches!(value.kind, ExprKind::PostIncrement(ref n) if n == "i"));
+}

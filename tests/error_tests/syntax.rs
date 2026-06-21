@@ -90,6 +90,23 @@ fn test_error_prefix_increment_malformed_property_target() {
     );
 }
 
+/// Verifies that prefix-incrementing a non-l-value in expression position is rejected.
+/// `$x = ++5;` cannot increment an integer literal, matching PHP's parse-time rejection.
+#[test]
+fn test_error_prefix_increment_non_lvalue_in_expression() {
+    expect_error("<?php $x = ++5;", "Expected variable after '++'");
+}
+
+/// Verifies that incrementing a method-call result (not an l-value) is rejected, rather
+/// than silently miscompiling the complex-l-value increment desugar.
+#[test]
+fn test_error_increment_method_call_result() {
+    expect_error(
+        "<?php class C { function m() { return 1; } } $o = new C(); $x = ++$o->m();",
+        "Expected variable after '++'",
+    );
+}
+
 /// Verifies the error diagnostic for empty list destructuring pattern.
 #[test]
 fn test_error_empty_list_destructuring_pattern() {

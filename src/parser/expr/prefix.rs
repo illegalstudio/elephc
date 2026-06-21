@@ -14,12 +14,13 @@ use crate::names::Name;
 use crate::parser::ast::{Expr, ExprKind, MagicConstant, StaticReceiver};
 use crate::span::Span;
 
+use super::assignment_targets::is_non_local_assignment_target;
 use super::calls::{parse_scoped_static_call, peek_cast};
 use super::prefix_complex::{
     parse_arrow_closure, parse_attributed_closure, parse_closure, parse_match_expr,
     parse_named_expr, parse_new_object,
 };
-use super::pratt::parse_expr_bp;
+use super::pratt::{build_incdec_value, parse_expr_bp};
 use super::{parse_args, parse_expr};
 
 /// Parses a prefix (unary or primary) PHP expression and returns the resulting AST node.
@@ -366,8 +367,11 @@ fn parse_unary(
 }
 
 /// Parses a prefix `++` or `--` increment/decrement operator. Consumes the operator,
-/// then expects a `Variable` token next. Returns `PreIncrement` or `PreDecrement` with the
-/// variable name. Returns an error if a variable does not follow the operator.
+/// then the target. A bare variable (`++$x`) keeps the dedicated `PreIncrement`/
+/// `PreDecrement` node. A complex l-value (`++$obj->p`, `++$a[$i]`, `++$this->n`,
+/// `++Foo::$s`) is parsed at a binding power above every binary operator — so only
+/// postfix member access attaches — and desugared to compound-assignment form, which
+/// yields the new value like PHP. Returns an error if the target is not an l-value.
 fn parse_prefix_inc_dec(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -375,8 +379,14 @@ fn parse_prefix_inc_dec(
     increment: bool,
 ) -> Result<Expr, CompileError> {
     *pos += 1;
-    if *pos < tokens.len() {
-        if let Token::Variable(name) = &tokens[*pos].0 {
+    // Fast path: a bare variable with no complex-l-value continuation keeps its
+    // dedicated prefix node (preserving bare-variable increment semantics).
+    if let Some((Token::Variable(name), _)) = tokens.get(*pos) {
+        let continues_complex = matches!(
+            tokens.get(*pos + 1).map(|(token, _)| token),
+            Some(Token::Arrow | Token::QuestionArrow | Token::LBracket | Token::DoubleColon)
+        );
+        if !continues_complex {
             let name = name.clone();
             *pos += 1;
             return Ok(Expr::new(
@@ -387,6 +397,17 @@ fn parse_prefix_inc_dec(
                 },
                 span,
             ));
+        }
+    }
+    // Complex l-value: parse the target above every binary operator (38 > the highest
+    // infix binding power, 37), so binary operators stay with the enclosing context.
+    if matches!(
+        tokens.get(*pos).map(|(token, _)| token),
+        Some(Token::Variable(_) | Token::This)
+    ) {
+        let target = parse_expr_bp(tokens, pos, 38)?;
+        if is_non_local_assignment_target(&target) {
+            return Ok(build_incdec_value(target, increment, true, span));
         }
     }
     Err(CompileError::new(

@@ -597,3 +597,128 @@ if ([$a, $b] = $v) {
     );
     assert_eq!(out, "falsy");
 }
+
+/// Verifies prefix `++` on an object property in EXPRESSION position yields the new value.
+/// `$y = ++$o->n` stores `n+1` and evaluates to it.
+#[test]
+fn test_pre_increment_property_expression_yields_new() {
+    let out = compile_and_run(
+        "<?php class C { public int $n = 4; } $o = new C(); $y = ++$o->n; echo $y . '/' . $o->n;",
+    );
+    assert_eq!(out, "5/5");
+}
+
+/// Verifies postfix `++` on an object property in EXPRESSION position yields the old value
+/// while still storing the incremented value (`$x = $o->n++`).
+#[test]
+fn test_post_increment_property_expression_yields_old() {
+    let out = compile_and_run(
+        "<?php class C { public int $n = 4; } $o = new C(); $x = $o->n++; echo $x . '/' . $o->n;",
+    );
+    assert_eq!(out, "4/5");
+}
+
+/// Verifies prefix `--` on an array element in expression position yields the new value.
+#[test]
+fn test_pre_decrement_array_element_expression_yields_new() {
+    let out = compile_and_run("<?php $a = [10]; $y = --$a[0]; echo $y . '/' . $a[0];");
+    assert_eq!(out, "9/9");
+}
+
+/// Verifies postfix `--` on an array element in expression position yields the old value.
+#[test]
+fn test_post_decrement_array_element_expression_yields_old() {
+    let out = compile_and_run("<?php $a = [10]; $x = $a[0]--; echo $x . '/' . $a[0];");
+    assert_eq!(out, "10/9");
+}
+
+/// Verifies prefix `++` on `$this->prop` in a statement (the Symfony `++$this->size;`
+/// pattern) works now that `$this` is recognized as a complex-l-value head.
+#[test]
+fn test_pre_increment_this_property_statement() {
+    let out = compile_and_run(
+        r#"<?php
+class K {
+    public int $size = 0;
+    function enter() { ++$this->size; }
+    function get() { return $this->size; }
+}
+$k = new K();
+$k->enter();
+$k->enter();
+echo $k->get();
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Verifies postfix `++` on `$this->prop` in expression position yields the old value.
+#[test]
+fn test_post_increment_this_property_expression() {
+    let out = compile_and_run(
+        r#"<?php
+class K {
+    public int $n = 7;
+    function bump() { return $this->n++; }
+}
+$k = new K();
+$old = $k->bump();
+echo $old . '/' . $k->n;
+"#,
+    );
+    assert_eq!(out, "7/8");
+}
+
+/// Verifies that a side-effecting index is evaluated exactly once for a complex-l-value
+/// increment (`$a[idx()]++`), matching PHP. A naive `$a[idx()] = $a[idx()] + 1` desugar
+/// would call `idx()` twice.
+#[test]
+fn test_increment_complex_lvalue_evaluates_index_once() {
+    let out = compile_and_run(
+        r#"<?php
+$calls = 0;
+function idx() { global $calls; $calls++; return 0; }
+$a = [10];
+$old = $a[idx()]++;
+echo $old . '/' . $a[0] . '/' . $calls;
+"#,
+    );
+    assert_eq!(out, "10/11/1");
+}
+
+/// Verifies prefix increment on a nested property-array element in expression position.
+#[test]
+fn test_pre_increment_nested_property_array_element() {
+    let out = compile_and_run(
+        "<?php class N { public array $t = [5, 6]; } $n = new N(); $v = ++$n->t[1]; echo $v . '/' . $n->t[1];",
+    );
+    assert_eq!(out, "7/7");
+}
+
+/// Verifies a complex-l-value postfix increment used directly inside another expression
+/// (here as an array index): `$this->t[$this->n++]` reads the old `n`, then increments.
+#[test]
+fn test_post_increment_as_array_index() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $n = 0;
+    public array $t = [10, 20, 30];
+    function step() { return $this->t[$this->n++]; }
+}
+$c = new C();
+echo $c->step();
+echo $c->step();
+echo '/' . $c->n;
+"#,
+    );
+    assert_eq!(out, "1020/2");
+}
+
+/// Verifies that a bare-variable increment still works unchanged in expression position,
+/// confirming the complex-l-value desugar did not regress the fast path.
+#[test]
+fn test_bare_variable_increment_unchanged() {
+    let out = compile_and_run("<?php $i = 1; $a = ++$i; $b = $i++; echo $a . '/' . $b . '/' . $i;");
+    assert_eq!(out, "2/2/3");
+}
