@@ -219,6 +219,7 @@ struct ReflectionMemberFlags {
     is_abstract: bool,
     is_readonly: bool,
     is_promoted: bool,
+    is_virtual: bool,
 }
 
 /// Returns true for reflection owner classes that need metadata-aware construction.
@@ -2137,14 +2138,16 @@ fn reflection_property_member_flags(
             .property_visibilities
             .get(property_name)
             .unwrap_or(&Visibility::Public);
-        return Some(reflection_member_flags(
+        let mut flags = reflection_member_flags(
             false,
             visibility,
             info.final_properties.contains(property_name),
             info.abstract_properties.contains(property_name),
             info.readonly_properties.contains(property_name),
             info.promoted_properties.contains(property_name),
-        ));
+        );
+        flags.is_virtual = reflection_property_is_virtual(info, property_name);
+        return Some(flags);
     }
     if info
         .static_properties
@@ -2926,6 +2929,7 @@ fn reflection_member_flags(
         is_abstract,
         is_readonly,
         is_promoted,
+        is_virtual: false,
     }
 }
 
@@ -4854,6 +4858,7 @@ fn emit_reflection_member_flag_properties(
                 "__is_promoted",
                 flags.is_promoted,
             )?;
+            emit_reflection_owner_bool_property(ctx, class_name, "__is_virtual", flags.is_virtual)?;
         }
         "ReflectionClassConstant" => {
             emit_reflection_owner_bool_property(ctx, class_name, "__is_public", flags.is_public)?;
@@ -5100,7 +5105,7 @@ fn reflection_property_modifiers_from_flags(flags: ReflectionMemberFlags) -> i64
         flags.is_final,
         flags.is_abstract,
         flags.is_readonly,
-        false,
+        flags.is_virtual,
         None,
     )
 }

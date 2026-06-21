@@ -2175,6 +2175,12 @@ fn add_reflection_member_flag_methods(
             false_bool(),
         ));
         properties.push(builtin_property(
+            "__is_virtual",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
             "__default_value",
             Visibility::Private,
             Some(mixed_type()),
@@ -2199,6 +2205,10 @@ fn add_reflection_member_flag_methods(
         methods.push(builtin_reflection_class_bool_method(
             "isPromoted",
             "__is_promoted",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isVirtual",
+            "__is_virtual",
         ));
         methods.push(builtin_reflection_constant_bool_method("isDefault", true));
         methods.push(builtin_reflection_class_mixed_method(

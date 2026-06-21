@@ -8660,6 +8660,8 @@ $backed->setRawValue(object: $hook, value: 7);
 echo $backed->getRawValue($hook) . ":";
 echo $backed->getValue($hook) . ":";
 echo $backed->getModifiers() . ":";
+echo $backed->isVirtual() ? "V:" : "b:";
+echo (new ReflectionProperty("EvalReflectValueHook", "virtual"))->isVirtual() ? "V:" : "b:";
 echo (new ReflectionProperty("EvalReflectValueHook", "virtual"))->getModifiers();');
 "#,
     );
@@ -8670,7 +8672,7 @@ echo (new ReflectionProperty("EvalReflectValueHook", "virtual"))->getModifiers()
     );
     assert_eq!(
         out.stdout,
-        "base:changed:Ada:Grace:1:5:6:4:5:10:2:4:4:8:7:14:1:513"
+        "base:changed:Ada:Grace:1:5:6:4:5:10:2:4:4:8:7:14:1:b:V:513"
     );
 }
 

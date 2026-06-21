@@ -365,8 +365,8 @@ when the variadic container itself is not rebound, and are reported through
 `ReflectionParameter::isPassedByReference()` and
 `ReflectionParameter::canBePassedByValue()`.
 `ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
-`isFinal()`, `isAbstract()`, `isReadOnly()`, `isPromoted()`, `isDefault()`, and
-`getModifiers()` report eval property metadata with PHP-compatible
+`isFinal()`, `isAbstract()`, `isReadOnly()`, `isPromoted()`, `isVirtual()`,
+`isDefault()`, and `getModifiers()` report eval property metadata with PHP-compatible
 `ReflectionProperty::IS_*` constants for the bitmask. `isPromoted()` reports
 generated/AOT and eval-declared promoted-property metadata.
 `ReflectionProperty::hasType()` and `getType()` expose retained property type

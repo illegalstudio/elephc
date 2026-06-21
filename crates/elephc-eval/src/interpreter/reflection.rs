@@ -40,6 +40,7 @@ pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_PROPERTY: u64 
 pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_CLASS_CONSTANT: u64 = 16;
 pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_PARAMETER: u64 = 32;
 const EVAL_REFLECTION_MEMBER_FLAG_PROMOTED: u64 = 512;
+const EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL: u64 = 1024;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
@@ -3060,6 +3061,9 @@ fn eval_reflection_member_object_result(
     }
     if member.is_promoted {
         flags |= EVAL_REFLECTION_MEMBER_FLAG_PROMOTED;
+    }
+    if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY && (member.modifiers & 512) != 0 {
+        flags |= EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL;
     }
     let owner_modifiers = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
         member.required_parameter_count as u64

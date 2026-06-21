@@ -19,6 +19,7 @@ const EVAL_REFLECTION_MEMBER_FLAG_READONLY: u64 = 64;
 const EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE: u64 = 128;
 const EVAL_REFLECTION_MEMBER_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
 const EVAL_REFLECTION_MEMBER_FLAG_PROMOTED: u64 = 512;
+const EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL: u64 = 1024;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
@@ -180,6 +181,10 @@ impl FakeOps {
             }
             (FakeValue::Object(properties), "ispromoted") if args.is_empty() => {
                 Self::object_property(&properties, "__is_promoted")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "isvirtual") if args.is_empty() => {
+                Self::object_property(&properties, "__is_virtual")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
             (FakeValue::Object(properties), "isanonymous") if args.is_empty() => {
@@ -667,6 +672,8 @@ impl FakeOps {
                     self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_HAS_DEFAULT_VALUE) != 0)?;
                 let is_promoted =
                     self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_PROMOTED) != 0)?;
+                let is_virtual =
+                    self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL) != 0)?;
                 properties.push(("__is_final".to_string(), is_final));
                 properties.push(("__is_abstract".to_string(), is_abstract));
                 properties.push(("__is_readonly".to_string(), is_readonly));
@@ -674,6 +681,7 @@ impl FakeOps {
                 properties.push(("__type".to_string(), method_objects));
                 properties.push(("__has_default_value".to_string(), has_default_value));
                 properties.push(("__is_promoted".to_string(), is_promoted));
+                properties.push(("__is_virtual".to_string(), is_virtual));
                 properties.push(("__default_value".to_string(), property_objects));
             }
         }
