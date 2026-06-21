@@ -260,9 +260,11 @@ visible member metadata, including supported member attributes and predicate
 flags. For generated/AOT classes, `ReflectionClass::getMethod()` /
 `getProperty()` and `getMethods()` / `getProperties()` materialize reflection
 objects from emitted member-name and predicate metadata, including optional
-modifier filters. AOT member reflection currently exposes names, declaring
-classes, and predicate flags, but does not expose full AOT parameter,
-attribute, property type, or property default-value metadata.
+modifier filters. AOT method reflection also exposes registered parameter
+names, required/optional counts, and registered scalar or null default values
+for generated method/static-method signatures. AOT member reflection does not
+yet expose full AOT type metadata, attributes, property types, or property
+default-value metadata.
 `ReflectionMethod::getDeclaringClass()` and
 `ReflectionProperty::getDeclaringClass()` return a materialized
 `ReflectionClass` for the symbol that declares the reflected
@@ -300,8 +302,11 @@ reflected method is `__construct` or `__destruct`.
 `ReflectionFunction::getName()`, `ReflectionFunction::getParameters()`,
 `ReflectionMethod::getParameters()`, `getNumberOfParameters()`, and
 `getNumberOfRequiredParameters()` report retained eval-declared function and
-method metadata. Eval-declared functions and methods expose declared-type
-presence for parameters and return types, simple named type metadata through
+method metadata, plus registered generated/AOT method parameter names,
+required/optional counts, and scalar or null default values when native
+method/static-method signatures are registered. Eval-declared functions and
+methods expose declared-type presence for parameters and return types, simple
+named type metadata through
 `ReflectionParameter::getType()` / `ReflectionNamedType::getName()`,
 `allowsNull()`, and `isBuiltin()`, and multi-member union metadata through
 `ReflectionUnionType::getTypes()` and `allowsNull()`. Intersection parameter
