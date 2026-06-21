@@ -126,9 +126,9 @@ PHP source (.php)
 ┌─────────────┐
 │ EIR passes  │  src/ir_passes/
 │             │  Fixed-point optimization pass driver (identity folding,
-│             │  peephole rewrites, dead-instruction elimination) plus
-│             │  linear-scan register allocation (liveness, intervals, pools)
-│             │  over EIR functions before codegen.
+│             │  peephole rewrites, dead-instruction elimination, dead-store
+│             │  elimination, branch simplification) plus linear-scan register
+│             │  allocation (liveness, intervals, pools) before codegen.
 └──────┬──────┘
        │
        ▼
@@ -174,6 +174,8 @@ src/
 ├── linker.rs                  Assembler and linker invocation
 ├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
+├── intrinsics.rs              Compiler-recognized intrinsic method calls for runtime-managed core objects
+├── string_bytes.rs            Parser string-literal payload → PHP runtime bytes conversion
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── magic_constants/           File/scope/trait magic-constant walkers
 ├── conditional/               Build-time `ifdef` pass
@@ -183,7 +185,7 @@ src/
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
 ├── ir_lower/                  Active checked-AST to EIR lowering
-├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, dead-instruction elimination, and linear-scan register allocation
+├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, dead-instruction elimination, dead-store elimination, branch simplification, and linear-scan register allocation
 ├── codegen_ir/                Active EIR to target assembly backend
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
