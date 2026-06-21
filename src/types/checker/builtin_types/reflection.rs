@@ -660,6 +660,7 @@ fn builtin_reflection_parameter() -> FlattenedClass {
                 "__is_passed_by_reference",
                 TypeExpr::Bool,
             ),
+            builtin_reflection_parameter_can_be_passed_by_value_method(),
             builtin_reflection_slot_getter("isPromoted", "__is_promoted", TypeExpr::Bool),
             builtin_reflection_slot_getter("hasType", "__has_type", TypeExpr::Bool),
             builtin_reflection_slot_getter("allowsNull", "__allows_null", TypeExpr::Bool),
@@ -757,6 +758,37 @@ fn builtin_reflection_class_new_instance_without_constructor_method() -> ClassMe
         by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `ReflectionParameter::canBePassedByValue()` from the retained by-ref flag.
+fn builtin_reflection_parameter_can_be_passed_by_value_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "canBePassedByValue".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::Not(Box::new(reflection_this_property(
+                    "__is_passed_by_reference",
+                    dummy_span,
+                ))),
+                dummy_span,
+            ))),
             dummy_span,
         )],
         span: dummy_span,
@@ -2994,6 +3026,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "isoptional",
                     "isvariadic",
                     "ispassedbyreference",
+                    "canbepassedbyvalue",
                     "ispromoted",
                     "hastype",
                     "allowsnull",

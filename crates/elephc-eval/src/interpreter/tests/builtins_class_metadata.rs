@@ -1499,6 +1499,7 @@ foreach ($params as $param) {
     echo $param->isOptional() ? "O" : "r";
     echo $param->isVariadic() ? "V" : "v";
     echo $param->isPassedByReference() ? "R" : "b";
+    echo $param->canBePassedByValue() ? "Y" : "N";
     echo $param->hasType() ? "T" : "t";
     echo $param->allowsNull() ? "N" : "n";
     $type = $param->getType();
@@ -1546,7 +1547,7 @@ return true;"##,
 
     assert_eq!(
         values.output,
-        "5/3:first#0rvRTn:int!B:A1:EvalParamTag:first:d|union#1rvbTn:union!:intB:stringB:A0:d|both#2rvbTn:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|second#3OvbTN:App\\Name?C:A0:D=null|rest#4OVRtN:null:A0:d|"
+        "5/3:first#0rvRNTn:int!B:A1:EvalParamTag:first:d|union#1rvbYTn:union!:intB:stringB:A0:d|both#2rvbYTn:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|second#3OvbYTN:App\\Name?C:A0:D=null|rest#4OVRNtN:null:A0:d|"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
