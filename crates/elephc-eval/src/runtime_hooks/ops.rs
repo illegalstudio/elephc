@@ -200,9 +200,17 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         &mut self,
         name: &str,
         args: RuntimeCellHandle,
+        target: u64,
+        repeated: bool,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe {
-            __elephc_eval_reflection_attribute_new(name.as_ptr(), name.len() as u64, args.as_ptr())
+            __elephc_eval_reflection_attribute_new(
+                name.as_ptr(),
+                name.len() as u64,
+                args.as_ptr(),
+                target,
+                if repeated { 1 } else { 0 },
+            )
         })
     }
 

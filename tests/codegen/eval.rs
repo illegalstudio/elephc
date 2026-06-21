@@ -6502,6 +6502,52 @@ echo $propertyAttrs[0]->getArguments()[0] . ":" . $propertyAttrs[0]->newInstance
     );
 }
 
+/// Verifies eval ReflectionAttribute exposes owner target and repetition metadata.
+#[test]
+fn test_eval_reflection_attribute_target_and_repetition() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalTargetMarker {
+    public function __construct($name = null) {}
+}
+#[EvalTargetMarker("class-a"), EvalTargetMarker("class-b")]
+class EvalReflectAttributeTarget {
+    #[EvalTargetMarker("method")]
+    public function run(#[EvalTargetMarker("param")] $id) {}
+    #[EvalTargetMarker("property")]
+    public $id;
+    #[EvalTargetMarker("const")]
+    public const ANSWER = 42;
+}
+enum EvalReflectAttributeEnum {
+    #[EvalTargetMarker("case")]
+    case Ready;
+}
+$classAttrs = (new ReflectionClass("EvalReflectAttributeTarget"))->getAttributes();
+echo $classAttrs[0]->getTarget() . "/" . ($classAttrs[0]->isRepeated() ? "R" : "r") . ":";
+echo $classAttrs[1]->getTarget() . "/" . ($classAttrs[1]->isRepeated() ? "R" : "r") . ":";
+$methodAttr = (new ReflectionMethod("EvalReflectAttributeTarget", "run"))->getAttributes()[0];
+echo $methodAttr->getTarget() . "/" . ($methodAttr->isRepeated() ? "R" : "r") . ":";
+$propertyAttr = (new ReflectionProperty("EvalReflectAttributeTarget", "id"))->getAttributes()[0];
+echo $propertyAttr->getTarget() . "/" . ($propertyAttr->isRepeated() ? "R" : "r") . ":";
+$paramAttr = (new ReflectionMethod("EvalReflectAttributeTarget", "run"))->getParameters()[0]->getAttributes()[0];
+echo $paramAttr->getTarget() . "/" . ($paramAttr->isRepeated() ? "R" : "r") . ":";
+$constAttr = (new ReflectionClassConstant("EvalReflectAttributeTarget", "ANSWER"))->getAttributes()[0];
+echo $constAttr->getTarget() . "/" . ($constAttr->isRepeated() ? "R" : "r") . ":";
+$caseAttr = (new ReflectionEnumUnitCase("EvalReflectAttributeEnum", "Ready"))->getAttributes()[0];
+echo $caseAttr->getTarget() . "/" . ($caseAttr->isRepeated() ? "R" : "r") . ":";
+echo method_exists($classAttrs[0], "getTarget") ? "Y" : "n";
+echo method_exists($classAttrs[0], "isRepeated") ? "Y" : "n";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "1/R:1/R:4/r:8/r:32/r:16/r:16/r:YY");
+}
+
 /// Verifies eval ReflectionClass exposes namespace-derived class-name parts.
 #[test]
 fn test_eval_reflection_class_name_parts() {

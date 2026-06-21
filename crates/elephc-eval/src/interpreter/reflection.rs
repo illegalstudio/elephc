@@ -33,6 +33,12 @@ const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
 const EVAL_REFLECTION_MEMBER_FLAG_READONLY: u64 = 64;
 const EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE: u64 = 128;
 const EVAL_REFLECTION_MEMBER_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
+pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_CLASS: u64 = 1;
+pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_FUNCTION: u64 = 2;
+pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_METHOD: u64 = 4;
+pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_PROPERTY: u64 = 8;
+pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_CLASS_CONSTANT: u64 = 16;
+pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_PARAMETER: u64 = 32;
 const EVAL_REFLECTION_MEMBER_FLAG_PROMOTED: u64 = 512;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
@@ -2073,7 +2079,12 @@ fn eval_reflection_owner_object_with_members(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let attrs = eval_reflection_attribute_array_result(attributes, context, values)?;
+    let attrs = eval_reflection_attribute_array_result(
+        attributes,
+        eval_reflection_attribute_target(owner_kind),
+        context,
+        values,
+    )?;
     let interface_names_array = eval_reflection_string_array_result(interface_names, values)?;
     let trait_names_array = eval_reflection_string_array_result(trait_names, values)?;
     let method_names_array = eval_reflection_string_array_result(method_names, values)?;
@@ -2415,6 +2426,20 @@ fn eval_reflection_string_array_result(
     Ok(result)
 }
 
+/// Maps a synthetic reflection owner kind to PHP's `Attribute::TARGET_*` bitmask.
+fn eval_reflection_attribute_target(owner_kind: u64) -> u64 {
+    match owner_kind {
+        EVAL_REFLECTION_OWNER_CLASS => EVAL_REFLECTION_ATTRIBUTE_TARGET_CLASS,
+        EVAL_REFLECTION_OWNER_FUNCTION => EVAL_REFLECTION_ATTRIBUTE_TARGET_FUNCTION,
+        EVAL_REFLECTION_OWNER_METHOD => EVAL_REFLECTION_ATTRIBUTE_TARGET_METHOD,
+        EVAL_REFLECTION_OWNER_PROPERTY => EVAL_REFLECTION_ATTRIBUTE_TARGET_PROPERTY,
+        EVAL_REFLECTION_OWNER_CLASS_CONSTANT
+        | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE
+        | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE => EVAL_REFLECTION_ATTRIBUTE_TARGET_CLASS_CONSTANT,
+        _ => 0,
+    }
+}
+
 /// Builds an indexed array of populated ReflectionParameter objects.
 fn eval_reflection_parameter_object_array_result(
     parameters: &[EvalReflectionParameterMetadata],
@@ -2436,7 +2461,12 @@ fn eval_reflection_parameter_object_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let attrs = eval_reflection_attribute_array_result(&parameter.attributes, context, values)?;
+    let attrs = eval_reflection_attribute_array_result(
+        &parameter.attributes,
+        EVAL_REFLECTION_ATTRIBUTE_TARGET_PARAMETER,
+        context,
+        values,
+    )?;
     let declaring_function = match parameter.declaring_function.as_ref() {
         Some(metadata) => {
             eval_reflection_declaring_function_object_result(metadata, context, values)?

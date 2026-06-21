@@ -77,6 +77,8 @@ unsafe extern "C" {
         name_ptr: *const u8,
         name_len: u64,
         args: *mut RuntimeCell,
+        target: u64,
+        repeated: u64,
     ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_reflection_owner_new(
         owner_kind: u64,

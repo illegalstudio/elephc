@@ -633,7 +633,14 @@ fn reflection_class_metadata_for_name(
             is_cloneable: false,
             is_iterable: false,
             modifiers: 0,
-            member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false, false),
+            member_flags: reflection_member_flags(
+                false,
+                &Visibility::Public,
+                false,
+                false,
+                false,
+                false,
+            ),
         });
     }
     if let Some(trait_name) = resolve_reflection_trait(ctx, &reflected_class) {
@@ -692,7 +699,14 @@ fn reflection_class_metadata_for_name(
             is_cloneable: false,
             is_iterable: false,
             modifiers: 0,
-            member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false, false),
+            member_flags: reflection_member_flags(
+                false,
+                &Visibility::Public,
+                false,
+                false,
+                false,
+                false,
+            ),
         });
     }
     Ok(empty_reflection_metadata())
@@ -1070,7 +1084,14 @@ fn reflection_class_constant_metadata(
             is_cloneable: false,
             is_iterable: false,
             modifiers: reflection_class_constant_modifiers(&Visibility::Public, false),
-            member_flags: reflection_member_flags(false, &Visibility::Public, false, false, false, false),
+            member_flags: reflection_member_flags(
+                false,
+                &Visibility::Public,
+                false,
+                false,
+                false,
+                false,
+            ),
         });
     }
     Ok(
@@ -3369,7 +3390,10 @@ fn emit_reflection_attrs_property(
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, attrs_low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     super::super::builtins::attributes::emit_reflection_attribute_array(
-        ctx, attr_names, attr_args,
+        ctx,
+        attr_names,
+        attr_args,
+        reflection_attribute_target_for_owner(class_name),
     )?;
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, attrs_low_offset);
@@ -3383,6 +3407,29 @@ fn emit_reflection_attrs_property(
     abi::emit_push_reg(ctx.emitter, object_reg);
     abi::emit_pop_reg(ctx.emitter, result_reg);
     Ok(())
+}
+
+/// Returns PHP's `Attribute::TARGET_*` bitmask for attributes on one Reflection owner type.
+fn reflection_attribute_target_for_owner(class_name: &str) -> i64 {
+    match class_name {
+        "ReflectionClass" => super::super::builtins::attributes::REFLECTION_ATTRIBUTE_TARGET_CLASS,
+        "ReflectionFunction" => {
+            super::super::builtins::attributes::REFLECTION_ATTRIBUTE_TARGET_FUNCTION
+        }
+        "ReflectionMethod" => {
+            super::super::builtins::attributes::REFLECTION_ATTRIBUTE_TARGET_METHOD
+        }
+        "ReflectionProperty" => {
+            super::super::builtins::attributes::REFLECTION_ATTRIBUTE_TARGET_PROPERTY
+        }
+        "ReflectionParameter" => {
+            super::super::builtins::attributes::REFLECTION_ATTRIBUTE_TARGET_PARAMETER
+        }
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => {
+            super::super::builtins::attributes::REFLECTION_ATTRIBUTE_TARGET_CLASS_CONSTANT
+        }
+        _ => 0,
+    }
 }
 
 /// Replaces a ReflectionClass private array slot with an indexed string array.

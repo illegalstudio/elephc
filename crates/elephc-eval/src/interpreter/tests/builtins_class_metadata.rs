@@ -270,6 +270,58 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionAttribute reports target bitmasks and repeated-owner metadata.
+#[test]
+fn execute_program_reflection_attribute_reports_target_and_repetition() {
+    let program = parse_fragment(
+        br#"class EvalTargetMarker {
+    public function __construct($name = null) {}
+}
+#[EvalTargetMarker("class-a"), EvalTargetMarker("class-b")]
+class EvalReflectAttributeTarget {
+    #[EvalTargetMarker("method")]
+    public function run(#[EvalTargetMarker("param")] $id) {}
+    #[EvalTargetMarker("property")]
+    public $id;
+    #[EvalTargetMarker("const")]
+    public const ANSWER = 42;
+}
+enum EvalReflectAttributeEnum {
+    #[EvalTargetMarker("case")]
+    case Ready;
+}
+$class_attrs = (new ReflectionClass("EvalReflectAttributeTarget"))->getAttributes();
+echo $class_attrs[0]->getTarget(); echo "/";
+echo $class_attrs[0]->isRepeated() ? "R" : "r"; echo ":";
+echo $class_attrs[1]->getTarget(); echo "/";
+echo $class_attrs[1]->isRepeated() ? "R" : "r"; echo ":";
+$method_attr = (new ReflectionMethod("EvalReflectAttributeTarget", "run"))->getAttributes()[0];
+echo $method_attr->getTarget(); echo "/";
+echo $method_attr->isRepeated() ? "R" : "r"; echo ":";
+$property_attr = (new ReflectionProperty("EvalReflectAttributeTarget", "id"))->getAttributes()[0];
+echo $property_attr->getTarget(); echo "/";
+echo $property_attr->isRepeated() ? "R" : "r"; echo ":";
+$param_attr = (new ReflectionMethod("EvalReflectAttributeTarget", "run"))->getParameters()[0]->getAttributes()[0];
+echo $param_attr->getTarget(); echo "/";
+echo $param_attr->isRepeated() ? "R" : "r"; echo ":";
+$const_attr = (new ReflectionClassConstant("EvalReflectAttributeTarget", "ANSWER"))->getAttributes()[0];
+echo $const_attr->getTarget(); echo "/";
+echo $const_attr->isRepeated() ? "R" : "r"; echo ":";
+$case_attr = (new ReflectionEnumUnitCase("EvalReflectAttributeEnum", "Ready"))->getAttributes()[0];
+echo $case_attr->getTarget(); echo "/";
+echo $case_attr->isRepeated() ? "R" : "r";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "1/R:1/R:4/r:8/r:32/r:16/r:16/r");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies reflection owner origin metadata APIs report eval user-defined defaults.
 #[test]
 fn execute_program_reflection_owners_report_origin_metadata_defaults() {

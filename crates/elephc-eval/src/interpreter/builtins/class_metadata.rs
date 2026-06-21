@@ -132,7 +132,12 @@ pub(in crate::interpreter) fn eval_class_attribute_metadata_result(
                 return values.array_new(0);
             };
             let attributes = attributes.to_vec();
-            eval_reflection_attribute_array_result(&attributes, context, values)
+            eval_reflection_attribute_array_result(
+                &attributes,
+                EVAL_REFLECTION_ATTRIBUTE_TARGET_CLASS,
+                context,
+                values,
+            )
         }
         ("class_attribute_args", [class_name, attribute_name]) => {
             let class_name = eval_class_metadata_name(*class_name, values)?;
@@ -189,6 +194,7 @@ fn eval_class_attribute_names_result(
 /// Builds an indexed `ReflectionAttribute` array from eval-retained attribute metadata.
 pub(in crate::interpreter) fn eval_reflection_attribute_array_result(
     attributes: &[EvalAttribute],
+    target: u64,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -199,13 +205,24 @@ pub(in crate::interpreter) fn eval_reflection_attribute_array_result(
         };
         let key = values.int(index as i64)?;
         let args = eval_class_attribute_args_result(args, values)?;
-        let reflection_attribute = values.reflection_attribute_new(attribute.name(), args)?;
+        let repeated = eval_attribute_is_repeated(attributes, attribute.name());
+        let reflection_attribute =
+            values.reflection_attribute_new(attribute.name(), args, target, repeated)?;
         let identity = values.object_identity(reflection_attribute)?;
-        context.register_eval_reflection_attribute(identity, attribute.clone());
+        context.register_eval_reflection_attribute(identity, attribute.clone(), target, repeated);
         values.release(args)?;
         result = values.array_set(result, key, reflection_attribute)?;
     }
     Ok(result)
+}
+
+/// Returns true when an attribute name appears more than once on the same owner.
+fn eval_attribute_is_repeated(attributes: &[EvalAttribute], name: &str) -> bool {
+    attributes
+        .iter()
+        .filter(|attribute| eval_attribute_name_matches(attribute.name(), name))
+        .nth(1)
+        .is_some()
 }
 
 /// Builds the indexed mixed array returned by `class_attribute_args()`.

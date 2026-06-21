@@ -246,6 +246,40 @@ struct EvalClassAlias {
     kind: EvalClassAliasKind,
 }
 
+/// Metadata attached to one synthetic eval `ReflectionAttribute` object.
+#[derive(Clone)]
+pub struct EvalReflectionAttributeMetadata {
+    attribute: EvalAttribute,
+    target: u64,
+    repeated: bool,
+}
+
+impl EvalReflectionAttributeMetadata {
+    /// Creates metadata for a materialized `ReflectionAttribute` object.
+    pub fn new(attribute: EvalAttribute, target: u64, repeated: bool) -> Self {
+        Self {
+            attribute,
+            target,
+            repeated,
+        }
+    }
+
+    /// Returns the underlying eval-retained attribute metadata.
+    pub const fn attribute(&self) -> &EvalAttribute {
+        &self.attribute
+    }
+
+    /// Returns the PHP `Attribute::TARGET_*` bitmask for this reflected owner.
+    pub const fn target(&self) -> u64 {
+        self.target
+    }
+
+    /// Returns whether this owner has multiple attributes with the same name.
+    pub const fn is_repeated(&self) -> bool {
+        self.repeated
+    }
+}
+
 /// Process-level eval context passed opaquely across the C ABI.
 ///
 /// Generated code never inspects this layout directly; it only passes pointers
@@ -281,7 +315,7 @@ pub struct ElephcEvalContext {
     included_files: HashSet<String>,
     dynamic_objects: HashMap<u64, String>,
     dynamic_property_aliases: HashMap<(u64, String), EvalReferenceTarget>,
-    eval_reflection_attributes: HashMap<u64, EvalAttribute>,
+    eval_reflection_attributes: HashMap<u64, EvalReflectionAttributeMetadata>,
     eval_reflection_classes: HashMap<u64, String>,
     eval_reflection_functions: HashMap<u64, String>,
     eval_reflection_methods: HashMap<u64, (String, String)>,
@@ -845,12 +879,24 @@ impl ElephcEvalContext {
     }
 
     /// Records eval-declared attribute metadata for one synthetic ReflectionAttribute object.
-    pub fn register_eval_reflection_attribute(&mut self, identity: u64, attribute: EvalAttribute) {
-        self.eval_reflection_attributes.insert(identity, attribute);
+    pub fn register_eval_reflection_attribute(
+        &mut self,
+        identity: u64,
+        attribute: EvalAttribute,
+        target: u64,
+        repeated: bool,
+    ) {
+        self.eval_reflection_attributes.insert(
+            identity,
+            EvalReflectionAttributeMetadata::new(attribute, target, repeated),
+        );
     }
 
     /// Returns eval-declared attribute metadata attached to a synthetic ReflectionAttribute.
-    pub fn eval_reflection_attribute(&self, identity: u64) -> Option<&EvalAttribute> {
+    pub fn eval_reflection_attribute(
+        &self,
+        identity: u64,
+    ) -> Option<&EvalReflectionAttributeMetadata> {
         self.eval_reflection_attributes.get(&identity)
     }
 
