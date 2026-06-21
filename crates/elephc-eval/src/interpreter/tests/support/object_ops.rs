@@ -1096,6 +1096,11 @@ fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exclude_self: 
     {
         return true;
     }
+    if class_name.eq_ignore_ascii_case("KnownClass")
+        && target_class.eq_ignore_ascii_case("KnownInterface")
+    {
+        return true;
+    }
     if target_class.eq_ignore_ascii_case("Throwable") {
         return fake_runtime_exception_like_class(class_name);
     }

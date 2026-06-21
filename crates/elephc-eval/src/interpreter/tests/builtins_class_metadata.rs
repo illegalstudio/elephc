@@ -489,6 +489,25 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass::implementsInterface checks fake generated/AOT relations.
+#[test]
+fn execute_program_reflects_aot_class_implements_interface_predicate() {
+    let program = parse_fragment(
+        br#"$ref = new ReflectionClass("KnownClass");
+echo $ref->implementsInterface("KnownInterface") ? "Y" : "N"; echo ":";
+echo $ref->implementsInterface("Iterator") ? "bad" : "N";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Y:N");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass::implementsInterface rejects non-interface names with catchable errors.
 #[test]
 fn execute_program_reflection_class_implements_interface_rejects_non_interfaces() {
