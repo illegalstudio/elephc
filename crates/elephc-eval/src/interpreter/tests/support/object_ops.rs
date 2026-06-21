@@ -909,6 +909,20 @@ impl FakeOps {
             _ => Ok(None),
         }
     }
+    /// Reports fake generated AOT ReflectionMethod declaring classes for metadata unit tests.
+    pub(super) fn runtime_reflection_method_declaring_class(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        if !class_name.eq_ignore_ascii_case("KnownClass") {
+            return Ok(None);
+        }
+        match method_name.to_ascii_lowercase().as_str() {
+            "run" | "helper" | "locked" => Ok(Some("KnownClass".to_string())),
+            _ => Ok(None),
+        }
+    }
     /// Reports fake generated AOT ReflectionMethod names for eval metadata unit tests.
     pub(super) fn runtime_reflection_method_names(
         &mut self,

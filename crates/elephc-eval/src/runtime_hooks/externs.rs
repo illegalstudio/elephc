@@ -103,6 +103,12 @@ unsafe extern "C" {
         method_ptr: *const u8,
         method_len: u64,
     ) -> u64;
+    pub(super) fn __elephc_eval_reflection_method_declaring_class(
+        class_ptr: *const u8,
+        class_len: u64,
+        method_ptr: *const u8,
+        method_len: u64,
+    ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_reflection_method_names(
         class_ptr: *const u8,
         class_len: u64,

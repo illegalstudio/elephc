@@ -175,6 +175,14 @@ impl RuntimeValueOps for FakeOps {
     ) -> Result<Option<u64>, EvalStatus> {
         self.runtime_reflection_method_flags(class_name, method_name)
     }
+    /// Reports fake generated AOT ReflectionMethod declaring classes for metadata bridge tests.
+    fn reflection_method_declaring_class(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        self.runtime_reflection_method_declaring_class(class_name, method_name)
+    }
     /// Reports fake generated AOT ReflectionMethod names for metadata bridge tests.
     fn reflection_method_names(
         &mut self,

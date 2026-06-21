@@ -174,6 +174,7 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emit_aarch64_eval_reflection_method_names(emitter);
     emit_aarch64_eval_reflection_property_names(emitter);
     emit_aarch64_eval_reflection_method_flags(emitter);
+    emit_aarch64_eval_reflection_method_declaring_class(emitter);
     emit_aarch64_eval_reflection_property_flags(emitter);
 
     label_c_global(emitter, "__elephc_eval_value_is_a");
@@ -1594,6 +1595,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emit_x86_64_eval_reflection_method_names(emitter);
     emit_x86_64_eval_reflection_property_names(emitter);
     emit_x86_64_eval_reflection_method_flags(emitter);
+    emit_x86_64_eval_reflection_method_declaring_class(emitter);
     emit_x86_64_eval_reflection_property_flags(emitter);
 
     label_c_global(emitter, "__elephc_eval_value_is_a");
@@ -2982,6 +2984,7 @@ fn emit_aarch64_eval_reflection_method_names(emitter: &mut Emitter) {
         "_eval_reflection_methods",
         "__elephc_eval_reflection_method_names",
         "method",
+        56,
     );
 }
 
@@ -2994,6 +2997,7 @@ fn emit_aarch64_eval_reflection_property_names(emitter: &mut Emitter) {
         "_eval_reflection_properties",
         "__elephc_eval_reflection_property_names",
         "property",
+        40,
     );
 }
 
@@ -3005,6 +3009,7 @@ fn emit_aarch64_eval_reflection_member_names(
     table_symbol: &str,
     label_prefix: &str,
     member_kind: &str,
+    row_stride: u64,
 ) {
     let loop_label = format!("{label_prefix}_loop");
     let skip_label = format!("{label_prefix}_skip");
@@ -3061,7 +3066,7 @@ fn emit_aarch64_eval_reflection_member_names(
     emitter.instruction("ldr x11, [sp, #40]");                                  // restore the row index after appending the member name
     emitter.label(&skip_label);
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload the current member metadata row
-    emitter.instruction("add x10, x10, #40");                                   // advance to the next 40-byte metadata row
+    emitter.instruction(&format!("add x10, x10, #{row_stride}"));               // advance to the next reflection metadata row
     emitter.instruction("str x10, [sp, #32]");                                  // persist the advanced row cursor
     emitter.instruction("add x11, x11, #1");                                    // advance the row index
     emitter.instruction(&format!("b {loop_label}"));                            // continue scanning member metadata rows
@@ -3131,7 +3136,7 @@ fn emit_aarch64_eval_reflection_method_flags(emitter: &mut Emitter) {
     emitter.instruction("b __elephc_eval_reflection_method_flags_done");        // restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_method_flags_skip");
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current method metadata row
-    emitter.instruction("add x10, x10, #40");                                   // advance to the next 40-byte metadata row
+    emitter.instruction("add x10, x10, #56");                                   // advance to the next 56-byte method metadata row
     emitter.instruction("str x10, [sp, #40]");                                  // persist the advanced row cursor
     emitter.instruction("add x11, x11, #1");                                    // advance the row index
     emitter.instruction("b __elephc_eval_reflection_method_flags_loop");        // continue scanning method metadata rows
@@ -3141,6 +3146,75 @@ fn emit_aarch64_eval_reflection_method_flags(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // release the method metadata scan frame
     emitter.instruction("ret");                                                 // return flags, or zero for a miss, to Rust
+}
+
+/// Emits the ARM64 eval hook that returns a matched AOT ReflectionMethod declaring class.
+fn emit_aarch64_eval_reflection_method_declaring_class(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_reflection_method_declaring_class");
+    emitter.instruction("sub sp, sp, #96");                                     // reserve scan state across runtime string comparisons
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #80");                                    // establish a stable scan frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
+    emitter.instruction("str x1, [sp, #8]");                                    // save the requested class-name length
+    emitter.instruction("str x2, [sp, #16]");                                   // save the requested method-name pointer
+    emitter.instruction("str x3, [sp, #24]");                                   // save the requested method-name length
+    abi::emit_symbol_address(emitter, "x9", "_eval_reflection_method_count");
+    emitter.instruction("ldr x9, [x9]");                                        // load the AOT reflection-method row count
+    emitter.instruction("cbz x9, __elephc_eval_reflection_method_declaring_class_miss"); // an empty table cannot contain the requested method
+    emitter.instruction("str x9, [sp, #32]");                                   // save the table count across string comparisons
+    abi::emit_symbol_address(emitter, "x10", "_eval_reflection_methods");
+    emitter.instruction("str x10, [sp, #40]");                                  // save the current method metadata row
+    emitter.instruction("mov x11, #0");                                         // start scanning at method metadata row zero
+    emitter.label("__elephc_eval_reflection_method_declaring_class_loop");
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the method metadata row count
+    emitter.instruction("cmp x11, x9");                                         // have all method metadata rows been scanned?
+    emitter.instruction("b.ge __elephc_eval_reflection_method_declaring_class_miss"); // no row matched before the end of the table
+    emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current method metadata row
+    emitter.instruction("ldr x12, [x10, #8]");                                  // load the stored class-name length
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the requested class-name length
+    emitter.instruction("cmp x12, x2");                                         // compare stored and requested class-name lengths
+    emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); // length mismatch means the class cannot match
+    emitter.instruction("str x11, [sp, #48]");                                  // save the row index across the class-name compare
+    emitter.instruction("ldr x1, [sp, #0]");                                    // pass the requested class-name pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // pass the requested class-name length
+    emitter.instruction("ldr x3, [x10]");                                       // pass the stored class-name pointer
+    emitter.instruction("mov x4, x12");                                         // pass the stored class-name length
+    emitter.instruction("bl __rt_strcasecmp");                                  // compare class names with PHP case-insensitive rules
+    emitter.instruction("ldr x11, [sp, #48]");                                  // restore the row index after the class-name compare
+    emitter.instruction("cmp x0, #0");                                          // did the requested class name match this row?
+    emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); // class mismatch means the row cannot match
+    emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current row for the method-name compare
+    emitter.instruction("ldr x12, [x10, #24]");                                 // load the stored method-name length
+    emitter.instruction("ldr x2, [sp, #24]");                                   // reload the requested method-name length
+    emitter.instruction("cmp x12, x2");                                         // compare stored and requested method-name lengths
+    emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); // length mismatch means the method cannot match
+    emitter.instruction("str x11, [sp, #48]");                                  // save the row index across the method-name compare
+    emitter.instruction("ldr x1, [sp, #16]");                                   // pass the requested method-name pointer
+    emitter.instruction("ldr x2, [sp, #24]");                                   // pass the requested method-name length
+    emitter.instruction("ldr x3, [x10, #16]");                                  // pass the stored method-name pointer
+    emitter.instruction("mov x4, x12");                                         // pass the stored method-name length
+    emitter.instruction("bl __rt_strcasecmp");                                  // compare method names with PHP case-insensitive rules
+    emitter.instruction("ldr x11, [sp, #48]");                                  // restore the row index after the method-name compare
+    emitter.instruction("cmp x0, #0");                                          // did the requested method name match this row?
+    emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); // method mismatch means scanning must continue
+    emitter.instruction("ldr x10, [sp, #40]");                                  // reload the matched method metadata row
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("ldr x1, [x10, #40]");                                  // load the declaring class-name pointer
+    emitter.instruction("ldr x2, [x10, #48]");                                  // load the declaring class-name length
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the declaring class name for Rust
+    emitter.instruction("b __elephc_eval_reflection_method_declaring_class_done"); // restore the wrapper frame after a match
+    emitter.label("__elephc_eval_reflection_method_declaring_class_skip");
+    emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current method metadata row
+    emitter.instruction("add x10, x10, #56");                                   // advance to the next 56-byte method metadata row
+    emitter.instruction("str x10, [sp, #40]");                                  // persist the advanced row cursor
+    emitter.instruction("add x11, x11, #1");                                    // advance the row index
+    emitter.instruction("b __elephc_eval_reflection_method_declaring_class_loop"); // continue scanning method metadata rows
+    emitter.label("__elephc_eval_reflection_method_declaring_class_miss");
+    emitter.instruction("mov x0, xzr");                                         // return null when no AOT method metadata matched
+    emitter.label("__elephc_eval_reflection_method_declaring_class_done");
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // release the method metadata scan frame
+    emitter.instruction("ret");                                                 // return the declaring class string, or null for a miss, to Rust
 }
 
 /// Emits the ARM64 eval hook that returns AOT ReflectionProperty predicate flags.
@@ -3218,6 +3292,7 @@ fn emit_x86_64_eval_reflection_method_names(emitter: &mut Emitter) {
         "_eval_reflection_methods",
         "__elephc_eval_reflection_method_names_x86",
         "method",
+        56,
     );
 }
 
@@ -3230,6 +3305,7 @@ fn emit_x86_64_eval_reflection_property_names(emitter: &mut Emitter) {
         "_eval_reflection_properties",
         "__elephc_eval_reflection_property_names_x86",
         "property",
+        40,
     );
 }
 
@@ -3241,6 +3317,7 @@ fn emit_x86_64_eval_reflection_member_names(
     table_symbol: &str,
     label_prefix: &str,
     member_kind: &str,
+    row_stride: u64,
 ) {
     let loop_label = format!("{label_prefix}_loop");
     let skip_label = format!("{label_prefix}_skip");
@@ -3297,7 +3374,7 @@ fn emit_x86_64_eval_reflection_member_names(
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // restore the row index after appending the member name
     emitter.label(&skip_label);
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current member metadata row
-    emitter.instruction("add r10, 40");                                         // advance to the next 40-byte metadata row
+    emitter.instruction(&format!("add r10, {row_stride}"));                     // advance to the next reflection metadata row
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // persist the advanced row cursor
     emitter.instruction("inc r11");                                             // advance the row index
     emitter.instruction(&format!("jmp {loop_label}"));                          // continue scanning member metadata rows
@@ -3364,7 +3441,7 @@ fn emit_x86_64_eval_reflection_method_flags(emitter: &mut Emitter) {
     emitter.instruction("jmp __elephc_eval_reflection_method_flags_done_x86");  // restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_method_flags_skip_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current method metadata row
-    emitter.instruction("add r10, 40");                                         // advance to the next 40-byte metadata row
+    emitter.instruction("add r10, 56");                                         // advance to the next 56-byte method metadata row
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // persist the advanced row cursor
     emitter.instruction("inc r11");                                             // advance the row index
     emitter.instruction("jmp __elephc_eval_reflection_method_flags_loop_x86");  // continue scanning method metadata rows
@@ -3374,6 +3451,72 @@ fn emit_x86_64_eval_reflection_method_flags(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return flags, or zero for a miss, to Rust
+}
+
+/// Emits the x86_64 eval hook that returns a matched AOT ReflectionMethod declaring class.
+fn emit_x86_64_eval_reflection_method_declaring_class(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_reflection_method_declaring_class");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable scan frame pointer
+    emitter.instruction("sub rsp, 64");                                         // reserve scan state across runtime string comparisons
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested method-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the requested method-name length
+    abi::emit_symbol_address(emitter, "r10", "_eval_reflection_method_count");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the AOT reflection-method row count
+    emitter.instruction("test r10, r10");                                       // is the method metadata table empty?
+    emitter.instruction("jz __elephc_eval_reflection_method_declaring_class_miss_x86"); // an empty table cannot contain the requested method
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the table count across string comparisons
+    abi::emit_symbol_address(emitter, "r11", "_eval_reflection_methods");
+    emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // save the current method metadata row
+    emitter.instruction("xor r11d, r11d");                                      // start scanning at method metadata row zero
+    emitter.label("__elephc_eval_reflection_method_declaring_class_loop_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the method metadata row count
+    emitter.instruction("cmp r11, r10");                                        // have all method metadata rows been scanned?
+    emitter.instruction("jae __elephc_eval_reflection_method_declaring_class_miss_x86"); // no row matched before the end of the table
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current method metadata row
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the stored class-name length
+    emitter.instruction("cmp rcx, QWORD PTR [rbp - 16]");                       // compare stored and requested class-name lengths
+    emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); // length mismatch means the class cannot match
+    emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the class-name compare
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the requested class-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the requested class-name length
+    emitter.instruction("mov rdx, QWORD PTR [r10]");                            // pass the stored class-name pointer
+    emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the class-name compare
+    emitter.instruction("test rax, rax");                                       // did the requested class name match this row?
+    emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); // class mismatch means the row cannot match
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current row for the method-name compare
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");                       // load the stored method-name length
+    emitter.instruction("cmp rcx, QWORD PTR [rbp - 32]");                       // compare stored and requested method-name lengths
+    emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); // length mismatch means the method cannot match
+    emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the method-name compare
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the requested method-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the requested method-name length
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // pass the stored method-name pointer
+    emitter.instruction("call __rt_strcasecmp");                                // compare method names with PHP case-insensitive rules
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the method-name compare
+    emitter.instruction("test rax, rax");                                       // did the requested method name match this row?
+    emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); // method mismatch means scanning must continue
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the matched method metadata row
+    emitter.instruction("mov rdi, QWORD PTR [r10 + 40]");                       // load the declaring class-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [r10 + 48]");                       // load the declaring class-name length
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // box the declaring class name for Rust
+    emitter.instruction("jmp __elephc_eval_reflection_method_declaring_class_done_x86"); // restore the wrapper frame after a match
+    emitter.label("__elephc_eval_reflection_method_declaring_class_skip_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current method metadata row
+    emitter.instruction("add r10, 56");                                         // advance to the next 56-byte method metadata row
+    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // persist the advanced row cursor
+    emitter.instruction("inc r11");                                             // advance the row index
+    emitter.instruction("jmp __elephc_eval_reflection_method_declaring_class_loop_x86"); // continue scanning method metadata rows
+    emitter.label("__elephc_eval_reflection_method_declaring_class_miss_x86");
+    emitter.instruction("xor eax, eax");                                        // return null when no AOT method metadata matched
+    emitter.label("__elephc_eval_reflection_method_declaring_class_done_x86");
+    emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the declaring class string, or null for a miss, to Rust
 }
 
 /// Emits the x86_64 eval hook that returns AOT ReflectionProperty predicate flags.

@@ -7469,6 +7469,57 @@ try {
     );
 }
 
+/// Verifies eval reports declaring classes for inherited generated/AOT methods and constructors.
+#[test]
+fn test_eval_reflection_method_declaring_class_for_inherited_aot_members() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectDeclaringBase {
+    public function __construct(string $name = "base") {}
+
+    public function inherited(): string {
+        return "base";
+    }
+
+    protected static function baseStatic(): string {
+        return "static";
+    }
+}
+class EvalAotReflectDeclaringChild extends EvalAotReflectDeclaringBase {
+    public function own(): string {
+        return "child";
+    }
+}
+echo eval('$class = new ReflectionClass("EvalAotReflectDeclaringChild");
+$inherited = $class->getMethod("inherited");
+echo $inherited->getDeclaringClass()->getName() . ":";
+$static = $class->getMethod("baseStatic");
+echo $static->getDeclaringClass()->getName() . ":";
+$own = $class->getMethod("own");
+echo $own->getDeclaringClass()->getName() . ":";
+$ctor = $class->getConstructor();
+echo $ctor->getDeclaringClass()->getName() . "/" . $ctor->getNumberOfParameters() . ":";
+$listed = null;
+foreach ($class->getMethods() as $method) {
+    if ($method->getName() === "inherited") {
+        $listed = $method;
+    }
+}
+echo $listed->getDeclaringClass()->getName();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalAotReflectDeclaringBase:EvalAotReflectDeclaringBase:EvalAotReflectDeclaringChild:EvalAotReflectDeclaringBase/1:EvalAotReflectDeclaringBase"
+    );
+}
+
 /// Verifies eval ReflectionMethod::invoke can dispatch public generated/AOT methods.
 #[test]
 fn test_eval_reflection_method_invoke_calls_aot_method() {

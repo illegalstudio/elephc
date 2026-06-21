@@ -867,6 +867,12 @@ fn emit_eval_reflection_method_lookup_data(
             let flags = eval_reflection_instance_method_flags(class_info, method_name);
             let class_label = format!("_eval_reflection_method_class_{}", index);
             let method_label = format!("_eval_reflection_method_name_{}", index);
+            let declaring_class = eval_reflection_instance_method_declaring_class(
+                class_name,
+                class_info,
+                method_name,
+            );
+            let declaring_label = format!("_eval_reflection_method_declaring_class_{}", index);
             out.push_str(&format!(
                 ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
                 class_label,
@@ -877,12 +883,19 @@ fn emit_eval_reflection_method_lookup_data(
                 method_label,
                 escaped_ascii(method_name)
             ));
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                declaring_label,
+                escaped_ascii(declaring_class)
+            ));
             entries.push((
                 class_label,
                 class_name.len(),
                 method_label,
                 method_name.len(),
                 flags,
+                declaring_label,
+                declaring_class.len(),
             ));
             index += 1;
         }
@@ -893,6 +906,9 @@ fn emit_eval_reflection_method_lookup_data(
             let flags = eval_reflection_static_method_flags(class_info, method_name);
             let class_label = format!("_eval_reflection_method_class_{}", index);
             let method_label = format!("_eval_reflection_method_name_{}", index);
+            let declaring_class =
+                eval_reflection_static_method_declaring_class(class_name, class_info, method_name);
+            let declaring_label = format!("_eval_reflection_method_declaring_class_{}", index);
             out.push_str(&format!(
                 ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
                 class_label,
@@ -903,12 +919,19 @@ fn emit_eval_reflection_method_lookup_data(
                 method_label,
                 escaped_ascii(method_name)
             ));
+            out.push_str(&format!(
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+                declaring_label,
+                escaped_ascii(declaring_class)
+            ));
             entries.push((
                 class_label,
                 class_name.len(),
                 method_label,
                 method_name.len(),
                 flags,
+                declaring_label,
+                declaring_class.len(),
             ));
             index += 1;
         }
@@ -918,13 +941,45 @@ fn emit_eval_reflection_method_lookup_data(
     out.push_str(".globl _eval_reflection_method_count\n_eval_reflection_method_count:\n");
     out.push_str(&format!("    .quad {}\n", entries.len()));
     out.push_str(".globl _eval_reflection_methods\n_eval_reflection_methods:\n");
-    for (class_label, class_len, method_label, method_len, flags) in entries {
+    for (class_label, class_len, method_label, method_len, flags, declaring_label, declaring_len) in
+        entries
+    {
         out.push_str(&format!("    .quad {}\n", class_label));
         out.push_str(&format!("    .quad {}\n", class_len));
         out.push_str(&format!("    .quad {}\n", method_label));
         out.push_str(&format!("    .quad {}\n", method_len));
         out.push_str(&format!("    .quad {}\n", flags));
+        out.push_str(&format!("    .quad {}\n", declaring_label));
+        out.push_str(&format!("    .quad {}\n", declaring_len));
     }
+}
+
+/// Returns the class name that declares one visible instance method.
+fn eval_reflection_instance_method_declaring_class<'a>(
+    reflected_class: &'a str,
+    class_info: &'a ClassInfo,
+    method_name: &str,
+) -> &'a str {
+    class_info
+        .method_impl_classes
+        .get(method_name)
+        .or_else(|| class_info.method_declaring_classes.get(method_name))
+        .map(String::as_str)
+        .unwrap_or(reflected_class)
+}
+
+/// Returns the class name that declares one visible static method.
+fn eval_reflection_static_method_declaring_class<'a>(
+    reflected_class: &'a str,
+    class_info: &'a ClassInfo,
+    method_name: &str,
+) -> &'a str {
+    class_info
+        .static_method_impl_classes
+        .get(method_name)
+        .or_else(|| class_info.static_method_declaring_classes.get(method_name))
+        .map(String::as_str)
+        .unwrap_or(reflected_class)
 }
 
 /// Returns eval ReflectionMethod bitflags for one instance method entry.

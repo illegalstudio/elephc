@@ -146,6 +146,13 @@ pub trait RuntimeValueOps {
         method_name: &str,
     ) -> Result<Option<u64>, EvalStatus>;
 
+    /// Returns the generated AOT declaring class for a class/method pair.
+    fn reflection_method_declaring_class(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Result<Option<String>, EvalStatus>;
+
     /// Returns generated AOT ReflectionMethod names visible for one class.
     fn reflection_method_names(
         &mut self,

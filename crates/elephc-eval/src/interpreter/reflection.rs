@@ -1536,8 +1536,11 @@ fn eval_reflection_aot_method_metadata_if_exists(
     let Some(flags) = values.reflection_method_flags(runtime_class_name, method_name)? else {
         return Ok(None);
     };
+    let declaring_class_name = values
+        .reflection_method_declaring_class(runtime_class_name, method_name)?
+        .unwrap_or_else(|| runtime_class_name.to_string());
     Ok(Some(eval_reflection_aot_method_metadata(
-        runtime_class_name,
+        &declaring_class_name,
         method_name,
         flags,
         None,
@@ -1555,10 +1558,17 @@ fn eval_reflection_aot_method_metadata_with_signature_if_exists(
     let Some(flags) = values.reflection_method_flags(runtime_class_name, method_name)? else {
         return Ok(None);
     };
-    let signature =
-        eval_reflection_aot_method_signature(runtime_class_name, method_name, flags, context);
+    let declaring_class_name = values
+        .reflection_method_declaring_class(runtime_class_name, method_name)?
+        .unwrap_or_else(|| runtime_class_name.to_string());
+    let mut signature =
+        eval_reflection_aot_method_signature(&declaring_class_name, method_name, flags, context);
+    if signature.is_none() && declaring_class_name != runtime_class_name {
+        signature =
+            eval_reflection_aot_method_signature(runtime_class_name, method_name, flags, context);
+    }
     Ok(Some(eval_reflection_aot_method_metadata(
-        runtime_class_name,
+        &declaring_class_name,
         method_name,
         flags,
         signature.as_ref(),
