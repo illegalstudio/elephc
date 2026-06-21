@@ -1092,6 +1092,56 @@ pub(in crate::interpreter) fn eval_reflection_property_set_value_result(
     values.null().map(Some)
 }
 
+/// Handles eval-backed `ReflectionProperty::isInitialized()` calls.
+pub(in crate::interpreter) fn eval_reflection_property_is_initialized_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("isInitialized") {
+        return Ok(None);
+    }
+    let Some((declaring_class, property_name)) =
+        context
+            .eval_reflection_property(identity)
+            .map(|(declaring_class, property_name)| {
+                (declaring_class.to_string(), property_name.to_string())
+            })
+    else {
+        return Ok(None);
+    };
+    let object = eval_reflection_property_get_value_arg(evaluated_args)?;
+    let Some(member) = eval_reflection_property_metadata(&declaring_class, &property_name, context)
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if member.is_static {
+        let declaring_class = member
+            .declaring_class_name
+            .as_deref()
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        return values
+            .bool_value(
+                context
+                    .static_property(declaring_class, &property_name)
+                    .is_some(),
+            )
+            .map(Some);
+    }
+    let object = object.ok_or(EvalStatus::RuntimeFatal)?;
+    eval_reflection_instance_property_is_initialized(
+        &declaring_class,
+        &property_name,
+        object,
+        context,
+        values,
+    )
+    .and_then(|initialized| values.bool_value(initialized))
+    .map(Some)
+}
+
 /// Handles eval-backed `ReflectionProperty::getRawValue()` and `setRawValue()` calls.
 pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
     identity: u64,
@@ -4743,7 +4793,33 @@ fn eval_reflection_instance_property_set_value(
         return Err(EvalStatus::RuntimeFatal);
     }
     let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
-    values.property_set(object, &storage_property_name, value)
+    values.property_set(object, &storage_property_name, value)?;
+    let identity = values.object_identity(object)?;
+    context.mark_dynamic_property_initialized(identity, &storage_property_name);
+    Ok(())
+}
+
+/// Returns whether one eval instance property is initialized for ReflectionProperty.
+fn eval_reflection_instance_property_is_initialized(
+    declaring_class: &str,
+    property_name: &str,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let (_, property) = eval_reflection_instance_property_target(
+        declaring_class,
+        property_name,
+        object,
+        context,
+        values,
+    )?;
+    if property.is_virtual() {
+        return Ok(true);
+    }
+    let identity = values.object_identity(object)?;
+    let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
+    Ok(context.dynamic_property_is_initialized(identity, &storage_property_name))
 }
 
 /// Reads one eval instance property through ReflectionProperty raw-storage semantics.
@@ -4789,7 +4865,10 @@ fn eval_reflection_instance_property_set_raw_value(
     }
     validate_eval_reflection_property_write(declaring_class, &property, context)?;
     let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
-    values.property_set(object, &storage_property_name, value)
+    values.property_set(object, &storage_property_name, value)?;
+    let identity = values.object_identity(object)?;
+    context.mark_dynamic_property_initialized(identity, &storage_property_name);
+    Ok(())
 }
 
 /// Resolves and validates the object/property pair targeted by ReflectionProperty.

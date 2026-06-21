@@ -1931,6 +1931,55 @@ return true;"#,
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies ReflectionProperty reports eval instance and static initialization state.
+#[test]
+fn execute_program_reflection_property_reports_initialized_state() {
+    let program = parse_fragment(
+        br#"class EvalReflectInitializedTarget {
+    public int $typed;
+    public ?int $nullable;
+    public $plain;
+    public static int $staticTyped;
+    public static $staticPlain;
+    public $virtual {
+        get => 42;
+    }
+}
+$object = new EvalReflectInitializedTarget();
+$typed = new ReflectionProperty("EvalReflectInitializedTarget", "typed");
+$nullable = new ReflectionProperty("EvalReflectInitializedTarget", "nullable");
+$plain = new ReflectionProperty("EvalReflectInitializedTarget", "plain");
+$staticTyped = new ReflectionProperty("EvalReflectInitializedTarget", "staticTyped");
+$staticPlain = new ReflectionProperty("EvalReflectInitializedTarget", "staticPlain");
+$virtual = new ReflectionProperty("EvalReflectInitializedTarget", "virtual");
+echo $typed->isInitialized($object) ? "T" : "t"; echo ":";
+echo $plain->isInitialized(object: $object) ? "P" : "p"; echo ":";
+echo $staticTyped->isInitialized() ? "S" : "s"; echo ":";
+echo $staticPlain->isInitialized() ? "N" : "n"; echo ":";
+EvalReflectInitializedTarget::$staticTyped = 3;
+echo $staticTyped->isInitialized() ? "S" : "s"; echo ":";
+$object->typed = 5;
+echo $typed->isInitialized($object) ? "T" : "t"; echo ":";
+unset($object->typed);
+echo $typed->isInitialized($object) ? "T" : "t"; echo ":";
+$typed->setRawValue(object: $object, value: 9);
+echo $typed->isInitialized($object) ? "T" : "t"; echo ":";
+echo $nullable->isInitialized($object) ? "Y" : "y"; echo ":";
+$nullable->setValue($object, null);
+echo $nullable->isInitialized($object) ? "Y" : "y"; echo ":";
+echo $virtual->isInitialized($object) ? "V" : "v";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "t:P:s:N:S:T:t:T:y:Y:V");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionProperty exposes eval property hook metadata and methods.
 #[test]
 fn execute_program_reflection_property_gets_eval_hook_metadata() {

@@ -661,12 +661,18 @@ fn initialize_eval_static_properties(
         .filter(|property| property.is_static())
     {
         let value = if let Some(default) = property.default() {
-            eval_expr(default, context, scope, values)?
+            Some(eval_expr(default, context, scope, values)?)
+        } else if property.property_type().is_none() {
+            Some(values.null()?)
         } else {
-            values.null()?
+            None
         };
-        if let Some(replaced) = context.set_static_property(class.name(), property.name(), value) {
-            values.release(replaced)?;
+        if let Some(value) = value {
+            if let Some(replaced) =
+                context.set_static_property(class.name(), property.name(), value)
+            {
+                values.release(replaced)?;
+            }
         }
     }
     Ok(())
@@ -1944,9 +1950,12 @@ pub(in crate::interpreter) fn eval_property_set_result(
             context,
             values,
         )?;
+        context.mark_dynamic_property_initialized(identity, &storage_property_name);
         return values.property_set(object, &storage_property_name, value);
     }
-    values.property_set(object, &storage_property_name, value)
+    values.property_set(object, &storage_property_name, value)?;
+    context.mark_dynamic_property_initialized(identity, &storage_property_name);
+    Ok(())
 }
 
 /// Binds one eval object property to a by-reference source parameter.
@@ -1977,7 +1986,9 @@ fn eval_property_reference_bind_result(
     let target = eval_property_reference_target(source_name, context, scope, values)?;
     let value = eval_reference_target_value(&target, context, values)?;
     context.bind_dynamic_property_alias(identity, &storage_property_name, target);
-    values.property_set(object, &storage_property_name, value)
+    values.property_set(object, &storage_property_name, value)?;
+    context.mark_dynamic_property_initialized(identity, &storage_property_name);
+    Ok(())
 }
 
 /// Resolves a local by-reference source into a persistent property alias target.
@@ -2118,6 +2129,7 @@ pub(in crate::interpreter) fn eval_property_unset_result(
             let storage_property_name =
                 eval_instance_property_storage_name(&declaring_class, &property);
             context.remove_dynamic_property_alias(identity, &storage_property_name);
+            context.mark_dynamic_property_uninitialized(identity, &storage_property_name);
             let null = values.null()?;
             return values.property_set(object, &storage_property_name, null);
         }
@@ -3098,14 +3110,17 @@ fn eval_dynamic_class_allocate_object(
             .filter(|property| !property.is_static() && !property.is_abstract())
         {
             let value = if let Some(default) = property.default() {
-                eval_expr(default, context, caller_scope, values)?
-            } else if property.is_readonly() {
-                continue;
+                Some(eval_expr(default, context, caller_scope, values)?)
+            } else if property.property_type().is_none() {
+                Some(values.null()?)
             } else {
-                values.null()?
+                None
             };
             let storage_name = eval_instance_property_storage_name(class.name(), property);
-            values.property_set(object, &storage_name, value)?;
+            if let Some(value) = value {
+                values.property_set(object, &storage_name, value)?;
+                context.mark_dynamic_property_initialized(identity, &storage_name);
+            }
         }
     }
     Ok(object)
@@ -3336,6 +3351,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         return Ok(result);
     }
     if let Some(result) = eval_reflection_property_hooks_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    if let Some(result) = eval_reflection_property_is_initialized_result(
         identity,
         method_name,
         evaluated_args.clone(),

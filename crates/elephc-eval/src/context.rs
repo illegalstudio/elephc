@@ -315,6 +315,7 @@ pub struct ElephcEvalContext {
     included_files: HashSet<String>,
     dynamic_objects: HashMap<u64, String>,
     dynamic_property_aliases: HashMap<(u64, String), EvalReferenceTarget>,
+    dynamic_initialized_properties: HashSet<(u64, String)>,
     eval_reflection_attributes: HashMap<u64, EvalReflectionAttributeMetadata>,
     eval_reflection_classes: HashMap<u64, String>,
     eval_reflection_functions: HashMap<u64, String>,
@@ -368,6 +369,7 @@ impl ElephcEvalContext {
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
             dynamic_property_aliases: HashMap::new(),
+            dynamic_initialized_properties: HashSet::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
             eval_reflection_functions: HashMap::new(),
@@ -422,6 +424,7 @@ impl ElephcEvalContext {
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
             dynamic_property_aliases: HashMap::new(),
+            dynamic_initialized_properties: HashSet::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
             eval_reflection_functions: HashMap::new(),
@@ -824,6 +827,8 @@ impl ElephcEvalContext {
             .unwrap_or_else(|| class_name.to_string());
         self.dynamic_objects
             .insert(identity, normalize_class_name(&class_name));
+        self.dynamic_initialized_properties
+            .retain(|(object, _)| *object != identity);
     }
 
     /// Returns the dynamic eval class metadata associated with one object identity.
@@ -871,6 +876,36 @@ impl ElephcEvalContext {
             .remove(&(identity, storage_property_name.to_string()))
     }
 
+    /// Marks one eval object storage slot as initialized.
+    pub fn mark_dynamic_property_initialized(
+        &mut self,
+        identity: u64,
+        storage_property_name: &str,
+    ) {
+        self.dynamic_initialized_properties
+            .insert((identity, storage_property_name.to_string()));
+    }
+
+    /// Marks one eval object storage slot as uninitialized.
+    pub fn mark_dynamic_property_uninitialized(
+        &mut self,
+        identity: u64,
+        storage_property_name: &str,
+    ) {
+        self.dynamic_initialized_properties
+            .remove(&(identity, storage_property_name.to_string()));
+    }
+
+    /// Returns whether one eval object storage slot is known to be initialized.
+    pub fn dynamic_property_is_initialized(
+        &self,
+        identity: u64,
+        storage_property_name: &str,
+    ) -> bool {
+        self.dynamic_initialized_properties
+            .contains(&(identity, storage_property_name.to_string()))
+    }
+
     /// Copies persistent property aliases from a source object identity to a clone identity.
     pub fn clone_dynamic_property_aliases(&mut self, source_identity: u64, clone_identity: u64) {
         let aliases = self
@@ -882,6 +917,16 @@ impl ElephcEvalContext {
             .collect::<Vec<_>>();
         for (property, target) in aliases {
             self.bind_dynamic_property_alias(clone_identity, &property, target);
+        }
+        let initialized = self
+            .dynamic_initialized_properties
+            .iter()
+            .filter_map(|(identity, property)| {
+                (*identity == source_identity).then(|| property.clone())
+            })
+            .collect::<Vec<_>>();
+        for property in initialized {
+            self.mark_dynamic_property_initialized(clone_identity, &property);
         }
     }
 

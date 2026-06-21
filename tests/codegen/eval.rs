@@ -8698,6 +8698,54 @@ $property->getRawValue($object);');
     );
 }
 
+/// Verifies eval ReflectionProperty reports instance and static initialization state.
+#[test]
+fn test_eval_reflection_property_is_initialized() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectInitializedTarget {
+    public int $typed;
+    public ?int $nullable;
+    public $plain;
+    public static int $staticTyped;
+    public static $staticPlain;
+    public $virtual {
+        get => 42;
+    }
+}
+$object = new EvalReflectInitializedTarget();
+$typed = new ReflectionProperty("EvalReflectInitializedTarget", "typed");
+$nullable = new ReflectionProperty("EvalReflectInitializedTarget", "nullable");
+$plain = new ReflectionProperty("EvalReflectInitializedTarget", "plain");
+$staticTyped = new ReflectionProperty("EvalReflectInitializedTarget", "staticTyped");
+$staticPlain = new ReflectionProperty("EvalReflectInitializedTarget", "staticPlain");
+$virtual = new ReflectionProperty("EvalReflectInitializedTarget", "virtual");
+echo $typed->isInitialized($object) ? "T:" : "t:";
+echo $plain->isInitialized(object: $object) ? "P:" : "p:";
+echo $staticTyped->isInitialized() ? "S:" : "s:";
+echo $staticPlain->isInitialized() ? "N:" : "n:";
+EvalReflectInitializedTarget::$staticTyped = 3;
+echo $staticTyped->isInitialized() ? "S:" : "s:";
+$object->typed = 5;
+echo $typed->isInitialized($object) ? "T:" : "t:";
+unset($object->typed);
+echo $typed->isInitialized($object) ? "T:" : "t:";
+$typed->setRawValue(object: $object, value: 9);
+echo $typed->isInitialized($object) ? "T:" : "t:";
+echo $nullable->isInitialized($object) ? "Y:" : "y:";
+$nullable->setValue($object, null);
+echo $nullable->isInitialized($object) ? "Y:" : "y:";
+echo $virtual->isInitialized($object) ? "V" : "v";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "t:P:s:N:S:T:t:T:y:Y:V");
+}
+
 /// Verifies eval ReflectionProperty exposes property hook metadata and hook methods.
 #[test]
 fn test_eval_reflection_property_hook_metadata() {
