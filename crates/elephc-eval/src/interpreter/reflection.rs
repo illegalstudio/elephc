@@ -124,6 +124,36 @@ enum EvalReflectionParameterTypeKind {
     Intersection(EvalReflectionIntersectionTypeMetadata),
 }
 
+/// Property hook kind accepted by `ReflectionProperty` hook APIs.
+#[derive(Clone, Copy)]
+enum EvalReflectionPropertyHook {
+    Get,
+    Set,
+}
+
+impl EvalReflectionPropertyHook {
+    /// Returns the associative-array key PHP uses for this hook kind.
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Get => "get",
+            Self::Set => "set",
+        }
+    }
+
+    /// Returns the PHP-visible synthetic hook method name.
+    fn reflected_method_name(self, property_name: &str) -> String {
+        format!("${}::{}", property_name, self.key())
+    }
+
+    /// Returns the internal eval method name that stores the hook body.
+    fn synthetic_method_name(self, property_name: &str) -> String {
+        match self {
+            Self::Get => property_hook_get_method(property_name),
+            Self::Set => property_hook_set_method(property_name),
+        }
+    }
+}
+
 /// Eval metadata needed to materialize one `ReflectionNamedType` object.
 #[derive(Clone)]
 struct EvalReflectionNamedTypeMetadata {
@@ -438,18 +468,18 @@ pub(in crate::interpreter) fn eval_reflection_class_get_relation_objects_result(
     else {
         return Ok(None);
     };
-    let names = if let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context)
-    {
-        if relation_kind == "interfaces" {
-            metadata.interface_names
+    let names =
+        if let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) {
+            if relation_kind == "interfaces" {
+                metadata.interface_names
+            } else {
+                metadata.trait_names
+            }
+        } else if relation_kind == "interfaces" {
+            eval_reflection_aot_class_interface_names(&reflected_name, values)?
         } else {
-            metadata.trait_names
-        }
-    } else if relation_kind == "interfaces" {
-        eval_reflection_aot_class_interface_names(&reflected_name, values)?
-    } else {
-        Vec::new()
-    };
+            Vec::new()
+        };
     eval_reflection_class_object_map_result(&names, context, values).map(Some)
 }
 
@@ -909,6 +939,63 @@ pub(in crate::interpreter) fn eval_reflection_set_accessible_result(
     values.null().map(Some)
 }
 
+/// Handles eval-backed `ReflectionProperty` hook-inspection calls.
+pub(in crate::interpreter) fn eval_reflection_property_hooks_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some((declaring_class, property_name)) =
+        context
+            .eval_reflection_property(identity)
+            .map(|(declaring_class, property_name)| {
+                (declaring_class.to_string(), property_name.to_string())
+            })
+    else {
+        return Ok(None);
+    };
+    let Some((property_class, property)) =
+        eval_reflection_property_for_hooks(&declaring_class, &property_name, context)
+    else {
+        return Ok(None);
+    };
+    match method_name.to_ascii_lowercase().as_str() {
+        "hashooks" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            let has_hooks = !eval_reflection_property_hook_kinds(&property).is_empty();
+            values.bool_value(has_hooks).map(Some)
+        }
+        "hashook" => {
+            let hook = eval_reflection_property_hook_arg(evaluated_args, context, values)?;
+            values
+                .bool_value(eval_reflection_property_has_hook(&property, hook))
+                .map(Some)
+        }
+        "gethook" => {
+            let hook = eval_reflection_property_hook_arg(evaluated_args, context, values)?;
+            if !eval_reflection_property_has_hook(&property, hook) {
+                return values.null().map(Some);
+            }
+            eval_reflection_property_hook_method_object(
+                &property_class,
+                &property,
+                hook,
+                context,
+                values,
+            )
+            .map(Some)
+        }
+        "gethooks" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            eval_reflection_property_hook_method_array(&property_class, &property, context, values)
+                .map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Handles eval-backed `ReflectionProperty::getValue()` calls.
 pub(in crate::interpreter) fn eval_reflection_property_get_value_result(
     identity: u64,
@@ -1272,10 +1359,11 @@ fn eval_reflection_constant_matches_filter(
     let Some(filter) = filter else {
         return true;
     };
-    eval_reflection_class_constant_metadata(reflected_name, constant_name, context)
-        .is_some_and(|(_, _, visibility, is_final, _)| {
+    eval_reflection_class_constant_metadata(reflected_name, constant_name, context).is_some_and(
+        |(_, _, visibility, is_final, _)| {
             eval_reflection_class_constant_modifiers(visibility, is_final) & filter != 0
-        })
+        },
+    )
 }
 
 /// Resolves the declared member spelling for eval `ReflectionClass` single-member lookups.
@@ -4069,6 +4157,215 @@ fn eval_reflection_property_set_value_args(
     Ok((object_or_value, bound_args[1]))
 }
 
+/// Returns the eval property metadata eligible for ReflectionProperty hook APIs.
+fn eval_reflection_property_for_hooks(
+    declaring_class: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<(String, EvalClassProperty)> {
+    if context.has_class(declaring_class) || context.has_enum(declaring_class) {
+        return context.class_property(declaring_class, property_name);
+    }
+    context.trait_decl(declaring_class).and_then(|trait_decl| {
+        trait_decl
+            .properties()
+            .iter()
+            .find(|property| property.name() == property_name)
+            .map(|property| (trait_decl.name().to_string(), property.clone()))
+    })
+}
+
+/// Binds the `PropertyHookType $type` argument used by ReflectionProperty hook APIs.
+fn eval_reflection_property_hook_arg(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalReflectionPropertyHook, EvalStatus> {
+    let args = bind_evaluated_function_args(&[String::from("type")], evaluated_args)?;
+    eval_reflection_property_hook_type(args[0], context, values)
+}
+
+/// Converts one synthetic `PropertyHookType` object into an eval reflection hook kind.
+fn eval_reflection_property_hook_type(
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalReflectionPropertyHook, EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_OBJECT {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let identity = values.object_identity(value)?;
+    if !context.dynamic_object_is_class(identity, "PropertyHookType") {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let hook_value = values.property_get(value, "value")?;
+    match eval_reflection_string_arg(hook_value, values)?.as_str() {
+        "get" => Ok(EvalReflectionPropertyHook::Get),
+        "set" => Ok(EvalReflectionPropertyHook::Set),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Returns concrete hook kinds declared on one eval property.
+fn eval_reflection_property_hook_kinds(
+    property: &EvalClassProperty,
+) -> Vec<EvalReflectionPropertyHook> {
+    let mut hooks = Vec::new();
+    if property.has_get_hook() {
+        hooks.push(EvalReflectionPropertyHook::Get);
+    }
+    if property.has_set_hook() {
+        hooks.push(EvalReflectionPropertyHook::Set);
+    }
+    hooks
+}
+
+/// Returns whether one eval property exposes the requested concrete hook.
+fn eval_reflection_property_has_hook(
+    property: &EvalClassProperty,
+    hook: EvalReflectionPropertyHook,
+) -> bool {
+    match hook {
+        EvalReflectionPropertyHook::Get => property.has_get_hook(),
+        EvalReflectionPropertyHook::Set => property.has_set_hook(),
+    }
+}
+
+/// Builds PHP's string-keyed ReflectionMethod map returned by `getHooks()`.
+fn eval_reflection_property_hook_method_array(
+    declaring_class: &str,
+    property: &EvalClassProperty,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let hooks = eval_reflection_property_hook_kinds(property);
+    let mut result = values.assoc_new(hooks.len())?;
+    for hook in hooks {
+        let key = values.string(hook.key())?;
+        let method = eval_reflection_property_hook_method_object(
+            declaring_class,
+            property,
+            hook,
+            context,
+            values,
+        )?;
+        result = values.array_set(result, key, method)?;
+    }
+    Ok(result)
+}
+
+/// Materializes a ReflectionMethod object for one concrete property hook.
+fn eval_reflection_property_hook_method_object(
+    declaring_class: &str,
+    property: &EvalClassProperty,
+    hook: EvalReflectionPropertyHook,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let metadata = eval_reflection_property_hook_method_metadata(declaring_class, property, hook);
+    eval_reflection_member_object_result(
+        EVAL_REFLECTION_OWNER_METHOD,
+        &hook.reflected_method_name(property.name()),
+        &metadata,
+        context,
+        values,
+    )
+}
+
+/// Builds ReflectionMethod metadata for one eval property hook accessor.
+fn eval_reflection_property_hook_method_metadata(
+    declaring_class: &str,
+    property: &EvalClassProperty,
+    hook: EvalReflectionPropertyHook,
+) -> EvalReflectionMemberMetadata {
+    let parameters = eval_reflection_property_hook_parameters(declaring_class, property, hook);
+    let required_parameter_count = parameters.len();
+    EvalReflectionMemberMetadata {
+        declaring_class_name: Some(declaring_class.to_string()),
+        attributes: Vec::new(),
+        visibility: property.visibility(),
+        is_static: false,
+        is_final: false,
+        is_abstract: false,
+        is_readonly: false,
+        is_promoted: false,
+        modifiers: eval_reflection_method_modifiers(property.visibility(), false, false, false),
+        type_metadata: None,
+        return_type_metadata: eval_reflection_property_hook_return_type(property, hook),
+        default_value: None,
+        required_parameter_count,
+        parameters,
+    }
+}
+
+/// Builds the synthetic setter parameter metadata exposed by PHP hook reflection.
+fn eval_reflection_property_hook_parameters(
+    declaring_class: &str,
+    property: &EvalClassProperty,
+    hook: EvalReflectionPropertyHook,
+) -> Vec<EvalReflectionParameterMetadata> {
+    if !matches!(hook, EvalReflectionPropertyHook::Set) {
+        return Vec::new();
+    }
+    let type_metadata = property
+        .property_type()
+        .and_then(eval_reflection_parameter_type_metadata);
+    let has_type = type_metadata.is_some();
+    let declaring_function = EvalReflectionDeclaringFunctionMetadata {
+        name: hook.reflected_method_name(property.name()),
+        declaring_class_name: Some(declaring_class.to_string()),
+        attributes: Vec::new(),
+        flags: eval_reflection_member_flags(property.visibility(), false, false, false, false),
+        required_parameter_count: 1,
+    };
+    vec![EvalReflectionParameterMetadata {
+        name: "value".to_string(),
+        declaring_class_name: Some(declaring_class.to_string()),
+        declaring_function: Some(declaring_function),
+        attributes: Vec::new(),
+        position: 0,
+        is_optional: false,
+        is_variadic: false,
+        is_passed_by_reference: false,
+        is_promoted: false,
+        has_type,
+        allows_null: type_metadata
+            .as_ref()
+            .is_some_and(eval_reflection_type_allows_null),
+        type_metadata,
+        default_value: None,
+        default_value_constant_name: None,
+    }]
+}
+
+/// Returns the ReflectionMethod return type metadata for a property hook.
+fn eval_reflection_property_hook_return_type(
+    property: &EvalClassProperty,
+    hook: EvalReflectionPropertyHook,
+) -> Option<EvalReflectionParameterTypeMetadata> {
+    match hook {
+        EvalReflectionPropertyHook::Get => property
+            .property_type()
+            .and_then(eval_reflection_parameter_type_metadata),
+        EvalReflectionPropertyHook::Set => Some(EvalReflectionParameterTypeMetadata {
+            kind: EvalReflectionParameterTypeKind::Named(eval_reflection_builtin_named_type(
+                "void", false,
+            )),
+        }),
+    }
+}
+
+/// Maps PHP-visible property-hook method names back to eval's synthetic method names.
+fn eval_reflection_property_hook_synthetic_method_name(method_name: &str) -> Option<String> {
+    let body = method_name.strip_prefix('$')?;
+    let (property_name, hook_name) = body.rsplit_once("::")?;
+    match hook_name {
+        "get" => Some(EvalReflectionPropertyHook::Get.synthetic_method_name(property_name)),
+        "set" => Some(EvalReflectionPropertyHook::Set.synthetic_method_name(property_name)),
+        _ => None,
+    }
+}
+
 /// Binds `ReflectionMethod::invoke()` arguments and preserves forwarded named args.
 fn eval_reflection_method_invoke_args(
     evaluated_args: Vec<EvaluatedCallArg>,
@@ -4153,7 +4450,10 @@ fn eval_reflection_method_invoke_dispatch(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if let Some((method_class, method)) = context.class_method(declaring_class, method_name) {
+    let lookup_method_name = eval_reflection_property_hook_synthetic_method_name(method_name)
+        .unwrap_or_else(|| method_name.to_string());
+    if let Some((method_class, method)) = context.class_method(declaring_class, &lookup_method_name)
+    {
         if method.is_abstract() {
             return Err(EvalStatus::RuntimeFatal);
         }

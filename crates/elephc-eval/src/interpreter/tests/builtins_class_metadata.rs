@@ -1880,6 +1880,60 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionProperty exposes eval property hook metadata and methods.
+#[test]
+fn execute_program_reflection_property_gets_eval_hook_metadata() {
+    let program = parse_fragment(
+        br#"class EvalReflectHookedProperty {
+    public int $raw = 2;
+    public int $doubled {
+        get { return $this->raw * 2; }
+        set { $this->raw = $value; }
+    }
+    public int $readonlyHook {
+        get => $this->raw + 1;
+    }
+    public int $plain = 5;
+}
+$hooked = new ReflectionProperty("EvalReflectHookedProperty", "doubled");
+$plain = new ReflectionProperty("EvalReflectHookedProperty", "plain");
+$readonly = new ReflectionProperty("EvalReflectHookedProperty", "readonlyHook");
+$getCase = PropertyHookType::Get;
+$setCase = PropertyHookType::Set;
+echo $getCase->name; echo ":"; echo $getCase->value; echo ":";
+echo $hooked->hasHooks() ? "H" : "h"; echo ":";
+echo $hooked->hasHook($getCase) ? "G" : "g"; echo ":";
+echo $hooked->hasHook(type: $setCase) ? "S" : "s"; echo ":";
+$hooks = $hooked->getHooks();
+echo count($hooks); echo ":"; echo $hooks["get"]->getName(); echo ":"; echo $hooks["set"]->getName(); echo ":";
+$get = $hooked->getHook($getCase);
+$set = $hooked->getHook(type: $setCase);
+echo $get->getDeclaringClass()->getName(); echo ":"; echo $get->getNumberOfParameters(); echo ":";
+echo $set->getNumberOfParameters(); echo ":"; echo $set->getParameters()[0]->getName(); echo ":";
+$box = new EvalReflectHookedProperty();
+echo $get->invoke($box); echo ":";
+$set->invoke($box, 7);
+echo $box->raw; echo ":";
+echo $readonly->hasHook($getCase) ? "R" : "r"; echo ":";
+echo $readonly->hasHook($setCase) ? "w" : "W"; echo ":";
+echo $readonly->getHook($setCase) === null ? "N" : "n"; echo ":";
+echo $plain->hasHooks() ? "bad" : "plain"; echo ":";
+echo count($plain->getHooks());
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Get:get:H:G:S:2:$doubled::get:$doubled::set:EvalReflectHookedProperty:0:1:value:4:7:R:W:N:plain:0"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass exposes and mutates eval static property values.
 #[test]
 fn execute_program_reflection_class_static_property_values() {
