@@ -1846,6 +1846,16 @@ class EvalReflectValueHook {
         get => $this->raw * 2;
         set { $this->raw = $value + 1; }
     }
+    public $backed {
+        get { return $this->backed * 2; }
+        set { $this->backed = $value; }
+    }
+    public $virtual {
+        get => $this->raw + 100;
+    }
+    public function __construct() {
+        $this->backed = 2;
+    }
 }
 $child = new EvalReflectValueChild();
 $secret = new ReflectionProperty("EvalReflectValueBase", "secret");
@@ -1867,7 +1877,18 @@ $doubled = new ReflectionProperty("EvalReflectValueHook", "doubled");
 echo $doubled->getValue($hook); echo ":";
 $doubled->setValue($hook, 4);
 echo $hook->raw; echo ":";
-echo $doubled->getValue($hook);
+echo $doubled->getValue($hook); echo ":";
+$backed = new ReflectionProperty("EvalReflectValueHook", "backed");
+echo $backed->getRawValue($hook); echo ":";
+echo $backed->getValue($hook); echo ":";
+$backed->setValue($hook, 4);
+echo $backed->getRawValue(object: $hook); echo ":";
+echo $backed->getValue($hook); echo ":";
+$backed->setRawValue(object: $hook, value: 7);
+echo $backed->getRawValue($hook); echo ":";
+echo $backed->getValue($hook); echo ":";
+echo $backed->getModifiers(); echo ":";
+echo (new ReflectionProperty("EvalReflectValueHook", "virtual"))->getModifiers();
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -1876,8 +1897,36 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "base:changed:Ada:Grace:1:5:6:4:5:10");
+    assert_eq!(
+        values.output,
+        "base:changed:Ada:Grace:1:5:6:4:5:10:2:4:4:8:7:14:1:513"
+    );
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies ReflectionProperty raw APIs reject virtual eval property hooks.
+#[test]
+fn execute_program_reflection_property_rejects_virtual_raw_value() {
+    let program = parse_fragment(
+        br#"class EvalReflectVirtualRawHook {
+    public $raw = 2;
+    public $virtual {
+        get => $this->raw * 2;
+    }
+}
+$object = new EvalReflectVirtualRawHook();
+$property = new ReflectionProperty("EvalReflectVirtualRawHook", "virtual");
+$property->getRawValue($object);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("virtual raw property read should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
 /// Verifies ReflectionProperty exposes eval property hook metadata and methods.
