@@ -331,10 +331,14 @@ returns the declaring class-like symbol for eval method parameters, and
 object for eval free-function parameters or a `ReflectionMethod` object for the
 declaring eval method. `ReflectionFunction::invoke()` and `invokeArgs()`
 dispatch eval-declared functions with the same named/default/variadic argument
-binding used by direct eval function calls. Defaulted eval method parameters are bound
-when omitted and reported through
-`ReflectionParameter::isOptional()`, `isDefaultValueAvailable()`, and
-`getDefaultValue()`. Supported default expressions include
+binding used by direct eval function calls. Defaulted eval method parameters are
+bound when omitted and reported through `ReflectionParameter::isOptional()`,
+`isDefaultValueAvailable()`, `isDefaultValueConstant()`,
+`getDefaultValueConstantName()`, and `getDefaultValue()`. Constant-name metadata
+is retained for predefined or eval-defined constant fetches, namespaced constant
+fallback, and class/interface/trait/enum constant fetches; `::class` literals,
+magic constants, and literal defaults are materialized as values but are not
+reported as default-value constants. Supported default expressions include
 scalar literals, arrays whose keys and values are supported default
 expressions, magic constants, unary and binary operators supported by eval,
 ternary and null-coalescing expressions, predefined or eval-defined constant
@@ -559,8 +563,9 @@ remaining class-system gaps are broader reflection APIs beyond the supported
 ReflectionClass/Function/Method/Parameter/Property/NamedType/UnionType/IntersectionType
 and attribute slice, Reflection type APIs beyond retained parameter, generated
 property, and function/method return metadata, broader
-parameter and generated property default-value objects beyond the eval-supported
-constant-expression subset, and broader generated/AOT method bridge signatures beyond the current public
+parameter and generated property default-value materialization beyond the
+eval-supported constant-expression subset, object-valued defaults in generated
+metadata, and broader generated/AOT method bridge signatures beyond the current public
 non-by-reference fixed scalar/Mixed/object slice. Generated/AOT method type
 metadata and generated/AOT method/property attributes are exposed for registered
 metadata slices, while broader non-public or unsupported bridge shapes remain

@@ -2341,6 +2341,18 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
             false_bool(),
         ),
         builtin_property(
+            "__is_default_value_constant",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ),
+        builtin_property(
+            "__default_value_constant_name",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ),
+        builtin_property(
             "__default_value",
             Visibility::Private,
             Some(mixed_type()),
@@ -2376,6 +2388,8 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
         builtin_reflection_class_mixed_method("getType", "__type"),
         builtin_reflection_owner_get_attributes_method(),
         builtin_reflection_class_bool_method("isDefaultValueAvailable", "__has_default_value"),
+        builtin_reflection_parameter_is_default_value_constant_method(),
+        builtin_reflection_parameter_get_default_value_constant_name_method(),
         builtin_reflection_parameter_get_default_value_method(),
         builtin_reflection_class_mixed_method("getDeclaringClass", "__declaring_class"),
         builtin_reflection_class_mixed_method("getDeclaringFunction", "__declaring_function"),
@@ -2395,6 +2409,84 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
     }
 }
 
+/// Builds `ReflectionParameter::isDefaultValueConstant()` over retained default metadata.
+fn builtin_reflection_parameter_is_default_value_constant_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "isDefaultValueConstant".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        body: vec![
+            reflection_parameter_throw_if_default_missing(dummy_span),
+            Stmt::new(
+                StmtKind::Return(Some(reflection_this_property(
+                    "__is_default_value_constant",
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `ReflectionParameter::getDefaultValueConstantName()` over retained default metadata.
+fn builtin_reflection_parameter_get_default_value_constant_name_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "getDefaultValueConstantName".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        body: vec![
+            reflection_parameter_throw_if_default_missing(dummy_span),
+            Stmt::new(
+                StmtKind::If {
+                    condition: Expr::new(
+                        ExprKind::Not(Box::new(reflection_this_property(
+                            "__is_default_value_constant",
+                            dummy_span,
+                        ))),
+                        dummy_span,
+                    ),
+                    then_body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(reflection_this_property(
+                    "__default_value_constant_name",
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Builds `ReflectionParameter::getDefaultValue()` over the retained default slot.
 fn builtin_reflection_parameter_get_default_value_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
@@ -2411,27 +2503,7 @@ fn builtin_reflection_parameter_get_default_value_method() -> ClassMethod {
         variadic_type: None,
         return_type: Some(mixed_type()),
         body: vec![
-            Stmt::new(
-                StmtKind::If {
-                    condition: Expr::new(
-                        ExprKind::Not(Box::new(reflection_this_property(
-                            "__has_default_value",
-                            dummy_span,
-                        ))),
-                        dummy_span,
-                    ),
-                    then_body: vec![throw_new_reflection_exception(
-                        string_lit(
-                            "Internal error: Failed to retrieve the default value",
-                            dummy_span,
-                        ),
-                        dummy_span,
-                    )],
-                    elseif_clauses: Vec::new(),
-                    else_body: None,
-                },
-                dummy_span,
-            ),
+            reflection_parameter_throw_if_default_missing(dummy_span),
             Stmt::new(
                 StmtKind::Return(Some(reflection_this_property(
                     "__default_value",
@@ -2443,6 +2515,28 @@ fn builtin_reflection_parameter_get_default_value_method() -> ClassMethod {
         span: dummy_span,
         attributes: Vec::new(),
     }
+}
+
+/// Builds the PHP-compatible default-metadata guard shared by ReflectionParameter methods.
+fn reflection_parameter_throw_if_default_missing(span: crate::span::Span) -> Stmt {
+    Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(
+                ExprKind::Not(Box::new(reflection_this_property(
+                    "__has_default_value",
+                    span,
+                ))),
+                span,
+            ),
+            then_body: vec![throw_new_reflection_exception(
+                string_lit("Internal error: Failed to retrieve the default value", span),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
 }
 
 /// Builds `ReflectionParameter::canBePassedByValue()` from the retained by-ref flag.
@@ -2932,12 +3026,13 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "hastype",
                     "allowsnull",
                     "isdefaultvalueavailable",
+                    "isdefaultvalueconstant",
                 ] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
                     }
                 }
-                for method_name in ["getType", "getDefaultValue"] {
+                for method_name in ["getType", "getDefaultValue", "getDefaultValueConstantName"] {
                     if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
                         sig.return_type = PhpType::Mixed;
                     }

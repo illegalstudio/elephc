@@ -1677,6 +1677,7 @@ fn execute_program_reflection_property_get_default_value_metadata() {
     public int $count = 7;
     public static string $label = "ok";
 }
+
 foreach (["implicit", "typed", "nullableTyped", "explicitNull", "count", "label"] as $name) {
     $property = new ReflectionProperty("EvalReflectPropertyDefaultTarget", $name);
     echo $property->getName(); echo ":";
@@ -1702,6 +1703,49 @@ return true;"#,
     assert_eq!(
         values.output,
         "implicit:Y:D:null|typed:Y:d:null|nullableTyped:Y:d:null|explicitNull:Y:D:null|count:Y:D:7|label:Y:D:ok|listed:Y:D:null"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies ReflectionParameter reports eval constant-default metadata.
+#[test]
+fn execute_program_reflection_parameter_reports_default_constant_metadata() {
+    let program = parse_fragment(
+        br##"define("EVAL_REFLECT_PARAM_DEFAULT_GLOBAL", "G");
+class EvalReflectParamDefaultBase {
+    const BASE = "B";
+}
+class EvalReflectParamDefaultTarget extends EvalReflectParamDefaultBase {
+    const LABEL = "L";
+    public function run($required, $global = EVAL_REFLECT_PARAM_DEFAULT_GLOBAL, $self = self::LABEL, $parent = parent::BASE, $literal = 7) {}
+}
+$params = (new ReflectionMethod("EvalReflectParamDefaultTarget", "run"))->getParameters();
+foreach ($params as $param) {
+    echo $param->getName(); echo ":";
+    echo $param->isDefaultValueAvailable() ? "D:" : "d:";
+    if ($param->isDefaultValueAvailable()) {
+        if ($param->isDefaultValueConstant()) {
+            echo "C:";
+            echo $param->getDefaultValueConstantName();
+            echo ":";
+        } else {
+            echo "c:null:";
+        }
+        echo $param->getDefaultValue();
+    }
+    echo "|";
+}
+return true;"##,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "required:d:|global:D:C:EVAL_REFLECT_PARAM_DEFAULT_GLOBAL:G|self:D:C:self::LABEL:L|parent:D:C:parent::BASE:B|literal:D:c:null:7|"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

@@ -26,6 +26,7 @@ const EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE: u64 = 8;
 const EVAL_REFLECTION_PARAMETER_FLAG_HAS_DEFAULT_VALUE: u64 = 16;
 const EVAL_REFLECTION_PARAMETER_FLAG_PROMOTED: u64 = 32;
 const EVAL_REFLECTION_PARAMETER_FLAG_ALLOWS_NULL: u64 = 64;
+const EVAL_REFLECTION_PARAMETER_FLAG_DEFAULT_VALUE_CONSTANT: u64 = 128;
 
 impl FakeOps {
     /// Reads one fake object property by name.
@@ -370,6 +371,10 @@ impl FakeOps {
                 Self::object_property(&properties, "__default_value")
                     .map_or_else(|| self.null(), Ok)
             }
+            (FakeValue::Object(properties), "getdefaultvalueconstantname") if args.is_empty() => {
+                Self::object_property(&properties, "__default_value_constant_name")
+                    .map_or_else(|| self.null(), Ok)
+            }
             (FakeValue::Object(properties), "isconstructor") if args.is_empty() => {
                 let Some(name) = Self::object_property(&properties, "__name") else {
                     return self.bool_value(false);
@@ -420,6 +425,10 @@ impl FakeOps {
                 if args.is_empty() =>
             {
                 Self::object_property(&properties, "__has_default_value")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "isdefaultvalueconstant") if args.is_empty() => {
+                Self::object_property(&properties, "__is_default_value_constant")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
             (FakeValue::Object(properties), "isdefault") if args.is_empty() => {
@@ -730,6 +739,8 @@ impl FakeOps {
                 self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_PROMOTED) != 0)?;
             let allows_null =
                 self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_ALLOWS_NULL) != 0)?;
+            let is_default_value_constant = self
+                .bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_DEFAULT_VALUE_CONSTANT) != 0)?;
             properties.push(("__position".to_string(), position));
             properties.push(("__is_optional".to_string(), is_optional));
             properties.push(("__is_variadic".to_string(), is_variadic));
@@ -742,6 +753,11 @@ impl FakeOps {
             properties.push(("__allows_null".to_string(), allows_null));
             properties.push(("__type".to_string(), method_objects));
             properties.push(("__has_default_value".to_string(), has_default_value));
+            properties.push((
+                "__is_default_value_constant".to_string(),
+                is_default_value_constant,
+            ));
+            properties.push(("__default_value_constant_name".to_string(), constant_value));
             properties.push(("__default_value".to_string(), property_objects));
             properties.push(("__declaring_function".to_string(), interface_names));
         }

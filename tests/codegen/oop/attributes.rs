@@ -2495,6 +2495,51 @@ echo $direct->getDefaultValue();
     assert_eq!(out.stdout, "d:E|D:7|D:null|D:ok");
 }
 
+/// Verifies `ReflectionParameter` exposes class-constant default metadata.
+#[test]
+fn test_reflection_parameter_exposes_default_constant_metadata() {
+    let out = compile_and_run_capture(
+        r##"<?php
+class ReflectDefaultConstBase {
+    const BASE = "B";
+}
+class ReflectDefaultConstTarget extends ReflectDefaultConstBase {
+    const LABEL = "L";
+    public function run($self = self::LABEL, $parent = parent::BASE, $class = self::class, $literal = 7) {}
+}
+$params = (new ReflectionMethod(ReflectDefaultConstTarget::class, "run"))->getParameters();
+foreach ($params as $param) {
+    echo $param->getName() . ":";
+    echo $param->isDefaultValueAvailable() ? "D:" : "d:";
+    if ($param->isDefaultValueConstant()) {
+        echo "C:";
+        echo $param->getDefaultValueConstantName();
+        echo ":";
+    } else {
+        echo "c:null:";
+    }
+    echo $param->getDefaultValue();
+    echo "|";
+}
+$direct = new ReflectionParameter([ReflectDefaultConstTarget::class, "run"], "parent");
+echo "direct:";
+echo $direct->isDefaultValueConstant() ? "C:" : "c:";
+echo $direct->getDefaultValueConstantName();
+echo ":";
+echo $direct->getDefaultValue();
+"##,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "self:D:C:self::LABEL:L|parent:D:C:parent::BASE:B|class:D:c:null:ReflectDefaultConstTarget|literal:D:c:null:7|direct:C:parent::BASE:B"
+    );
+}
+
 /// Verifies direct `new ReflectionParameter()` construction for statically known
 /// class and interface method targets.
 #[test]

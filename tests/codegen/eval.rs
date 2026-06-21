@@ -8355,6 +8355,48 @@ foreach ($params as $param) {
     );
 }
 
+/// Verifies eval ReflectionParameter exposes PHP constant-default metadata.
+#[test]
+fn test_eval_reflection_parameter_reports_default_constant_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('define("EVAL_REFLECT_PARAM_DEFAULT_GLOBAL", "G");
+class EvalReflectParamDefaultBase {
+    const BASE = "B";
+}
+class EvalReflectParamDefaultTarget extends EvalReflectParamDefaultBase {
+    const LABEL = "L";
+    public function run($required, $global = EVAL_REFLECT_PARAM_DEFAULT_GLOBAL, $self = self::LABEL, $parent = parent::BASE, $literal = 7) {}
+}
+$params = (new ReflectionMethod("EvalReflectParamDefaultTarget", "run"))->getParameters();
+foreach ($params as $param) {
+    echo $param->getName() . ":";
+    echo $param->isDefaultValueAvailable() ? "D:" : "d:";
+    if ($param->isDefaultValueAvailable()) {
+        if ($param->isDefaultValueConstant()) {
+            echo "C:";
+            echo $param->getDefaultValueConstantName();
+            echo ":";
+        } else {
+            echo "c:null:";
+        }
+        echo $param->getDefaultValue();
+    }
+    echo "|";
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "required:d:|global:D:C:EVAL_REFLECT_PARAM_DEFAULT_GLOBAL:G|self:D:C:self::LABEL:L|parent:D:C:parent::BASE:B|literal:D:c:null:7|"
+    );
+}
+
 /// Verifies eval ReflectionMethod exposes eval-declared return type metadata.
 #[test]
 fn test_eval_reflection_method_reports_return_type_metadata() {

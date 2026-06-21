@@ -47,6 +47,7 @@ const EVAL_REFLECTION_PARAMETER_FLAG_HAS_TYPE: u64 = 8;
 const EVAL_REFLECTION_PARAMETER_FLAG_HAS_DEFAULT_VALUE: u64 = 16;
 const EVAL_REFLECTION_PARAMETER_FLAG_PROMOTED: u64 = 32;
 const EVAL_REFLECTION_PARAMETER_FLAG_ALLOWS_NULL: u64 = 64;
+const EVAL_REFLECTION_PARAMETER_FLAG_DEFAULT_VALUE_CONSTANT: u64 = 128;
 const EVAL_REFLECTION_NAMED_TYPE_FLAG_ALLOWS_NULL: u64 = 1;
 const EVAL_REFLECTION_NAMED_TYPE_FLAG_BUILTIN: u64 = 2;
 
@@ -96,6 +97,7 @@ struct EvalReflectionParameterMetadata {
     allows_null: bool,
     type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     default_value: Option<EvalExpr>,
+    default_value_constant_name: Option<String>,
 }
 
 /// Eval metadata needed for `ReflectionParameter::getDeclaringFunction()`.
@@ -2489,11 +2491,11 @@ fn eval_reflection_parameter_object_result(
         Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
         None => values.null()?,
     };
-    let default_value = match parameter.default_value.as_ref() {
-        Some(default) => eval_method_parameter_default(default, context, values)?,
+    let default_value = eval_reflection_parameter_default_value(parameter, context, values)?;
+    let default_value_constant_name = match parameter.default_value_constant_name.as_deref() {
+        Some(name) => values.string(name)?,
         None => values.null()?,
     };
-    let constant_value = values.null()?;
     let backing_value = values.null()?;
     let flags = eval_reflection_parameter_flags(parameter);
     let object = values.reflection_owner_new(
@@ -2510,9 +2512,9 @@ fn eval_reflection_parameter_object_result(
         flags,
         parameter.position as u64,
         0,
-        constant_value,
+        default_value_constant_name,
         backing_value,
-        constant_value,
+        backing_value,
     )?;
     values.release(attrs)?;
     values.release(declaring_function)?;
@@ -2523,9 +2525,29 @@ fn eval_reflection_parameter_object_result(
     values.release(type_value)?;
     values.release(default_value)?;
     values.release(parent_class)?;
-    values.release(constant_value)?;
+    values.release(default_value_constant_name)?;
     values.release(backing_value)?;
     Ok(object)
+}
+
+/// Materializes one ReflectionParameter default using the declaring class scope when present.
+fn eval_reflection_parameter_default_value(
+    parameter: &EvalReflectionParameterMetadata,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(default) = parameter.default_value.as_ref() else {
+        return values.null();
+    };
+    let Some(class_name) = parameter.declaring_class_name.as_deref() else {
+        return eval_method_parameter_default(default, context, values);
+    };
+    context.push_class_scope(class_name.to_string());
+    context.push_called_class_scope(class_name.to_string());
+    let result = eval_method_parameter_default(default, context, values);
+    context.pop_called_class_scope();
+    context.pop_class_scope();
+    result
 }
 
 /// Builds a shallow ReflectionMethod object for a parameter's declaring function metadata.
@@ -4333,6 +4355,9 @@ fn eval_reflection_parameters_from_names_and_type_flags(
         .map(|(position, name)| {
             let has_type = has_type_flags.get(position).copied().unwrap_or(false);
             let default_value = defaults.get(position).and_then(Clone::clone);
+            let default_value_constant_name = default_value
+                .as_ref()
+                .and_then(eval_reflection_default_constant_name);
             let type_metadata = parameter_types
                 .get(position)
                 .and_then(Option::as_ref)
@@ -4362,9 +4387,23 @@ fn eval_reflection_parameters_from_names_and_type_flags(
                 ),
                 type_metadata,
                 default_value,
+                default_value_constant_name,
             }
         })
         .collect()
+}
+
+/// Returns PHP's ReflectionParameter default-constant name for retained eval defaults.
+fn eval_reflection_default_constant_name(default: &EvalExpr) -> Option<String> {
+    match default {
+        EvalExpr::ConstFetch(name) => Some(name.clone()),
+        EvalExpr::NamespacedConstFetch { name, .. } => Some(name.clone()),
+        EvalExpr::ClassConstantFetch {
+            class_name,
+            constant,
+        } => Some(format!("{}::{}", class_name, constant)),
+        _ => None,
+    }
 }
 
 /// Builds ReflectionParameter metadata for eval-declared or native free functions.
@@ -4818,6 +4857,9 @@ fn eval_reflection_parameter_flags(parameter: &EvalReflectionParameterMetadata) 
     }
     if parameter.allows_null {
         flags |= EVAL_REFLECTION_PARAMETER_FLAG_ALLOWS_NULL;
+    }
+    if parameter.default_value_constant_name.is_some() {
+        flags |= EVAL_REFLECTION_PARAMETER_FLAG_DEFAULT_VALUE_CONSTANT;
     }
     flags
 }
