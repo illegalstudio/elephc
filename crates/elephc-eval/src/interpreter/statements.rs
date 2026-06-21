@@ -2995,12 +2995,28 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         let evaluated_args = positional_evaluated_arg_values(evaluated_args)?;
         return values.method_call(object, method_name, evaluated_args);
     };
-    if let Some(attribute) = context.eval_reflection_attribute(identity).cloned() {
+    if let Some(attribute_metadata) = context.eval_reflection_attribute(identity).cloned() {
         if method_name.eq_ignore_ascii_case("newInstance") {
             if !evaluated_args.is_empty() {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            return eval_reflection_attribute_new_instance_result(&attribute, context, values);
+            return eval_reflection_attribute_new_instance_result(
+                attribute_metadata.attribute(),
+                context,
+                values,
+            );
+        }
+        if method_name.eq_ignore_ascii_case("getTarget") {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            return values.int(attribute_metadata.target() as i64);
+        }
+        if method_name.eq_ignore_ascii_case("isRepeated") {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            return values.bool_value(attribute_metadata.is_repeated());
         }
     }
     if let Some(result) = eval_reflection_class_implements_interface_result(

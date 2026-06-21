@@ -91,12 +91,26 @@ pub(crate) fn inject_builtin_reflection(
                     Some(TypeExpr::Int),
                     int_lit(0),
                 ),
+                builtin_property(
+                    "__target",
+                    Visibility::Private,
+                    Some(TypeExpr::Int),
+                    int_lit(0),
+                ),
+                builtin_property(
+                    "__is_repeated",
+                    Visibility::Private,
+                    Some(TypeExpr::Bool),
+                    false_bool(),
+                ),
             ],
             methods: vec![
                 builtin_reflection_attribute_constructor_method(),
                 builtin_reflection_attribute_get_name_method(),
                 builtin_reflection_attribute_get_arguments_method(),
                 builtin_reflection_attribute_new_instance_method(),
+                builtin_reflection_class_int_method("getTarget", "__target"),
+                builtin_reflection_class_bool_method("isRepeated", "__is_repeated"),
             ],
             attributes: Vec::new(),
             constants: Vec::new(),
@@ -973,7 +987,12 @@ fn builtin_reflection_class_get_static_property_value_method() -> ClassMethod {
         has_body: true,
         params: vec![
             ("name".to_string(), Some(TypeExpr::Str), None, false),
-            ("default".to_string(), Some(mixed_type()), null_expr(), false),
+            (
+                "default".to_string(),
+                Some(mixed_type()),
+                null_expr(),
+                false,
+            ),
         ],
         param_attributes: Vec::new(),
         variadic: None,
@@ -2622,6 +2641,7 @@ fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
 /// - `__construct` → `void`
 /// - `getName` / `getArguments` → `string` / `array`
 /// - `newInstance` → `mixed`
+/// - `getTarget` / `isRepeated` → `int` / `bool`
 /// - `getAttributes` → `array<ReflectionAttribute>`
 pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
     if let Some(class_info) = checker.classes.get_mut("ReflectionAttribute") {
@@ -2636,6 +2656,12 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
         }
         if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("newInstance")) {
             sig.return_type = PhpType::Mixed;
+        }
+        if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getTarget")) {
+            sig.return_type = PhpType::Int;
+        }
+        if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("isRepeated")) {
+            sig.return_type = PhpType::Bool;
         }
     }
     for class_name in [
@@ -2673,10 +2699,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     sig.return_type = PhpType::Str;
                 }
             }
-            if let Some(sig) = class_info
-                .methods
-                .get_mut(&php_symbol_key("getDocComment"))
-            {
+            if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getDocComment")) {
                 sig.return_type = PhpType::Union(vec![PhpType::Str, PhpType::Bool]);
             }
             if let Some(sig) = class_info

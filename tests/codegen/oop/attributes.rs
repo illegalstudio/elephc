@@ -722,6 +722,46 @@ foreach ($attrs as $attr) {
     assert_eq!(out, "count=2\nAuthor:[Ada][1815]\nVersion:[1.0][1]\n");
 }
 
+/// Verifies that `ReflectionAttribute::getTarget()` and `isRepeated()` report
+/// PHP-compatible owner target bits and duplicate-owner metadata.
+#[test]
+fn test_reflection_attribute_target_and_repetition_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+class TargetMarker {
+    public function __construct(string $name = "") {}
+}
+#[TargetMarker("class-a"), TargetMarker("class-b")]
+class ReflectAttributeTarget {
+    #[TargetMarker("method")]
+    public function run(#[TargetMarker("param")] $id): void {}
+    #[TargetMarker("property")]
+    public int $id = 1;
+    #[TargetMarker("const")]
+    public const ANSWER = 42;
+}
+enum ReflectAttributeEnum {
+    #[TargetMarker("case")]
+    case Ready;
+}
+$classAttrs = (new ReflectionClass(ReflectAttributeTarget::class))->getAttributes();
+echo $classAttrs[0]->getTarget() . "/" . ($classAttrs[0]->isRepeated() ? "R" : "r") . ":";
+echo $classAttrs[1]->getTarget() . "/" . ($classAttrs[1]->isRepeated() ? "R" : "r") . ":";
+$methodAttr = (new ReflectionMethod(ReflectAttributeTarget::class, "run"))->getAttributes()[0];
+echo $methodAttr->getTarget() . "/" . ($methodAttr->isRepeated() ? "R" : "r") . ":";
+$propertyAttr = (new ReflectionProperty(ReflectAttributeTarget::class, "id"))->getAttributes()[0];
+echo $propertyAttr->getTarget() . "/" . ($propertyAttr->isRepeated() ? "R" : "r") . ":";
+$paramAttr = (new ReflectionMethod(ReflectAttributeTarget::class, "run"))->getParameters()[0]->getAttributes()[0];
+echo $paramAttr->getTarget() . "/" . ($paramAttr->isRepeated() ? "R" : "r") . ":";
+$constAttr = (new ReflectionClassConstant(ReflectAttributeTarget::class, "ANSWER"))->getAttributes()[0];
+echo $constAttr->getTarget() . "/" . ($constAttr->isRepeated() ? "R" : "r") . ":";
+$caseAttr = (new ReflectionEnumUnitCase(ReflectAttributeEnum::class, "Ready"))->getAttributes()[0];
+echo $caseAttr->getTarget() . "/" . ($caseAttr->isRepeated() ? "R" : "r");
+"#,
+    );
+    assert_eq!(out, "1/R:1/R:4/r:8/r:32/r:16/r:16/r");
+}
+
 /// Verifies that `class_get_attributes()` returns an empty array for a
 /// class with no attributes.
 #[test]

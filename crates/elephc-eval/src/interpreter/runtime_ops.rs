@@ -116,6 +116,8 @@ pub trait RuntimeValueOps {
         &mut self,
         name: &str,
         args: RuntimeCellHandle,
+        target: u64,
+        repeated: bool,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Materializes a synthetic ReflectionClass/Method/Property object through generated private-layout code.

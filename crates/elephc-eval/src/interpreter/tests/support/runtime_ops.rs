@@ -125,8 +125,10 @@ impl RuntimeValueOps for FakeOps {
         &mut self,
         name: &str,
         args: RuntimeCellHandle,
+        target: u64,
+        repeated: bool,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        self.runtime_reflection_attribute_new(name, args)
+        self.runtime_reflection_attribute_new(name, args, target, repeated)
     }
     /// Materializes one fake Reflection owner object for eval metadata tests.
     fn reflection_owner_new(
