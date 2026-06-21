@@ -1451,3 +1451,32 @@ echo $cb();
     );
     assert_eq!(out, "B");
 }
+
+/// Verifies the dynamic first-class-callable form `$callable(...)`: creating a closure from a
+/// callable held in a variable yields a value that can be stored and invoked. Here `$f` holds a
+/// `strlen(...)` callable, `$g = $f(...)` re-wraps it, and `$g("hello")` returns `5`.
+#[test]
+fn test_fcc_dynamic_variable_callable() {
+    let out = compile_and_run(
+        r#"<?php
+$f = strlen(...);
+$g = $f(...);
+echo $g("hello");
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies `$callable(...)` on a variable holding a closure: the first-class-callable form returns
+/// the closure value, which is then invoked with an argument.
+#[test]
+fn test_fcc_dynamic_variable_closure() {
+    let out = compile_and_run(
+        r#"<?php
+$c = function ($x) { return $x * 2; };
+$d = $c(...);
+echo $d(21);
+"#,
+    );
+    assert_eq!(out, "42");
+}

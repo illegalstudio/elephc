@@ -15,7 +15,7 @@ use crate::parser::ast::{Expr, ExprKind, MagicConstant, StaticReceiver};
 use crate::span::Span;
 
 use super::assignment_targets::is_non_local_assignment_target;
-use super::calls::{parse_scoped_static_call, peek_cast};
+use super::calls::{parse_first_class_callable_parens, parse_scoped_static_call, peek_cast};
 use super::prefix_complex::{
     parse_arrow_closure, parse_attributed_closure, parse_closure, parse_match_expr,
     parse_named_expr, parse_new_object,
@@ -577,6 +577,13 @@ fn parse_variable(
             }
             Token::LParen => {
                 *pos += 1;
+                if parse_first_class_callable_parens(tokens, pos)? {
+                    // `$callable(...)` is the first-class-callable form: it creates a closure from the
+                    // callable held in `$callable`. In elephc's closed world a callable-typed variable
+                    // already *is* a callable value, so the closure-creation form evaluates to that
+                    // value directly and can be stored and invoked like any other callable.
+                    return Ok(Expr::new(ExprKind::Variable(name), span));
+                }
                 let args = parse_args(tokens, pos, span)?;
                 return Ok(Expr::new(ExprKind::ClosureCall { var: name, args }, span));
             }
