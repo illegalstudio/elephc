@@ -130,7 +130,10 @@ pub fn run(
             // the app. Tolerate an unparseable or unreadable helper by skipping it and
             // recording a warning rather than aborting the whole build, so one
             // unsupported construct in an unused helper cannot kill compilation.
-            match load_autoloaded_file(&canonical, base_dir) {
+            // Strict include resolution (`false`): a helper's top-level statements run
+            // eagerly at startup, so an unresolvable dynamic include must surface as an
+            // error that becomes a skip here, not a degraded stub that would fatal at boot.
+            match load_autoloaded_file(&canonical, base_dir, false) {
                 Ok(stmts) => prefix.extend(stmts),
                 Err(e) => warnings.push(CompileWarning::new(
                     Span::dummy(),
@@ -169,7 +172,10 @@ pub fn run(
                     // Referenced classes must load or the program is broken: a class the
                     // app actually uses cannot be tolerated-away like an unreferenced
                     // `autoload.files` helper, so a load failure here is a hard error.
-                    let loaded = load_autoloaded_file(&canonical, base_dir)?;
+                    // Lenient include resolution (`true`): a dynamic include inside a class
+                    // method is lazy and may never run, so an unresolvable one degrades to a
+                    // runtime-fatal stub instead of failing the whole compile.
+                    let loaded = load_autoloaded_file(&canonical, base_dir, true)?;
                     insertions.push((stmt_idx, loaded));
                 }
             }
@@ -220,7 +226,20 @@ fn resolve_class(fqn: &str, registry: &Registry) -> Option<PathBuf> {
 }
 
 /// Load, parse, and resolve a single autoloaded PHP file, returning its statements.
-fn load_autoloaded_file(path: &Path, base_dir: &Path) -> Result<Program, CompileError> {
+///
+/// `lenient_includes` selects include-resolution strictness for this file. It is `true` only
+/// for lazily-referenced class files: such a file's dynamic `include`/`require` typically sits
+/// inside a method that may never run for the program being built (e.g. a polyfill that
+/// `require`s a data table by a computed path), so an unresolvable runtime-dynamic path is
+/// degraded to a runtime-fatal stub rather than failing compilation. It is `false` for
+/// always-included `autoload.files` helpers, whose top-level statements execute eagerly at
+/// startup: a degraded stub there would fatal immediately, so those keep the strict behavior
+/// and an unresolvable include surfaces as an error the caller turns into a tolerant skip.
+fn load_autoloaded_file(
+    path: &Path,
+    base_dir: &Path,
+    lenient_includes: bool,
+) -> Result<Program, CompileError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         CompileError::new(
             Span::dummy(),
@@ -231,7 +250,12 @@ fn load_autoloaded_file(path: &Path, base_dir: &Path) -> Result<Program, Compile
     let tokens = crate::lexer::tokenize(&content).map_err(|e| e.with_file(file_label.clone()))?;
     let parsed = crate::parser::parse(&tokens).map_err(|e| e.with_file(file_label.clone()))?;
     let parsed = crate::magic_constants::substitute_file_and_scope_constants(parsed, path);
-    let resolved = crate::resolver::resolve(parsed, path.parent().unwrap_or(base_dir))?;
+    let include_base = path.parent().unwrap_or(base_dir);
+    let resolved = if lenient_includes {
+        crate::resolver::resolve_lenient_includes(parsed, include_base)?
+    } else {
+        crate::resolver::resolve(parsed, include_base)?
+    };
     let resolved = alias::collect_aliases(resolved);
     let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;
     // name_resolver has already flattened namespace nodes and canonicalized

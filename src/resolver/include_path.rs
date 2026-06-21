@@ -96,7 +96,11 @@ fn include_path_error_message(expr: &Expr) -> String {
 /// Returns `Some(description)` for expressions that resolve at runtime (variables,
 /// calls, ternaries, property access), `None` for expressions that could theoretically
 /// be foldable but are expressed in a dynamic way.
-fn runtime_dynamic_include_path_detail(expr: &Expr) -> Option<String> {
+///
+/// Also consulted by lenient include lowering (`crate::resolver::engine_includes`): a `Some`
+/// classification is what makes an unresolvable path eligible for a runtime-fatal stub, while
+/// statically-invalid shapes (`None`) always remain hard errors.
+pub(super) fn runtime_dynamic_include_path_detail(expr: &Expr) -> Option<String> {
     match &expr.kind {
         ExprKind::Variable(name) => {
             Some(format!("variable `${}` is resolved at runtime", name))

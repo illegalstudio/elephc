@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::errors::CompileError;
 use crate::names::Name;
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, TypeExpr};
+use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 use crate::span::Span;
 
 use super::declarations::strip_discoverable_declarations;
@@ -22,7 +22,7 @@ use super::discovery::FunctionVariantRegistry;
 use super::engine::resolve_stmts;
 use super::files::{parse_file, resolve_path};
 use super::include_once::include_once_label;
-use super::include_path::fold_include_path;
+use super::include_path::{fold_include_path, runtime_dynamic_include_path_detail};
 use super::state::ResolveState;
 
 /// Process-global counter producing unique hidden temporary names for value-position includes.
@@ -59,8 +59,21 @@ pub(super) fn resolve_include_stmt(
     state: &mut ResolveState,
     function_variants: &FunctionVariantRegistry,
 ) -> Result<Option<Vec<Stmt>>, CompileError> {
-    let path_str =
-        fold_include_path(path, state).map_err(|msg| CompileError::new(stmt.span, &msg))?;
+    let path_str = match fold_include_path(path, state) {
+        Ok(s) => s,
+        Err(msg) => {
+            // Under lenient include lowering (autoloader-spliced library code), an
+            // unresolvable *runtime-dynamic* path becomes a diverging runtime-fatal stub so
+            // the closed-world compile is not blocked by a lazy include that may never run.
+            // Statically-invalid shapes (e.g. an integer path) still hard-error.
+            if state.lenient_dynamic_includes {
+                if let Some(stub) = dynamic_include_fatal_stub(path, stmt.span) {
+                    return Ok(Some(stub));
+                }
+            }
+            return Err(CompileError::new(stmt.span, &msg));
+        }
+    };
     let resolved = resolve_path(&path_str, base_dir);
     let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
 
@@ -257,6 +270,20 @@ pub(super) fn expand_value_include(
     state: &mut ResolveState,
     function_variants: &FunctionVariantRegistry,
 ) -> Result<Vec<Stmt>, CompileError> {
+    // Under lenient include lowering, a value-position `return require $dynamic;` whose path
+    // cannot be resolved becomes a diverging runtime-fatal stub. Returning it directly (rather
+    // than the usual `<tmp> = ...; return <tmp>;` scaffolding) keeps the enclosing function's
+    // declared return type satisfied: the stub's `exit` diverges, so no value is returned and
+    // the unreachable `return <tmp>` that would otherwise mismatch the return type is omitted.
+    if state.lenient_dynamic_includes
+        && matches!(capture, IncludeValueCapture::Return)
+        && fold_include_path(path, state).is_err()
+    {
+        if let Some(stub) = dynamic_include_fatal_stub(path, span) {
+            return Ok(stub);
+        }
+    }
+
     let (mut out, tmp) = expand_value_include_core(
         span,
         path,
@@ -279,6 +306,79 @@ pub(super) fn expand_value_include(
         }
     }
     Ok(out)
+}
+
+/// Builds the diverging runtime-fatal stub that replaces an unresolvable runtime-dynamic
+/// include/require under lenient include lowering. The stub writes a descriptive message to
+/// stderr (`fwrite(STDERR, ...)`) and then calls `exit(255)` — PHP's fatal-error exit code.
+///
+/// `exit` is recognized as a function-exit guarantee by termination analysis, so a function
+/// body whose only remaining path runs this stub satisfies any declared return type without an
+/// explicit `return` (the value-position `return require $dynamic;` case). The synthetic nodes
+/// mirror exactly what the parser produces for `fwrite(STDERR, ...)` and `exit(255)`, so they
+/// flow unchanged through name resolution, type checking, and EIR lowering.
+///
+/// The message concatenates the original `path` expression so the runtime diagnostic names the
+/// actual (computed) path that could not be resolved. Re-evaluating `path` in the stub also keeps
+/// any variable it reads marked as used, so degrading `$p = ...; require $p;` does not turn the
+/// `$p` assignment into a spurious "unused variable" warning. The path is only evaluated on the
+/// fatal path, which is reached exactly when the original include would have run.
+///
+/// Returns `None` when `path` is not a runtime-dynamic expression: statically-invalid include
+/// shapes (e.g. an integer or boolean literal path) keep their hard compile error.
+fn dynamic_include_fatal_stub(path: &Expr, span: Span) -> Option<Vec<Stmt>> {
+    // Gate: only runtime-dynamic shapes degrade; statically-invalid paths keep their hard error.
+    runtime_dynamic_include_path_detail(path)?;
+
+    let prefix = Expr::new(
+        ExprKind::StringLiteral(
+            "Fatal error: could not resolve dynamic include/require path at compile time: "
+                .to_string(),
+        ),
+        span,
+    );
+    let suffix = Expr::new(
+        ExprKind::StringLiteral(" (elephc compiled it as a runtime fatal)\n".to_string()),
+        span,
+    );
+    // `prefix . <path> . suffix`
+    let message = concat(concat(prefix, path.clone(), span), suffix, span);
+
+    let write_call = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("fwrite"),
+            args: vec![
+                Expr::new(ExprKind::ConstRef(Name::unqualified("STDERR")), span),
+                message,
+            ],
+        },
+        span,
+    );
+    let exit_call = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("exit"),
+            args: vec![Expr::new(ExprKind::IntLiteral(255), span)],
+        },
+        span,
+    );
+
+    Some(vec![
+        Stmt::new(StmtKind::ExprStmt(write_call), span),
+        Stmt::new(StmtKind::ExprStmt(exit_call), span),
+    ])
+}
+
+/// Builds a `left . right` string-concatenation expression at `span`, used to assemble the
+/// runtime-fatal stub message from a static prefix/suffix and the original include path.
+fn concat(left: Expr, right: Expr, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(left),
+            op: BinOp::Concat,
+            right: Box::new(right),
+        },
+        span,
+    )
 }
 
 /// Builds a `<temp> = <value>;` assignment statement for the hidden include temporary.

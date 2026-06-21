@@ -73,6 +73,18 @@ PHP source
   [`extension_loaded()`](../php/system-and-io.md#system-functions) builtin reports
   no loaded extensions, so a polyfill's `extension_loaded` guard selects its
   userland fallback path consistently.
+- **lenient dynamic includes in library code** — elephc is closed-world, so an
+  `include`/`require` whose path is only known at run time (e.g. `require $file;`)
+  is rejected in your own program. Inside a *class file pulled in by the
+  autoloader*, however, such a path is usually a lazy data-table load buried in a
+  method that the program never calls. Rather than failing the whole build, elephc
+  degrades that unresolvable dynamic include into a runtime-fatal stub: the class
+  compiles normally, and only if that exact branch is reached at run time does the
+  program print `could not resolve dynamic include/require path at compile time:
+  <path>` to stderr and exit non-zero. Eagerly-executed `autoload.files` helpers
+  keep the strict behavior (an unresolvable include there is skipped with a
+  warning, since its top-level code runs at startup), and your program's own
+  includes are never silently degraded.
 - **typecheck** — the [Type Checker](../internals/the-type-checker.md) infers and
   validates types and emits warnings.
 

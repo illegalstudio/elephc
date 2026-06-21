@@ -1878,3 +1878,61 @@ fn test_autoload_tolerant_skip_returns_warning_naming_helper() {
         "warning must say 'skipped', got: {msg}"
     );
 }
+
+/// Verifies that a lazily-referenced autoloaded class whose method contains an unresolvable
+/// runtime-dynamic `require` still compiles: the dynamic include is degraded to a runtime-fatal
+/// stub, and because the method is never called the program runs normally. This is the
+/// intl-normalizer `getData()` shape — a polyfill that `require`s a data table by a computed path.
+#[test]
+fn test_autoload_class_dynamic_include_degrades_and_runs_when_unreached() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Lazy.php",
+                "<?php\nnamespace App;\nclass Lazy {\n    public static function load(string $name) {\n        $file = __DIR__ . '/' . $name . '.php';\n        return require $file;\n    }\n    public static function greet(): string { return \"ok\"; }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho \\App\\Lazy::greet();\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies the resolver's lenient include lowering directly: a value-position
+/// `return require $f;` whose path is runtime-dynamic is a hard error under the strict `resolve`
+/// (main program and eager `autoload.files` helpers) but is degraded to a diverging runtime-fatal
+/// stub under `resolve_lenient_includes` (lazily-referenced classes), so the closed-world compile
+/// is not blocked by a lazy include that may never run.
+#[test]
+fn test_resolve_lenient_includes_degrades_dynamic_require_to_fatal_stub() {
+    let src = "<?php function load($f) { return require $f; }";
+    let base = std::path::Path::new(".");
+
+    let tokens = elephc::lexer::tokenize(src).unwrap();
+    let strict_program = elephc::parser::parse(&tokens).unwrap();
+    assert!(
+        elephc::resolver::resolve(strict_program, base).is_err(),
+        "strict resolve must reject a runtime-dynamic include"
+    );
+
+    let tokens = elephc::lexer::tokenize(src).unwrap();
+    let lenient_program = elephc::parser::parse(&tokens).unwrap();
+    let resolved = elephc::resolver::resolve_lenient_includes(lenient_program, base)
+        .expect("lenient resolve must accept a runtime-dynamic include");
+    let rendered = format!("{resolved:?}");
+    assert!(
+        rendered.contains("could not resolve dynamic include/require path at compile time"),
+        "lenient resolve must inject the runtime-fatal stub message, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("exit"),
+        "the stub must diverge via an exit() call, got: {rendered}"
+    );
+}
