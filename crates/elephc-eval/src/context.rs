@@ -271,6 +271,7 @@ pub struct ElephcEvalContext {
     native_static_methods: HashMap<(String, String), NativeCallableSignature>,
     native_constructors: HashMap<String, NativeCallableSignature>,
     native_class_parents: HashMap<String, String>,
+    native_property_types: HashMap<(String, String), EvalParameterType>,
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
     static_properties: HashMap<(String, String), RuntimeCellHandle>,
     class_constants: HashMap<(String, String), RuntimeCellHandle>,
@@ -320,6 +321,7 @@ impl ElephcEvalContext {
             native_static_methods: HashMap::new(),
             native_constructors: HashMap::new(),
             native_class_parents: HashMap::new(),
+            native_property_types: HashMap::new(),
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
             class_constants: HashMap::new(),
@@ -370,6 +372,7 @@ impl ElephcEvalContext {
             native_static_methods: HashMap::new(),
             native_constructors: HashMap::new(),
             native_class_parents: HashMap::new(),
+            native_property_types: HashMap::new(),
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
             class_constants: HashMap::new(),
@@ -1755,6 +1758,33 @@ impl ElephcEvalContext {
             .map(String::as_str)
     }
 
+    /// Defines generated AOT property type metadata for eval reflection.
+    pub fn define_native_property_type(
+        &mut self,
+        class_name: &str,
+        property_name: &str,
+        property_type: EvalParameterType,
+    ) -> bool {
+        let key = native_property_key(class_name, property_name);
+        if key.0.is_empty() || key.1.is_empty() {
+            return false;
+        }
+        self.native_property_types
+            .insert(key, property_type)
+            .is_none()
+    }
+
+    /// Returns generated AOT property type metadata by PHP class and property name.
+    pub fn native_property_type(
+        &self,
+        class_name: &str,
+        property_name: &str,
+    ) -> Option<EvalParameterType> {
+        self.native_property_types
+            .get(&native_property_key(class_name, property_name))
+            .cloned()
+    }
+
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.
     pub fn has_function(&self, name: &str) -> bool {
         self.functions.contains_key(name) || self.native_functions.contains_key(name)
@@ -2035,6 +2065,14 @@ fn native_method_key(class_name: &str, method_name: &str) -> (String, String) {
     (
         normalize_class_name(class_name),
         normalize_method_name(method_name),
+    )
+}
+
+/// Builds the folded native property metadata key used for eval reflection.
+fn native_property_key(class_name: &str, property_name: &str) -> (String, String) {
+    (
+        normalize_class_name(class_name),
+        property_name.trim_start_matches('$').to_string(),
     )
 }
 
