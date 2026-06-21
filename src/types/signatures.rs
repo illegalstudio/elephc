@@ -691,7 +691,7 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         | "ctype_alpha" | "ctype_digit" | "ctype_alnum" | "ctype_space" => {
             Some(typed_first_class_builtin_sig(name, &[PhpType::Mixed], PhpType::Bool))
         }
-        "defined" | "extension_loaded" => Some(typed_first_class_builtin_sig(
+        "defined" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Str],
             PhpType::Bool,

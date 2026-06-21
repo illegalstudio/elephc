@@ -2483,3 +2483,22 @@ fn test_extension_loaded_is_case_insensitive() {
     let out = compile_and_run("<?php var_dump(extension_loaded('DeepClone'));");
     assert_eq!(out, "bool(false)\n");
 }
+
+/// Regression: `extension_loaded` must not be a first-class-callable builtin. Because the
+/// dynamic-callable dispatch table emits a wrapper for every FCC-eligible builtin, listing
+/// `extension_loaded` there made every program that uses a dynamic string callback reference
+/// a non-existent `_fn_extension_loaded` symbol (it is inlined, not a runtime function), so
+/// linking failed. This program both calls `extension_loaded` and invokes a user function
+/// through a dynamic string callback; it must compile and run.
+#[test]
+fn test_extension_loaded_does_not_break_dynamic_string_callback() {
+    let out = compile_and_run(
+        r#"<?php
+function inc($x) { return $x + 1; }
+$loaded = extension_loaded('deepclone') ? '1' : '0';
+$mapped = array_map("inc", [10]);
+echo $loaded . $mapped[0];
+"#,
+    );
+    assert_eq!(out, "011");
+}
