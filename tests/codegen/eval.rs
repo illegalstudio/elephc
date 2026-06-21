@@ -8650,6 +8650,59 @@ echo $doubled->getValue($hook);');
     assert_eq!(out.stdout, "base:changed:Ada:Grace:1:5:6:4:5:10");
 }
 
+/// Verifies eval ReflectionProperty exposes property hook metadata and hook methods.
+#[test]
+fn test_eval_reflection_property_hook_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectHookedProperty {
+    public int $raw = 2;
+    public int $doubled {
+        get { return $this->raw * 2; }
+        set { $this->raw = $value; }
+    }
+    public int $readonlyHook {
+        get => $this->raw + 1;
+    }
+    public int $plain = 5;
+}
+$hooked = new ReflectionProperty("EvalReflectHookedProperty", "doubled");
+$plain = new ReflectionProperty("EvalReflectHookedProperty", "plain");
+$readonly = new ReflectionProperty("EvalReflectHookedProperty", "readonlyHook");
+$getCase = PropertyHookType::Get;
+$setCase = PropertyHookType::Set;
+echo $getCase->name . ":" . $getCase->value . ":";
+echo ($hooked->hasHooks() ? "H" : "h") . ":";
+echo ($hooked->hasHook($getCase) ? "G" : "g") . ":";
+echo ($hooked->hasHook(type: $setCase) ? "S" : "s") . ":";
+$hooks = $hooked->getHooks();
+echo count($hooks) . ":" . $hooks["get"]->getName() . ":" . $hooks["set"]->getName() . ":";
+$get = $hooked->getHook($getCase);
+$set = $hooked->getHook(type: $setCase);
+echo $get->getDeclaringClass()->getName() . ":" . $get->getNumberOfParameters() . ":";
+echo $set->getNumberOfParameters() . ":" . $set->getParameters()[0]->getName() . ":";
+$box = new EvalReflectHookedProperty();
+echo $get->invoke($box) . ":";
+$set->invoke($box, 7);
+echo $box->raw . ":";
+echo ($readonly->hasHook($getCase) ? "R" : "r") . ":";
+echo ($readonly->hasHook($setCase) ? "w" : "W") . ":";
+echo ($readonly->getHook($setCase) === null ? "N" : "n") . ":";
+echo ($plain->hasHooks() ? "bad" : "plain") . ":";
+echo count($plain->getHooks());');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Get:get:H:G:S:2:$doubled::get:$doubled::set:EvalReflectHookedProperty:0:1:value:4:7:R:W:N:plain:0"
+    );
+}
+
 /// Verifies eval ReflectionClass static-property APIs use current runtime values.
 #[test]
 fn test_eval_reflection_class_static_property_values() {

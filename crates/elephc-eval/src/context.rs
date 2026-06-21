@@ -833,6 +833,13 @@ impl ElephcEvalContext {
             .and_then(|class_key| self.classes.get(class_key))
     }
 
+    /// Returns whether one dynamic object identity was registered with a class-like name.
+    pub fn dynamic_object_is_class(&self, identity: u64, class_name: &str) -> bool {
+        self.dynamic_objects
+            .get(&identity)
+            .is_some_and(|class_key| class_key == &normalize_class_name(class_name))
+    }
+
     /// Binds one eval object property slot to a persistent PHP reference target.
     pub fn bind_dynamic_property_alias(
         &mut self,

@@ -2429,6 +2429,11 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
     {
         return Ok(value);
     }
+    if let Some(value) =
+        eval_builtin_property_hook_type_case(class_name, constant_name, context, values)?
+    {
+        return Ok(value);
+    }
     let class_name = resolve_eval_static_class_like_name(class_name, context)?;
     if let Some(case) = context.enum_case(&class_name, constant_name) {
         return Ok(case);
@@ -2493,6 +2498,50 @@ fn eval_builtin_reflection_class_constant(
         None
     };
     value.map(|value| values.int(value)).transpose()
+}
+
+/// Resolves eval-visible `PropertyHookType` builtin enum cases.
+fn eval_builtin_property_hook_type_case(
+    class_name: &str,
+    constant_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("PropertyHookType")
+    {
+        return Ok(None);
+    }
+    let Some((case_name, case_value)) = eval_property_hook_type_case_parts(constant_name) else {
+        return Ok(None);
+    };
+    if let Some(case) = context.enum_case("PropertyHookType", case_name) {
+        return Ok(Some(case));
+    }
+    let object = values.new_object("stdClass")?;
+    let identity = values.object_identity(object)?;
+    context.register_dynamic_object(identity, "PropertyHookType");
+    let name = values.string(case_name)?;
+    values.property_set(object, "name", name)?;
+    let value = values.string(case_value)?;
+    values.property_set(object, "value", value)?;
+    if let Some(replaced) = context.set_enum_case_value("PropertyHookType", case_name, value) {
+        values.release(replaced)?;
+    }
+    if let Some(replaced) = context.set_enum_case("PropertyHookType", case_name, object) {
+        values.release(replaced)?;
+    }
+    Ok(Some(object))
+}
+
+/// Returns the PHP case name and backed value for a builtin property-hook case.
+fn eval_property_hook_type_case_parts(constant_name: &str) -> Option<(&'static str, &'static str)> {
+    match constant_name {
+        "Get" => Some(("Get", "get")),
+        "Set" => Some(("Set", "set")),
+        _ => None,
+    }
 }
 
 /// Returns the PHP class-name literal for `ClassName::class`-style eval expressions.
@@ -3182,6 +3231,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         return Ok(result);
     }
     if let Some(result) = eval_reflection_set_accessible_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    if let Some(result) = eval_reflection_property_hooks_result(
         identity,
         method_name,
         evaluated_args.clone(),
