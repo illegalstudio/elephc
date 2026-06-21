@@ -217,6 +217,19 @@ pub(super) fn parse_prefix(
         {
             parse_long_array_literal(tokens, pos, span)
         }
+        // A leading `\` before a global constant (`\PHP_INT_MAX`, `\INF`, `\DIRECTORY_SEPARATOR`,
+        // `\PHP_EOL`, `\true`, …) only denotes the global namespace. Those constants are global and
+        // are lexed as dedicated tokens rather than identifiers, so the fully-qualified-name path
+        // would reject them ("Expected name"). Consume the `\` and parse the constant token itself.
+        Token::Backslash
+            if tokens
+                .get(*pos + 1)
+                .map(|(token, _)| is_backslashable_global_constant(token))
+                .unwrap_or(false) =>
+        {
+            *pos += 1; // consume the leading `\`
+            parse_prefix(tokens, pos)
+        }
         Token::Identifier(_) | Token::Backslash => parse_named_expr(tokens, pos, span),
         Token::Self_ => {
             *pos += 1;
@@ -270,6 +283,41 @@ pub(super) fn parse_prefix(
             &format!("Unexpected token: {:?}", other),
         )),
     }
+}
+
+/// Returns true when `token` is a global constant that is lexed as a dedicated token (rather than
+/// an identifier) and may be written with a leading `\` (`\PHP_INT_MAX`, `\INF`, `\PHP_EOL`,
+/// `\DIRECTORY_SEPARATOR`, `\true`, …). Used so a fully-qualified reference to such a constant
+/// skips the leading backslash and parses the constant directly instead of failing name parsing.
+/// Magic constants (`__LINE__`, `__DIR__`, …) are intentionally excluded: PHP does not namespace
+/// them, so `\__LINE__` is not valid.
+fn is_backslashable_global_constant(token: &Token) -> bool {
+    matches!(
+        token,
+        Token::True
+            | Token::False
+            | Token::Null
+            | Token::Inf
+            | Token::Nan
+            | Token::PhpIntMax
+            | Token::PhpIntMin
+            | Token::PhpFloatMax
+            | Token::PhpFloatMin
+            | Token::PhpFloatEpsilon
+            | Token::MPi
+            | Token::ME
+            | Token::MSqrt2
+            | Token::MPi2
+            | Token::MPi4
+            | Token::MLog2e
+            | Token::MLog10e
+            | Token::PhpEol
+            | Token::PhpOs
+            | Token::DirectorySeparator
+            | Token::Stdin
+            | Token::Stdout
+            | Token::Stderr
+    )
 }
 
 /// Returns true when `token` can begin a prefix/primary PHP expression — i.e. when

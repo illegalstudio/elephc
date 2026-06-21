@@ -32,3 +32,10 @@ function multiply($a, $b) {
 }
 $result = call_user_func_array("multiply", [6, 7]);
 echo "6 * 7 = " . $result . "\n";
+
+// Predefined constants live in the global namespace, so they can be written either bare or
+// fully-qualified with a leading backslash. Library code (e.g. Symfony) often uses the `\` form
+// to be namespace-safe; both resolve to the same value.
+echo "PHP_INT_MAX = " . \PHP_INT_MAX . "\n";
+echo "separator = " . \DIRECTORY_SEPARATOR . "\n";
+echo "pi = " . \M_PI . "\n";

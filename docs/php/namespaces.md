@@ -388,6 +388,8 @@ define("PI", 3.14159);
 | `FNM_PERIOD` | int | 4 |
 | `FNM_CASEFOLD` | int | 16 |
 
+These predefined constants live in the global namespace, so inside a namespace they may be written either bare or fully-qualified with a leading backslash — `\PHP_INT_MAX`, `\PHP_EOL`, `\DIRECTORY_SEPARATOR`, `\M_PI`, `\INF`, `\true`/`\false`/`\null` — and both forms resolve to the same value. Library code often uses the `\` form to stay namespace-safe.
+
 ## Superglobals
 
 | Variable | Type | Description |
