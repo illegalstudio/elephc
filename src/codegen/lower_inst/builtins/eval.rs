@@ -98,6 +98,13 @@ struct EvalNativeConstructorRegistration {
     signature: FunctionSig,
 }
 
+/// A module-local property type that can be registered with the eval context.
+struct EvalNativePropertyTypeRegistration {
+    class_name: String,
+    property_name: String,
+    type_spec: String,
+}
+
 /// Scalar native callable default that can be registered with libelephc-eval.
 enum EvalNativeCallableDefault {
     Scalar { kind: i64, payload: i64 },
@@ -468,6 +475,9 @@ fn register_eval_native_method_signatures(ctx: &mut FunctionContext<'_>, context
     for registration in eval_native_constructor_registrations(ctx) {
         register_eval_native_constructor(ctx, context_offset, &registration);
     }
+    for registration in eval_native_property_type_registrations(ctx) {
+        register_eval_native_property_type(ctx, context_offset, &registration);
+    }
     register_eval_native_class_parents(ctx, context_offset);
 }
 
@@ -525,6 +535,20 @@ fn eval_native_constructor_registrations(
     registrations
 }
 
+/// Collects AOT property types whose declared PHP type can be exposed to eval reflection.
+fn eval_native_property_type_registrations(
+    ctx: &FunctionContext<'_>,
+) -> Vec<EvalNativePropertyTypeRegistration> {
+    let mut registrations = Vec::new();
+    let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    for (class_name, class_info) in classes {
+        collect_eval_native_instance_property_types(class_name, class_info, &mut registrations);
+        collect_eval_native_static_property_types(class_name, class_info, &mut registrations);
+    }
+    registrations
+}
+
 /// Registers generated AOT class parent metadata for eval `parent::` resolution.
 fn register_eval_native_class_parents(ctx: &mut FunctionContext<'_>, context_offset: usize) {
     let mut parents = ctx
@@ -544,6 +568,87 @@ fn register_eval_native_class_parents(ctx: &mut FunctionContext<'_>, context_off
     for (_, class_name, parent_name) in parents {
         register_eval_native_class_parent(ctx, context_offset, &class_name, &parent_name);
     }
+}
+
+/// Adds declared instance-property type metadata for one class to eval registration.
+fn collect_eval_native_instance_property_types(
+    class_name: &str,
+    class_info: &ClassInfo,
+    registrations: &mut Vec<EvalNativePropertyTypeRegistration>,
+) {
+    for (slot, (property_name, php_type)) in class_info.properties.iter().enumerate() {
+        if !class_info.property_slot_is_declared(slot, property_name) {
+            continue;
+        }
+        let Some(type_spec) = eval_native_php_type_spec(php_type, false) else {
+            continue;
+        };
+        registrations.push(EvalNativePropertyTypeRegistration {
+            class_name: eval_native_instance_property_declaring_class(
+                class_name,
+                class_info,
+                property_name,
+            )
+            .to_string(),
+            property_name: property_name.clone(),
+            type_spec,
+        });
+    }
+}
+
+/// Adds declared static-property type metadata for one class to eval registration.
+fn collect_eval_native_static_property_types(
+    class_name: &str,
+    class_info: &ClassInfo,
+    registrations: &mut Vec<EvalNativePropertyTypeRegistration>,
+) {
+    for (property_name, php_type) in &class_info.static_properties {
+        if !class_info
+            .declared_static_properties
+            .contains(property_name)
+        {
+            continue;
+        }
+        let Some(type_spec) = eval_native_php_type_spec(php_type, false) else {
+            continue;
+        };
+        registrations.push(EvalNativePropertyTypeRegistration {
+            class_name: eval_native_static_property_declaring_class(
+                class_name,
+                class_info,
+                property_name,
+            )
+            .to_string(),
+            property_name: property_name.clone(),
+            type_spec,
+        });
+    }
+}
+
+/// Returns the class name that declares one AOT instance property row.
+fn eval_native_instance_property_declaring_class<'a>(
+    reflected_class: &'a str,
+    class_info: &'a ClassInfo,
+    property_name: &str,
+) -> &'a str {
+    class_info
+        .property_declaring_classes
+        .get(property_name)
+        .map(String::as_str)
+        .unwrap_or(reflected_class)
+}
+
+/// Returns the class name that declares one AOT static property row.
+fn eval_native_static_property_declaring_class<'a>(
+    reflected_class: &'a str,
+    class_info: &'a ClassInfo,
+    property_name: &str,
+) -> &'a str {
+    class_info
+        .static_property_declaring_classes
+        .get(property_name)
+        .map(String::as_str)
+        .unwrap_or(reflected_class)
 }
 
 /// Adds eligible public instance methods for one class to eval signature registration.
@@ -1232,6 +1337,46 @@ fn register_eval_native_class_parent(
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_class_parent");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native property-type metadata registration call into the eval context.
+fn register_eval_native_property_type(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    registration: &EvalNativePropertyTypeRegistration,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    let property_key = format!(
+        "{}::{}",
+        registration.class_name, registration.property_name
+    );
+    let (property_key_label, property_key_len) = ctx.data.add_string(property_key.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &property_key_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        property_key_len as i64,
+    );
+    let (type_label, type_len) = ctx.data.add_string(registration.type_spec.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        &type_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        type_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_property_type");
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 

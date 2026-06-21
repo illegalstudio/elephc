@@ -501,6 +501,47 @@ fn register_native_class_parent_records_metadata() {
     assert_eq!(ctx.native_class_parent("knownchild"), Some("KnownParent"));
 }
 
+/// Verifies native AOT property type metadata is available to eval reflection.
+#[test]
+fn register_native_property_type_records_metadata() {
+    let mut ctx = ElephcEvalContext::new();
+    let property = b"KnownClass::name";
+    let property_type = b"?KnownDep";
+    let invalid_property = b"KnownClass::bad";
+    let invalid_type = b"void";
+
+    let registered = unsafe {
+        __elephc_eval_register_native_property_type(
+            &mut ctx,
+            property.as_ptr(),
+            property.len() as u64,
+            property_type.as_ptr(),
+            property_type.len() as u64,
+        )
+    };
+    let invalid_registered = unsafe {
+        __elephc_eval_register_native_property_type(
+            &mut ctx,
+            invalid_property.as_ptr(),
+            invalid_property.len() as u64,
+            invalid_type.as_ptr(),
+            invalid_type.len() as u64,
+        )
+    };
+
+    assert_eq!(registered, 1);
+    let property_type = ctx
+        .native_property_type("knownclass", "name")
+        .expect("property type metadata");
+    assert!(property_type.allows_null());
+    assert_eq!(
+        property_type.variants(),
+        &[EvalParameterTypeVariant::Class("KnownDep".to_string())]
+    );
+    assert_eq!(invalid_registered, 0);
+    assert!(ctx.native_property_type("KnownClass", "bad").is_none());
+}
+
 /// Verifies scope allocation returns an empty opaque activation scope handle.
 #[test]
 fn scope_new_returns_empty_handle() {

@@ -7496,6 +7496,61 @@ echo $listed->getDeclaringClass()->getName();
     );
 }
 
+/// Verifies eval exposes declared generated/AOT property types through
+/// `ReflectionProperty::hasType()` and `getType()`.
+#[test]
+fn test_eval_reflection_property_exposes_aot_type_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectPropertyTypeDep {}
+class EvalAotReflectPropertyTypeBase {
+    protected ?string $baseName = null;
+}
+class EvalAotReflectPropertyTypeTarget extends EvalAotReflectPropertyTypeBase {
+    public int|string $id = 0;
+    public ?EvalAotReflectPropertyTypeDep $dep = null;
+    public static ?int $count = null;
+    public $untyped = 1;
+}
+echo eval('$id = new ReflectionProperty("EvalAotReflectPropertyTypeTarget", "id");
+echo $id->hasType() ? "H:" : "h:";
+$type = $id->getType();
+$parts = $type->getTypes();
+echo $parts[0]->getName() . ($parts[0]->isBuiltin() ? "B" : "C");
+echo "," . $parts[1]->getName() . ($parts[1]->isBuiltin() ? "B" : "C");
+echo $type->allowsNull() ? ":N" : ":n";
+$dep = new ReflectionProperty("EvalAotReflectPropertyTypeTarget", "dep");
+$depType = $dep->getType();
+echo ":" . ($dep->hasType() ? "D" : "d");
+echo $depType->allowsNull() ? "?" : "!";
+echo $depType->getName() . ($depType->isBuiltin() ? "B" : "C");
+$static = new ReflectionProperty("EvalAotReflectPropertyTypeTarget", "count");
+$staticType = $static->getType();
+echo ":" . ($static->hasType() ? "S" : "s");
+echo $staticType->allowsNull() ? "?" : "!";
+echo $staticType->getName() . ($staticType->isBuiltin() ? "B" : "C");
+$base = new ReflectionProperty("EvalAotReflectPropertyTypeTarget", "baseName");
+$baseType = $base->getType();
+echo ":" . ($base->hasType() ? "B" : "b");
+echo $baseType->allowsNull() ? "?" : "!";
+echo $baseType->getName() . ($baseType->isBuiltin() ? "B" : "C");
+$untyped = new ReflectionProperty("EvalAotReflectPropertyTypeTarget", "untyped");
+echo ":" . ($untyped->hasType() ? "U" : "u");
+echo $untyped->getType() === null ? "N" : "n";
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "H:intB,stringB:n:D?EvalAotReflectPropertyTypeDepC:S?intB:B?stringB:uN"
+    );
+}
+
 /// Verifies eval can probe generated/AOT method predicate metadata through
 /// `ReflectionClass::hasMethod()`, `getMethod()`, and direct `ReflectionMethod`.
 #[test]

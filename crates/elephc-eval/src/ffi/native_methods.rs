@@ -489,6 +489,32 @@ pub unsafe extern "C" fn __elephc_eval_register_native_class_parent(
     .unwrap_or(0)
 }
 
+/// Registers one generated native PHP property type in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. The property key must be a
+/// readable `ClassName::propertyName` byte string, and the type spec must be a
+/// readable generated type-spec byte string.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_property_type(
+    ctx: *mut ElephcEvalContext,
+    property_key_ptr: *const u8,
+    property_key_len: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_property_type_inner(
+            ctx,
+            property_key_ptr,
+            property_key_len,
+            type_spec_ptr,
+            type_spec_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
 /// Runs native method registration after installing a panic boundary.
 ///
 /// # Safety
@@ -967,6 +993,40 @@ unsafe fn register_native_class_parent_inner(
     i32::from(context.define_native_class_parent(&class_name, &parent_name))
 }
 
+/// Runs native property-type registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_property_type`; invalid handles,
+/// names, or type specs fail closed as `false`.
+unsafe fn register_native_property_type_inner(
+    ctx: *mut ElephcEvalContext,
+    property_key_ptr: *const u8,
+    property_key_len: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(property_key) = abi_name_to_string(property_key_ptr, property_key_len) else {
+        return 0;
+    };
+    let Some((class_name, property_name)) = split_property_key(&property_key) else {
+        return 0;
+    };
+    let Some(property_type) = native_callable_type_from_abi(
+        type_spec_ptr,
+        type_spec_len,
+        NativeCallableTypePosition::Parameter,
+    ) else {
+        return 0;
+    };
+    i32::from(context.define_native_property_type(class_name, property_name, property_type))
+}
+
 /// Decodes scalar default kind/payload ABI fields into native callable metadata.
 fn native_callable_scalar_default(
     default_kind: u64,
@@ -1073,4 +1133,9 @@ fn native_callable_type_variant(
 fn split_method_key(method_key: &str) -> Option<(&str, &str)> {
     let (class_name, method_name) = method_key.rsplit_once("::")?;
     (!class_name.is_empty() && !method_name.is_empty()).then_some((class_name, method_name))
+}
+
+/// Splits one generated `ClassName::propertyName` metadata key into class and property pieces.
+fn split_property_key(property_key: &str) -> Option<(&str, &str)> {
+    split_method_key(property_key)
 }

@@ -355,17 +355,21 @@ pub(in crate::interpreter) fn eval_reflection_class_has_property_result(
     };
     let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
     let property_name = eval_reflection_string_arg(args[0], values)?;
-    let exists = if let Some(metadata) =
-        eval_reflection_class_like_attributes(&reflected_name, context)
-    {
-        metadata
-            .property_names
-            .iter()
-            .any(|name| name == &property_name)
-    } else {
-        eval_reflection_aot_property_metadata_if_exists(&reflected_name, &property_name, values)?
+    let exists =
+        if let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) {
+            metadata
+                .property_names
+                .iter()
+                .any(|name| name == &property_name)
+        } else {
+            eval_reflection_aot_property_metadata_if_exists(
+                &reflected_name,
+                &property_name,
+                context,
+                values,
+            )?
             .is_some()
-    };
+        };
     values.bool_value(exists).map(Some)
 }
 
@@ -1090,6 +1094,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
             if let Some(member) = eval_reflection_aot_property_metadata_if_exists(
                 &reflected_name,
                 &requested_name,
+                context,
                 values,
             )? {
                 return eval_reflection_member_object_result(
@@ -1505,9 +1510,12 @@ fn eval_reflection_property_new(
     let class_name = eval_reflection_string_arg(args[0], values)?;
     if !eval_reflection_class_like_exists(&class_name, context) {
         let property_name = eval_reflection_string_arg(args[1], values)?;
-        if let Some(property) =
-            eval_reflection_aot_property_metadata_if_exists(&class_name, &property_name, values)?
-        {
+        if let Some(property) = eval_reflection_aot_property_metadata_if_exists(
+            &class_name,
+            &property_name,
+            context,
+            values,
+        )? {
             return eval_reflection_member_object_result(
                 EVAL_REFLECTION_OWNER_PROPERTY,
                 &property_name,
@@ -1742,6 +1750,7 @@ fn eval_reflection_native_callable_default_expr(default: &NativeCallableDefault)
 fn eval_reflection_aot_property_metadata_if_exists(
     class_name: &str,
     property_name: &str,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalReflectionMemberMetadata>, EvalStatus> {
     let runtime_class_name = class_name.trim_start_matches('\\');
@@ -1751,16 +1760,38 @@ fn eval_reflection_aot_property_metadata_if_exists(
     let declaring_class_name = values
         .reflection_property_declaring_class(runtime_class_name, property_name)?
         .unwrap_or_else(|| runtime_class_name.to_string());
+    let type_metadata = eval_reflection_aot_property_type_metadata(
+        runtime_class_name,
+        &declaring_class_name,
+        property_name,
+        context,
+    );
     Ok(Some(eval_reflection_aot_property_metadata(
         &declaring_class_name,
         flags,
+        type_metadata,
     )))
+}
+
+/// Returns registered generated/AOT property type metadata for one reflected property.
+fn eval_reflection_aot_property_type_metadata(
+    runtime_class_name: &str,
+    declaring_class_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<EvalReflectionParameterTypeMetadata> {
+    context
+        .native_property_type(declaring_class_name, property_name)
+        .or_else(|| context.native_property_type(runtime_class_name, property_name))
+        .as_ref()
+        .and_then(eval_reflection_parameter_type_metadata)
 }
 
 /// Converts AOT property flag metadata into the eval ReflectionProperty shape.
 fn eval_reflection_aot_property_metadata(
     class_name: &str,
     flags: u64,
+    type_metadata: Option<EvalReflectionParameterTypeMetadata>,
 ) -> EvalReflectionMemberMetadata {
     let visibility = if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
         EvalVisibility::Private
@@ -1790,7 +1821,7 @@ fn eval_reflection_aot_property_metadata(
             is_readonly,
             false,
         ),
-        type_metadata: None,
+        type_metadata,
         return_type_metadata: None,
         default_value: None,
         required_parameter_count: 0,
@@ -2745,7 +2776,7 @@ fn eval_reflection_aot_member_object_array_result(
                 class_name, name, context, values,
             )?
         } else {
-            eval_reflection_aot_property_metadata_if_exists(class_name, name, values)?
+            eval_reflection_aot_property_metadata_if_exists(class_name, name, context, values)?
         };
         let Some(member) = member else {
             continue;
