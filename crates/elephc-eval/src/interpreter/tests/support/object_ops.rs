@@ -400,6 +400,13 @@ impl FakeOps {
                 Self::object_property(&properties, "__is_passed_by_reference")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
+            (FakeValue::Object(properties), "canbepassedbyvalue") if args.is_empty() => {
+                let Some(by_ref) = Self::object_property(&properties, "__is_passed_by_reference")
+                else {
+                    return self.bool_value(true);
+                };
+                self.bool_value(!matches!(self.get(by_ref), FakeValue::Bool(true)))
+            }
             (FakeValue::Object(properties), "hastype") if args.is_empty() => {
                 if let Some(has_type) = Self::object_property(&properties, "__has_type") {
                     return Ok(has_type);

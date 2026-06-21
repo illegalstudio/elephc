@@ -8293,7 +8293,7 @@ fn test_eval_reflection_method_lists_parameters() {
 eval('interface EvalReflectLeft {}
 interface EvalReflectRight {}
 class EvalReflectParamTarget {
-    public function run(#[EvalParamTag("first")] int $first, int|string $union, #[EvalParamTag("both")] EvalReflectLeft&EvalReflectRight $both, \App\Name|null $second = null, ...$rest) {}
+    public function run(#[EvalParamTag("first")] int &$first, int|string $union, #[EvalParamTag("both")] EvalReflectLeft&EvalReflectRight $both, \App\Name|null $second = null, &...$rest) {}
 }
 $method = new ReflectionMethod("EvalReflectParamTarget", "run");
 echo $method->getNumberOfParameters() . "/";
@@ -8304,6 +8304,7 @@ foreach ($params as $param) {
     echo $param->isOptional() ? "O" : "r";
     echo $param->isVariadic() ? "V" : "v";
     echo $param->isPassedByReference() ? "R" : "b";
+    echo $param->canBePassedByValue() ? "Y" : "N";
     echo $param->hasType() ? "T" : "t";
     echo $param->allowsNull() ? "N" : "n";
     $type = $param->getType();
@@ -8350,7 +8351,7 @@ foreach ($params as $param) {
     );
     assert_eq!(
         out.stdout,
-        "5/3:first@0rvbTn:int!B:A1:EvalParamTag:first:d|union@1rvbTn:union!:intB:stringB:A0:d|both@2rvbTn:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|second@3OvbTN:App\\Name?C:A0:D=null|rest@4OVbtN:null:A0:d|"
+        "5/3:first@0rvRNTn:int!B:A1:EvalParamTag:first:d|union@1rvbYTn:union!:intB:stringB:A0:d|both@2rvbYTn:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|second@3OvbYTN:App\\Name?C:A0:D=null|rest@4OVRNtN:null:A0:d|"
     );
 }
 

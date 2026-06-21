@@ -351,7 +351,8 @@ Constructor-promoted eval parameters are reported through
 direct variable, array-element, and object-property arguments, write back fixed
 parameters after method execution, write back mutated `&...$items` elements
 when the variadic container itself is not rebound, and are reported through
-`ReflectionParameter::isPassedByReference()`.
+`ReflectionParameter::isPassedByReference()` and
+`ReflectionParameter::canBePassedByValue()`.
 `ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
 `isFinal()`, `isAbstract()`, `isReadOnly()`, `isPromoted()`, `isDefault()`, and
 `getModifiers()` report eval property metadata with PHP-compatible

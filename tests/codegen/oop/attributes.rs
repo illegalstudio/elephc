@@ -2128,6 +2128,7 @@ foreach ($params as $param) {
     echo ($param->hasType() ? "T" : "t");
     echo ($param->isOptional() ? "O" : "R");
     echo ($param->isPassedByReference() ? "B" : "b");
+    echo ($param->canBePassedByValue() ? "P" : "p");
     echo ($param->isVariadic() ? "V" : "v");
     echo "|";
 }
@@ -2156,7 +2157,7 @@ echo ($traitParams[2]->hasType() ? "T" : "t");
     );
     assert_eq!(
         out.stdout,
-        "4/2:id#0TRbv|name#1tRBv|mode#2TObv|rest#3tObV|\n2/1:idT:nameO\n3/1:SR:restVT"
+        "4/2:id#0TRbPv|name#1tRBpv|mode#2TObPv|rest#3tObPV|\n2/1:idT:nameO\n3/1:SR:restVT"
     );
 }
 
