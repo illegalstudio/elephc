@@ -425,6 +425,8 @@ pub(crate) fn emit_runtime_data_user(
     emit_eval_reflection_method_lookup_data(&mut out, &sorted_classes);
     out.push_str(".p2align 3\n");
     emit_eval_reflection_property_lookup_data(&mut out, &sorted_classes);
+    out.push_str(".p2align 3\n");
+    emit_eval_reflection_class_interface_lookup_data(&mut out, &sorted_classes, interfaces);
 
     // -- class-level PHP 8 attribute metadata table --
     // Per-class layout: count followed by (name_ptr, name_len) pairs.
@@ -1147,6 +1149,132 @@ fn eval_reflection_static_property_declaring_class<'a>(
         .get(property_name)
         .map(String::as_str)
         .unwrap_or(reflected_class)
+}
+
+/// Emits class-like/interface-name rows consumed by eval ReflectionClass metadata probes.
+fn emit_eval_reflection_class_interface_lookup_data(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+    interfaces: &HashMap<String, InterfaceInfo>,
+) {
+    let mut entries = Vec::new();
+    let mut index = 0usize;
+    for (class_name, class_info) in sorted_classes {
+        for interface_name in &class_info.interfaces {
+            push_eval_reflection_class_interface_row(
+                out,
+                &mut entries,
+                &mut index,
+                class_name,
+                interface_name,
+            );
+        }
+    }
+
+    let mut sorted_interfaces: Vec<&String> = interfaces.keys().collect();
+    sorted_interfaces.sort();
+    for interface_name in sorted_interfaces {
+        for parent_name in eval_reflection_interface_parent_names(interface_name, interfaces) {
+            push_eval_reflection_class_interface_row(
+                out,
+                &mut entries,
+                &mut index,
+                interface_name,
+                &parent_name,
+            );
+        }
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(
+        ".globl _eval_reflection_class_interface_count\n_eval_reflection_class_interface_count:\n",
+    );
+    out.push_str(&format!("    .quad {}\n", entries.len()));
+    out.push_str(".globl _eval_reflection_class_interfaces\n_eval_reflection_class_interfaces:\n");
+    for (class_label, class_len, interface_label, interface_len) in entries {
+        out.push_str(&format!("    .quad {}\n", class_label));
+        out.push_str(&format!("    .quad {}\n", class_len));
+        out.push_str(&format!("    .quad {}\n", interface_label));
+        out.push_str(&format!("    .quad {}\n", interface_len));
+    }
+}
+
+/// Adds one class-like/interface-name row and its backing string labels.
+fn push_eval_reflection_class_interface_row(
+    out: &mut String,
+    entries: &mut Vec<(String, usize, String, usize)>,
+    index: &mut usize,
+    class_name: &str,
+    interface_name: &str,
+) {
+    let class_label = format!("_eval_reflection_class_interface_class_{}", *index);
+    let interface_label = format!("_eval_reflection_class_interface_name_{}", *index);
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        class_label,
+        escaped_ascii(class_name)
+    ));
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        interface_label,
+        escaped_ascii(interface_name)
+    ));
+    entries.push((
+        class_label,
+        class_name.len(),
+        interface_label,
+        interface_name.len(),
+    ));
+    *index += 1;
+}
+
+/// Returns direct and inherited parent interface names for one generated interface.
+fn eval_reflection_interface_parent_names(
+    interface_name: &str,
+    interfaces: &HashMap<String, InterfaceInfo>,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    collect_eval_reflection_interface_parent_names(interface_name, interfaces, &mut names);
+    names
+}
+
+/// Recursively appends interface parents without duplicating case-insensitive names.
+fn collect_eval_reflection_interface_parent_names(
+    interface_name: &str,
+    interfaces: &HashMap<String, InterfaceInfo>,
+    names: &mut Vec<String>,
+) {
+    let Some((_, interface_info)) = eval_reflection_interface_entry(interface_name, interfaces)
+    else {
+        return;
+    };
+    for parent in &interface_info.parents {
+        let parent_name = eval_reflection_interface_entry(parent, interfaces)
+            .map(|(name, _)| name.to_string())
+            .unwrap_or_else(|| parent.clone());
+        if names
+            .iter()
+            .any(|name| php_symbol_key(name) == php_symbol_key(&parent_name))
+        {
+            continue;
+        }
+        names.push(parent_name.clone());
+        collect_eval_reflection_interface_parent_names(&parent_name, interfaces, names);
+    }
+}
+
+/// Returns the canonical generated interface entry for a possibly case-varied name.
+fn eval_reflection_interface_entry<'a>(
+    interface_name: &str,
+    interfaces: &'a HashMap<String, InterfaceInfo>,
+) -> Option<(&'a str, &'a InterfaceInfo)> {
+    if let Some((name, info)) = interfaces.get_key_value(interface_name) {
+        return Some((name.as_str(), info));
+    }
+    interfaces
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(interface_name))
+        .map(|(name, info)| (name.as_str(), info))
 }
 
 /// Returns eval ReflectionProperty bitflags for one instance property slot.

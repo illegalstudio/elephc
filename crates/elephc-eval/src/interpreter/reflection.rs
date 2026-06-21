@@ -1247,12 +1247,13 @@ fn eval_reflection_class_new(
             &reflected_name,
             values,
         )?;
+        let interface_names = eval_reflection_aot_class_interface_names(&reflected_name, values)?;
         let parent_class_name = eval_reflection_aot_parent_class_name(&reflected_name, values)?;
         return eval_reflection_owner_object(
             EVAL_REFLECTION_OWNER_CLASS,
             &reflected_name,
             &[],
-            &[],
+            &interface_names,
             &[],
             &method_names,
             &property_names,
@@ -2156,12 +2157,13 @@ fn eval_reflection_full_class_object_result(
             runtime_class_name,
             values,
         )?;
+        let interface_names = eval_reflection_aot_class_interface_names(runtime_class_name, values)?;
         let parent_class_name = eval_reflection_aot_parent_class_name(runtime_class_name, values)?;
         return eval_reflection_owner_object(
             EVAL_REFLECTION_OWNER_CLASS,
             runtime_class_name,
             &[],
-            &[],
+            &interface_names,
             &[],
             &method_names,
             &property_names,
@@ -2210,11 +2212,12 @@ fn eval_reflection_shallow_class_object_result(
         let Some((flags, modifiers)) = eval_reflection_aot_class_flags(class_name, values)? else {
             return values.bool_value(false);
         };
+        let interface_names = eval_reflection_aot_class_interface_names(class_name, values)?;
         return eval_reflection_owner_object_with_members(
             EVAL_REFLECTION_OWNER_CLASS,
             class_name.trim_start_matches('\\'),
             &[],
-            &[],
+            &interface_names,
             &[],
             &[],
             &[],
@@ -2808,6 +2811,18 @@ fn eval_reflection_aot_member_names(
     } else {
         values.reflection_property_names(runtime_class_name)?
     };
+    let names = eval_reflection_string_array_to_vec(names_array, values)?;
+    values.release(names_array)?;
+    Ok(names)
+}
+
+/// Returns generated AOT interface names for one reflected class-like symbol.
+fn eval_reflection_aot_class_interface_names(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let names_array = values.reflection_class_interface_names(runtime_class_name)?;
     let names = eval_reflection_string_array_to_vec(names_array, values)?;
     values.release(names_array)?;
     Ok(names)

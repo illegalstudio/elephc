@@ -179,6 +179,12 @@ pub trait RuntimeValueOps {
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Returns generated/AOT interface names visible for one reflected class-like symbol.
+    fn reflection_class_interface_names(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Creates a named runtime object without constructor arguments.
     fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus>;
 

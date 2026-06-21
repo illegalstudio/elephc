@@ -129,6 +129,10 @@ unsafe extern "C" {
         class_ptr: *const u8,
         class_len: u64,
     ) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_reflection_class_interface_names(
+        class_ptr: *const u8,
+        class_len: u64,
+    ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_new_object(
         name_ptr: *const u8,
         name_len: u64,

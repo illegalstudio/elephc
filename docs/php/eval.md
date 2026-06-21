@@ -227,7 +227,8 @@ user-defined class-like symbols.
 `ReflectionClass::getModifiers()` returns PHP's `ReflectionClass::IS_*`
 modifier bitmask for eval class-like metadata.
 `ReflectionClass::getInterfaceNames()` returns implemented interfaces for eval
-classes and parent interfaces for eval interfaces.
+and generated/AOT classes, plus parent interfaces for eval and generated/AOT
+interfaces.
 `ReflectionClass::implementsInterface()` checks those eval relations
 case-insensitively, returns true when reflecting the requested interface itself,
 and checks generated/AOT class-interface relations through runtime metadata. It

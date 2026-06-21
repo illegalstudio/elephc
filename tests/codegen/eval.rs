@@ -6556,6 +6556,31 @@ echo count($parentInterfaces) . ":" . $parentInterfaces[0];');
     );
 }
 
+/// Verifies eval ReflectionClass exposes generated/AOT implemented interface names.
+#[test]
+fn test_eval_reflection_class_get_interface_names_for_aot_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface EvalAotReflectIfaceBase {}
+interface EvalAotReflectIfaceChild extends EvalAotReflectIfaceBase {}
+class EvalAotReflectIfaceTarget implements EvalAotReflectIfaceChild {}
+eval('$interfaces = (new ReflectionClass("EvalAotReflectIfaceTarget"))->getInterfaceNames();
+sort($interfaces);
+echo count($interfaces) . ":";
+echo implode(",", $interfaces);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "2:EvalAotReflectIfaceBase,EvalAotReflectIfaceChild"
+    );
+}
+
 /// Verifies eval ReflectionClass::implementsInterface reports class, enum, and
 /// interface metadata through the bridge.
 #[test]

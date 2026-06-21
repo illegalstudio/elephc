@@ -173,6 +173,7 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
 
     emit_aarch64_eval_reflection_method_names(emitter);
     emit_aarch64_eval_reflection_property_names(emitter);
+    emit_aarch64_eval_reflection_class_interface_names(emitter);
     emit_aarch64_eval_reflection_method_flags(emitter);
     emit_aarch64_eval_reflection_method_declaring_class(emitter);
     emit_aarch64_eval_reflection_property_declaring_class(emitter);
@@ -1595,6 +1596,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
 
     emit_x86_64_eval_reflection_method_names(emitter);
     emit_x86_64_eval_reflection_property_names(emitter);
+    emit_x86_64_eval_reflection_class_interface_names(emitter);
     emit_x86_64_eval_reflection_method_flags(emitter);
     emit_x86_64_eval_reflection_method_declaring_class(emitter);
     emit_x86_64_eval_reflection_property_declaring_class(emitter);
@@ -3003,6 +3005,19 @@ fn emit_aarch64_eval_reflection_property_names(emitter: &mut Emitter) {
     );
 }
 
+/// Emits the ARM64 eval hook that returns AOT ReflectionClass interface names.
+fn emit_aarch64_eval_reflection_class_interface_names(emitter: &mut Emitter) {
+    emit_aarch64_eval_reflection_member_names(
+        emitter,
+        "__elephc_eval_reflection_class_interface_names",
+        "_eval_reflection_class_interface_count",
+        "_eval_reflection_class_interfaces",
+        "__elephc_eval_reflection_class_interface_names",
+        "class interface",
+        32,
+    );
+}
+
 /// Emits an ARM64 class-filtered AOT reflection member-name scanner.
 fn emit_aarch64_eval_reflection_member_names(
     emitter: &mut Emitter,
@@ -3377,6 +3392,19 @@ fn emit_x86_64_eval_reflection_property_names(emitter: &mut Emitter) {
         "__elephc_eval_reflection_property_names_x86",
         "property",
         56,
+    );
+}
+
+/// Emits the x86_64 eval hook that returns AOT ReflectionClass interface names.
+fn emit_x86_64_eval_reflection_class_interface_names(emitter: &mut Emitter) {
+    emit_x86_64_eval_reflection_member_names(
+        emitter,
+        "__elephc_eval_reflection_class_interface_names",
+        "_eval_reflection_class_interface_count",
+        "_eval_reflection_class_interfaces",
+        "__elephc_eval_reflection_class_interface_names_x86",
+        "class interface",
+        32,
     );
 }
 

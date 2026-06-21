@@ -461,6 +461,26 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass::getInterfaceNames reads fake generated/AOT metadata.
+#[test]
+fn execute_program_reflects_aot_class_interface_names() {
+    let program = parse_fragment(
+        br#"$class_names = (new ReflectionClass("KnownClass"))->getInterfaceNames();
+echo count($class_names); echo ":"; echo $class_names[0]; echo ":";
+$interface_names = (new ReflectionClass("KnownInterface"))->getInterfaceNames();
+echo count($interface_names); echo ":"; echo $interface_names[0];
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "1:KnownInterface:1:Traversable");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass::implementsInterface reports eval class, enum, and
 /// interface metadata using case-insensitive interface names.
 #[test]
