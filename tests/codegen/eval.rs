@@ -6583,6 +6583,28 @@ echo (new ReflectionClass("EvalImplTrait"))->implementsInterface("EvalImplBase")
     assert_eq!(out.stdout, "CBEIPt");
 }
 
+/// Verifies eval ReflectionClass::implementsInterface uses generated/AOT relations.
+#[test]
+fn test_eval_reflection_class_implements_interface_for_aot_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface EvalAotReflectImplBase {}
+interface EvalAotReflectImplChild extends EvalAotReflectImplBase {}
+class EvalAotReflectImplTarget implements EvalAotReflectImplChild {}
+eval('$ref = new ReflectionClass("EvalAotReflectImplTarget");
+echo $ref->implementsInterface("EvalAotReflectImplChild") ? "C" : "c";
+echo $ref->implementsInterface("evalaotreflectimplbase") ? "B" : "b";
+echo $ref->implementsInterface("Iterator") ? "I" : "i";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "CBi");
+}
+
 /// Verifies eval `ReflectionClass::implementsInterface()` throws ReflectionException
 /// for missing or non-interface argument names.
 #[test]

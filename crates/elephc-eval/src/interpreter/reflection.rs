@@ -222,13 +222,17 @@ pub(in crate::interpreter) fn eval_reflection_class_implements_interface_result(
             values,
         );
     }
-    values
-        .bool_value(eval_reflection_class_implements_interface_name(
-            &reflected_name,
-            &interface_name,
-            context,
-        ))
-        .map(Some)
+    let result = if eval_reflection_class_like_exists(&reflected_name, context) {
+        eval_reflection_class_implements_interface_name(&reflected_name, &interface_name, context)
+    } else if values.interface_exists(&reflected_name)? {
+        eval_reflection_same_class_like_name(&reflected_name, &interface_name)
+    } else {
+        let reflected_class = values.string(&reflected_name)?;
+        let result = values.object_is_a(reflected_class, &interface_name, false);
+        values.release(reflected_class)?;
+        result?
+    };
+    values.bool_value(result).map(Some)
 }
 
 /// Handles eval-backed `ReflectionClass::isSubclassOf()` calls.
