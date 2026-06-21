@@ -14,9 +14,9 @@ use crate::errors::EvalParseError;
 use crate::eval_ir::{
     EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalCallArg, EvalCatch, EvalClass,
     EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst, EvalEnum,
-    EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalInterface, EvalInterfaceMethod,
-    EvalInterfaceProperty, EvalParameterType, EvalParameterTypeVariant, EvalStmt, EvalSwitchCase,
-    EvalTrait, EvalTraitAdaptation, EvalUnaryOp, EvalVisibility,
+    EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalInstanceOfTarget, EvalInterface,
+    EvalInterfaceMethod, EvalInterfaceProperty, EvalParameterType, EvalParameterTypeVariant,
+    EvalStmt, EvalSwitchCase, EvalTrait, EvalTraitAdaptation, EvalUnaryOp, EvalVisibility,
 };
 use crate::lexer::TokenKind;
 
@@ -931,6 +931,8 @@ impl Parser {
         let default_is_some = default.is_some();
         let (has_get_hook, has_set_hook, hook_methods) =
             self.parse_property_hook_tail(&name, is_static, effective_readonly, default_is_some)?;
+        let is_virtual = (has_get_hook || has_set_hook)
+            && !property_hook_methods_use_backing_slot(&hook_methods, &name);
         let property = EvalClassProperty::with_visibility_static_final_and_readonly(
             name,
             visibility,
@@ -940,7 +942,8 @@ impl Parser {
             default,
         )
         .with_type(property_type)
-        .with_hooks(has_get_hook, has_set_hook);
+        .with_hooks(has_get_hook, has_set_hook)
+        .with_virtual(is_virtual);
         Ok((property, hook_methods))
     }
 
@@ -2572,6 +2575,227 @@ fn eval_attribute_arg_from_expr(expr: &EvalExpr) -> Option<EvalAttributeArg> {
         },
         _ => None,
     }
+}
+
+/// Returns whether any parsed property hook accessor uses its own backing slot.
+fn property_hook_methods_use_backing_slot(
+    hook_methods: &[EvalClassMethod],
+    property_name: &str,
+) -> bool {
+    hook_methods.iter().any(|method| {
+        method
+            .body()
+            .iter()
+            .any(|stmt| eval_stmt_uses_this_property(stmt, property_name))
+    })
+}
+
+/// Returns whether one statement touches `$this->{$property_name}` directly.
+fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
+    match stmt {
+        EvalStmt::ArrayAppendVar { value, .. } => {
+            eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::ArraySetVar { index, value, .. } => {
+            eval_expr_uses_this_property(index, property_name)
+                || eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::Break
+        | EvalStmt::Continue
+        | EvalStmt::ClassDecl(_)
+        | EvalStmt::EnumDecl(_)
+        | EvalStmt::FunctionDecl { .. }
+        | EvalStmt::Global { .. }
+        | EvalStmt::InterfaceDecl(_)
+        | EvalStmt::ReferenceAssign { .. }
+        | EvalStmt::TraitDecl(_)
+        | EvalStmt::UnsetVar { .. } => false,
+        EvalStmt::DoWhile { body, condition } | EvalStmt::While { condition, body } => {
+            eval_expr_uses_this_property(condition, property_name)
+                || eval_stmt_list_uses_this_property(body, property_name)
+        }
+        EvalStmt::Echo(expr)
+        | EvalStmt::Expr(expr)
+        | EvalStmt::StaticVar { init: expr, .. }
+        | EvalStmt::Throw(expr) => eval_expr_uses_this_property(expr, property_name),
+        EvalStmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            eval_stmt_list_uses_this_property(init, property_name)
+                || condition
+                    .as_ref()
+                    .is_some_and(|expr| eval_expr_uses_this_property(expr, property_name))
+                || eval_stmt_list_uses_this_property(update, property_name)
+                || eval_stmt_list_uses_this_property(body, property_name)
+        }
+        EvalStmt::Foreach { array, body, .. } => {
+            eval_expr_uses_this_property(array, property_name)
+                || eval_stmt_list_uses_this_property(body, property_name)
+        }
+        EvalStmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            eval_expr_uses_this_property(condition, property_name)
+                || eval_stmt_list_uses_this_property(then_branch, property_name)
+                || eval_stmt_list_uses_this_property(else_branch, property_name)
+        }
+        EvalStmt::Return(expr) => expr
+            .as_ref()
+            .is_some_and(|expr| eval_expr_uses_this_property(expr, property_name)),
+        EvalStmt::PropertyReferenceBind {
+            object, property, ..
+        }
+        | EvalStmt::UnsetProperty { object, property } => {
+            eval_is_this_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+        }
+        EvalStmt::PropertySet {
+            object,
+            property,
+            value,
+        } => {
+            eval_is_this_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::StaticPropertySet { value, .. } | EvalStmt::StoreVar { value, .. } => {
+            eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::Switch { expr, cases } => {
+            eval_expr_uses_this_property(expr, property_name)
+                || cases.iter().any(|case| {
+                    case.condition
+                        .as_ref()
+                        .is_some_and(|expr| eval_expr_uses_this_property(expr, property_name))
+                        || eval_stmt_list_uses_this_property(&case.body, property_name)
+                })
+        }
+        EvalStmt::Try {
+            body,
+            catches,
+            finally_body,
+        } => {
+            eval_stmt_list_uses_this_property(body, property_name)
+                || catches
+                    .iter()
+                    .any(|catch| eval_stmt_list_uses_this_property(&catch.body, property_name))
+                || eval_stmt_list_uses_this_property(finally_body, property_name)
+        }
+    }
+}
+
+/// Returns whether any statement in a list touches `$this->{$property_name}` directly.
+fn eval_stmt_list_uses_this_property(stmts: &[EvalStmt], property_name: &str) -> bool {
+    stmts
+        .iter()
+        .any(|stmt| eval_stmt_uses_this_property(stmt, property_name))
+}
+
+/// Returns whether one expression touches `$this->{$property_name}` directly.
+fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
+    match expr {
+        EvalExpr::Array(elements) => elements.iter().any(|element| match element {
+            EvalArrayElement::Value(value) => eval_expr_uses_this_property(value, property_name),
+            EvalArrayElement::KeyValue { key, value } => {
+                eval_expr_uses_this_property(key, property_name)
+                    || eval_expr_uses_this_property(value, property_name)
+            }
+        }),
+        EvalExpr::ArrayGet { array, index } => {
+            eval_expr_uses_this_property(array, property_name)
+                || eval_expr_uses_this_property(index, property_name)
+        }
+        EvalExpr::Call { args, .. }
+        | EvalExpr::NamespacedCall { args, .. }
+        | EvalExpr::NewObject { args, .. }
+        | EvalExpr::StaticMethodCall { args, .. } => args
+            .iter()
+            .any(|arg| eval_expr_uses_this_property(arg.value(), property_name)),
+        EvalExpr::DynamicCall { callee, args } => {
+            eval_expr_uses_this_property(callee, property_name)
+                || args
+                    .iter()
+                    .any(|arg| eval_expr_uses_this_property(arg.value(), property_name))
+        }
+        EvalExpr::Const(_)
+        | EvalExpr::ConstFetch(_)
+        | EvalExpr::ClassConstantFetch { .. }
+        | EvalExpr::ClassNameFetch { .. }
+        | EvalExpr::LoadVar(_)
+        | EvalExpr::Magic(_)
+        | EvalExpr::NamespacedConstFetch { .. }
+        | EvalExpr::StaticPropertyGet { .. } => false,
+        EvalExpr::Include { path, .. }
+        | EvalExpr::Clone(path)
+        | EvalExpr::Print(path)
+        | EvalExpr::Unary { expr: path, .. } => eval_expr_uses_this_property(path, property_name),
+        EvalExpr::InstanceOf { value, target } => {
+            eval_expr_uses_this_property(value, property_name)
+                || matches!(
+                    target,
+                    EvalInstanceOfTarget::Expr(target)
+                        if eval_expr_uses_this_property(target, property_name)
+                )
+        }
+        EvalExpr::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            eval_expr_uses_this_property(subject, property_name)
+                || arms.iter().any(|arm| {
+                    arm.patterns
+                        .iter()
+                        .any(|pattern| eval_expr_uses_this_property(pattern, property_name))
+                        || eval_expr_uses_this_property(&arm.value, property_name)
+                })
+                || default
+                    .as_ref()
+                    .is_some_and(|expr| eval_expr_uses_this_property(expr, property_name))
+        }
+        EvalExpr::MethodCall { object, args, .. } => {
+            eval_expr_uses_this_property(object, property_name)
+                || args
+                    .iter()
+                    .any(|arg| eval_expr_uses_this_property(arg.value(), property_name))
+        }
+        EvalExpr::NewAnonymousClass { args, .. } => args
+            .iter()
+            .any(|arg| eval_expr_uses_this_property(arg.value(), property_name)),
+        EvalExpr::NullCoalesce { value, default } => {
+            eval_expr_uses_this_property(value, property_name)
+                || eval_expr_uses_this_property(default, property_name)
+        }
+        EvalExpr::PropertyGet { object, property } => {
+            eval_is_this_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+        }
+        EvalExpr::Ternary {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            eval_expr_uses_this_property(condition, property_name)
+                || then_branch
+                    .as_ref()
+                    .is_some_and(|expr| eval_expr_uses_this_property(expr, property_name))
+                || eval_expr_uses_this_property(else_branch, property_name)
+        }
+        EvalExpr::Binary { left, right, .. } => {
+            eval_expr_uses_this_property(left, property_name)
+                || eval_expr_uses_this_property(right, property_name)
+        }
+    }
+}
+
+/// Returns whether one object/property pair is exactly `$this->{$property_name}`.
+fn eval_is_this_property(object: &EvalExpr, property: &str, property_name: &str) -> bool {
+    matches!(object, EvalExpr::LoadVar(name) if name == "this") && property == property_name
 }
 
 /// Returns the synthetic get-hook method name for one property.

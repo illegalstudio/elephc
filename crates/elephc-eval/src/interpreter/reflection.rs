@@ -1091,6 +1091,49 @@ pub(in crate::interpreter) fn eval_reflection_property_set_value_result(
     values.null().map(Some)
 }
 
+/// Handles eval-backed `ReflectionProperty::getRawValue()` and `setRawValue()` calls.
+pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some((declaring_class, property_name)) =
+        context
+            .eval_reflection_property(identity)
+            .map(|(declaring_class, property_name)| {
+                (declaring_class.to_string(), property_name.to_string())
+            })
+    else {
+        return Ok(None);
+    };
+    if method_name.eq_ignore_ascii_case("getRawValue") {
+        let object = eval_reflection_property_raw_value_arg(evaluated_args)?;
+        return eval_reflection_instance_property_get_raw_value(
+            &declaring_class,
+            &property_name,
+            object,
+            context,
+            values,
+        )
+        .map(Some);
+    }
+    if method_name.eq_ignore_ascii_case("setRawValue") {
+        let (object, value) = eval_reflection_property_set_raw_value_args(evaluated_args)?;
+        eval_reflection_instance_property_set_raw_value(
+            &declaring_class,
+            &property_name,
+            object,
+            value,
+            context,
+            values,
+        )?;
+        return values.null().map(Some);
+    }
+    Ok(None)
+}
+
 /// Handles eval-backed `ReflectionClass::getReflectionConstant()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constant_result(
     identity: u64,
@@ -3558,12 +3601,9 @@ fn eval_reflection_property_modifiers(
     modifiers
 }
 
-/// Returns whether an eval property is virtual because it has or requires hooks.
+/// Returns whether eval retained this property as virtual rather than backed.
 fn eval_reflection_property_is_virtual(property: &EvalClassProperty) -> bool {
-    property.has_get_hook()
-        || property.has_set_hook()
-        || property.requires_get_hook()
-        || property.requires_set_hook()
+    property.is_virtual()
 }
 
 /// Computes PHP's `ReflectionMethod::getModifiers()` bitmask from eval member flags.
@@ -4157,6 +4197,25 @@ fn eval_reflection_property_set_value_args(
     Ok((object_or_value, bound_args[1]))
 }
 
+/// Binds the required object argument for `ReflectionProperty::getRawValue()`.
+fn eval_reflection_property_raw_value_arg(
+    evaluated_args: Vec<EvaluatedCallArg>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let args = bind_evaluated_function_args(&[String::from("object")], evaluated_args)?;
+    Ok(args[0])
+}
+
+/// Binds the object and value arguments for `ReflectionProperty::setRawValue()`.
+fn eval_reflection_property_set_raw_value_args(
+    evaluated_args: Vec<EvaluatedCallArg>,
+) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
+    let args = bind_evaluated_function_args(
+        &[String::from("object"), String::from("value")],
+        evaluated_args,
+    )?;
+    Ok((args[0], args[1]))
+}
+
 /// Returns the eval property metadata eligible for ReflectionProperty hook APIs.
 fn eval_reflection_property_for_hooks(
     declaring_class: &str,
@@ -4679,6 +4738,52 @@ fn eval_reflection_instance_property_set_value(
     } else if property.has_get_hook() {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
+    values.property_set(object, &storage_property_name, value)
+}
+
+/// Reads one eval instance property through ReflectionProperty raw-storage semantics.
+fn eval_reflection_instance_property_get_raw_value(
+    declaring_class: &str,
+    property_name: &str,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (_, property) = eval_reflection_instance_property_target(
+        declaring_class,
+        property_name,
+        object,
+        context,
+        values,
+    )?;
+    if property.is_virtual() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
+    values.property_get(object, &storage_property_name)
+}
+
+/// Writes one eval instance property through ReflectionProperty raw-storage semantics.
+fn eval_reflection_instance_property_set_raw_value(
+    declaring_class: &str,
+    property_name: &str,
+    object: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let (_, property) = eval_reflection_instance_property_target(
+        declaring_class,
+        property_name,
+        object,
+        context,
+        values,
+    )?;
+    if property.is_virtual() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    validate_eval_reflection_property_write(declaring_class, &property, context)?;
     let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
     values.property_set(object, &storage_property_name, value)
 }

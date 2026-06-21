@@ -8618,6 +8618,16 @@ class EvalReflectValueHook {
         get => $this->raw * 2;
         set { $this->raw = $value + 1; }
     }
+    public $backed {
+        get { return $this->backed * 2; }
+        set { $this->backed = $value; }
+    }
+    public $virtual {
+        get => $this->raw + 100;
+    }
+    public function __construct() {
+        $this->backed = 2;
+    }
 }
 $child = new EvalReflectValueChild();
 $secret = new ReflectionProperty("EvalReflectValueBase", "secret");
@@ -8639,7 +8649,18 @@ $doubled = new ReflectionProperty("EvalReflectValueHook", "doubled");
 echo $doubled->getValue($hook) . ":";
 $doubled->setValue($hook, 4);
 echo $hook->raw . ":";
-echo $doubled->getValue($hook);');
+echo $doubled->getValue($hook) . ":";
+$backed = new ReflectionProperty("EvalReflectValueHook", "backed");
+echo $backed->getRawValue($hook) . ":";
+echo $backed->getValue($hook) . ":";
+$backed->setValue($hook, 4);
+echo $backed->getRawValue(object: $hook) . ":";
+echo $backed->getValue($hook) . ":";
+$backed->setRawValue(object: $hook, value: 7);
+echo $backed->getRawValue($hook) . ":";
+echo $backed->getValue($hook) . ":";
+echo $backed->getModifiers() . ":";
+echo (new ReflectionProperty("EvalReflectValueHook", "virtual"))->getModifiers();');
 "#,
     );
     assert!(
@@ -8647,7 +8668,32 @@ echo $doubled->getValue($hook);');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "base:changed:Ada:Grace:1:5:6:4:5:10");
+    assert_eq!(
+        out.stdout,
+        "base:changed:Ada:Grace:1:5:6:4:5:10:2:4:4:8:7:14:1:513"
+    );
+}
+
+/// Verifies eval ReflectionProperty raw APIs reject virtual property hooks.
+#[test]
+fn test_eval_reflection_property_virtual_raw_value_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalReflectVirtualRawHook {
+    public $raw = 2;
+    public $virtual {
+        get => $this->raw * 2;
+    }
+}
+$object = new EvalReflectVirtualRawHook();
+$property = new ReflectionProperty("EvalReflectVirtualRawHook", "virtual");
+$property->getRawValue($object);');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
 }
 
 /// Verifies eval ReflectionProperty exposes property hook metadata and hook methods.

@@ -1406,6 +1406,7 @@ pub struct EvalClassProperty {
     has_set_hook: bool,
     requires_get_hook: bool,
     requires_set_hook: bool,
+    is_virtual: bool,
     default: Option<EvalExpr>,
 }
 
@@ -1475,6 +1476,7 @@ impl EvalClassProperty {
             has_set_hook: false,
             requires_get_hook: false,
             requires_set_hook: false,
+            is_virtual: false,
             default,
         }
     }
@@ -1483,6 +1485,13 @@ impl EvalClassProperty {
     pub const fn with_hooks(mut self, has_get_hook: bool, has_set_hook: bool) -> Self {
         self.has_get_hook = has_get_hook;
         self.has_set_hook = has_set_hook;
+        self.is_virtual = has_get_hook || has_set_hook;
+        self
+    }
+
+    /// Returns a copy of this property with explicit hook virtuality metadata.
+    pub const fn with_virtual(mut self, is_virtual: bool) -> Self {
+        self.is_virtual = is_virtual;
         self
     }
 
@@ -1495,6 +1504,7 @@ impl EvalClassProperty {
         self.is_abstract = true;
         self.requires_get_hook = requires_get_hook;
         self.requires_set_hook = requires_set_hook;
+        self.is_virtual = true;
         self
     }
 
@@ -1579,6 +1589,11 @@ impl EvalClassProperty {
     /// Returns whether this abstract property contract requires write access.
     pub const fn requires_set_hook(&self) -> bool {
         self.requires_set_hook
+    }
+
+    /// Returns whether this property is virtual instead of backed by object storage.
+    pub const fn is_virtual(&self) -> bool {
+        self.is_virtual
     }
 
     /// Returns the property initializer expression, when one was declared.

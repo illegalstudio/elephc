@@ -387,6 +387,10 @@ for those APIs, including `PropertyHookType::cases()`, `from()`, and
 instance and static property values, bypass public/protected/private visibility
 like PHP reflection, route concrete property hooks through their accessors, and
 still reject readonly writes.
+`ReflectionProperty::getRawValue()` and `setRawValue()` are supported for
+eval-declared backed instance properties, including backed property hooks, and
+bypass concrete property hook accessors. Virtual property hooks reject raw
+access like PHP.
 `ReflectionClassConstant::getAttributes()`,
 `ReflectionEnumUnitCase::getAttributes()`, and
 `ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant
