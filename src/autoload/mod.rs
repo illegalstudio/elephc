@@ -157,6 +157,12 @@ pub fn run(
     // reference graph collected below.
     program = polyfill_prune::prune_provided_function_polyfills(program);
 
+    // Drop definition guards for optional `autoload.files` helpers the program never calls
+    // (e.g. Symfony's `u()`/`b()`/`s()` and `dump()`/`dd()`). Their bodies construct heavy
+    // classes (`UnicodeString`, `ByteString`, `VarDumper`) that would otherwise be dragged into
+    // the closure purely by the unused helper, not the program's actual reachable code.
+    program = polyfill_prune::prune_unused_optional_helpers(program);
+
     for _ in 0..MAX_ITERATIONS {
         let mut declared = collect_declared_fqns(&program);
         seed_builtin_declared_fqns(&mut declared);

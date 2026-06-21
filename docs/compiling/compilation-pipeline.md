@@ -69,7 +69,16 @@ PHP source
   (`deepclone_to_array`, `deepclone_from_array`, `deepclone_hydrate`). The wrapper
   bodies are never materialized, so the classes they delegate to (such as the
   large `symfony/polyfill-deepclone` `DeepClone` class) stay out of the
-  closed-world compile when nothing calls those functions. The companion
+  closed-world compile when nothing calls those functions. The same prune also
+  drops definition guards for a set of *optional* `autoload.files` helper
+  functions — Symfony's `u()`/`b()`/`s()` (which construct `UnicodeString` /
+  `ByteString`) and `dump()`/`dd()` (which construct `VarDumper`) — but only when
+  the program never calls them. Because those helpers are defined eagerly yet
+  reference heavy classes, pruning the unused ones keeps the whole `symfony/string`
+  and `var-dumper` branches out of a render path that never uses them. The prune is
+  conservative: a helper is removed only if no call names it anywhere in the
+  program assembled so far, so a genuine call keeps the helper (and its classes).
+  The companion
   [`extension_loaded()`](../php/system-and-io.md#system-functions) builtin reports
   no loaded extensions, so a polyfill's `extension_loaded` guard selects its
   userland fallback path consistently.

@@ -1936,3 +1936,66 @@ fn test_resolve_lenient_includes_degrades_dynamic_require_to_fatal_stub() {
         "the stub must diverge via an exit() call, got: {rendered}"
     );
 }
+
+/// Verifies an unused optional helper (`dump`) defined in an `autoload.files` bootstrap is pruned
+/// before class-reference collection, so the heavy class its body constructs is never pulled.
+/// `dump()`'s body references `\App\HeavyDelegate` (whose PSR-4 target is unparseable); because
+/// `main.php` never calls `dump`, the guard is dropped and the broken class is never loaded, so
+/// autoload succeeds. This is the Symfony `u()`/`b()`/`dump()` pattern that drags in
+/// `UnicodeString`/`ByteString`/`VarDumper` on a render path that never calls them.
+#[test]
+fn test_unused_optional_helper_guard_is_pruned_before_class_load() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+            ),
+            (
+                "bootstrap.php",
+                "<?php\nif (!function_exists('dump')) {\n    function dump($v) { return \\App\\HeavyDelegate::run(); }\n}\n",
+            ),
+            (
+                "src/HeavyDelegate.php",
+                "<?php\nnamespace App;\n$x = \"unterminated;\n",
+            ),
+            ("main.php", "<?php\necho \"ok\";\n"),
+        ],
+        "main.php",
+    );
+    assert!(
+        result.is_ok(),
+        "unused optional helper should be pruned so the heavy class is never loaded, got {:?}",
+        result.err(),
+    );
+}
+
+/// Control for the unused-helper prune: when the program DOES call the optional helper, its guard
+/// is kept, its body still references `\App\HeavyDelegate`, and the unparseable PSR-4 target is
+/// loaded and hard-fails. Confirms the prune is conditional on the helper being uncalled, not an
+/// unconditional removal of allowlisted helpers.
+#[test]
+fn test_called_optional_helper_guard_is_kept_and_loads_referenced_class() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+            ),
+            (
+                "bootstrap.php",
+                "<?php\nif (!function_exists('dump')) {\n    function dump($v) { return \\App\\HeavyDelegate::run(); }\n}\n",
+            ),
+            (
+                "src/HeavyDelegate.php",
+                "<?php\nnamespace App;\n$x = \"unterminated;\n",
+            ),
+            ("main.php", "<?php\ndump(1);\necho \"ok\";\n"),
+        ],
+        "main.php",
+    );
+    assert!(
+        result.is_err(),
+        "a called optional helper must keep its class reference and fail to load the broken class",
+    );
+}

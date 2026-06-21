@@ -1,6 +1,8 @@
 //! Purpose:
-//! Collects declared and referenced fully-qualified class-like names from the AST.
-//! Gives the autoload pass the missing symbols it can try to resolve from disk.
+//! Collects declared and referenced fully-qualified class-like names from the AST,
+//! plus the set of function names the program calls. Gives the autoload pass the
+//! missing class symbols it can resolve from disk and the call set used to prune
+//! unused, optional `autoload.files` helper definitions.
 //!
 //! Called from:
 //! - `crate::autoload::run()`
@@ -8,6 +10,9 @@
 //! Key details:
 //! - Literal `class_exists(..., true)` shapes are treated as compile-time autoload demands.
 //! - Dynamic autoload flags are not guessed because the checker rejects them in AOT mode.
+//! - One traversal fills both the class-reference set and the called-function-name set
+//!   (`Refs`); `collect_reference_points` reads the former, `collect_called_function_names`
+//!   the latter.
 
 use std::collections::HashSet;
 
@@ -15,6 +20,17 @@ use crate::parser::ast::{
     CallableTarget, CatchClause, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Program,
     StaticReceiver, Stmt, StmtKind, TraitUse, TypeExpr,
 };
+
+/// Accumulator for one reference traversal: class-like names referenced, and function names
+/// called. Filled by `collect_refs_*`; consumers read whichever set they need.
+#[derive(Default)]
+pub(super) struct Refs {
+    /// Fully-qualified class/interface/trait/enum names referenced (leading `\` trimmed).
+    classes: HashSet<String>,
+    /// Function names called, lowercased and leading-`\`-trimmed for PHP case-insensitive,
+    /// namespace-tolerant matching. Includes first-class-callable function targets.
+    functions: HashSet<String>,
+}
 
 /// Collect all declared fully-qualified class-like names from the program.
 pub(super) fn collect_declared_fqns(program: &Program) -> HashSet<String> {
@@ -48,17 +64,29 @@ fn collect_declared_in_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
 pub(super) fn collect_reference_points(program: &Program) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     for (stmt_idx, stmt) in program.iter().enumerate() {
-        let mut refs = HashSet::new();
+        let mut refs = Refs::default();
         collect_refs_stmt(stmt, &mut refs);
-        let mut refs: Vec<String> = refs.into_iter().collect();
-        refs.sort();
-        out.extend(refs.into_iter().map(|fqn| (stmt_idx, fqn)));
+        let mut classes: Vec<String> = refs.classes.into_iter().collect();
+        classes.sort();
+        out.extend(classes.into_iter().map(|fqn| (stmt_idx, fqn)));
     }
     out
 }
 
-/// Recurse into a statement to collect class references.
-fn collect_refs_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
+/// Collect the set of function names the program calls (lowercased, leading-`\` trimmed),
+/// including first-class-callable function targets. Used to decide whether an optional
+/// `autoload.files` helper definition is dead and may be pruned before class-reference
+/// collection.
+pub(super) fn collect_called_function_names(program: &Program) -> HashSet<String> {
+    let mut refs = Refs::default();
+    for stmt in program {
+        collect_refs_stmt(stmt, &mut refs);
+    }
+    refs.functions
+}
+
+/// Recurse into a statement to collect class references and called function names.
+fn collect_refs_stmt(stmt: &Stmt, out: &mut Refs) {
     match &stmt.kind {
         StmtKind::ClassDecl {
             extends,
@@ -241,9 +269,7 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
                 collect_refs_stmt(s, out);
             }
         }
-        StmtKind::Foreach {
-            array, body, ..
-        } => {
+        StmtKind::Foreach { array, body, .. } => {
             collect_refs_expr(array, out);
             for s in body {
                 collect_refs_stmt(s, out);
@@ -266,7 +292,11 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
                 }
             }
         }
-        StmtKind::Switch { subject, cases, default } => {
+        StmtKind::Switch {
+            subject,
+            cases,
+            default,
+        } => {
             collect_refs_expr(subject, out);
             for (values, body) in cases {
                 for v in values {
@@ -329,7 +359,9 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
         }
         StmtKind::ArrayPush { value, .. } => collect_refs_expr(value, out),
         StmtKind::ListUnpack { value, .. } => collect_refs_expr(value, out),
-        StmtKind::TypedAssign { type_expr, value, .. } => {
+        StmtKind::TypedAssign {
+            type_expr, value, ..
+        } => {
             collect_type_expr(type_expr, out);
             collect_refs_expr(value, out);
         }
@@ -343,8 +375,8 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
     }
 }
 
-/// Collect class references from a catch clause.
-fn collect_refs_catch(catch: &CatchClause, out: &mut HashSet<String>) {
+/// Collect class references and called functions from a catch clause.
+fn collect_refs_catch(catch: &CatchClause, out: &mut Refs) {
     for ty in &catch.exception_types {
         push_name(ty, out);
     }
@@ -353,8 +385,8 @@ fn collect_refs_catch(catch: &CatchClause, out: &mut HashSet<String>) {
     }
 }
 
-/// Collect class references from a class method declaration.
-fn collect_method(method: &ClassMethod, out: &mut HashSet<String>) {
+/// Collect class references and called functions from a class method declaration.
+fn collect_method(method: &ClassMethod, out: &mut Refs) {
     for (_, type_expr, default, _) in &method.params {
         if let Some(t) = type_expr {
             collect_type_expr(t, out);
@@ -371,8 +403,8 @@ fn collect_method(method: &ClassMethod, out: &mut HashSet<String>) {
     }
 }
 
-/// Collect class references from a class property declaration.
-fn collect_property(prop: &ClassProperty, out: &mut HashSet<String>) {
+/// Collect class references and called functions from a class property declaration.
+fn collect_property(prop: &ClassProperty, out: &mut Refs) {
     if let Some(t) = &prop.type_expr {
         collect_type_expr(t, out);
     }
@@ -381,20 +413,20 @@ fn collect_property(prop: &ClassProperty, out: &mut HashSet<String>) {
     }
 }
 
-/// Collect class references from a class constant declaration.
-fn collect_class_const(constant: &ClassConst, out: &mut HashSet<String>) {
+/// Collect class references and called functions from a class constant declaration.
+fn collect_class_const(constant: &ClassConst, out: &mut Refs) {
     collect_refs_expr(&constant.value, out);
 }
 
 /// Collect class references from a trait use declaration.
-fn collect_trait_use(trait_use: &TraitUse, out: &mut HashSet<String>) {
+fn collect_trait_use(trait_use: &TraitUse, out: &mut Refs) {
     for name in &trait_use.trait_names {
         push_name(name, out);
     }
 }
 
 /// Collect class references from a type expression.
-fn collect_type_expr(ty: &TypeExpr, out: &mut HashSet<String>) {
+fn collect_type_expr(ty: &TypeExpr, out: &mut Refs) {
     match ty {
         TypeExpr::Named(name) => push_name(name, out),
         TypeExpr::Array(inner) => collect_type_expr(inner, out),
@@ -410,9 +442,10 @@ fn collect_type_expr(ty: &TypeExpr, out: &mut HashSet<String>) {
     }
 }
 
-/// Recurse into an expression to collect class references, including compile-time
-/// autoload demands from `class_exists`/`interface_exists`/etc. with literal arguments.
-fn collect_refs_expr(expr: &Expr, out: &mut HashSet<String>) {
+/// Recurse into an expression to collect class references and called function names, including
+/// compile-time autoload demands from `class_exists`/`interface_exists`/etc. with literal
+/// arguments.
+fn collect_refs_expr(expr: &Expr, out: &mut Refs) {
     match &expr.kind {
         ExprKind::NewObject { class_name, args } => {
             push_name(class_name, out);
@@ -487,7 +520,12 @@ fn collect_refs_expr(expr: &Expr, out: &mut HashSet<String>) {
                 collect_refs_expr(d, out);
             }
         }
-        ExprKind::Assignment { target, value, prelude, .. } => {
+        ExprKind::Assignment {
+            target,
+            value,
+            prelude,
+            ..
+        } => {
             collect_refs_expr(target, out);
             collect_refs_expr(value, out);
             for s in prelude {
@@ -495,6 +533,9 @@ fn collect_refs_expr(expr: &Expr, out: &mut HashSet<String>) {
             }
         }
         ExprKind::FunctionCall { name, args } => {
+            // Record the callee so unused-helper pruning can tell whether an optional
+            // `autoload.files` helper is ever called.
+            push_called_function(name, out);
             // Detect compile-time demands for a literal class name. The
             // autoload pass picks these up like any other class reference.
             let canonical = name.as_canonical();
@@ -605,39 +646,51 @@ fn collect_refs_expr(expr: &Expr, out: &mut HashSet<String>) {
 }
 
 /// Collect a class reference from a static receiver (::scope).
-fn collect_static_receiver(receiver: &StaticReceiver, out: &mut HashSet<String>) {
+fn collect_static_receiver(receiver: &StaticReceiver, out: &mut Refs) {
     if let StaticReceiver::Named(name) = receiver {
         push_name(name, out);
     }
 }
 
-/// Collect a class reference from a first-class callable target.
-fn collect_callable_target(target: &CallableTarget, out: &mut HashSet<String>) {
+/// Collect a class reference and/or called function from a first-class callable target.
+fn collect_callable_target(target: &CallableTarget, out: &mut Refs) {
     match target {
         CallableTarget::StaticMethod { receiver, .. } => collect_static_receiver(receiver, out),
         CallableTarget::Method { object, .. } => collect_refs_expr(object, out),
-        CallableTarget::Function(_) => {}
+        // `strlen(...)` first-class-callable syntax references the function by name.
+        CallableTarget::Function(name) => push_called_function(name, out),
     }
 }
 
-/// Normalize a name to its canonical FQN (strip leading `\`), then insert it into `out` if non-empty.
-fn push_name(name: &crate::names::Name, out: &mut HashSet<String>) {
+/// Normalize a name to its canonical FQN (strip leading `\`), then insert it into the class
+/// set if non-empty.
+fn push_name(name: &crate::names::Name, out: &mut Refs) {
     let canonical = name.as_canonical();
     let trimmed = canonical.trim_start_matches('\\');
     if !trimmed.is_empty() {
-        out.insert(trimmed.to_string());
+        out.classes.insert(trimmed.to_string());
+    }
+}
+
+/// Record a called function name in the function set, lowercased and leading-`\`-trimmed so
+/// lookups match PHP's case-insensitive, namespace-tolerant function resolution.
+fn push_called_function(name: &crate::names::Name, out: &mut Refs) {
+    let canonical = name.as_canonical();
+    let key = canonical.trim_start_matches('\\').to_ascii_lowercase();
+    if !key.is_empty() {
+        out.functions.insert(key);
     }
 }
 
 /// Extract a literal string FQN from an expression argument (used for `class_exists` etc.).
-/// Inserts the cleaned FQN into `out` if the argument is a string literal.
-fn push_literal_fqn(arg: Option<&crate::parser::ast::Expr>, out: &mut HashSet<String>) {
+/// Inserts the cleaned FQN into the class set if the argument is a string literal.
+fn push_literal_fqn(arg: Option<&crate::parser::ast::Expr>, out: &mut Refs) {
     let Some(arg) = arg else { return };
     let ExprKind::StringLiteral(name) = &arg.kind else {
         return;
     };
     let cleaned = name.trim_start_matches('\\').to_string();
     if !cleaned.is_empty() {
-        out.insert(cleaned);
+        out.classes.insert(cleaned);
     }
 }

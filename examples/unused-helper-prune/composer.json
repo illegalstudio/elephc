@@ -1,0 +1,8 @@
+{
+    "name": "elephc/unused-helper-prune-example",
+    "description": "An optional autoload.files helper that the program never calls is pruned, so the heavy class it references stays out of the binary.",
+    "autoload": {
+        "psr-4": { "App\\": "src/" },
+        "files": [ "src/debug.php" ]
+    }
+}
