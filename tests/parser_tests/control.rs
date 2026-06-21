@@ -304,3 +304,29 @@ fn test_static_ref_is_not_label() {
     let stmts = parse_source("<?php Foo::BAR;");
     assert!(!matches!(&stmts[0].kind, StmtKind::Label(_)));
 }
+
+/// Verifies a `static $x;` with no initializer parses to a `StaticVar` whose init defaults to null.
+#[test]
+fn test_static_var_no_initializer_parses() {
+    let stmts = parse_source("<?php static $x;");
+    let StmtKind::StaticVar { name, init } = &stmts[0].kind else {
+        panic!("expected StaticVar");
+    };
+    assert_eq!(name, "x");
+    assert!(matches!(init.kind, ExprKind::Null));
+}
+
+/// Verifies a comma-separated `static $a = 1, $b;` declaration parses to a `Synthetic` block holding
+/// one `StaticVar` per variable, preserving each initializer (the second defaults to null).
+#[test]
+fn test_static_var_comma_list_parses() {
+    let stmts = parse_source("<?php static $a = 1, $b;");
+    let StmtKind::Synthetic(decls) = &stmts[0].kind else {
+        panic!("expected Synthetic block for multiple static vars");
+    };
+    assert_eq!(decls.len(), 2);
+    assert!(matches!(&decls[0].kind, StmtKind::StaticVar { name, init }
+        if name == "a" && matches!(init.kind, ExprKind::IntLiteral(1))));
+    assert!(matches!(&decls[1].kind, StmtKind::StaticVar { name, init }
+        if name == "b" && matches!(init.kind, ExprKind::Null)));
+}

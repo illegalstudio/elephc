@@ -78,9 +78,12 @@ pub(in crate::parser::stmt) fn parse_global(
     Ok(Stmt::new(StmtKind::Global { vars }, span))
 }
 
-/// Parses a `static $var = expr;` declaration statement.
-/// Consumes the `static` keyword, then expects a single variable name followed by `=` and an
-/// initializer expression. Returns a `StmtKind::StaticVar` node.
+/// Parses a `static` declaration statement, e.g. `static $a = 1, $b, $c = f();`.
+///
+/// Each variable may carry an `= expr` initializer; an omitted initializer defaults to `null`,
+/// matching PHP (`static $x;` is equivalent to `static $x = null;`). Multiple comma-separated
+/// variables produce one `StmtKind::StaticVar` per name, wrapped in a `Synthetic` block when there
+/// is more than one so the single-statement callers stay unchanged.
 pub(in crate::parser::stmt) fn parse_static_var(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -88,23 +91,39 @@ pub(in crate::parser::stmt) fn parse_static_var(
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume 'static'
 
-    let name = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Variable(n)) => n.clone(),
-        _ => return Err(CompileError::new(span, "Expected variable after 'static'")),
-    };
-    *pos += 1;
+    let mut declarations = Vec::new();
+    loop {
+        let var_span = tokens.get(*pos).map(|(_, s)| *s).unwrap_or(span);
+        let name = match tokens.get(*pos).map(|(t, _)| t) {
+            Some(Token::Variable(n)) => n.clone(),
+            _ => return Err(CompileError::new(span, "Expected variable after 'static'")),
+        };
+        *pos += 1;
 
-    expect_token(
-        tokens,
-        pos,
-        &Token::Assign,
-        "Expected '=' after static variable",
-    )?;
+        // An explicit `= expr` initializer is optional; a bare `static $x;` defaults to null.
+        let init = if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Assign)) {
+            *pos += 1; // consume '='
+            parse_assignment_value_expr(tokens, pos)?
+        } else {
+            Expr::new(ExprKind::Null, var_span)
+        };
 
-    let init = parse_assignment_value_expr(tokens, pos)?;
-    expect_semicolon(tokens, pos)?;
+        declarations.push(Stmt::new(StmtKind::StaticVar { name, init }, var_span));
 
-    Ok(Stmt::new(StmtKind::StaticVar { name, init }, span))
+        // Continue the comma-separated list, otherwise require the terminating semicolon.
+        if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Comma)) {
+            *pos += 1; // consume ','
+            continue;
+        }
+        expect_semicolon(tokens, pos)?;
+        break;
+    }
+
+    if declarations.len() == 1 {
+        Ok(declarations.pop().expect("one declaration present"))
+    } else {
+        Ok(Stmt::new(StmtKind::Synthetic(declarations), span))
+    }
 }
 
 /// Returns true if the token sequence at `pos` looks like a typed local assignment:

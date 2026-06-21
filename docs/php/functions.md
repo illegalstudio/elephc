@@ -356,6 +356,10 @@ function test() {
 
 ## Static variables
 
+A `static` variable keeps its value between calls to the function. Several variables may be declared
+in one `static` statement, separated by commas, and an initializer may be omitted (it defaults to
+`null`, exactly like `static $x = null;`).
+
 ```php
 <?php
 function counter() {
@@ -365,6 +369,15 @@ function counter() {
 }
 counter(); // 1
 counter(); // 2
+
+function totals() {
+    static $hits = 0, $misses = 0; // one persistent slot each
+    // ...
+}
+
+function once() {
+    static $cache; // no initializer — defaults to null on the first call
+}
 ```
 
 ## Pass by reference
