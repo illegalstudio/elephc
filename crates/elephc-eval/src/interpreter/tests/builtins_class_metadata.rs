@@ -1909,6 +1909,10 @@ $iface = new ReflectionProperty("EvalReflectInterfaceHookProperty", "iface");
 $getCase = PropertyHookType::Get;
 $setCase = PropertyHookType::Set;
 echo $getCase->name; echo ":"; echo $getCase->value; echo ":";
+$caseList = PropertyHookType::cases();
+echo count($caseList); echo ":"; echo $caseList[0]->name; echo ":"; echo $caseList[1]->value; echo ":";
+echo PropertyHookType::from("set")->name; echo ":";
+echo PropertyHookType::tryFrom("missing") === null ? "T" : "t"; echo ":";
 echo $hooked->hasHooks() ? "H" : "h"; echo ":";
 echo $hooked->hasHook($getCase) ? "G" : "g"; echo ":";
 echo $hooked->hasHook(type: $setCase) ? "S" : "s"; echo ":";
@@ -1948,7 +1952,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "Get:get:H:G:S:2:$doubled::get:$doubled::set:EvalReflectHookedProperty:0:1:value:4:7:R:W:N:plain:0:2:AG:AS:$contract::get:A:$contract::set:A:1:IG:is:IA"
+        "Get:get:2:Get:set:Set:T:H:G:S:2:$doubled::get:$doubled::set:EvalReflectHookedProperty:0:1:value:4:7:R:W:N:plain:0:2:AG:AS:$contract::get:A:$contract::set:A:1:IG:is:IA"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
