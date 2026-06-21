@@ -453,6 +453,28 @@ pub(in crate::interpreter) fn eval_reflection_class_get_relation_objects_result(
     eval_reflection_class_object_map_result(&names, context, values).map(Some)
 }
 
+/// Handles eval-backed `ReflectionClass::getTraitAliases()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_get_trait_aliases_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("getTraitAliases") {
+        return Ok(None);
+    }
+    eval_reflection_bind_no_args(evaluated_args)?;
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    eval_reflection_string_assoc_result(context.class_trait_aliases(&reflected_name), values)
+        .map(Some)
+}
+
 /// Handles eval-backed `ReflectionClass::getConstant()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_get_constant_result(
     identity: u64,
@@ -2485,6 +2507,20 @@ fn eval_reflection_string_array_result(
     let mut result = values.string_array_new(names.len())?;
     for name in names {
         result = values.string_array_push(result, name)?;
+    }
+    Ok(result)
+}
+
+/// Builds a string-keyed PHP associative array from owned string pairs.
+fn eval_reflection_string_assoc_result(
+    pairs: Vec<(String, String)>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.assoc_new(pairs.len())?;
+    for (key, value) in pairs {
+        let key = values.string(&key)?;
+        let value = values.string(&value)?;
+        result = values.array_set(result, key, value)?;
     }
     Ok(result)
 }

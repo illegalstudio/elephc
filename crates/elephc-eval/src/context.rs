@@ -18,7 +18,7 @@ use crate::abi::ABI_VERSION;
 use crate::eval_ir::{
     EvalAttribute, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalEnum,
     EvalFunction, EvalInterface, EvalInterfaceMethod, EvalInterfaceProperty, EvalParameterType,
-    EvalTrait, EvalVisibility,
+    EvalTrait, EvalTraitAdaptation, EvalVisibility,
 };
 use crate::scope::ElephcEvalScope;
 use crate::stream_resources::EvalStreamResources;
@@ -1194,6 +1194,57 @@ impl ElephcEvalContext {
                 push_unique_class_name(trait_name, &mut traits, &mut seen);
             }
             traits
+        })
+    }
+
+    /// Returns trait method aliases declared directly by an eval-declared class.
+    pub fn class_trait_aliases(&self, class_name: &str) -> Vec<(String, String)> {
+        let Some(class) = self.class(class_name) else {
+            return Vec::new();
+        };
+        let mut aliases = Vec::new();
+        for adaptation in class.trait_adaptations() {
+            let EvalTraitAdaptation::Alias {
+                trait_name,
+                method,
+                alias: Some(alias),
+                ..
+            } = adaptation
+            else {
+                continue;
+            };
+            let Some(source_trait) =
+                self.class_trait_alias_source(class, trait_name.as_deref(), method)
+            else {
+                continue;
+            };
+            aliases.push((alias.clone(), format!("{source_trait}::{method}")));
+        }
+        aliases
+    }
+
+    /// Resolves the trait name shown in `ReflectionClass::getTraitAliases()`.
+    fn class_trait_alias_source(
+        &self,
+        class: &EvalClass,
+        explicit_trait: Option<&str>,
+        method: &str,
+    ) -> Option<String> {
+        if let Some(trait_name) = explicit_trait {
+            return Some(
+                self.trait_decl(trait_name)
+                    .map_or(trait_name, EvalTrait::name)
+                    .trim_start_matches('\\')
+                    .to_string(),
+            );
+        }
+        class.traits().iter().find_map(|trait_name| {
+            let trait_decl = self.trait_decl(trait_name)?;
+            trait_decl
+                .methods()
+                .iter()
+                .any(|candidate| candidate.name().eq_ignore_ascii_case(method))
+                .then(|| trait_decl.name().trim_start_matches('\\').to_string())
         })
     }
 

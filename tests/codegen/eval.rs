@@ -6576,25 +6576,39 @@ fn test_eval_reflection_class_relation_names() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('interface EvalRelationIface {}
-trait EvalRelationTrait {}
-class EvalRelationTarget implements EvalRelationIface {
-    use EvalRelationTrait;
+trait EvalRelationTrait {
+    public function primary() {}
 }
+trait EvalRelationOtherTrait {
+    public function other() {}
+}
+class EvalRelationTarget implements EvalRelationIface {
+    use EvalRelationTrait, EvalRelationOtherTrait {
+        EvalRelationTrait::primary as relationAlias;
+        EvalRelationOtherTrait::other as private hiddenOther;
+        EvalRelationOtherTrait::other as protected;
+    }
+}
+class EvalRelationInherited extends EvalRelationTarget {}
 interface EvalRelationParent {}
 interface EvalRelationChild extends EvalRelationParent {}
 $ref = new ReflectionClass("EvalRelationTarget");
 $interfaces = $ref->getInterfaceNames();
 $traits = $ref->getTraitNames();
 echo count($interfaces) . ":" . $interfaces[0] . ":";
-echo count($traits) . ":" . $traits[0] . ":";
+echo count($traits) . ":" . $traits[0] . ":" . $traits[1] . ":";
 $parentInterfaces = (new ReflectionClass("EvalRelationChild"))->getInterfaceNames();
 echo count($parentInterfaces) . ":" . $parentInterfaces[0] . ":";
 $interfaceObjects = $ref->getInterfaces();
 echo count($interfaceObjects) . ":" . $interfaceObjects["EvalRelationIface"]->getName() . ":";
 $traitObjects = $ref->getTraits();
-echo count($traitObjects) . ":" . $traitObjects["EvalRelationTrait"]->getName() . ":";
+echo count($traitObjects) . ":" . $traitObjects["EvalRelationTrait"]->getName() . ":" . $traitObjects["EvalRelationOtherTrait"]->getName() . ":";
 $parentInterfaceObjects = (new ReflectionClass("EvalRelationChild"))->getInterfaces();
-echo count($parentInterfaceObjects) . ":" . $parentInterfaceObjects["EvalRelationParent"]->getName();');
+echo count($parentInterfaceObjects) . ":" . $parentInterfaceObjects["EvalRelationParent"]->getName() . ":";
+$aliases = $ref->getTraitAliases();
+echo count($aliases) . ":" . $aliases["relationAlias"] . ":" . $aliases["hiddenOther"] . ":";
+$inheritedAliases = (new ReflectionClass("EvalRelationInherited"))->getTraitAliases();
+echo count($inheritedAliases);');
 "#,
     );
     assert!(
@@ -6604,7 +6618,7 @@ echo count($parentInterfaceObjects) . ":" . $parentInterfaceObjects["EvalRelatio
     );
     assert_eq!(
         out.stdout,
-        "1:EvalRelationIface:1:EvalRelationTrait:1:EvalRelationParent:1:EvalRelationIface:1:EvalRelationTrait:1:EvalRelationParent"
+        "1:EvalRelationIface:2:EvalRelationTrait:EvalRelationOtherTrait:1:EvalRelationParent:1:EvalRelationIface:2:EvalRelationTrait:EvalRelationOtherTrait:1:EvalRelationParent:2:EvalRelationTrait::primary:EvalRelationOtherTrait::other:0"
     );
 }
 
