@@ -267,8 +267,9 @@ names, declared parameter types, declared return types, required/optional
 counts, and registered scalar or null default values for generated
 constructor, instance-method, and static-method signatures. AOT property
 reflection exposes registered declared property types and supported scalar,
-string, or null default values for generated property metadata. AOT member
-reflection does not yet expose AOT attributes.
+string, or null default values for generated property metadata. AOT method and
+property reflection expose generated member attributes when their arguments fit
+the materializable literal subset.
 `ReflectionMethod::getDeclaringClass()` and
 `ReflectionProperty::getDeclaringClass()` return a materialized
 `ReflectionClass` for the symbol that declares the reflected
@@ -557,8 +558,9 @@ property, and function/method return metadata, broader
 parameter and generated property default-value objects beyond the eval-supported
 constant-expression subset, and broader generated/AOT method bridge signatures beyond the current public
 non-by-reference fixed scalar/Mixed/object slice. Generated/AOT method type
-metadata is exposed for registered public bridge signatures, while broader
-non-public or unsupported bridge shapes remain outside that slice. Eval object cloning covers ordinary
+metadata and generated/AOT method/property attributes are exposed for registered
+metadata slices, while broader non-public or unsupported bridge shapes remain
+outside that slice. Eval object cloning covers ordinary
 emitted/AOT storage and public AOT `__clone()` hooks, but non-public AOT
 `__clone()` scope checks and broader bridge signatures remain outside that
 bridge slice.

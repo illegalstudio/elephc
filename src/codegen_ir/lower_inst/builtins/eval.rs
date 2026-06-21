@@ -20,7 +20,7 @@ use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Op};
 use crate::names::{function_symbol, ir_global_symbol, php_symbol_key};
 use crate::parser::ast::{Expr, ExprKind, TypeExpr, Visibility};
-use crate::types::{ClassInfo, FunctionSig, PhpType};
+use crate::types::{AttrArgValue, ClassInfo, FunctionSig, PhpType};
 
 use super::super::super::context::FunctionContext;
 use super::super::{
@@ -54,6 +54,14 @@ const NATIVE_DEFAULT_NULL: i64 = 0;
 const NATIVE_DEFAULT_BOOL: i64 = 1;
 const NATIVE_DEFAULT_INT: i64 = 2;
 const NATIVE_DEFAULT_FLOAT: i64 = 3;
+const NATIVE_MEMBER_ATTRIBUTE_METHOD: u8 = 0;
+const NATIVE_MEMBER_ATTRIBUTE_PROPERTY: u8 = 1;
+const NATIVE_ATTRIBUTE_ARGS_UNSUPPORTED: u8 = 0;
+const NATIVE_ATTRIBUTE_ARGS_SUPPORTED: u8 = 1;
+const NATIVE_ATTRIBUTE_ARG_NULL: u8 = 0;
+const NATIVE_ATTRIBUTE_ARG_BOOL: u8 = 1;
+const NATIVE_ATTRIBUTE_ARG_INT: u8 = 2;
+const NATIVE_ATTRIBUTE_ARG_STRING: u8 = 3;
 
 /// Local slot metadata needed for conservative eval scope synchronization.
 #[derive(Clone)]
@@ -109,6 +117,15 @@ struct EvalNativePropertyDefaultRegistration {
     class_name: String,
     property_name: String,
     default: EvalNativeCallableDefault,
+}
+
+/// A module-local member attribute that can be registered with the eval context.
+struct EvalNativeMemberAttributeRegistration {
+    owner_kind: u8,
+    class_name: String,
+    member_name: String,
+    attribute_name: String,
+    attribute_args: Option<Vec<AttrArgValue>>,
 }
 
 /// Scalar native callable default that can be registered with libelephc-eval.
@@ -487,6 +504,9 @@ fn register_eval_native_method_signatures(ctx: &mut FunctionContext<'_>, context
     for registration in eval_native_property_default_registrations(ctx) {
         register_eval_native_property_default(ctx, context_offset, &registration);
     }
+    for registration in eval_native_member_attribute_registrations(ctx) {
+        register_eval_native_member_attribute(ctx, context_offset, &registration);
+    }
     register_eval_native_class_parents(ctx, context_offset);
 }
 
@@ -572,6 +592,41 @@ fn eval_native_property_default_registrations(
     registrations
 }
 
+/// Collects AOT member attributes whose metadata can be exposed to eval reflection.
+fn eval_native_member_attribute_registrations(
+    ctx: &FunctionContext<'_>,
+) -> Vec<EvalNativeMemberAttributeRegistration> {
+    let mut registrations = Vec::new();
+    let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    for (class_name, class_info) in classes {
+        collect_eval_native_method_attributes(class_name, class_info, &mut registrations);
+        collect_eval_native_property_attributes(class_name, class_info, &mut registrations);
+    }
+    dedupe_eval_native_member_attribute_registrations(registrations)
+}
+
+/// Removes inherited duplicate member-attribute registrations by normalized metadata key.
+fn dedupe_eval_native_member_attribute_registrations(
+    registrations: Vec<EvalNativeMemberAttributeRegistration>,
+) -> Vec<EvalNativeMemberAttributeRegistration> {
+    let mut seen = std::collections::HashSet::new();
+    let mut unique = Vec::with_capacity(registrations.len());
+    for registration in registrations {
+        let key = (
+            registration.owner_kind,
+            php_symbol_key(&registration.class_name),
+            registration.member_name.clone(),
+            registration.attribute_name.clone(),
+            registration.attribute_args.clone(),
+        );
+        if seen.insert(key) {
+            unique.push(registration);
+        }
+    }
+    unique
+}
+
 /// Registers generated AOT class parent metadata for eval `parent::` resolution.
 fn register_eval_native_class_parents(ctx: &mut FunctionContext<'_>, context_offset: usize) {
     let mut parents = ctx
@@ -590,6 +645,82 @@ fn register_eval_native_class_parents(ctx: &mut FunctionContext<'_>, context_off
     parents.sort_by_key(|(class_id, _, _)| *class_id);
     for (_, class_name, parent_name) in parents {
         register_eval_native_class_parent(ctx, context_offset, &class_name, &parent_name);
+    }
+}
+
+/// Adds method attribute metadata for one class to eval registration.
+fn collect_eval_native_method_attributes(
+    class_name: &str,
+    class_info: &ClassInfo,
+    registrations: &mut Vec<EvalNativeMemberAttributeRegistration>,
+) {
+    let mut methods = class_info.method_attribute_names.iter().collect::<Vec<_>>();
+    methods.sort_by_key(|(method_name, _)| method_name.as_str());
+    for (method_name, attribute_names) in methods {
+        let attribute_args = class_info
+            .method_attribute_args
+            .get(method_name)
+            .cloned()
+            .unwrap_or_default();
+        collect_eval_native_member_attributes(
+            NATIVE_MEMBER_ATTRIBUTE_METHOD,
+            eval_native_method_declaring_class(class_name, class_info, method_name),
+            method_name,
+            attribute_names,
+            &attribute_args,
+            registrations,
+        );
+    }
+}
+
+/// Adds property attribute metadata for one class to eval registration.
+fn collect_eval_native_property_attributes(
+    class_name: &str,
+    class_info: &ClassInfo,
+    registrations: &mut Vec<EvalNativeMemberAttributeRegistration>,
+) {
+    let mut properties = class_info
+        .property_attribute_names
+        .iter()
+        .collect::<Vec<_>>();
+    properties.sort_by_key(|(property_name, _)| property_name.as_str());
+    for (property_name, attribute_names) in properties {
+        let attribute_args = class_info
+            .property_attribute_args
+            .get(property_name)
+            .cloned()
+            .unwrap_or_default();
+        collect_eval_native_member_attributes(
+            NATIVE_MEMBER_ATTRIBUTE_PROPERTY,
+            eval_native_property_attribute_declaring_class(class_name, class_info, property_name),
+            property_name,
+            attribute_names,
+            &attribute_args,
+            registrations,
+        );
+    }
+}
+
+/// Adds aligned attribute name/argument metadata for one AOT member.
+fn collect_eval_native_member_attributes(
+    owner_kind: u8,
+    class_name: &str,
+    member_name: &str,
+    attribute_names: &[String],
+    attribute_args: &[Option<Vec<AttrArgValue>>],
+    registrations: &mut Vec<EvalNativeMemberAttributeRegistration>,
+) {
+    for (index, attribute_name) in attribute_names.iter().enumerate() {
+        let Some(args) = attribute_args.get(index).cloned().flatten() else {
+            continue;
+        };
+        registrations.push(EvalNativeMemberAttributeRegistration {
+            owner_kind,
+            class_name: class_name.to_string(),
+            member_name: member_name.to_string(),
+            attribute_name: attribute_name.clone(),
+            attribute_args: Some(args),
+        });
     }
 }
 
@@ -726,6 +857,40 @@ fn eval_native_static_property_declaring_class<'a>(
     class_info
         .static_property_declaring_classes
         .get(property_name)
+        .map(String::as_str)
+        .unwrap_or(reflected_class)
+}
+
+/// Returns the class name that declares one AOT method metadata row.
+fn eval_native_method_declaring_class<'a>(
+    reflected_class: &'a str,
+    class_info: &'a ClassInfo,
+    method_name: &str,
+) -> &'a str {
+    class_info
+        .method_impl_classes
+        .get(method_name)
+        .or_else(|| class_info.static_method_impl_classes.get(method_name))
+        .or_else(|| class_info.method_declaring_classes.get(method_name))
+        .or_else(|| class_info.static_method_declaring_classes.get(method_name))
+        .map(String::as_str)
+        .unwrap_or(reflected_class)
+}
+
+/// Returns the class name that declares one AOT property attribute row.
+fn eval_native_property_attribute_declaring_class<'a>(
+    reflected_class: &'a str,
+    class_info: &'a ClassInfo,
+    property_name: &str,
+) -> &'a str {
+    class_info
+        .property_declaring_classes
+        .get(property_name)
+        .or_else(|| {
+            class_info
+                .static_property_declaring_classes
+                .get(property_name)
+        })
         .map(String::as_str)
         .unwrap_or(reflected_class)
 }
@@ -1530,6 +1695,87 @@ fn register_eval_native_property_default(
         }
     };
     abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native member-attribute metadata registration call into the eval context.
+fn register_eval_native_member_attribute(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    registration: &EvalNativeMemberAttributeRegistration,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    let record = eval_native_member_attribute_record(registration);
+    let (record_label, record_len) = ctx.data.add_string(&record);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &record_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        record_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_member_attribute");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Encodes one member-attribute registration record for the eval bridge ABI.
+fn eval_native_member_attribute_record(
+    registration: &EvalNativeMemberAttributeRegistration,
+) -> Vec<u8> {
+    let mut record = Vec::new();
+    record.push(registration.owner_kind);
+    eval_native_member_attribute_push_string(
+        &mut record,
+        &format!("{}::{}", registration.class_name, registration.member_name),
+    );
+    eval_native_member_attribute_push_string(&mut record, &registration.attribute_name);
+    match &registration.attribute_args {
+        Some(args) => {
+            record.push(NATIVE_ATTRIBUTE_ARGS_SUPPORTED);
+            eval_native_member_attribute_push_u32(&mut record, args.len());
+            for arg in args {
+                eval_native_member_attribute_push_arg(&mut record, arg);
+            }
+        }
+        None => record.push(NATIVE_ATTRIBUTE_ARGS_UNSUPPORTED),
+    }
+    record
+}
+
+/// Encodes one attribute argument into a member-attribute registration record.
+fn eval_native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &AttrArgValue) {
+    match arg {
+        AttrArgValue::Null => record.push(NATIVE_ATTRIBUTE_ARG_NULL),
+        AttrArgValue::Bool(value) => {
+            record.push(NATIVE_ATTRIBUTE_ARG_BOOL);
+            record.push(u8::from(*value));
+        }
+        AttrArgValue::Int(value) => {
+            record.push(NATIVE_ATTRIBUTE_ARG_INT);
+            record.extend_from_slice(&value.to_le_bytes());
+        }
+        AttrArgValue::Str(value) => {
+            record.push(NATIVE_ATTRIBUTE_ARG_STRING);
+            eval_native_member_attribute_push_string(record, value);
+        }
+    }
+}
+
+/// Encodes one length-prefixed UTF-8 string into a member-attribute registration record.
+fn eval_native_member_attribute_push_string(record: &mut Vec<u8>, value: &str) {
+    eval_native_member_attribute_push_u32(record, value.len());
+    record.extend_from_slice(value.as_bytes());
+}
+
+/// Encodes one little-endian u32 length into a member-attribute registration record.
+fn eval_native_member_attribute_push_u32(record: &mut Vec<u8>, value: usize) {
+    let value = u32::try_from(value).unwrap_or(u32::MAX);
+    record.extend_from_slice(&value.to_le_bytes());
 }
 
 /// Emits one native constructor parameter-name registration call.

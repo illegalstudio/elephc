@@ -271,8 +271,10 @@ pub struct ElephcEvalContext {
     native_static_methods: HashMap<(String, String), NativeCallableSignature>,
     native_constructors: HashMap<String, NativeCallableSignature>,
     native_class_parents: HashMap<String, String>,
+    native_method_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
     native_property_types: HashMap<(String, String), EvalParameterType>,
     native_property_defaults: HashMap<(String, String), NativeCallableDefault>,
+    native_property_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
     static_properties: HashMap<(String, String), RuntimeCellHandle>,
     class_constants: HashMap<(String, String), RuntimeCellHandle>,
@@ -322,8 +324,10 @@ impl ElephcEvalContext {
             native_static_methods: HashMap::new(),
             native_constructors: HashMap::new(),
             native_class_parents: HashMap::new(),
+            native_method_attributes: HashMap::new(),
             native_property_types: HashMap::new(),
             native_property_defaults: HashMap::new(),
+            native_property_attributes: HashMap::new(),
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
             class_constants: HashMap::new(),
@@ -374,8 +378,10 @@ impl ElephcEvalContext {
             native_static_methods: HashMap::new(),
             native_constructors: HashMap::new(),
             native_class_parents: HashMap::new(),
+            native_method_attributes: HashMap::new(),
             native_property_types: HashMap::new(),
             native_property_defaults: HashMap::new(),
+            native_property_attributes: HashMap::new(),
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
             class_constants: HashMap::new(),
@@ -1761,6 +1767,36 @@ impl ElephcEvalContext {
             .map(String::as_str)
     }
 
+    /// Appends generated AOT method attribute metadata for eval reflection.
+    pub fn define_native_method_attribute(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        attribute: EvalAttribute,
+    ) -> bool {
+        let key = native_method_key(class_name, method_name);
+        if key.0.is_empty() || key.1.is_empty() {
+            return false;
+        }
+        self.native_method_attributes
+            .entry(key)
+            .or_default()
+            .push(attribute);
+        true
+    }
+
+    /// Returns generated AOT method attribute metadata by PHP class and method name.
+    pub fn native_method_attributes(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Vec<EvalAttribute> {
+        self.native_method_attributes
+            .get(&native_method_key(class_name, method_name))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Defines generated AOT property type metadata for eval reflection.
     pub fn define_native_property_type(
         &mut self,
@@ -1811,6 +1847,36 @@ impl ElephcEvalContext {
         self.native_property_defaults
             .get(&native_property_key(class_name, property_name))
             .cloned()
+    }
+
+    /// Appends generated AOT property attribute metadata for eval reflection.
+    pub fn define_native_property_attribute(
+        &mut self,
+        class_name: &str,
+        property_name: &str,
+        attribute: EvalAttribute,
+    ) -> bool {
+        let key = native_property_key(class_name, property_name);
+        if key.0.is_empty() || key.1.is_empty() {
+            return false;
+        }
+        self.native_property_attributes
+            .entry(key)
+            .or_default()
+            .push(attribute);
+        true
+    }
+
+    /// Returns generated AOT property attribute metadata by PHP class and property name.
+    pub fn native_property_attributes(
+        &self,
+        class_name: &str,
+        property_name: &str,
+    ) -> Vec<EvalAttribute> {
+        self.native_property_attributes
+            .get(&native_property_key(class_name, property_name))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.

@@ -1557,6 +1557,7 @@ fn eval_reflection_aot_method_metadata_if_exists(
         &declaring_class_name,
         method_name,
         flags,
+        Vec::new(),
         None,
     )))
 }
@@ -1581,10 +1582,17 @@ fn eval_reflection_aot_method_metadata_with_signature_if_exists(
         signature =
             eval_reflection_aot_method_signature(runtime_class_name, method_name, flags, context);
     }
+    let attributes = eval_reflection_aot_method_attributes(
+        runtime_class_name,
+        &declaring_class_name,
+        method_name,
+        context,
+    );
     Ok(Some(eval_reflection_aot_method_metadata(
         &declaring_class_name,
         method_name,
         flags,
+        attributes,
         signature.as_ref(),
     )))
 }
@@ -1606,6 +1614,7 @@ fn eval_reflection_aot_method_metadata(
     class_name: &str,
     method_name: &str,
     flags: u64,
+    attributes: Vec<EvalAttribute>,
     signature: Option<&NativeCallableSignature>,
 ) -> EvalReflectionMemberMetadata {
     let visibility = if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
@@ -1625,7 +1634,7 @@ fn eval_reflection_aot_method_metadata(
         .and_then(eval_reflection_parameter_type_metadata);
     EvalReflectionMemberMetadata {
         declaring_class_name: Some(class_name.trim_start_matches('\\').to_string()),
-        attributes: Vec::new(),
+        attributes,
         visibility,
         is_static: flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0,
         is_final: flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL != 0,
@@ -1639,6 +1648,20 @@ fn eval_reflection_aot_method_metadata(
         required_parameter_count,
         parameters,
     }
+}
+
+/// Returns registered generated/AOT method attributes for one reflected method.
+fn eval_reflection_aot_method_attributes(
+    runtime_class_name: &str,
+    declaring_class_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> Vec<EvalAttribute> {
+    let attributes = context.native_method_attributes(declaring_class_name, method_name);
+    if !attributes.is_empty() || declaring_class_name == runtime_class_name {
+        return attributes;
+    }
+    context.native_method_attributes(runtime_class_name, method_name)
 }
 
 /// Selects the registered native signature for an AOT method-like member.
@@ -1772,9 +1795,16 @@ fn eval_reflection_aot_property_metadata_if_exists(
         property_name,
         context,
     );
+    let attributes = eval_reflection_aot_property_attributes(
+        runtime_class_name,
+        &declaring_class_name,
+        property_name,
+        context,
+    );
     Ok(Some(eval_reflection_aot_property_metadata(
         &declaring_class_name,
         flags,
+        attributes,
         type_metadata,
         default_value,
     )))
@@ -1808,10 +1838,25 @@ fn eval_reflection_aot_property_default_value(
         .map(eval_reflection_native_callable_default_expr)
 }
 
+/// Returns registered generated/AOT property attributes for one reflected property.
+fn eval_reflection_aot_property_attributes(
+    runtime_class_name: &str,
+    declaring_class_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+) -> Vec<EvalAttribute> {
+    let attributes = context.native_property_attributes(declaring_class_name, property_name);
+    if !attributes.is_empty() || declaring_class_name == runtime_class_name {
+        return attributes;
+    }
+    context.native_property_attributes(runtime_class_name, property_name)
+}
+
 /// Converts AOT property flag metadata into the eval ReflectionProperty shape.
 fn eval_reflection_aot_property_metadata(
     class_name: &str,
     flags: u64,
+    attributes: Vec<EvalAttribute>,
     type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     default_value: Option<EvalExpr>,
 ) -> EvalReflectionMemberMetadata {
@@ -1828,7 +1873,7 @@ fn eval_reflection_aot_property_metadata(
     let is_readonly = flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY != 0;
     EvalReflectionMemberMetadata {
         declaring_class_name: Some(class_name.trim_start_matches('\\').to_string()),
-        attributes: Vec::new(),
+        attributes,
         visibility,
         is_static,
         is_final,

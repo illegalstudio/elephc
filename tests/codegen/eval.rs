@@ -7600,6 +7600,59 @@ echo $listed->getDefaultValue();
     );
 }
 
+/// Verifies eval exposes generated/AOT method and property attributes through
+/// `ReflectionMethod::getAttributes()` and `ReflectionProperty::getAttributes()`.
+#[test]
+fn test_eval_reflection_member_exposes_aot_attributes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotMemberAttr {
+    public function __construct($first = null, $second = null, $third = null, $fourth = null) {}
+}
+class EvalAotReflectAttrBase {
+    #[EvalAotMemberAttr("base", 7, true, null)]
+    public function baseRun() {}
+    #[EvalAotMemberAttr("baseProp")]
+    protected int $baseId = 1;
+}
+class EvalAotReflectAttrTarget extends EvalAotReflectAttrBase {
+    #[EvalAotMemberAttr("method")]
+    public function run() {}
+    #[EvalAotMemberAttr("property", -3)]
+    public int $id = 2;
+}
+echo eval('$methodAttrs = (new ReflectionMethod("EvalAotReflectAttrTarget", "run"))->getAttributes();
+echo "M" . count($methodAttrs) . ":";
+echo $methodAttrs[0]->getName() . ":" . $methodAttrs[0]->getArguments()[0] . ":";
+$propertyAttrs = (new ReflectionProperty("EvalAotReflectAttrTarget", "id"))->getAttributes();
+echo "P" . count($propertyAttrs) . ":";
+echo $propertyAttrs[0]->getName() . ":";
+$propertyArgs = $propertyAttrs[0]->getArguments();
+echo $propertyArgs[0] . ":" . $propertyArgs[1] . ":";
+$baseMethodAttrs = (new ReflectionMethod("EvalAotReflectAttrTarget", "baseRun"))->getAttributes();
+echo "BM" . count($baseMethodAttrs) . ":";
+$args = $baseMethodAttrs[0]->getArguments();
+echo $args[0] . ":" . $args[1] . ":" . ($args[2] ? "T" : "F") . ":" . ($args[3] === null ? "N" : "n") . ":";
+$basePropertyAttrs = (new ReflectionProperty("EvalAotReflectAttrTarget", "baseId"))->getAttributes();
+echo "BP" . count($basePropertyAttrs) . ":" . $basePropertyAttrs[0]->getArguments()[0] . ":";
+$listedMethod = (new ReflectionClass("EvalAotReflectAttrTarget"))->getMethod("run");
+echo count($listedMethod->getAttributes()) . ":";
+$listedProperty = (new ReflectionClass("EvalAotReflectAttrTarget"))->getProperty("id");
+echo count($listedProperty->getAttributes());
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "M1:EvalAotMemberAttr:method:P1:EvalAotMemberAttr:property:-3:BM1:base:7:T:N:BP1:baseProp:1:1"
+    );
+}
+
 /// Verifies eval can probe generated/AOT method predicate metadata through
 /// `ReflectionClass::hasMethod()`, `getMethod()`, and direct `ReflectionMethod`.
 #[test]

@@ -22,7 +22,7 @@ use crate::abi::{
 };
 use crate::context::NativeCallableDefault;
 use crate::errors::EvalStatus;
-use crate::eval_ir::EvalParameterTypeVariant;
+use crate::eval_ir::{EvalAttributeArg, EvalParameterTypeVariant};
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 use std::ffi::c_void;
 
@@ -32,6 +32,55 @@ unsafe extern "C" fn fake_native_invoker(
     _args: *mut RuntimeCell,
 ) -> *mut RuntimeCell {
     std::ptr::null_mut()
+}
+
+/// Builds one native member-attribute ABI record for registration tests.
+fn native_member_attribute_record(
+    owner_kind: u8,
+    member_key: &str,
+    attribute_name: &str,
+    args: Option<&[EvalAttributeArg]>,
+) -> Vec<u8> {
+    let mut record = Vec::new();
+    record.push(owner_kind);
+    native_member_attribute_push_string(&mut record, member_key);
+    native_member_attribute_push_string(&mut record, attribute_name);
+    match args {
+        Some(args) => {
+            record.push(1);
+            record.extend_from_slice(&(args.len() as u32).to_le_bytes());
+            for arg in args {
+                native_member_attribute_push_arg(&mut record, arg);
+            }
+        }
+        None => record.push(0),
+    }
+    record
+}
+
+/// Appends one test attribute argument to a native member-attribute ABI record.
+fn native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &EvalAttributeArg) {
+    match arg {
+        EvalAttributeArg::Null => record.push(0),
+        EvalAttributeArg::Bool(value) => {
+            record.push(1);
+            record.push(u8::from(*value));
+        }
+        EvalAttributeArg::Int(value) => {
+            record.push(2);
+            record.extend_from_slice(&value.to_le_bytes());
+        }
+        EvalAttributeArg::String(value) => {
+            record.push(3);
+            native_member_attribute_push_string(record, value);
+        }
+    }
+}
+
+/// Appends one length-prefixed string to a native member-attribute ABI record.
+fn native_member_attribute_push_string(record: &mut Vec<u8>, value: &str) {
+    record.extend_from_slice(&(value.len() as u32).to_le_bytes());
+    record.extend_from_slice(value.as_bytes());
 }
 
 /// Verifies the exported version entry point reports the crate ABI constant.
@@ -593,6 +642,70 @@ fn register_native_property_default_records_metadata() {
     assert!(ctx
         .native_property_default("KnownClass", "invalid")
         .is_none());
+}
+
+/// Verifies native AOT member attributes are available to eval reflection.
+#[test]
+fn register_native_member_attribute_records_metadata() {
+    let mut ctx = ElephcEvalContext::new();
+    let method_record = native_member_attribute_record(
+        0,
+        "KnownClass::run",
+        "Route",
+        Some(&[
+            EvalAttributeArg::String("api".to_string()),
+            EvalAttributeArg::Int(7),
+            EvalAttributeArg::Bool(true),
+            EvalAttributeArg::Null,
+        ]),
+    );
+    let property_record = native_member_attribute_record(1, "KnownClass::id", "Column", None);
+    let invalid_record = [99, 0, 0, 0, 0];
+
+    let method_registered = unsafe {
+        __elephc_eval_register_native_member_attribute(
+            &mut ctx,
+            method_record.as_ptr(),
+            method_record.len() as u64,
+        )
+    };
+    let property_registered = unsafe {
+        __elephc_eval_register_native_member_attribute(
+            &mut ctx,
+            property_record.as_ptr(),
+            property_record.len() as u64,
+        )
+    };
+    let invalid_registered = unsafe {
+        __elephc_eval_register_native_member_attribute(
+            &mut ctx,
+            invalid_record.as_ptr(),
+            invalid_record.len() as u64,
+        )
+    };
+
+    assert_eq!(method_registered, 1);
+    let method_attributes = ctx.native_method_attributes("knownclass", "RUN");
+    assert_eq!(method_attributes.len(), 1);
+    assert_eq!(method_attributes[0].name(), "Route");
+    assert_eq!(
+        method_attributes[0].args(),
+        Some(
+            [
+                EvalAttributeArg::String("api".to_string()),
+                EvalAttributeArg::Int(7),
+                EvalAttributeArg::Bool(true),
+                EvalAttributeArg::Null,
+            ]
+            .as_slice()
+        )
+    );
+    assert_eq!(property_registered, 1);
+    let property_attributes = ctx.native_property_attributes("KnownClass", "id");
+    assert_eq!(property_attributes.len(), 1);
+    assert_eq!(property_attributes[0].name(), "Column");
+    assert!(property_attributes[0].args().is_none());
+    assert_eq!(invalid_registered, 0);
 }
 
 /// Verifies scope allocation returns an empty opaque activation scope handle.

@@ -13,12 +13,22 @@
 use super::util::abi_name_to_string;
 use crate::abi::{ElephcEvalContext, ABI_VERSION};
 use crate::context::{NativeCallableDefault, NativeCallableSignature};
-use crate::eval_ir::{EvalParameterType, EvalParameterTypeVariant};
+use crate::eval_ir::{
+    EvalAttribute, EvalAttributeArg, EvalParameterType, EvalParameterTypeVariant,
+};
 
 const NATIVE_DEFAULT_NULL: u64 = 0;
 const NATIVE_DEFAULT_BOOL: u64 = 1;
 const NATIVE_DEFAULT_INT: u64 = 2;
 const NATIVE_DEFAULT_FLOAT: u64 = 3;
+const NATIVE_MEMBER_ATTRIBUTE_METHOD: u8 = 0;
+const NATIVE_MEMBER_ATTRIBUTE_PROPERTY: u8 = 1;
+const NATIVE_ATTRIBUTE_ARGS_UNSUPPORTED: u8 = 0;
+const NATIVE_ATTRIBUTE_ARGS_SUPPORTED: u8 = 1;
+const NATIVE_ATTRIBUTE_ARG_NULL: u8 = 0;
+const NATIVE_ATTRIBUTE_ARG_BOOL: u8 = 1;
+const NATIVE_ATTRIBUTE_ARG_INT: u8 = 2;
+const NATIVE_ATTRIBUTE_ARG_STRING: u8 = 3;
 
 #[derive(Clone, Copy)]
 enum NativeCallableTypePosition {
@@ -561,6 +571,23 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_default_string(
             default_ptr,
             default_len,
         )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP method/property attribute in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `record_ptr` must point to one
+/// readable binary member-attribute metadata record.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_member_attribute(
+    ctx: *mut ElephcEvalContext,
+    record_ptr: *const u8,
+    record_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_member_attribute_inner(ctx, record_ptr, record_len)
     })
     .unwrap_or(0)
 }
@@ -1142,6 +1169,144 @@ unsafe fn register_native_property_default_inner(
         return 0;
     };
     i32::from(context.define_native_property_default(class_name, property_name, default))
+}
+
+/// Runs native member-attribute registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_member_attribute`; invalid handles or
+/// binary records fail closed as `false`.
+unsafe fn register_native_member_attribute_inner(
+    ctx: *mut ElephcEvalContext,
+    record_ptr: *const u8,
+    record_len: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Some(record) = native_member_attribute_record_from_abi(record_ptr, record_len) else {
+        return 0;
+    };
+    let Some((class_name, member_name)) = split_method_key(&record.member_key) else {
+        return 0;
+    };
+    match record.owner_kind {
+        NATIVE_MEMBER_ATTRIBUTE_METHOD => i32::from(context.define_native_method_attribute(
+            class_name,
+            member_name,
+            record.attribute,
+        )),
+        NATIVE_MEMBER_ATTRIBUTE_PROPERTY => i32::from(context.define_native_property_attribute(
+            class_name,
+            member_name,
+            record.attribute,
+        )),
+        _ => 0,
+    }
+}
+
+/// Decoded native member-attribute metadata record.
+struct NativeMemberAttributeRecord {
+    owner_kind: u8,
+    member_key: String,
+    attribute: EvalAttribute,
+}
+
+/// Decodes one generated native member-attribute metadata record.
+fn native_member_attribute_record_from_abi(
+    record_ptr: *const u8,
+    record_len: u64,
+) -> Option<NativeMemberAttributeRecord> {
+    if record_ptr.is_null() || record_len == 0 {
+        return None;
+    }
+    let record_len = usize::try_from(record_len).ok()?;
+    let bytes = unsafe { std::slice::from_raw_parts(record_ptr, record_len) };
+    let mut offset = 0usize;
+    let owner_kind = native_attribute_take_u8(bytes, &mut offset)?;
+    let member_key = native_attribute_take_string(bytes, &mut offset)?;
+    let attribute_name = native_attribute_take_string(bytes, &mut offset)?;
+    let args = native_attribute_take_args(bytes, &mut offset)?;
+    (offset == bytes.len()).then_some(NativeMemberAttributeRecord {
+        owner_kind,
+        member_key,
+        attribute: EvalAttribute::new(attribute_name, args),
+    })
+}
+
+/// Decodes the optional argument vector from a native attribute record.
+fn native_attribute_take_args(
+    bytes: &[u8],
+    offset: &mut usize,
+) -> Option<Option<Vec<EvalAttributeArg>>> {
+    match native_attribute_take_u8(bytes, offset)? {
+        NATIVE_ATTRIBUTE_ARGS_UNSUPPORTED => Some(None),
+        NATIVE_ATTRIBUTE_ARGS_SUPPORTED => {
+            let count = usize::try_from(native_attribute_take_u32(bytes, offset)?).ok()?;
+            let mut args = Vec::with_capacity(count);
+            for _ in 0..count {
+                args.push(native_attribute_take_arg(bytes, offset)?);
+            }
+            Some(Some(args))
+        }
+        _ => None,
+    }
+}
+
+/// Decodes one literal argument from a native attribute record.
+fn native_attribute_take_arg(bytes: &[u8], offset: &mut usize) -> Option<EvalAttributeArg> {
+    match native_attribute_take_u8(bytes, offset)? {
+        NATIVE_ATTRIBUTE_ARG_NULL => Some(EvalAttributeArg::Null),
+        NATIVE_ATTRIBUTE_ARG_BOOL => Some(EvalAttributeArg::Bool(
+            native_attribute_take_u8(bytes, offset)? != 0,
+        )),
+        NATIVE_ATTRIBUTE_ARG_INT => Some(EvalAttributeArg::Int(native_attribute_take_i64(
+            bytes, offset,
+        )?)),
+        NATIVE_ATTRIBUTE_ARG_STRING => {
+            native_attribute_take_string(bytes, offset).map(EvalAttributeArg::String)
+        }
+        _ => None,
+    }
+}
+
+/// Reads one UTF-8 string with a little-endian u32 byte length prefix.
+fn native_attribute_take_string(bytes: &[u8], offset: &mut usize) -> Option<String> {
+    let len = usize::try_from(native_attribute_take_u32(bytes, offset)?).ok()?;
+    let chunk = native_attribute_take_bytes(bytes, offset, len)?;
+    std::str::from_utf8(chunk).ok().map(str::to_string)
+}
+
+/// Reads one little-endian i64 from a native attribute record.
+fn native_attribute_take_i64(bytes: &[u8], offset: &mut usize) -> Option<i64> {
+    let chunk = native_attribute_take_bytes(bytes, offset, std::mem::size_of::<i64>())?;
+    Some(i64::from_le_bytes(chunk.try_into().ok()?))
+}
+
+/// Reads one little-endian u32 from a native attribute record.
+fn native_attribute_take_u32(bytes: &[u8], offset: &mut usize) -> Option<u32> {
+    let chunk = native_attribute_take_bytes(bytes, offset, std::mem::size_of::<u32>())?;
+    Some(u32::from_le_bytes(chunk.try_into().ok()?))
+}
+
+/// Reads one byte from a native attribute record.
+fn native_attribute_take_u8(bytes: &[u8], offset: &mut usize) -> Option<u8> {
+    native_attribute_take_bytes(bytes, offset, 1).map(|chunk| chunk[0])
+}
+
+/// Reads one bounded byte slice and advances the decode offset.
+fn native_attribute_take_bytes<'a>(
+    bytes: &'a [u8],
+    offset: &mut usize,
+    len: usize,
+) -> Option<&'a [u8]> {
+    let end = offset.checked_add(len)?;
+    let chunk = bytes.get(*offset..end)?;
+    *offset = end;
+    Some(chunk)
 }
 
 /// Decodes scalar default kind/payload ABI fields into native callable metadata.
