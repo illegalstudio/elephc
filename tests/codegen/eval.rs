@@ -7568,6 +7568,56 @@ echo ":" . $listed->getNumberOfParameters() . "/" . $listed->getParameters()[2]-
     );
 }
 
+/// Verifies eval ReflectionClass::getConstructor exposes generated/AOT constructor metadata.
+#[test]
+fn test_eval_reflection_class_get_constructor_for_aot_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectCtorParamTarget {
+    public string $label = "";
+
+    public function __construct(string $left, string $right = "B", ?int $count = null) {
+        $this->label = $left . $right . ($count ?? 0);
+    }
+}
+class EvalAotReflectCtorPlain {}
+echo eval('$ctor = (new ReflectionClass("EvalAotReflectCtorParamTarget"))->getConstructor();
+echo ($ctor instanceof ReflectionMethod) ? "M:" : "m:";
+echo $ctor->getName() . "/" . $ctor->getDeclaringClass()->getName() . ":";
+echo $ctor->getNumberOfParameters() . "/" . $ctor->getNumberOfRequiredParameters() . ":";
+foreach ($ctor->getParameters() as $param) {
+    echo $param->getName();
+    echo $param->isOptional() ? "O" : "r";
+    echo $param->isDefaultValueAvailable() ? "=" : "-";
+    if ($param->isDefaultValueAvailable()) {
+        $default = $param->getDefaultValue();
+        echo is_null($default) ? "null" : $default;
+    }
+    echo ";";
+}
+$listed = null;
+foreach ((new ReflectionClass("EvalAotReflectCtorParamTarget"))->getMethods() as $candidate) {
+    if ($candidate->getName() === "__construct") {
+        $listed = $candidate;
+    }
+}
+echo ":" . $listed->getNumberOfParameters() . "/" . $listed->getParameters()[0]->getName();
+$plain = (new ReflectionClass("EvalAotReflectCtorPlain"))->getConstructor();
+echo ":" . ($plain === null ? "null" : "bad");
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "M:__construct/EvalAotReflectCtorParamTarget:3/1:leftr-;rightO=B;countO=null;:3/left:null"
+    );
+}
+
 /// Verifies eval ReflectionMethod constructor/destructor predicates through the bridge.
 #[test]
 fn test_eval_reflection_method_reports_constructor_and_destructor() {

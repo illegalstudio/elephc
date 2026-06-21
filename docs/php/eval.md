@@ -262,9 +262,9 @@ flags. For generated/AOT classes, `ReflectionClass::getMethod()` /
 objects from emitted member-name and predicate metadata, including optional
 modifier filters. AOT method reflection also exposes registered parameter
 names, required/optional counts, and registered scalar or null default values
-for generated method/static-method signatures. AOT member reflection does not
-yet expose full AOT type metadata, attributes, property types, or property
-default-value metadata.
+for generated constructor, instance-method, and static-method signatures. AOT
+member reflection does not yet expose full AOT type metadata, attributes,
+property types, or property default-value metadata.
 `ReflectionMethod::getDeclaringClass()` and
 `ReflectionProperty::getDeclaringClass()` return a materialized
 `ReflectionClass` for the symbol that declares the reflected
@@ -272,8 +272,10 @@ member. `ReflectionMethod::hasPrototype()` and `getPrototype()` expose
 eval parent-class overrides and interface implementation prototypes; inherited
 methods that are not overridden report no prototype, matching PHP reflection.
 `ReflectionClass::getConstructor()` returns a materialized
-`ReflectionMethod` for direct, inherited, interface, and trait constructors, or
-`null` when no constructor is visible. `ReflectionClass::getParentClass()`
+`ReflectionMethod` for direct, inherited, interface, trait, and generated/AOT
+constructors, including registered generated/AOT constructor parameter names,
+counts, and scalar/null defaults where available; it returns `null` when no
+constructor is visible. `ReflectionClass::getParentClass()`
 returns a materialized `ReflectionClass` for eval-declared parent classes or
 `false` when no parent class exists. `ReflectionClass::newInstance()` constructs
 eval-declared reflected classes and forwards constructor arguments through
