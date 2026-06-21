@@ -259,7 +259,10 @@ member lists to be materialized on the `ReflectionClass` object.
 class constants, interface constants, trait constants, enum constants, enum
 cases, supported materialized property defaults, and current eval-declared
 static property values. Constant lookup is case-sensitive; single-value
-lookups return `false` when no constant or case is visible.
+lookups return `false` when no constant or case is visible. `getConstants()`
+and `getReflectionConstants()` accept PHP's `ReflectionClassConstant::IS_*`
+visibility/finality filter bitmask; `null` means no filter and `0` returns no
+constants.
 `ReflectionClass::getMethods()` and `ReflectionClass::getProperties()` return
 materialized `ReflectionMethod` and `ReflectionProperty` objects for the same
 visible member metadata, including supported member attributes and predicate

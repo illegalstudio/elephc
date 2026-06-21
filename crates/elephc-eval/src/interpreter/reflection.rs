@@ -489,9 +489,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_constants_result(
     if !method_name.eq_ignore_ascii_case("getConstants") {
         return Ok(None);
     }
-    if !evaluated_args.is_empty() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
+    let filter = eval_reflection_member_filter(evaluated_args, values)?;
     let Some(reflected_name) = context
         .eval_reflection_class_name(identity)
         .map(str::to_string)
@@ -501,6 +499,9 @@ pub(in crate::interpreter) fn eval_reflection_class_get_constants_result(
     let names = eval_reflection_constant_names(&reflected_name, context);
     let mut result = values.assoc_new(names.len())?;
     for name in names {
+        if !eval_reflection_constant_matches_filter(&reflected_name, &name, filter, context) {
+            continue;
+        }
         let Some(value) = eval_reflection_constant_value(&reflected_name, &name, context) else {
             continue;
         };
@@ -1021,9 +1022,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constants_res
     if !method_name.eq_ignore_ascii_case("getReflectionConstants") {
         return Ok(None);
     }
-    if !evaluated_args.is_empty() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
+    let filter = eval_reflection_member_filter(evaluated_args, values)?;
     let Some(reflected_name) = context
         .eval_reflection_class_name(identity)
         .map(str::to_string)
@@ -1032,11 +1031,16 @@ pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constants_res
     };
     let names = eval_reflection_constant_names(&reflected_name, context);
     let mut result = values.array_new(names.len())?;
-    for (index, name) in names.iter().enumerate() {
+    let mut index = 0;
+    for name in &names {
+        if !eval_reflection_constant_matches_filter(&reflected_name, name, filter, context) {
+            continue;
+        }
         let object =
             eval_reflection_class_constant_object_result(&reflected_name, name, context, values)?;
-        let key = values.int(index as i64)?;
+        let key = values.int(index)?;
         result = values.array_set(result, key, object)?;
+        index += 1;
     }
     Ok(Some(result))
 }
@@ -1234,6 +1238,22 @@ fn eval_reflection_class_constant_object_result(
         context,
         values,
     )
+}
+
+/// Returns whether one class constant passes an optional `ReflectionClassConstant` filter.
+fn eval_reflection_constant_matches_filter(
+    reflected_name: &str,
+    constant_name: &str,
+    filter: Option<u64>,
+    context: &ElephcEvalContext,
+) -> bool {
+    let Some(filter) = filter else {
+        return true;
+    };
+    eval_reflection_class_constant_metadata(reflected_name, constant_name, context)
+        .is_some_and(|(_, _, visibility, is_final, _)| {
+            eval_reflection_class_constant_modifiers(visibility, is_final) & filter != 0
+        })
 }
 
 /// Resolves the declared member spelling for eval `ReflectionClass` single-member lookups.

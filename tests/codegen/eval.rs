@@ -7264,6 +7264,10 @@ enum EvalReflectConstEnum {
 }
 $ref = new ReflectionClass("EvalReflectConstChild");
 $all = $ref->getConstants();
+$public = $ref->getConstants(ReflectionClassConstant::IS_PUBLIC);
+$private = $ref->getConstants(filter: ReflectionClassConstant::IS_PRIVATE);
+$none = $ref->getConstants(0);
+$null = $ref->getConstants(null);
 echo $ref->getConstant("OWN") . ":";
 echo $ref->getConstant("BASE") . ":";
 echo $ref->getConstant("LIMIT") . ":";
@@ -7271,6 +7275,9 @@ echo $ref->getConstant("SECRET") . ":";
 echo $ref->getConstant("SUM") . ":";
 echo $ref->getConstant("own") ? "bad" : "missing";
 echo ":" . count($all) . ":" . $all["OWN"] . ":" . $all["BASE"] . ":" . $all["LIMIT"];
+echo ":" . count($public) . ":" . $public["OWN"] . ":" . $public["BASE"];
+echo ":" . count($private) . ":" . $private["SECRET"];
+echo ":" . count($none) . ":" . count($null);
 $trait = new ReflectionClass("EvalReflectConstTrait");
 $traitAll = $trait->getConstants();
 echo ":" . $trait->getConstant("TRAIT_VALUE") . ":" . count($traitAll) . ":" . $traitAll["TRAIT_VALUE"];
@@ -7288,7 +7295,7 @@ echo ":" . $enum->getConstant("LEVEL") . ":" . $enumAll["LEVEL"] . ":" . count($
     );
     assert_eq!(
         out.stdout,
-        "own:1:2:9:5:missing:5:own:1:2:3:1:3:Ready:40:40:2"
+        "own:1:2:9:5:missing:5:own:1:2:4:own:1:1:9:0:5:3:1:3:Ready:40:40:2"
     );
 }
 
@@ -7318,19 +7325,25 @@ enum EvalReflectConstObjectEnum {
 $ref = new ReflectionClass("EvalReflectConstObjectTarget");
 $single = $ref->getReflectionConstant("ANSWER");
 $all = $ref->getReflectionConstants();
+$public = $ref->getReflectionConstants(ReflectionClassConstant::IS_PUBLIC);
+$final = $ref->getReflectionConstants(filter: ReflectionClassConstant::IS_FINAL);
 echo $single->getName() . ":";
 echo ($single->isFinal() ? "F" : "f") . ":";
 echo count($all) . ":" . $all[0]->getName() . ":";
 echo $single->getAttributes()[0]->newInstance()->label() . ":";
 echo $ref->getReflectionConstant("answer") ? "bad" : "missing";
+echo ":" . count($public) . ":" . $public[0]->getName();
+echo ":" . count($final) . ":" . $final[0]->getName();
 $enum = new ReflectionClass("EvalReflectConstObjectEnum");
 $enumAll = $enum->getReflectionConstants();
+$enumFinal = $enum->getReflectionConstants(ReflectionClassConstant::IS_FINAL);
 $case = $enum->getReflectionConstant("Ready");
 $level = $enum->getReflectionConstant("LEVEL");
 echo ":" . count($enumAll) . ":" . $enumAll[0]->getName() . ":" . $enumAll[1]->getName();
 echo ":" . $case->getAttributes()[0]->newInstance()->label() . ":";
 echo count($level->getAttributes()) . ":";
-echo $level->isFinal() ? "F" : "f";');
+echo $level->isFinal() ? "F" : "f";
+echo ":" . count($enumFinal) . ":" . $enumFinal[0]->getName();');
 "#,
     );
     assert!(
@@ -7340,7 +7353,7 @@ echo $level->isFinal() ? "F" : "f";');
     );
     assert_eq!(
         out.stdout,
-        "ANSWER:F:1:ANSWER:const:missing:2:Ready:LEVEL:case:0:F"
+        "ANSWER:F:1:ANSWER:const:missing:1:ANSWER:1:ANSWER:2:Ready:LEVEL:case:0:F:1:LEVEL"
     );
 }
 
