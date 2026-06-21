@@ -187,7 +187,24 @@ echo 1 + $b = 5;   // 6   (parsed as 1 + ($b = 5)); $b is now 5
 echo !$b = 0;      // 1   (parsed as !($b = 0)); $b is now 0
 ```
 
-This applies to any preceding operator (`+`, `*`, `&&`, `!==`, prefix `!`, …). It only kicks in when the left operand of `=` is a real assignment target; `($a + $b) = 5` is still a "Invalid assignment target" error.
+This applies to any preceding operator (`+`, `*`, `&&`, `!==`, prefix `!`, the short ternary `?:`, …) and to any assignment target, including complex lvalues such as object properties and array elements. The assignment becomes the operator's adjacent operand:
+
+```php
+<?php
+class Text { public string $value = "hello"; }
+$t = new Text();
+
+// `cond ?: $t->value = X` parses as `cond ?: ($t->value = X)` — the property assignment is the
+// else-branch, run only when the condition is falsy.
+strlen($t->value) > 100 ?: $t->value = strtoupper($t->value);
+echo $t->value; // HELLO
+
+$a = [1, 2];
+true && $a[0] = 99;   // parsed as `true && ($a[0] = 99)`
+echo $a[0];           // 99
+```
+
+It only kicks in when the left operand of `=` is a real assignment target; `($a + $b) = 5` and `cond ?: f() = 5` are still "Invalid assignment target" errors.
 
 ## List Unpacking
 

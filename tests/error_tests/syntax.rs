@@ -31,6 +31,14 @@ fn test_error_value_led_statement_missing_semicolon() {
     expect_error("<?php 0 > $x", "Expected ';'");
 }
 
+/// Verifies that binding `=` to the adjacent lvalue inside an expression does not silently accept
+/// a genuinely invalid target: `cond ?: f() = 5;` (a call result is not assignable) is still
+/// reported as an invalid assignment target rather than parsed.
+#[test]
+fn test_error_short_ternary_else_invalid_assignment_target() {
+    expect_error("<?php false ?: bar() = 5;", "Invalid assignment target");
+}
+
 /// Verifies the error diagnostic for unterminated string.
 #[test]
 fn test_error_unterminated_string() {

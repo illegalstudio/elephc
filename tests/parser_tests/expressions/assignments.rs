@@ -395,3 +395,41 @@ fn test_parse_bare_variable_increment_expression_keeps_nodes() {
     };
     assert!(matches!(value.kind, ExprKind::PostIncrement(ref n) if n == "i"));
 }
+
+/// Verifies the short-ternary else-branch binds `=` to its adjacent lvalue: PHP parses
+/// `cond ?: $o->p = B` as `cond ?: ($o->p = B)`, not `(cond ?: $o->p) = B`. The statement is a bare
+/// expression statement whose `ShortTernary` default is the property assignment, rather than a
+/// statement-level assignment to a non-lvalue (which would be "Invalid assignment target").
+#[test]
+fn test_short_ternary_else_binds_property_assignment() {
+    let stmts = parse_source("<?php false ?: $o->p = 5;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::ShortTernary { value, default } => {
+                assert!(matches!(value.kind, ExprKind::BoolLiteral(false)));
+                assert!(
+                    matches!(default.kind, ExprKind::Assignment { .. }),
+                    "short-ternary else must bind the assignment, got {:?}",
+                    default.kind
+                );
+            }
+            other => panic!("expected ShortTernary, got {:?}", other),
+        },
+        other => panic!("expected ExprStmt, got {:?}", other),
+    }
+}
+
+/// Regression guard for the bail in `try_parse_postfix_assignment`: an ordinary property
+/// assignment statement still parses as a dedicated `PropertyAssign`, not a bailed bare
+/// expression statement. The short-ternary fix must not disturb plain complex assignments.
+#[test]
+fn test_plain_property_assignment_stays_a_statement() {
+    let stmts = parse_source("<?php $o->p = 5;");
+    assert_eq!(stmts.len(), 1);
+    assert!(
+        matches!(stmts[0].kind, StmtKind::PropertyAssign { .. }),
+        "a plain property assignment must parse as PropertyAssign, got {:?}",
+        stmts[0].kind
+    );
+}

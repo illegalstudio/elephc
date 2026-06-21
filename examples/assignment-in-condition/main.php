@@ -26,3 +26,16 @@ $flag = true;
 $result = !$flag = false;   // parses as !($flag = false): assigns false, negates to true
 echo "!(\$flag = false) = " . ($result ? "true" : "false")
     . ", \$flag is now " . ($flag ? "true" : "false") . "\n";
+
+// The same binding works for the short-circuit `?:` / `&&` idioms and for complex lvalues
+// (object properties, array elements). `cond ?: $obj->prop = X` parses as `cond ?: ($obj->prop = X)`
+// — the assignment is the else-branch, run only when the condition is falsy. Symfony's
+// UnicodeString normalises a string this way: `isNormalized($s->v) ?: $s->v = normalize($s->v);`.
+class Text
+{
+    public string $value = 'hello';
+}
+
+$t = new Text();
+strlen($t->value) > 100 ?: $t->value = strtoupper($t->value);   // not "long" -> run the else
+echo "normalised value = " . $t->value . "\n";                  // HELLO

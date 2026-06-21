@@ -104,6 +104,16 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
 
+    // The tokens before the top-level `=` parse to a complete expression, but if that expression
+    // is not itself an assignable target shape — e.g. `A ?: $x->p` (short-ternary) or `cond && $x->p`
+    // — then this is not a statement-level assignment: the `=` binds to the adjacent lvalue *inside*
+    // the expression (PHP parses `A ?: $x = B` as `A ?: ($x = B)`). Bail without consuming so the
+    // caller parses the whole statement as a bare expression statement, where the Pratt parser
+    // performs that adjacent-lvalue binding. A genuinely invalid target still surfaces an error there.
+    if !parsed_lhs_is_assignable_target(&lhs_expr) {
+        return Ok(None);
+    }
+
     *pos = assign_pos + 1;
     // `$arr[$k] =& $src;` / `$obj->prop =& $src;` — reference assignment into a complex lvalue.
     // The `&` after `=` cannot be parsed as a value expression, so intercept it here and build a
@@ -436,6 +446,23 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     };
 
     Ok(Some(Stmt::new(stmt, span)))
+}
+
+/// Returns true when `expr` (the expression parsed from the tokens before a top-level `=`) is an
+/// assignable target shape: a variable, array element, or object/static property access. When it
+/// is anything else — a short-ternary, ternary, binary operation, or call result that merely
+/// *contains* a postfix access — the leading `=` is not a statement-level assignment but binds to
+/// an lvalue inside the expression, so `try_parse_postfix_assignment` bails to bare-expression
+/// parsing. Mirrors the shapes accepted by `expr::is_assignment_expression_target`.
+fn parsed_lhs_is_assignable_target(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::Variable(_)
+            | ExprKind::ArrayAccess { .. }
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+    )
 }
 
 /// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)

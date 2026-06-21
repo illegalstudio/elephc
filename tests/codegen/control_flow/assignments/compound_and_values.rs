@@ -722,3 +722,53 @@ fn test_bare_variable_increment_unchanged() {
     let out = compile_and_run("<?php $i = 1; $a = ++$i; $b = $i++; echo $a . '/' . $b . '/' . $i;");
     assert_eq!(out, "2/2/3");
 }
+
+/// Verifies the short-ternary else-branch binds `=` to an adjacent property lvalue: PHP parses
+/// `cond ?: $o->p = B` as `cond ?: ($o->p = B)`. With a false condition the assignment runs.
+/// This is the Symfony `UnicodeString::join()` shape `normalizer_is_normalized(..) ?: $s->v = ..`.
+#[test]
+fn test_short_ternary_else_assigns_property() {
+    let out = compile_and_run(
+        "<?php class B { public string $s = 'old'; } $b = new B(); false ?: $b->s = 'new'; echo $b->s;",
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies a true short-ternary condition skips the else-branch assignment, leaving the property
+/// unchanged — confirming the bound assignment is genuinely the conditional else, not eager.
+#[test]
+fn test_short_ternary_true_skips_else_assignment() {
+    let out = compile_and_run(
+        "<?php class B { public string $s = 'old'; } $b = new B(); true ?: $b->s = 'new'; echo $b->s;",
+    );
+    assert_eq!(out, "old");
+}
+
+/// Verifies the short-ternary else-branch binds `=` to an adjacent array-element lvalue:
+/// `cond ?: $arr[$k] = B` runs the element assignment when the condition is false.
+#[test]
+fn test_short_ternary_else_assigns_array_element() {
+    let out = compile_and_run("<?php $a = [1, 2]; false ?: $a[0] = 99; echo $a[0];");
+    assert_eq!(out, "99");
+}
+
+/// Verifies a logical `&&` binds `=` to an adjacent property lvalue on its right operand:
+/// PHP parses `cond && $o->n = B` as `cond && ($o->n = B)`, so the assignment runs when the
+/// condition is true.
+#[test]
+fn test_logical_and_rhs_assigns_property() {
+    let out = compile_and_run(
+        "<?php class B { public int $n = 0; } $b = new B(); true && $b->n = 7; echo $b->n;",
+    );
+    assert_eq!(out, "7");
+}
+
+/// Regression guard: an ordinary complex assignment statement (`$o->p = B`, `$a[$i] = B`,
+/// `$a[] = B`) is unaffected by the short-ternary bail and still parses as a direct assignment.
+#[test]
+fn test_plain_complex_assignment_statements_unaffected() {
+    let out = compile_and_run(
+        "<?php class B { public string $s = 'x'; } $b = new B(); $b->s = 'set'; $a = [1]; $a[0] = 9; $a[] = 5; echo $b->s . '/' . $a[0] . '/' . $a[1];",
+    );
+    assert_eq!(out, "set/9/5");
+}
