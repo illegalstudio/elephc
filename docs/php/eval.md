@@ -380,7 +380,8 @@ expose eval-declared concrete, abstract, and interface property get/set hook
 metadata and return hook `ReflectionMethod` objects using PHP's
 `$property::get` / `$property::set` names. Eval also exposes
 `PropertyHookType::Get` and `PropertyHookType::Set` inside evaluated fragments
-for those APIs.
+for those APIs, including `PropertyHookType::cases()`, `from()`, and
+`tryFrom()`.
 `ReflectionProperty::setAccessible()` is accepted as a PHP-compatible no-op.
 `ReflectionProperty::getValue()` and `setValue()` read and write eval-declared
 instance and static property values, bypass public/protected/private visibility

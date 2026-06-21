@@ -2586,6 +2586,15 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let class_name = resolve_eval_static_method_class_name(class_name, context)?;
+    if let Some(result) = eval_builtin_property_hook_type_static_method_result(
+        &class_name,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
     if context.has_enum(&class_name) && eval_enum_static_builtin_name(method_name).is_some() {
         return eval_enum_builtin_static_method_result(
             &class_name,
@@ -2644,6 +2653,93 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
         values,
     )?;
     values.static_method_call(&class_name, method_name, args)
+}
+
+/// Dispatches static methods for eval's builtin `PropertyHookType` enum slice.
+fn eval_builtin_property_hook_type_static_method_result(
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("PropertyHookType")
+    {
+        return Ok(None);
+    }
+    match eval_enum_static_builtin_name(method_name) {
+        Some("cases") => {
+            eval_builtin_property_hook_type_cases(evaluated_args, context, values).map(Some)
+        }
+        Some("from") => {
+            eval_builtin_property_hook_type_from(evaluated_args, false, context, values).map(Some)
+        }
+        Some("tryFrom") => {
+            eval_builtin_property_hook_type_from(evaluated_args, true, context, values).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Builds the indexed case array for eval's builtin `PropertyHookType` enum slice.
+fn eval_builtin_property_hook_type_cases(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !evaluated_args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let case_names = ["Get", "Set"];
+    let mut array = values.array_new(case_names.len())?;
+    for (index, case_name) in case_names.iter().enumerate() {
+        let key = values.int(index as i64)?;
+        let case =
+            eval_builtin_property_hook_type_case("PropertyHookType", case_name, context, values)?
+                .ok_or(EvalStatus::RuntimeFatal)?;
+        array = values.array_set(array, key, case)?;
+    }
+    Ok(array)
+}
+
+/// Evaluates builtin `PropertyHookType::from()` or `tryFrom()` inside eval.
+fn eval_builtin_property_hook_type_from(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    nullable_miss: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut args = bind_evaluated_function_args(&[String::from("value")], evaluated_args)?;
+    let value = args.pop().ok_or(EvalStatus::RuntimeFatal)?;
+    let bytes = values.string_bytes(value)?;
+    let value_text = String::from_utf8_lossy(&bytes);
+    for constant_name in ["Get", "Set"] {
+        let Some((_, case_value)) = eval_property_hook_type_case_parts(constant_name) else {
+            continue;
+        };
+        if value_text == case_value {
+            return eval_builtin_property_hook_type_case(
+                "PropertyHookType",
+                constant_name,
+                context,
+                values,
+            )?
+            .ok_or(EvalStatus::RuntimeFatal);
+        }
+    }
+    if nullable_miss {
+        values.null()
+    } else {
+        let message = eval_enum_invalid_backing_value_message(
+            "PropertyHookType",
+            EvalEnumBackingType::String,
+            value,
+            values,
+        )?;
+        eval_throw_value_error(&message, context, values)
+    }
 }
 
 /// Returns a recognized enum-provided static method name.
