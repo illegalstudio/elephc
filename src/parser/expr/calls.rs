@@ -39,6 +39,29 @@ pub(super) fn parse_scoped_static_call(
         Some(Token::Variable(property)) => {
             let property = property.clone();
             *pos += 1;
+            // `self::$method(args)` / `static::$method(args)` / `parent::$method(args)` is a dynamic
+            // static method call (the method name lives in `$method`). Desugar to
+            // `call_user_func([receiver::class, $method], ...args)` so it reuses the runtime
+            // dynamic-dispatch path, exactly like the named-class form `C::$method(args)`. The
+            // `receiver::class` constant resolves `static::` to the runtime class, preserving late
+            // static binding. Without a following `(` it stays a static property access.
+            if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::LParen)) {
+                *pos += 1; // consume '('
+                let dynamic_args = crate::parser::expr::parse_args(tokens, pos, span)?;
+                crate::parser::expr::pratt::reject_named_args_in_dynamic_call(&dynamic_args, span)?;
+                let class_const = Expr::new(ExprKind::ClassConstant { receiver: receiver.clone() }, span);
+                let method_expr = Expr::new(ExprKind::Variable(property), span);
+                let mut call_args =
+                    vec![Expr::new(ExprKind::ArrayLiteral(vec![class_const, method_expr]), span)];
+                call_args.extend(dynamic_args);
+                return Ok(Expr::new(
+                    ExprKind::FunctionCall {
+                        name: crate::names::Name::unqualified("call_user_func"),
+                        args: call_args,
+                    },
+                    span,
+                ));
+            }
             return Ok(Expr::new(
                 ExprKind::StaticPropertyAccess { receiver, property },
                 span,

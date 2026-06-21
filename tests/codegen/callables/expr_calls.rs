@@ -1511,3 +1511,38 @@ echo Box::make()();
     );
     assert_eq!(out, "S");
 }
+
+/// Verifies `self::$method(args)` dispatches to the static method named at runtime by `$method`.
+#[test]
+fn test_self_dynamic_static_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public static function a($x) { return "a:$x"; }
+    public static function b($x) { return "b:$x"; }
+    public static function run($m, $x) { return self::$m($x); }
+}
+echo C::run("a", 1), C::run("b", 2);
+"#,
+    );
+    assert_eq!(out, "a:1b:2");
+}
+
+/// Verifies `static::$method(args)` dispatches through the late-static-binding class: in `D::go`
+/// the receiver `static::` is `D`, so `static::$m` selects `D`'s override of `a`.
+#[test]
+fn test_static_dynamic_static_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public static function a($x) { return "C:$x"; }
+}
+class D extends C {
+    public static function a($x) { return "D:$x"; }
+    public static function go($m, $x) { return static::$m($x); }
+}
+echo D::go("a", 9);
+"#,
+    );
+    assert_eq!(out, "D:9");
+}
