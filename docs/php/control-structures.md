@@ -76,6 +76,16 @@ for ($i = 0; $i < 10; $i++) {
 }
 ```
 
+The init and update sections may contain several comma-separated expressions, all evaluated in
+order (the init list once, the update list after each iteration):
+
+```php
+<?php
+for ($i = 0, $j = 10; $i < 5; $i++, $j--) {
+    echo "$i:$j ";
+}
+```
+
 ## foreach
 
 ```php

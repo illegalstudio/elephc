@@ -69,6 +69,18 @@ fn test_for_parses() {
     assert!(matches!(&stmts[0].kind, StmtKind::For { .. }));
 }
 
+/// Verifies a `for` with comma-separated init and update clauses parses, wrapping each multi-statement
+/// clause in a `Synthetic` block (the init holds both assignments, the update holds both increments).
+#[test]
+fn test_for_comma_clauses_parse_to_synthetic() {
+    let stmts = parse_source("<?php for ($i = 0, $j = 10; $i < 5; $i++, $j--) {}");
+    let StmtKind::For { init, update, .. } = &stmts[0].kind else {
+        panic!("expected For");
+    };
+    assert!(matches!(init.as_deref().map(|s| &s.kind), Some(StmtKind::Synthetic(stmts)) if stmts.len() == 2));
+    assert!(matches!(update.as_deref().map(|s| &s.kind), Some(StmtKind::Synthetic(stmts)) if stmts.len() == 2));
+}
+
 /// Verifies that `<?php while (1) { break; }` parses with the `Break(1)` statement nested
 /// inside `While`. The argument 1 means break one level.
 #[test]

@@ -263,13 +263,7 @@ pub fn parse_for(
     *pos += 1;
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'for'")?;
 
-    let init = if *pos < tokens.len() && tokens[*pos].0 != Token::Semicolon {
-        let init_span = tokens[*pos].1;
-        let s = parse_assign_inline(tokens, pos, init_span)?;
-        Some(Box::new(s))
-    } else {
-        None
-    };
+    let init = parse_for_clause_list(tokens, pos, &Token::Semicolon)?;
     expect_semicolon(tokens, pos)?;
 
     let condition = if *pos < tokens.len() && tokens[*pos].0 != Token::Semicolon {
@@ -279,13 +273,7 @@ pub fn parse_for(
     };
     expect_semicolon(tokens, pos)?;
 
-    let update = if *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-        let update_span = tokens[*pos].1;
-        let s = parse_assign_inline(tokens, pos, update_span)?;
-        Some(Box::new(s))
-    } else {
-        None
-    };
+    let update = parse_for_clause_list(tokens, pos, &Token::RParen)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after for clauses")?;
 
     let body = parse_body(tokens, pos)?;
@@ -389,6 +377,38 @@ pub fn parse_try(
 }
 
 /// Parse a simple statement without trailing semicolon (for use inside for-loops).
+/// Parses a `for` init or update clause, which may be a comma-separated list of inline statements.
+///
+/// Stops at `terminator` (a `;` for the init clause, a `)` for the update clause). An empty clause
+/// yields `None`; a single statement is returned directly; several comma-separated statements are
+/// wrapped in a `Synthetic` block so the `for` lowering runs them in order (the init list once, the
+/// update list after each iteration), matching PHP's `for ($i = 0, $j = 10; ...; $i++, $j--)`.
+fn parse_for_clause_list(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    terminator: &Token,
+) -> Result<Option<Box<Stmt>>, CompileError> {
+    if *pos >= tokens.len() || tokens[*pos].0 == *terminator {
+        return Ok(None);
+    }
+    let list_span = tokens[*pos].1;
+    let mut stmts = Vec::new();
+    loop {
+        let stmt_span = tokens[*pos].1;
+        stmts.push(parse_assign_inline(tokens, pos, stmt_span)?);
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+            *pos += 1; // consume ','
+            continue;
+        }
+        break;
+    }
+    if stmts.len() == 1 {
+        Ok(Some(Box::new(stmts.pop().expect("one statement present"))))
+    } else {
+        Ok(Some(Box::new(Stmt::new(StmtKind::Synthetic(stmts), list_span))))
+    }
+}
+
 pub fn parse_assign_inline(
     tokens: &[(Token, Span)],
     pos: &mut usize,
