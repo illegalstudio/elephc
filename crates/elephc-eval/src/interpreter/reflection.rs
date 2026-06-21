@@ -689,7 +689,7 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let Some(target) = eval_reflection_function_method_target(identity, context) else {
+    let Some(target) = eval_reflection_function_method_target(identity, context, values)? else {
         return Ok(None);
     };
     let method_key = method_name.to_ascii_lowercase();
@@ -1612,6 +1612,9 @@ fn eval_reflection_aot_method_metadata(
     let parameters = signature.map_or_else(Vec::new, |signature| {
         eval_reflection_native_callable_parameters(class_name, method_name, flags, signature)
     });
+    let return_type_metadata = signature
+        .and_then(NativeCallableSignature::return_type)
+        .and_then(eval_reflection_parameter_type_metadata);
     EvalReflectionMemberMetadata {
         declaring_class_name: Some(class_name.trim_start_matches('\\').to_string()),
         attributes: Vec::new(),
@@ -1623,7 +1626,7 @@ fn eval_reflection_aot_method_metadata(
         is_promoted: false,
         modifiers: eval_reflection_method_modifiers_from_flags(flags),
         type_metadata: None,
-        return_type_metadata: None,
+        return_type_metadata,
         default_value: None,
         required_parameter_count,
         parameters,
@@ -1656,8 +1659,11 @@ fn eval_reflection_native_callable_parameters(
 ) -> Vec<EvalReflectionParameterMetadata> {
     let names = eval_reflection_native_callable_parameter_names(signature);
     let parameter_count = names.len();
-    let has_type_flags = vec![false; parameter_count];
-    let parameter_types = vec![None; parameter_count];
+    let parameter_types = eval_reflection_native_callable_parameter_types(signature);
+    let has_type_flags = parameter_types
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
     let parameter_attributes = vec![Vec::new(); parameter_count];
     let defaults = eval_reflection_native_callable_parameter_defaults(signature);
     let by_ref_flags = vec![false; parameter_count];
@@ -1681,6 +1687,15 @@ fn eval_reflection_native_callable_parameters(
         &variadic_flags,
         &[],
     )
+}
+
+/// Returns declared parameter type metadata for a registered native callable.
+fn eval_reflection_native_callable_parameter_types(
+    signature: &NativeCallableSignature,
+) -> Vec<Option<EvalParameterType>> {
+    (0..signature.param_count())
+        .map(|index| signature.param_type(index).cloned())
+        .collect()
 }
 
 /// Returns parameter names for a registered native callable, filling missing bridge names.
@@ -2157,7 +2172,8 @@ fn eval_reflection_full_class_object_result(
             runtime_class_name,
             values,
         )?;
-        let interface_names = eval_reflection_aot_class_interface_names(runtime_class_name, values)?;
+        let interface_names =
+            eval_reflection_aot_class_interface_names(runtime_class_name, values)?;
         let parent_class_name = eval_reflection_aot_parent_class_name(runtime_class_name, values)?;
         return eval_reflection_owner_object(
             EVAL_REFLECTION_OWNER_CLASS,
@@ -4385,7 +4401,8 @@ fn eval_reflection_builtin_named_type(
 fn eval_reflection_function_method_target(
     identity: u64,
     context: &ElephcEvalContext,
-) -> Option<EvalReflectionFunctionMethodTarget> {
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalReflectionFunctionMethodTarget>, EvalStatus> {
     if let Some(name) = context.eval_reflection_function_name(identity) {
         let function = context.function(&name.to_ascii_lowercase());
         let is_variadic = function
@@ -4393,31 +4410,39 @@ fn eval_reflection_function_method_target(
         let return_type_metadata = function
             .and_then(EvalFunction::return_type)
             .and_then(eval_reflection_parameter_type_metadata);
-        return Some(EvalReflectionFunctionMethodTarget::Function {
+        return Ok(Some(EvalReflectionFunctionMethodTarget::Function {
             name: name.to_string(),
             is_variadic,
             return_type_metadata,
-        });
+        }));
     }
-    context
-        .eval_reflection_method(identity)
-        .map(|(declaring_class, method_name)| {
-            let method_metadata =
-                eval_reflection_method_metadata(declaring_class, method_name, context);
-            let is_variadic = method_metadata.as_ref().is_some_and(|method| {
-                method
-                    .parameters
-                    .iter()
-                    .any(|parameter| parameter.is_variadic)
-            });
-            let return_type_metadata =
-                method_metadata.and_then(|method| method.return_type_metadata);
-            EvalReflectionFunctionMethodTarget::Method {
-                name: method_name.to_string(),
-                is_variadic,
-                return_type_metadata,
-            }
-        })
+    let Some((declaring_class, method_name)) = context.eval_reflection_method(identity) else {
+        return Ok(None);
+    };
+    let method_metadata = if let Some(method_metadata) =
+        eval_reflection_method_metadata(declaring_class, method_name, context)
+    {
+        Some(method_metadata)
+    } else {
+        eval_reflection_aot_method_metadata_with_signature_if_exists(
+            declaring_class,
+            method_name,
+            context,
+            values,
+        )?
+    };
+    let is_variadic = method_metadata.as_ref().is_some_and(|method| {
+        method
+            .parameters
+            .iter()
+            .any(|parameter| parameter.is_variadic)
+    });
+    let return_type_metadata = method_metadata.and_then(|method| method.return_type_metadata);
+    Ok(Some(EvalReflectionFunctionMethodTarget::Method {
+        name: method_name.to_string(),
+        is_variadic,
+        return_type_metadata,
+    }))
 }
 
 /// Validates that a synthetic reflection metadata call received no arguments.

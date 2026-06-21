@@ -17,8 +17,8 @@ use std::ffi::c_void;
 use crate::abi::ABI_VERSION;
 use crate::eval_ir::{
     EvalAttribute, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalEnum,
-    EvalFunction, EvalInterface, EvalInterfaceMethod, EvalInterfaceProperty, EvalTrait,
-    EvalVisibility,
+    EvalFunction, EvalInterface, EvalInterfaceMethod, EvalInterfaceProperty, EvalParameterType,
+    EvalTrait, EvalVisibility,
 };
 use crate::scope::ElephcEvalScope;
 use crate::stream_resources::EvalStreamResources;
@@ -129,7 +129,9 @@ pub enum NativeCallableDefault {
 pub struct NativeCallableSignature {
     param_count: usize,
     param_names: Vec<String>,
+    param_types: Vec<Option<EvalParameterType>>,
     param_defaults: Vec<Option<NativeCallableDefault>>,
+    return_type: Option<EvalParameterType>,
 }
 
 impl NativeCallableSignature {
@@ -138,7 +140,9 @@ impl NativeCallableSignature {
         Self {
             param_count,
             param_names: Vec::new(),
+            param_types: Vec::new(),
             param_defaults: Vec::new(),
+            return_type: None,
         }
     }
 
@@ -159,6 +163,18 @@ impl NativeCallableSignature {
         true
     }
 
+    /// Records the PHP declared type metadata for one positional callable slot.
+    pub fn set_param_type(&mut self, index: usize, param_type: EvalParameterType) -> bool {
+        if index >= self.param_count {
+            return false;
+        }
+        if self.param_types.len() < self.param_count {
+            self.param_types.resize(self.param_count, None);
+        }
+        self.param_types[index] = Some(param_type);
+        true
+    }
+
     /// Records a PHP scalar default value for one positional callable slot.
     pub fn set_param_default(&mut self, index: usize, default: NativeCallableDefault) -> bool {
         if index >= self.param_count {
@@ -171,9 +187,24 @@ impl NativeCallableSignature {
         true
     }
 
+    /// Records the PHP declared return type metadata for this callable.
+    pub fn set_return_type(&mut self, return_type: EvalParameterType) {
+        self.return_type = Some(return_type);
+    }
+
     /// Returns the PHP-visible parameter names registered for this callable.
     pub fn param_names(&self) -> &[String] {
         &self.param_names
+    }
+
+    /// Returns PHP declared parameter types registered for this callable.
+    pub fn param_types(&self) -> &[Option<EvalParameterType>] {
+        &self.param_types
+    }
+
+    /// Returns the registered declared type for one parameter slot, if any.
+    pub fn param_type(&self, index: usize) -> Option<&EvalParameterType> {
+        self.param_types.get(index).and_then(Option::as_ref)
     }
 
     /// Returns the PHP-visible scalar parameter defaults registered for this callable.
@@ -191,6 +222,11 @@ impl NativeCallableSignature {
         (0..self.param_count)
             .rfind(|index| self.param_default(*index).is_none())
             .map_or(0, |index| index + 1)
+    }
+
+    /// Returns the registered declared return type metadata, if any.
+    pub fn return_type(&self) -> Option<&EvalParameterType> {
+        self.return_type.as_ref()
     }
 }
 
@@ -1537,6 +1573,19 @@ impl ElephcEvalContext {
             .is_some_and(|signature| signature.set_param_name(index, param_name))
     }
 
+    /// Records one parameter type for registered native AOT instance-method metadata.
+    pub fn define_native_method_param_type(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        index: usize,
+        param_type: EvalParameterType,
+    ) -> bool {
+        self.native_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| signature.set_param_type(index, param_type))
+    }
+
     /// Records one parameter default for registered native AOT instance-method metadata.
     pub fn define_native_method_param_default(
         &mut self,
@@ -1548,6 +1597,21 @@ impl ElephcEvalContext {
         self.native_methods
             .get_mut(&native_method_key(class_name, method_name))
             .is_some_and(|signature| signature.set_param_default(index, default))
+    }
+
+    /// Records one return type for registered native AOT instance-method metadata.
+    pub fn define_native_method_return_type(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        return_type: EvalParameterType,
+    ) -> bool {
+        self.native_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| {
+                signature.set_return_type(return_type);
+                true
+            })
     }
 
     /// Records one parameter name for registered native AOT static-method metadata.
@@ -1563,6 +1627,19 @@ impl ElephcEvalContext {
             .is_some_and(|signature| signature.set_param_name(index, param_name))
     }
 
+    /// Records one parameter type for registered native AOT static-method metadata.
+    pub fn define_native_static_method_param_type(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        index: usize,
+        param_type: EvalParameterType,
+    ) -> bool {
+        self.native_static_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| signature.set_param_type(index, param_type))
+    }
+
     /// Records one parameter default for registered native AOT static-method metadata.
     pub fn define_native_static_method_param_default(
         &mut self,
@@ -1576,6 +1653,21 @@ impl ElephcEvalContext {
             .is_some_and(|signature| signature.set_param_default(index, default))
     }
 
+    /// Records one return type for registered native AOT static-method metadata.
+    pub fn define_native_static_method_return_type(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        return_type: EvalParameterType,
+    ) -> bool {
+        self.native_static_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| {
+                signature.set_return_type(return_type);
+                true
+            })
+    }
+
     /// Records one parameter name for registered native AOT constructor metadata.
     pub fn define_native_constructor_param(
         &mut self,
@@ -1586,6 +1678,18 @@ impl ElephcEvalContext {
         self.native_constructors
             .get_mut(&normalize_class_name(class_name))
             .is_some_and(|signature| signature.set_param_name(index, param_name))
+    }
+
+    /// Records one parameter type for registered native AOT constructor metadata.
+    pub fn define_native_constructor_param_type(
+        &mut self,
+        class_name: &str,
+        index: usize,
+        param_type: EvalParameterType,
+    ) -> bool {
+        self.native_constructors
+            .get_mut(&normalize_class_name(class_name))
+            .is_some_and(|signature| signature.set_param_type(index, param_type))
     }
 
     /// Records one parameter default for registered native AOT constructor metadata.

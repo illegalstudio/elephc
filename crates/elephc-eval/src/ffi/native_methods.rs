@@ -13,11 +13,18 @@
 use super::util::abi_name_to_string;
 use crate::abi::{ElephcEvalContext, ABI_VERSION};
 use crate::context::{NativeCallableDefault, NativeCallableSignature};
+use crate::eval_ir::{EvalParameterType, EvalParameterTypeVariant};
 
 const NATIVE_DEFAULT_NULL: u64 = 0;
 const NATIVE_DEFAULT_BOOL: u64 = 1;
 const NATIVE_DEFAULT_INT: u64 = 2;
 const NATIVE_DEFAULT_FLOAT: u64 = 3;
+
+#[derive(Clone, Copy)]
+enum NativeCallableTypePosition {
+    Parameter,
+    Return,
+}
 
 /// Registers a generated native PHP method signature in an eval context.
 ///
@@ -106,6 +113,114 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param(
             param_index,
             param_name_ptr,
             param_name_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP method parameter declared type in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Method key and type-spec pointers
+/// must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_method_param_type(
+    ctx: *mut ElephcEvalContext,
+    method_key_ptr: *const u8,
+    method_key_len: u64,
+    param_index: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_method_param_type_inner(
+            ctx,
+            method_key_ptr,
+            method_key_len,
+            false,
+            param_index,
+            type_spec_ptr,
+            type_spec_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP static-method parameter declared type.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Method key and type-spec pointers
+/// must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_type(
+    ctx: *mut ElephcEvalContext,
+    method_key_ptr: *const u8,
+    method_key_len: u64,
+    param_index: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_method_param_type_inner(
+            ctx,
+            method_key_ptr,
+            method_key_len,
+            true,
+            param_index,
+            type_spec_ptr,
+            type_spec_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP method declared return type in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Method key and type-spec pointers
+/// must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_method_return_type(
+    ctx: *mut ElephcEvalContext,
+    method_key_ptr: *const u8,
+    method_key_len: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_method_return_type_inner(
+            ctx,
+            method_key_ptr,
+            method_key_len,
+            false,
+            type_spec_ptr,
+            type_spec_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP static-method declared return type.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Method key and type-spec pointers
+/// must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_static_method_return_type(
+    ctx: *mut ElephcEvalContext,
+    method_key_ptr: *const u8,
+    method_key_len: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_method_return_type_inner(
+            ctx,
+            method_key_ptr,
+            method_key_len,
+            true,
+            type_spec_ptr,
+            type_spec_len,
         )
     })
     .unwrap_or(0)
@@ -263,6 +378,33 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param(
             param_index,
             param_name_ptr,
             param_name_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP constructor parameter declared type.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Class and type-spec pointers must
+/// be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_type(
+    ctx: *mut ElephcEvalContext,
+    class_name_ptr: *const u8,
+    class_name_len: u64,
+    param_index: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_constructor_param_type_inner(
+            ctx,
+            class_name_ptr,
+            class_name_len,
+            param_index,
+            type_spec_ptr,
+            type_spec_len,
         )
     })
     .unwrap_or(0)
@@ -431,6 +573,102 @@ unsafe fn register_native_method_param_inner(
     }
 }
 
+/// Runs native method parameter-type registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_method_param_type`; invalid handles,
+/// names, indexes, or type specs fail closed as `false`.
+unsafe fn register_native_method_param_type_inner(
+    ctx: *mut ElephcEvalContext,
+    method_key_ptr: *const u8,
+    method_key_len: u64,
+    is_static: bool,
+    param_index: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(method_key) = abi_name_to_string(method_key_ptr, method_key_len) else {
+        return 0;
+    };
+    let Some((class_name, method_name)) = split_method_key(&method_key) else {
+        return 0;
+    };
+    let Ok(param_index) = usize::try_from(param_index) else {
+        return 0;
+    };
+    let Some(param_type) = native_callable_type_from_abi(
+        type_spec_ptr,
+        type_spec_len,
+        NativeCallableTypePosition::Parameter,
+    ) else {
+        return 0;
+    };
+    if is_static {
+        i32::from(context.define_native_static_method_param_type(
+            class_name,
+            method_name,
+            param_index,
+            param_type,
+        ))
+    } else {
+        i32::from(context.define_native_method_param_type(
+            class_name,
+            method_name,
+            param_index,
+            param_type,
+        ))
+    }
+}
+
+/// Runs native method return-type registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_method_return_type`; invalid handles,
+/// names, or type specs fail closed as `false`.
+unsafe fn register_native_method_return_type_inner(
+    ctx: *mut ElephcEvalContext,
+    method_key_ptr: *const u8,
+    method_key_len: u64,
+    is_static: bool,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(method_key) = abi_name_to_string(method_key_ptr, method_key_len) else {
+        return 0;
+    };
+    let Some((class_name, method_name)) = split_method_key(&method_key) else {
+        return 0;
+    };
+    let Some(return_type) = native_callable_type_from_abi(
+        type_spec_ptr,
+        type_spec_len,
+        NativeCallableTypePosition::Return,
+    ) else {
+        return 0;
+    };
+    if is_static {
+        i32::from(context.define_native_static_method_return_type(
+            class_name,
+            method_name,
+            return_type,
+        ))
+    } else {
+        i32::from(context.define_native_method_return_type(class_name, method_name, return_type))
+    }
+}
+
 /// Runs native method scalar-default registration after installing a panic boundary.
 ///
 /// # Safety
@@ -590,6 +828,41 @@ unsafe fn register_native_constructor_param_inner(
     i32::from(context.define_native_constructor_param(&class_name, param_index, param_name))
 }
 
+/// Runs native constructor parameter-type registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_constructor_param_type`; invalid
+/// handles, names, indexes, or type specs fail closed as `false`.
+unsafe fn register_native_constructor_param_type_inner(
+    ctx: *mut ElephcEvalContext,
+    class_name_ptr: *const u8,
+    class_name_len: u64,
+    param_index: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(class_name) = abi_name_to_string(class_name_ptr, class_name_len) else {
+        return 0;
+    };
+    let Ok(param_index) = usize::try_from(param_index) else {
+        return 0;
+    };
+    let Some(param_type) = native_callable_type_from_abi(
+        type_spec_ptr,
+        type_spec_len,
+        NativeCallableTypePosition::Parameter,
+    ) else {
+        return 0;
+    };
+    i32::from(context.define_native_constructor_param_type(&class_name, param_index, param_type))
+}
+
 /// Runs native constructor scalar-default registration after installing a panic boundary.
 ///
 /// # Safety
@@ -708,6 +981,92 @@ fn native_callable_scalar_default(
         ))),
         _ => None,
     }
+}
+
+/// Decodes one generated type-spec string into eval Reflection type metadata.
+fn native_callable_type_from_abi(
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+    position: NativeCallableTypePosition,
+) -> Option<EvalParameterType> {
+    let type_spec = abi_name_to_string(type_spec_ptr, type_spec_len).ok()?;
+    native_callable_type_from_spec(&type_spec, position)
+}
+
+/// Parses the compact generated type syntax used by native signature registration.
+fn native_callable_type_from_spec(
+    type_spec: &str,
+    position: NativeCallableTypePosition,
+) -> Option<EvalParameterType> {
+    let type_spec = type_spec.trim();
+    if type_spec.is_empty() {
+        return None;
+    }
+    let nullable_shorthand = type_spec.strip_prefix('?');
+    let (type_spec, mut allows_null) = match nullable_shorthand {
+        Some(inner) => (inner, true),
+        None => (type_spec, false),
+    };
+    if type_spec.contains('&') {
+        if allows_null || type_spec.contains('|') {
+            return None;
+        }
+        let variants = type_spec
+            .split('&')
+            .map(|member| native_callable_type_variant(member, position))
+            .collect::<Option<Vec<_>>>()?;
+        if variants.iter().any(Option::is_none) {
+            return None;
+        }
+        return Some(EvalParameterType::intersection(
+            variants.into_iter().flatten().collect(),
+        ));
+    }
+    let mut variants = Vec::new();
+    for member in type_spec.split('|') {
+        match native_callable_type_variant(member, position)? {
+            Some(variant) => variants.push(variant),
+            None => allows_null = true,
+        }
+    }
+    if variants.is_empty() {
+        return None;
+    }
+    Some(EvalParameterType::new(variants, allows_null))
+}
+
+/// Converts one generated type member name into eval type metadata.
+fn native_callable_type_variant(
+    member: &str,
+    position: NativeCallableTypePosition,
+) -> Option<Option<EvalParameterTypeVariant>> {
+    let member = member.trim();
+    if member.is_empty() {
+        return None;
+    }
+    let lower = member.trim_start_matches('\\').to_ascii_lowercase();
+    let variant = match lower.as_str() {
+        "array" => EvalParameterTypeVariant::Array,
+        "bool" => EvalParameterTypeVariant::Bool,
+        "callable" => EvalParameterTypeVariant::Callable,
+        "float" => EvalParameterTypeVariant::Float,
+        "int" => EvalParameterTypeVariant::Int,
+        "iterable" => EvalParameterTypeVariant::Iterable,
+        "mixed" => EvalParameterTypeVariant::Mixed,
+        "never" if matches!(position, NativeCallableTypePosition::Return) => {
+            EvalParameterTypeVariant::Never
+        }
+        "null" => return Some(None),
+        "object" => EvalParameterTypeVariant::Object,
+        "string" => EvalParameterTypeVariant::String,
+        "void" if matches!(position, NativeCallableTypePosition::Return) => {
+            EvalParameterTypeVariant::Void
+        }
+        "void" | "never" => return None,
+        "self" | "parent" | "static" => EvalParameterTypeVariant::Class(lower),
+        _ => EvalParameterTypeVariant::Class(member.trim_start_matches('\\').to_string()),
+    };
+    Some(Some(variant))
 }
 
 /// Splits one generated `ClassName::methodName` metadata key into class and method pieces.

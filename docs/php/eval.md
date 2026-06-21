@@ -263,10 +263,11 @@ flags. For generated/AOT classes, `ReflectionClass::getMethod()` /
 `getProperty()` and `getMethods()` / `getProperties()` materialize reflection
 objects from emitted member-name and predicate metadata, including optional
 modifier filters. AOT method reflection also exposes registered parameter
-names, required/optional counts, and registered scalar or null default values
-for generated constructor, instance-method, and static-method signatures. AOT
-member reflection does not yet expose full AOT type metadata, attributes,
-property types, or property default-value metadata.
+names, declared parameter types, declared return types, required/optional
+counts, and registered scalar or null default values for generated
+constructor, instance-method, and static-method signatures. AOT member
+reflection does not yet expose AOT attributes, property types, or property
+default-value metadata.
 `ReflectionMethod::getDeclaringClass()` and
 `ReflectionProperty::getDeclaringClass()` return a materialized
 `ReflectionClass` for the symbol that declares the reflected
@@ -307,10 +308,10 @@ reflected method is `__construct` or `__destruct`.
 `ReflectionFunction::getName()`, `ReflectionFunction::getParameters()`,
 `ReflectionMethod::getParameters()`, `getNumberOfParameters()`, and
 `getNumberOfRequiredParameters()` report retained eval-declared function and
-method metadata, plus registered generated/AOT method parameter names,
-required/optional counts, and scalar or null default values when native
-method/static-method signatures are registered. Eval-declared functions and
-methods expose declared-type presence for parameters and return types, simple
+method metadata, plus registered generated/AOT method parameter names, declared
+parameter and return types, required/optional counts, and scalar or null default
+values when native method/static-method signatures are registered. Eval-declared
+functions and methods expose declared-type presence for parameters and return types, simple
 named type metadata through
 `ReflectionParameter::getType()` / `ReflectionNamedType::getName()`,
 `allowsNull()`, and `isBuiltin()`, and multi-member union metadata through
@@ -554,7 +555,9 @@ and attribute slice, Reflection type APIs beyond retained parameter, property,
 and function/method return metadata, broader
 parameter default-value objects beyond the eval-supported
 constant-expression subset, and broader generated/AOT method bridge signatures beyond the current public
-non-by-reference fixed scalar/Mixed/object slice. Eval object cloning covers ordinary
+non-by-reference fixed scalar/Mixed/object slice. Generated/AOT method type
+metadata is exposed for registered public bridge signatures, while broader
+non-public or unsupported bridge shapes remain outside that slice. Eval object cloning covers ordinary
 emitted/AOT storage and public AOT `__clone()` hooks, but non-public AOT
 `__clone()` scope checks and broader bridge signatures remain outside that
 bridge slice.

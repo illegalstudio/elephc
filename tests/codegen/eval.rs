@@ -7732,6 +7732,57 @@ echo ":" . $listed->getNumberOfParameters() . "/" . $listed->getParameters()[2]-
     );
 }
 
+/// Verifies eval ReflectionMethod exposes generated/AOT declared type metadata.
+#[test]
+fn test_eval_reflection_method_exposes_aot_type_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface EvalAotReflectTypeLeft {}
+interface EvalAotReflectTypeRight {}
+class EvalAotReflectTypeBoth implements EvalAotReflectTypeLeft, EvalAotReflectTypeRight {}
+class EvalAotReflectTypeDep {}
+class EvalAotReflectTypeTarget {
+    public function describe(int|string $id, ?EvalAotReflectTypeDep $dep): ?string {
+        return null;
+    }
+
+    public static function factory(EvalAotReflectTypeDep $dep): EvalAotReflectTypeDep {
+        return $dep;
+    }
+
+    public function both(EvalAotReflectTypeLeft&EvalAotReflectTypeRight $value): void {}
+}
+echo eval('$method = new ReflectionMethod("EvalAotReflectTypeTarget", "describe");
+$params = $method->getParameters();
+$union = $params[0]->getType();
+echo "U" . count($union->getTypes());
+foreach ($union->getTypes() as $type) {
+    echo ":" . $type->getName() . ($type->isBuiltin() ? "B" : "C");
+}
+$dep = $params[1]->getType();
+echo ":D" . ($dep->allowsNull() ? "?" : "!") . ":" . $dep->getName() . ($dep->isBuiltin() ? "B" : "C");
+$return = $method->getReturnType();
+echo ":R" . ($return->allowsNull() ? "?" : "!") . ":" . $return->getName() . ($return->isBuiltin() ? "B" : "C");
+$static = (new ReflectionMethod("EvalAotReflectTypeTarget", "factory"))->getReturnType();
+echo ":S" . ($static->allowsNull() ? "?" : "!") . ":" . $static->getName() . ($static->isBuiltin() ? "B" : "C");
+$intersection = (new ReflectionMethod("EvalAotReflectTypeTarget", "both"))->getParameters()[0]->getType();
+echo ":I" . count($intersection->getTypes());
+foreach ($intersection->getTypes() as $type) {
+    echo ":" . $type->getName() . ($type->isBuiltin() ? "B" : "C");
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "U2:intB:stringB:D?:EvalAotReflectTypeDepC:R?:stringB:S!:EvalAotReflectTypeDepC:I2:EvalAotReflectTypeLeftC:EvalAotReflectTypeRightC"
+    );
+}
+
 /// Verifies eval ReflectionClass::getConstructor exposes generated/AOT constructor metadata.
 #[test]
 fn test_eval_reflection_class_get_constructor_for_aot_class() {
@@ -7757,6 +7808,9 @@ foreach ($ctor->getParameters() as $param) {
         $default = $param->getDefaultValue();
         echo is_null($default) ? "null" : $default;
     }
+    $type = $param->getType();
+    echo ":";
+    echo $type === null ? "none" : $type->getName() . ($type->allowsNull() ? "?" : "!");
     echo ";";
 }
 $listed = null;
@@ -7778,7 +7832,7 @@ echo ":" . ($plain === null ? "null" : "bad");
     );
     assert_eq!(
         out.stdout,
-        "M:__construct/EvalAotReflectCtorParamTarget:3/1:leftr-;rightO=B;countO=null;:3/left:null"
+        "M:__construct/EvalAotReflectCtorParamTarget:3/1:leftr-:string!;rightO=B:string!;countO=null:int?;:3/left:null"
     );
 }
 

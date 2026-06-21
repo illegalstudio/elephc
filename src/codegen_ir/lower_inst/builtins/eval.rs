@@ -19,7 +19,7 @@ use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed};
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Op};
 use crate::names::{function_symbol, ir_global_symbol, php_symbol_key};
-use crate::parser::ast::{Expr, ExprKind, Visibility};
+use crate::parser::ast::{Expr, ExprKind, TypeExpr, Visibility};
 use crate::types::{ClassInfo, FunctionSig, PhpType};
 
 use super::super::super::context::FunctionContext;
@@ -609,6 +609,105 @@ fn method_signature_can_register_with_eval(signature: &FunctionSig) -> bool {
         && signature.ref_params.iter().all(|is_ref| !*is_ref)
 }
 
+/// Returns generated type specs for declared native callable parameters.
+fn eval_native_callable_param_type_specs(signature: &FunctionSig) -> Vec<Option<String>> {
+    signature
+        .params
+        .iter()
+        .enumerate()
+        .map(|(index, (_, php_type))| {
+            if !signature
+                .declared_params
+                .get(index)
+                .copied()
+                .unwrap_or(false)
+            {
+                return None;
+            }
+            signature
+                .param_type_exprs
+                .get(index)
+                .and_then(Option::as_ref)
+                .and_then(eval_native_type_expr_spec)
+                .or_else(|| eval_native_php_type_spec(php_type, false))
+        })
+        .collect()
+}
+
+/// Returns a generated type spec for a declared native callable return type.
+fn eval_native_callable_return_type_spec(signature: &FunctionSig) -> Option<String> {
+    signature
+        .declared_return
+        .then(|| eval_native_php_type_spec(&signature.return_type, true))
+        .flatten()
+}
+
+/// Formats one parsed PHP type expression for eval native metadata registration.
+fn eval_native_type_expr_spec(type_expr: &TypeExpr) -> Option<String> {
+    match type_expr {
+        TypeExpr::Int => Some("int".to_string()),
+        TypeExpr::Float => Some("float".to_string()),
+        TypeExpr::Bool => Some("bool".to_string()),
+        TypeExpr::Str => Some("string".to_string()),
+        TypeExpr::Void => Some("null".to_string()),
+        TypeExpr::Never => None,
+        TypeExpr::Iterable => Some("iterable".to_string()),
+        TypeExpr::Array(_) => Some("array".to_string()),
+        TypeExpr::Ptr(_) | TypeExpr::Buffer(_) => None,
+        TypeExpr::Named(name) => Some(name.as_str().to_string()),
+        TypeExpr::Nullable(inner) => {
+            let inner = eval_native_type_expr_spec(inner)?;
+            Some(format!("?{}", inner))
+        }
+        TypeExpr::Union(members) => eval_native_type_expr_member_specs(members, "|"),
+        TypeExpr::Intersection(members) => eval_native_type_expr_member_specs(members, "&"),
+    }
+}
+
+/// Formats a compound parsed type expression with the requested separator.
+fn eval_native_type_expr_member_specs(members: &[TypeExpr], separator: &str) -> Option<String> {
+    members
+        .iter()
+        .map(eval_native_type_expr_spec)
+        .collect::<Option<Vec<_>>>()
+        .map(|members| members.join(separator))
+}
+
+/// Formats one checked PHP type for eval native metadata registration.
+fn eval_native_php_type_spec(php_type: &PhpType, allow_return_atoms: bool) -> Option<String> {
+    match php_type {
+        PhpType::Int => Some("int".to_string()),
+        PhpType::Float => Some("float".to_string()),
+        PhpType::Str => Some("string".to_string()),
+        PhpType::Bool => Some("bool".to_string()),
+        PhpType::Void if allow_return_atoms => Some("void".to_string()),
+        PhpType::Void => Some("null".to_string()),
+        PhpType::Never if allow_return_atoms => Some("never".to_string()),
+        PhpType::Never => None,
+        PhpType::Iterable => Some("iterable".to_string()),
+        PhpType::Mixed => Some("mixed".to_string()),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Some("array".to_string()),
+        PhpType::Callable => Some("callable".to_string()),
+        PhpType::Object(name) if name.is_empty() => Some("object".to_string()),
+        PhpType::Object(name) => Some(name.clone()),
+        PhpType::Union(members) => eval_native_php_type_member_specs(members),
+        PhpType::Buffer(_)
+        | PhpType::Packed(_)
+        | PhpType::Pointer(_)
+        | PhpType::Resource(_)
+        | PhpType::TaggedScalar => None,
+    }
+}
+
+/// Formats union members from checked PHP types for eval native metadata registration.
+fn eval_native_php_type_member_specs(members: &[PhpType]) -> Option<String> {
+    members
+        .iter()
+        .map(|member| eval_native_php_type_spec(member, false))
+        .collect::<Option<Vec<_>>>()
+        .map(|members| members.join("|"))
+}
+
 /// Converts a PHP signature default into the compact eval bridge default ABI.
 fn eval_native_callable_default(expr: &Expr) -> Option<EvalNativeCallableDefault> {
     match &expr.kind {
@@ -769,6 +868,7 @@ fn register_eval_native_method(
             .extern_symbol("__elephc_eval_register_native_method")
     };
     abi::emit_call_label(ctx.emitter, &symbol);
+    let param_type_specs = eval_native_callable_param_type_specs(&registration.signature);
     for (index, (param_name, _)) in registration.signature.params.iter().enumerate() {
         register_eval_native_method_param(
             ctx,
@@ -779,6 +879,17 @@ fn register_eval_native_method(
             index,
             param_name,
         );
+        if let Some(type_spec) = param_type_specs.get(index).and_then(Option::as_deref) {
+            register_eval_native_method_param_type(
+                ctx,
+                context_offset,
+                &method_key_label,
+                method_key_len,
+                registration.is_static,
+                index,
+                type_spec,
+            );
+        }
     }
     for (index, default) in registration.signature.defaults.iter().enumerate() {
         let Some(default) = default.as_ref().and_then(eval_native_callable_default) else {
@@ -792,6 +903,16 @@ fn register_eval_native_method(
             registration.is_static,
             index,
             &default,
+        );
+    }
+    if let Some(type_spec) = eval_native_callable_return_type_spec(&registration.signature) {
+        register_eval_native_method_return_type(
+            ctx,
+            context_offset,
+            &method_key_label,
+            method_key_len,
+            registration.is_static,
+            &type_spec,
         );
     }
 }
@@ -841,6 +962,98 @@ fn register_eval_native_method_param(
         ctx.emitter
             .target
             .extern_symbol("__elephc_eval_register_native_method_param")
+    };
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native method parameter-type registration call.
+fn register_eval_native_method_param_type(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    method_key_label: &str,
+    method_key_len: usize,
+    is_static: bool,
+    param_index: usize,
+    type_spec: &str,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        method_key_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        method_key_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        param_index as i64,
+    );
+    let (type_label, type_len) = ctx.data.add_string(type_spec.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        &type_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        type_len as i64,
+    );
+    let symbol = if is_static {
+        ctx.emitter
+            .target
+            .extern_symbol("__elephc_eval_register_native_static_method_param_type")
+    } else {
+        ctx.emitter
+            .target
+            .extern_symbol("__elephc_eval_register_native_method_param_type")
+    };
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native method return-type registration call.
+fn register_eval_native_method_return_type(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    method_key_label: &str,
+    method_key_len: usize,
+    is_static: bool,
+    type_spec: &str,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        method_key_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        method_key_len as i64,
+    );
+    let (type_label, type_len) = ctx.data.add_string(type_spec.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        &type_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        type_len as i64,
+    );
+    let symbol = if is_static {
+        ctx.emitter
+            .target
+            .extern_symbol("__elephc_eval_register_native_static_method_return_type")
+    } else {
+        ctx.emitter
+            .target
+            .extern_symbol("__elephc_eval_register_native_method_return_type")
     };
     abi::emit_call_label(ctx.emitter, &symbol);
 }
@@ -948,6 +1161,7 @@ fn register_eval_native_constructor(
         .target
         .extern_symbol("__elephc_eval_register_native_constructor");
     abi::emit_call_label(ctx.emitter, &symbol);
+    let param_type_specs = eval_native_callable_param_type_specs(&registration.signature);
     for (index, (param_name, _)) in registration.signature.params.iter().enumerate() {
         register_eval_native_constructor_param(
             ctx,
@@ -957,6 +1171,16 @@ fn register_eval_native_constructor(
             index,
             param_name,
         );
+        if let Some(type_spec) = param_type_specs.get(index).and_then(Option::as_deref) {
+            register_eval_native_constructor_param_type(
+                ctx,
+                context_offset,
+                &class_name_label,
+                class_name_len,
+                index,
+                type_spec,
+            );
+        }
     }
     for (index, default) in registration.signature.defaults.iter().enumerate() {
         let Some(default) = default.as_ref().and_then(eval_native_callable_default) else {
@@ -1050,6 +1274,49 @@ fn register_eval_native_constructor_param(
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_constructor_param");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native constructor parameter-type registration call.
+fn register_eval_native_constructor_param_type(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    class_name_label: &str,
+    class_name_len: usize,
+    param_index: usize,
+    type_spec: &str,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        class_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        class_name_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        param_index as i64,
+    );
+    let (type_label, type_len) = ctx.data.add_string(type_spec.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        &type_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        type_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_constructor_param_type");
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 
