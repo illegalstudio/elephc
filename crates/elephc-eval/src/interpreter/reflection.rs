@@ -1766,10 +1766,17 @@ fn eval_reflection_aot_property_metadata_if_exists(
         property_name,
         context,
     );
+    let default_value = eval_reflection_aot_property_default_value(
+        runtime_class_name,
+        &declaring_class_name,
+        property_name,
+        context,
+    );
     Ok(Some(eval_reflection_aot_property_metadata(
         &declaring_class_name,
         flags,
         type_metadata,
+        default_value,
     )))
 }
 
@@ -1787,11 +1794,26 @@ fn eval_reflection_aot_property_type_metadata(
         .and_then(eval_reflection_parameter_type_metadata)
 }
 
+/// Returns registered generated/AOT property default metadata for one reflected property.
+fn eval_reflection_aot_property_default_value(
+    runtime_class_name: &str,
+    declaring_class_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<EvalExpr> {
+    context
+        .native_property_default(declaring_class_name, property_name)
+        .or_else(|| context.native_property_default(runtime_class_name, property_name))
+        .as_ref()
+        .map(eval_reflection_native_callable_default_expr)
+}
+
 /// Converts AOT property flag metadata into the eval ReflectionProperty shape.
 fn eval_reflection_aot_property_metadata(
     class_name: &str,
     flags: u64,
     type_metadata: Option<EvalReflectionParameterTypeMetadata>,
+    default_value: Option<EvalExpr>,
 ) -> EvalReflectionMemberMetadata {
     let visibility = if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
         EvalVisibility::Private
@@ -1823,7 +1845,7 @@ fn eval_reflection_aot_property_metadata(
         ),
         type_metadata,
         return_type_metadata: None,
-        default_value: None,
+        default_value,
         required_parameter_count: 0,
         parameters: Vec::new(),
     }

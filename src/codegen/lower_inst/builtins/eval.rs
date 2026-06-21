@@ -105,6 +105,13 @@ struct EvalNativePropertyTypeRegistration {
     type_spec: String,
 }
 
+/// A module-local property default that can be registered with the eval context.
+struct EvalNativePropertyDefaultRegistration {
+    class_name: String,
+    property_name: String,
+    default: EvalNativeCallableDefault,
+}
+
 /// Scalar native callable default that can be registered with libelephc-eval.
 enum EvalNativeCallableDefault {
     Scalar { kind: i64, payload: i64 },
@@ -478,6 +485,9 @@ fn register_eval_native_method_signatures(ctx: &mut FunctionContext<'_>, context
     for registration in eval_native_property_type_registrations(ctx) {
         register_eval_native_property_type(ctx, context_offset, &registration);
     }
+    for registration in eval_native_property_default_registrations(ctx) {
+        register_eval_native_property_default(ctx, context_offset, &registration);
+    }
     register_eval_native_class_parents(ctx, context_offset);
 }
 
@@ -549,6 +559,20 @@ fn eval_native_property_type_registrations(
     registrations
 }
 
+/// Collects AOT property defaults whose value can be exposed to eval reflection.
+fn eval_native_property_default_registrations(
+    ctx: &FunctionContext<'_>,
+) -> Vec<EvalNativePropertyDefaultRegistration> {
+    let mut registrations = Vec::new();
+    let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    for (class_name, class_info) in classes {
+        collect_eval_native_instance_property_defaults(class_name, class_info, &mut registrations);
+        collect_eval_native_static_property_defaults(class_name, class_info, &mut registrations);
+    }
+    registrations
+}
+
 /// Registers generated AOT class parent metadata for eval `parent::` resolution.
 fn register_eval_native_class_parents(ctx: &mut FunctionContext<'_>, context_offset: usize) {
     let mut parents = ctx
@@ -567,6 +591,62 @@ fn register_eval_native_class_parents(ctx: &mut FunctionContext<'_>, context_off
     parents.sort_by_key(|(class_id, _, _)| *class_id);
     for (_, class_name, parent_name) in parents {
         register_eval_native_class_parent(ctx, context_offset, &class_name, &parent_name);
+    }
+}
+
+/// Adds supported instance-property default metadata for one class to eval registration.
+fn collect_eval_native_instance_property_defaults(
+    class_name: &str,
+    class_info: &ClassInfo,
+    registrations: &mut Vec<EvalNativePropertyDefaultRegistration>,
+) {
+    for (slot, (property_name, _)) in class_info.properties.iter().enumerate() {
+        let default = class_info.defaults.get(slot).and_then(Option::as_ref);
+        let is_declared = class_info.property_slot_is_declared(slot, property_name);
+        let is_abstract = class_info.abstract_properties.contains(property_name);
+        let Some(default) = eval_native_property_default(default, is_declared, is_abstract) else {
+            continue;
+        };
+        registrations.push(EvalNativePropertyDefaultRegistration {
+            class_name: eval_native_instance_property_declaring_class(
+                class_name,
+                class_info,
+                property_name,
+            )
+            .to_string(),
+            property_name: property_name.clone(),
+            default,
+        });
+    }
+}
+
+/// Adds supported static-property default metadata for one class to eval registration.
+fn collect_eval_native_static_property_defaults(
+    class_name: &str,
+    class_info: &ClassInfo,
+    registrations: &mut Vec<EvalNativePropertyDefaultRegistration>,
+) {
+    for (slot, (property_name, _)) in class_info.static_properties.iter().enumerate() {
+        let default = class_info
+            .static_defaults
+            .get(slot)
+            .and_then(Option::as_ref);
+        let is_declared = class_info
+            .declared_static_properties
+            .contains(property_name);
+        let Some(default) = eval_native_property_default(default, is_declared, false) else {
+            continue;
+        };
+        registrations.push(EvalNativePropertyDefaultRegistration {
+            class_name: eval_native_static_property_declaring_class(
+                class_name,
+                class_info,
+                property_name,
+            )
+            .to_string(),
+            property_name: property_name.clone(),
+            default,
+        });
     }
 }
 
@@ -837,6 +917,21 @@ fn eval_native_callable_default(expr: &Expr) -> Option<EvalNativeCallableDefault
         ExprKind::Negate(inner) => eval_native_callable_negated_default(inner),
         _ => None,
     }
+}
+
+/// Converts supported property defaults into the compact eval bridge default ABI.
+fn eval_native_property_default(
+    default: Option<&Expr>,
+    is_declared: bool,
+    is_abstract: bool,
+) -> Option<EvalNativeCallableDefault> {
+    if let Some(default) = default {
+        return eval_native_callable_default(default);
+    }
+    (!is_declared && !is_abstract).then_some(EvalNativeCallableDefault::Scalar {
+        kind: NATIVE_DEFAULT_NULL,
+        payload: 0,
+    })
 }
 
 /// Converts a negated literal default into the compact eval bridge default ABI.
@@ -1377,6 +1472,64 @@ fn register_eval_native_property_type(
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_property_type");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native property-default metadata registration call into the eval context.
+fn register_eval_native_property_default(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    registration: &EvalNativePropertyDefaultRegistration,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    let property_key = format!(
+        "{}::{}",
+        registration.class_name, registration.property_name
+    );
+    let (property_key_label, property_key_len) = ctx.data.add_string(property_key.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &property_key_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        property_key_len as i64,
+    );
+    let symbol = match &registration.default {
+        EvalNativeCallableDefault::Scalar { kind, payload } => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 3),
+                *kind,
+            );
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 4),
+                *payload,
+            );
+            ctx.emitter
+                .target
+                .extern_symbol("__elephc_eval_register_native_property_default_scalar")
+        }
+        EvalNativeCallableDefault::String(value) => {
+            let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
+            abi::emit_symbol_address(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 3),
+                &default_label,
+            );
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 4),
+                default_len as i64,
+            );
+            ctx.emitter
+                .target
+                .extern_symbol("__elephc_eval_register_native_property_default_string")
+        }
+    };
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 

@@ -542,6 +542,59 @@ fn register_native_property_type_records_metadata() {
     assert!(ctx.native_property_type("KnownClass", "bad").is_none());
 }
 
+/// Verifies native AOT property default metadata is available to eval reflection.
+#[test]
+fn register_native_property_default_records_metadata() {
+    let mut ctx = ElephcEvalContext::new();
+    let count = b"KnownClass::count";
+    let label = b"KnownClass::label";
+    let invalid = b"KnownClass::invalid";
+    let label_value = b"ok";
+
+    let scalar_registered = unsafe {
+        __elephc_eval_register_native_property_default_scalar(
+            &mut ctx,
+            count.as_ptr(),
+            count.len() as u64,
+            2,
+            42,
+        )
+    };
+    let string_registered = unsafe {
+        __elephc_eval_register_native_property_default_string(
+            &mut ctx,
+            label.as_ptr(),
+            label.len() as u64,
+            label_value.as_ptr(),
+            label_value.len() as u64,
+        )
+    };
+    let invalid_registered = unsafe {
+        __elephc_eval_register_native_property_default_scalar(
+            &mut ctx,
+            invalid.as_ptr(),
+            invalid.len() as u64,
+            99,
+            0,
+        )
+    };
+
+    assert_eq!(scalar_registered, 1);
+    assert_eq!(
+        ctx.native_property_default("knownclass", "count"),
+        Some(NativeCallableDefault::Int(42))
+    );
+    assert_eq!(string_registered, 1);
+    assert_eq!(
+        ctx.native_property_default("KnownClass", "label"),
+        Some(NativeCallableDefault::String("ok".to_string()))
+    );
+    assert_eq!(invalid_registered, 0);
+    assert!(ctx
+        .native_property_default("KnownClass", "invalid")
+        .is_none());
+}
+
 /// Verifies scope allocation returns an empty opaque activation scope handle.
 #[test]
 fn scope_new_returns_empty_handle() {
