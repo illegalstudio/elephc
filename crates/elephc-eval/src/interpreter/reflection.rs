@@ -1063,9 +1063,10 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
         if owner_kind == EVAL_REFLECTION_OWNER_METHOD
             && !eval_reflection_class_like_exists(&reflected_name, context)
         {
-            if let Some(member) = eval_reflection_aot_method_metadata_if_exists(
+            if let Some(member) = eval_reflection_aot_method_metadata_with_signature_if_exists(
                 &reflected_name,
                 &requested_name,
+                context,
                 values,
             )? {
                 let member_name = requested_name.to_ascii_lowercase();
@@ -1437,9 +1438,12 @@ fn eval_reflection_method_new(
     let class_name = eval_reflection_string_arg(args[0], values)?;
     if !eval_reflection_class_like_exists(&class_name, context) {
         let method_name = eval_reflection_string_arg(args[1], values)?;
-        if let Some(method) =
-            eval_reflection_aot_method_metadata_if_exists(&class_name, &method_name, values)?
-        {
+        if let Some(method) = eval_reflection_aot_method_metadata_with_signature_if_exists(
+            &class_name,
+            &method_name,
+            context,
+            values,
+        )? {
             let method_name = method_name.to_ascii_lowercase();
             return eval_reflection_member_object_result(
                 EVAL_REFLECTION_OWNER_METHOD,
@@ -1524,7 +1528,30 @@ fn eval_reflection_aot_method_metadata_if_exists(
     };
     Ok(Some(eval_reflection_aot_method_metadata(
         runtime_class_name,
+        method_name,
         flags,
+        None,
+    )))
+}
+
+/// Returns generated AOT ReflectionMethod metadata with registered signature details.
+fn eval_reflection_aot_method_metadata_with_signature_if_exists(
+    class_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalReflectionMemberMetadata>, EvalStatus> {
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let Some(flags) = values.reflection_method_flags(runtime_class_name, method_name)? else {
+        return Ok(None);
+    };
+    let signature =
+        eval_reflection_aot_method_signature(runtime_class_name, method_name, flags, context);
+    Ok(Some(eval_reflection_aot_method_metadata(
+        runtime_class_name,
+        method_name,
+        flags,
+        signature.as_ref(),
     )))
 }
 
@@ -1543,7 +1570,9 @@ pub(in crate::interpreter) fn eval_aot_method_dispatch_metadata(
 /// Converts AOT method flag metadata into the eval ReflectionMethod shape.
 fn eval_reflection_aot_method_metadata(
     class_name: &str,
+    method_name: &str,
     flags: u64,
+    signature: Option<&NativeCallableSignature>,
 ) -> EvalReflectionMemberMetadata {
     let visibility = if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
         EvalVisibility::Private
@@ -1552,6 +1581,11 @@ fn eval_reflection_aot_method_metadata(
     } else {
         EvalVisibility::Public
     };
+    let required_parameter_count =
+        signature.map_or(0, NativeCallableSignature::required_param_count);
+    let parameters = signature.map_or_else(Vec::new, |signature| {
+        eval_reflection_native_callable_parameters(class_name, method_name, flags, signature)
+    });
     EvalReflectionMemberMetadata {
         declaring_class_name: Some(class_name.trim_start_matches('\\').to_string()),
         attributes: Vec::new(),
@@ -1565,9 +1599,102 @@ fn eval_reflection_aot_method_metadata(
         type_metadata: None,
         return_type_metadata: None,
         default_value: None,
-        required_parameter_count: 0,
-        parameters: Vec::new(),
+        required_parameter_count,
+        parameters,
     }
+}
+
+/// Selects the registered native signature for an AOT method-like member.
+fn eval_reflection_aot_method_signature(
+    class_name: &str,
+    method_name: &str,
+    flags: u64,
+    context: &ElephcEvalContext,
+) -> Option<NativeCallableSignature> {
+    if method_name.eq_ignore_ascii_case("__construct") {
+        return context.native_constructor_signature(class_name);
+    }
+    if flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0 {
+        context.native_static_method_signature(class_name, method_name)
+    } else {
+        context.native_method_signature(class_name, method_name)
+    }
+}
+
+/// Builds ReflectionParameter metadata for one registered native AOT signature.
+fn eval_reflection_native_callable_parameters(
+    declaring_class_name: &str,
+    method_name: &str,
+    flags: u64,
+    signature: &NativeCallableSignature,
+) -> Vec<EvalReflectionParameterMetadata> {
+    let names = eval_reflection_native_callable_parameter_names(signature);
+    let parameter_count = names.len();
+    let has_type_flags = vec![false; parameter_count];
+    let parameter_types = vec![None; parameter_count];
+    let parameter_attributes = vec![Vec::new(); parameter_count];
+    let defaults = eval_reflection_native_callable_parameter_defaults(signature);
+    let by_ref_flags = vec![false; parameter_count];
+    let variadic_flags = vec![false; parameter_count];
+    let declaring_function = EvalReflectionDeclaringFunctionMetadata {
+        name: method_name.to_ascii_lowercase(),
+        declaring_class_name: Some(declaring_class_name.trim_start_matches('\\').to_string()),
+        attributes: Vec::new(),
+        flags,
+        required_parameter_count: signature.required_param_count(),
+    };
+    eval_reflection_parameters_from_names_and_type_flags(
+        Some(declaring_class_name.trim_start_matches('\\')),
+        Some(&declaring_function),
+        &names,
+        &has_type_flags,
+        &parameter_types,
+        &parameter_attributes,
+        &defaults,
+        &by_ref_flags,
+        &variadic_flags,
+        &[],
+    )
+}
+
+/// Returns parameter names for a registered native callable, filling missing bridge names.
+fn eval_reflection_native_callable_parameter_names(
+    signature: &NativeCallableSignature,
+) -> Vec<String> {
+    (0..signature.param_count())
+        .map(|index| {
+            signature
+                .param_names()
+                .get(index)
+                .filter(|name| !name.is_empty())
+                .cloned()
+                .unwrap_or_else(|| format!("arg{}", index))
+        })
+        .collect()
+}
+
+/// Converts registered scalar native defaults into eval constant expressions.
+fn eval_reflection_native_callable_parameter_defaults(
+    signature: &NativeCallableSignature,
+) -> Vec<Option<EvalExpr>> {
+    (0..signature.param_count())
+        .map(|index| {
+            signature
+                .param_default(index)
+                .map(eval_reflection_native_callable_default_expr)
+        })
+        .collect()
+}
+
+/// Converts one registered native default into an eval constant expression.
+fn eval_reflection_native_callable_default_expr(default: &NativeCallableDefault) -> EvalExpr {
+    EvalExpr::Const(match default {
+        NativeCallableDefault::Null => EvalConst::Null,
+        NativeCallableDefault::Bool(value) => EvalConst::Bool(*value),
+        NativeCallableDefault::Int(value) => EvalConst::Int(*value),
+        NativeCallableDefault::Float(value) => EvalConst::Float(*value),
+        NativeCallableDefault::String(value) => EvalConst::String(value.clone()),
+    })
 }
 
 /// Returns generated AOT ReflectionProperty metadata when the runtime table has a matching row.
@@ -2462,7 +2589,9 @@ fn eval_reflection_aot_member_object_array_result(
     let mut index = 0;
     for name in names {
         let member = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
-            eval_reflection_aot_method_metadata_if_exists(class_name, name, values)?
+            eval_reflection_aot_method_metadata_with_signature_if_exists(
+                class_name, name, context, values,
+            )?
         } else {
             eval_reflection_aot_property_metadata_if_exists(class_name, name, values)?
         };

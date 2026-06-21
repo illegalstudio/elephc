@@ -7510,6 +7510,64 @@ return $join->invokeArgs($object, ["b" => "2", "a" => "1"]);');
     );
 }
 
+/// Verifies eval ReflectionMethod exposes registered generated/AOT parameter metadata.
+#[test]
+fn test_eval_reflection_method_exposes_aot_parameter_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectParamTarget {
+    public function join(string $left, string $right = "B", ?int $count = null): string {
+        return $left . $right . ($count ?? 0);
+    }
+
+    public static function sum(int $first, int $second = 2): int {
+        return $first + $second;
+    }
+}
+echo eval('$method = new ReflectionMethod("EvalAotReflectParamTarget", "join");
+echo $method->getNumberOfParameters() . "/" . $method->getNumberOfRequiredParameters() . ":";
+foreach ($method->getParameters() as $param) {
+    echo $param->getName();
+    echo $param->isOptional() ? "O" : "r";
+    echo $param->isDefaultValueAvailable() ? "=" : "-";
+    if ($param->isDefaultValueAvailable()) {
+        $default = $param->getDefaultValue();
+        echo is_null($default) ? "null" : $default;
+    }
+    echo ";";
+}
+$static = new ReflectionMethod("EvalAotReflectParamTarget", "sum");
+echo ":" . $static->getNumberOfParameters() . "/" . $static->getNumberOfRequiredParameters() . ":";
+foreach ($static->getParameters() as $param) {
+    echo $param->getName();
+    echo $param->isOptional() ? "O" : "r";
+    echo $param->isDefaultValueAvailable() ? "=" : "-";
+    if ($param->isDefaultValueAvailable()) {
+        echo $param->getDefaultValue();
+    }
+    echo ";";
+}
+$listed = null;
+foreach ((new ReflectionClass("EvalAotReflectParamTarget"))->getMethods() as $candidate) {
+    if ($candidate->getName() === "join") {
+        $listed = $candidate;
+    }
+}
+echo ":" . $listed->getNumberOfParameters() . "/" . $listed->getParameters()[2]->getName();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "3/1:leftr-;rightO=B;countO=null;:2/1:firstr-;secondO=2;:3/count"
+    );
+}
+
 /// Verifies eval ReflectionMethod constructor/destructor predicates through the bridge.
 #[test]
 fn test_eval_reflection_method_reports_constructor_and_destructor() {
