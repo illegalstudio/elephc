@@ -51,6 +51,8 @@ const EVAL_REFLECTION_PARAMETER_FLAG_HAS_DEFAULT_VALUE: u64 = 16;
 const EVAL_REFLECTION_PARAMETER_FLAG_PROMOTED: u64 = 32;
 const EVAL_REFLECTION_PARAMETER_FLAG_ALLOWS_NULL: u64 = 64;
 const EVAL_REFLECTION_PARAMETER_FLAG_DEFAULT_VALUE_CONSTANT: u64 = 128;
+const EVAL_REFLECTION_PARAMETER_FLAG_ARRAY_TYPE: u64 = 256;
+const EVAL_REFLECTION_PARAMETER_FLAG_CALLABLE_TYPE: u64 = 512;
 const EVAL_REFLECTION_NAMED_TYPE_FLAG_ALLOWS_NULL: u64 = 1;
 const EVAL_REFLECTION_NAMED_TYPE_FLAG_BUILTIN: u64 = 2;
 
@@ -98,6 +100,8 @@ struct EvalReflectionParameterMetadata {
     is_promoted: bool,
     has_type: bool,
     allows_null: bool,
+    is_array_type: bool,
+    is_callable_type: bool,
     type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     default_value: Option<EvalExpr>,
     default_value_constant_name: Option<String>,
@@ -864,6 +868,81 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
         }
         _ => Ok(None),
     }
+}
+
+/// Handles eval-backed `ReflectionParameter::isArray()` and `isCallable()` calls.
+pub(in crate::interpreter) fn eval_reflection_parameter_legacy_type_predicate_result(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(expected_type) = eval_reflection_parameter_legacy_type_name(method_name) else {
+        return Ok(None);
+    };
+    if !eval_reflection_object_has_class(object, "ReflectionParameter", values)? {
+        return Ok(None);
+    }
+    eval_reflection_bind_no_args(evaluated_args)?;
+    if let Some(flag_property) = eval_reflection_parameter_legacy_type_flag_property(method_name) {
+        let flag = values.property_get(object, flag_property)?;
+        if values.type_tag(flag)? == EVAL_TAG_BOOL {
+            return Ok(Some(flag));
+        }
+    }
+    let type_value = values.method_call(object, "getType", Vec::new())?;
+    if values.is_null(type_value)? {
+        return values.bool_value(false).map(Some);
+    }
+    if !eval_reflection_object_has_class(type_value, "ReflectionNamedType", values)? {
+        return values.bool_value(false).map(Some);
+    }
+    let name = values.method_call(type_value, "getName", Vec::new())?;
+    let bytes = values.string_bytes(name)?;
+    let name = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+    values
+        .bool_value(name.eq_ignore_ascii_case(expected_type))
+        .map(Some)
+}
+
+/// Maps a legacy ReflectionParameter predicate method to its target named type.
+fn eval_reflection_parameter_legacy_type_name(method_name: &str) -> Option<&'static str> {
+    if method_name.eq_ignore_ascii_case("isArray") {
+        Some("array")
+    } else if method_name.eq_ignore_ascii_case("isCallable") {
+        Some("callable")
+    } else {
+        None
+    }
+}
+
+/// Maps a legacy ReflectionParameter predicate method to its precomputed flag slot.
+fn eval_reflection_parameter_legacy_type_flag_property(method_name: &str) -> Option<&'static str> {
+    if method_name.eq_ignore_ascii_case("isArray") {
+        Some("__is_array_type")
+    } else if method_name.eq_ignore_ascii_case("isCallable") {
+        Some("__is_callable_type")
+    } else {
+        None
+    }
+}
+
+/// Returns whether one runtime object cell has the requested PHP class name.
+fn eval_reflection_object_has_class(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if values.is_null(object)? || values.type_tag(object)? != EVAL_TAG_OBJECT {
+        return Ok(false);
+    }
+    let actual = values.object_class_name(object)?;
+    let bytes = values.string_bytes(actual);
+    values.release(actual)?;
+    let actual = String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+    Ok(actual
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case(class_name))
 }
 
 /// Handles eval-backed `ReflectionMethod::hasPrototype()` and `getPrototype()` calls.
@@ -4643,6 +4722,9 @@ fn eval_reflection_property_hook_parameters(
         .property_type()
         .and_then(eval_reflection_parameter_type_metadata);
     let has_type = type_metadata.is_some();
+    let is_array_type = eval_reflection_parameter_has_named_type(type_metadata.as_ref(), "array");
+    let is_callable_type =
+        eval_reflection_parameter_has_named_type(type_metadata.as_ref(), "callable");
     let declaring_function = EvalReflectionDeclaringFunctionMetadata {
         name: hook.reflected_method_name(property.name()),
         declaring_class_name: Some(declaring_class.to_string()),
@@ -4664,6 +4746,8 @@ fn eval_reflection_property_hook_parameters(
         allows_null: type_metadata
             .as_ref()
             .is_some_and(eval_reflection_type_allows_null),
+        is_array_type,
+        is_callable_type,
         type_metadata,
         default_value: None,
         default_value_constant_name: None,
@@ -5198,6 +5282,10 @@ fn eval_reflection_parameters_from_names_and_type_flags(
                 .and_then(Option::as_ref)
                 .and_then(eval_reflection_parameter_type_metadata)
                 .filter(|_| has_type);
+            let is_array_type =
+                eval_reflection_parameter_has_named_type(type_metadata.as_ref(), "array");
+            let is_callable_type =
+                eval_reflection_parameter_has_named_type(type_metadata.as_ref(), "callable");
             EvalReflectionParameterMetadata {
                 name: name.clone(),
                 declaring_class_name: declaring_class_name.map(str::to_string),
@@ -5220,12 +5308,27 @@ fn eval_reflection_parameters_from_names_and_type_flags(
                     type_metadata.as_ref(),
                     default_value.as_ref(),
                 ),
+                is_array_type,
+                is_callable_type,
                 type_metadata,
                 default_value,
                 default_value_constant_name,
             }
         })
         .collect()
+}
+
+/// Returns whether retained parameter metadata is one named type with the requested name.
+fn eval_reflection_parameter_has_named_type(
+    type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
+    expected_name: &str,
+) -> bool {
+    matches!(
+        type_metadata,
+        Some(EvalReflectionParameterTypeMetadata {
+            kind: EvalReflectionParameterTypeKind::Named(named)
+        }) if named.name.eq_ignore_ascii_case(expected_name)
+    )
 }
 
 /// Returns PHP's ReflectionParameter default-constant name for retained eval defaults.
@@ -5695,6 +5798,12 @@ fn eval_reflection_parameter_flags(parameter: &EvalReflectionParameterMetadata) 
     }
     if parameter.default_value_constant_name.is_some() {
         flags |= EVAL_REFLECTION_PARAMETER_FLAG_DEFAULT_VALUE_CONSTANT;
+    }
+    if parameter.is_array_type {
+        flags |= EVAL_REFLECTION_PARAMETER_FLAG_ARRAY_TYPE;
+    }
+    if parameter.is_callable_type {
+        flags |= EVAL_REFLECTION_PARAMETER_FLAG_CALLABLE_TYPE;
     }
     flags
 }

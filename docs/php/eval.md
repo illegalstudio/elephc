@@ -325,7 +325,9 @@ values when native method/static-method signatures are registered. Eval-declared
 functions and methods expose declared-type presence for parameters and return types, simple
 named type metadata through
 `ReflectionParameter::getType()` / `ReflectionNamedType::getName()`,
-`allowsNull()`, and `isBuiltin()`, and multi-member union metadata through
+`allowsNull()`, and `isBuiltin()`, and the legacy
+`ReflectionParameter::isArray()` / `isCallable()` predicates for named `array`
+and `callable` parameter types. Multi-member union metadata is exposed through
 `ReflectionUnionType::getTypes()` and `allowsNull()`. Intersection parameter
 metadata is exposed through `ReflectionIntersectionType::getTypes()` and
 `allowsNull()`. Function, method, and parameter attributes are exposed through

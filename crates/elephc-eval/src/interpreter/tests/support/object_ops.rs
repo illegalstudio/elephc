@@ -28,6 +28,8 @@ const EVAL_REFLECTION_PARAMETER_FLAG_HAS_DEFAULT_VALUE: u64 = 16;
 const EVAL_REFLECTION_PARAMETER_FLAG_PROMOTED: u64 = 32;
 const EVAL_REFLECTION_PARAMETER_FLAG_ALLOWS_NULL: u64 = 64;
 const EVAL_REFLECTION_PARAMETER_FLAG_DEFAULT_VALUE_CONSTANT: u64 = 128;
+const EVAL_REFLECTION_PARAMETER_FLAG_ARRAY_TYPE: u64 = 256;
+const EVAL_REFLECTION_PARAMETER_FLAG_CALLABLE_TYPE: u64 = 512;
 
 impl FakeOps {
     /// Reads one fake object property by name.
@@ -459,6 +461,14 @@ impl FakeOps {
                 Self::object_property(&properties, "__allows_null")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
+            (FakeValue::Object(properties), "isarray") if args.is_empty() => {
+                Self::object_property(&properties, "__is_array_type")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
+            (FakeValue::Object(properties), "iscallable") if args.is_empty() => {
+                Self::object_property(&properties, "__is_callable_type")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
             (FakeValue::Object(properties), "isbuiltin") if args.is_empty() => {
                 Self::object_property(&properties, "__is_builtin")
                     .map_or_else(|| self.bool_value(false), Ok)
@@ -765,6 +775,10 @@ impl FakeOps {
                 self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_ALLOWS_NULL) != 0)?;
             let is_default_value_constant = self
                 .bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_DEFAULT_VALUE_CONSTANT) != 0)?;
+            let is_array_type =
+                self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_ARRAY_TYPE) != 0)?;
+            let is_callable_type =
+                self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_CALLABLE_TYPE) != 0)?;
             properties.push(("__position".to_string(), position));
             properties.push(("__is_optional".to_string(), is_optional));
             properties.push(("__is_variadic".to_string(), is_variadic));
@@ -775,6 +789,8 @@ impl FakeOps {
             properties.push(("__is_promoted".to_string(), is_promoted));
             properties.push(("__has_type".to_string(), has_type));
             properties.push(("__allows_null".to_string(), allows_null));
+            properties.push(("__is_array_type".to_string(), is_array_type));
+            properties.push(("__is_callable_type".to_string(), is_callable_type));
             properties.push(("__type".to_string(), method_objects));
             properties.push(("__has_default_value".to_string(), has_default_value));
             properties.push((

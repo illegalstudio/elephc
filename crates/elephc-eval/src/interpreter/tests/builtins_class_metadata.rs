@@ -1537,7 +1537,7 @@ fn execute_program_reflects_eval_method_parameters() {
 br##"interface EvalReflectLeft {}
 interface EvalReflectRight {}
 class EvalReflectParamTarget {
-    public function run(#[EvalParamTag("first")] int &$first, int|string $union, #[EvalParamTag("both")] EvalReflectLeft&EvalReflectRight $both, \App\Name|null $second = null, &...$rest) {}
+    public function run(#[EvalParamTag("first")] int &$first, int|string $union, #[EvalParamTag("both")] EvalReflectLeft&EvalReflectRight $both, ?array $items = null, ?callable $callback = null, \App\Name|null $second = null, &...$rest) {}
 }
 $method = new ReflectionMethod("EvalReflectParamTarget", "run");
 echo $method->getNumberOfParameters(); echo "/";
@@ -1551,6 +1551,8 @@ foreach ($params as $param) {
     echo $param->canBePassedByValue() ? "Y" : "N";
     echo $param->hasType() ? "T" : "t";
     echo $param->allowsNull() ? "N" : "n";
+    echo $param->isArray() ? "A" : "a";
+    echo $param->isCallable() ? "C" : "c";
     $type = $param->getType();
     if ($param->getName() == "union") {
         echo ":union";
@@ -1596,7 +1598,7 @@ return true;"##,
 
     assert_eq!(
         values.output,
-        "5/3:first#0rvRNTn:int!B:A1:EvalParamTag:first:d|union#1rvbYTn:union!:intB:stringB:A0:d|both#2rvbYTn:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|second#3OvbYTN:App\\Name?C:A0:D=null|rest#4OVRNtN:null:A0:d|"
+        "7/3:first#0rvRNTnac:int!B:A1:EvalParamTag:first:d|union#1rvbYTnac:union!:intB:stringB:A0:d|both#2rvbYTnac:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|items#3OvbYTNAc:array?B:A0:D=null|callback#4OvbYTNaC:callable?B:A0:D=null|second#5OvbYTNac:App\\Name?C:A0:D=null|rest#6OVRNtNac:null:A0:d|"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
