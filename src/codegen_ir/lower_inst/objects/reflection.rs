@@ -895,8 +895,16 @@ fn reflection_property_metadata(
                 reflection_property_declaring_class_name(info, &property_name);
             Some(ReflectionOwnerMetadata {
                 reflected_name: Some(property_name.clone()),
-                attr_names: info.property_attribute_names.get(&property_name)?.clone(),
-                attr_args: info.property_attribute_args.get(&property_name)?.clone(),
+                attr_names: info
+                    .property_attribute_names
+                    .get(&property_name)
+                    .cloned()
+                    .unwrap_or_default(),
+                attr_args: info
+                    .property_attribute_args
+                    .get(&property_name)
+                    .cloned()
+                    .unwrap_or_default(),
                 interface_names: Vec::new(),
                 trait_names: Vec::new(),
                 parent_names: Vec::new(),
