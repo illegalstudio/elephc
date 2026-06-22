@@ -2361,6 +2361,95 @@ fn builtin_reflection_property_modifier_mask_method(method_name: &str, mask: i64
     }
 }
 
+/// Returns `ReflectionProperty::hasHook()` backed by the retained hook method map.
+fn builtin_reflection_property_has_hook_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let hook_kind = reflection_property_hook_type_value(dummy_span);
+    let has_hook = function_call(
+        "array_key_exists",
+        vec![
+            hook_kind,
+            reflection_this_property("__hooks", dummy_span),
+        ],
+        dummy_span,
+    );
+    ClassMethod {
+        name: "hasHook".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("type".to_string(), Some(mixed_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        body: vec![Stmt::new(StmtKind::Return(Some(has_hook)), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionProperty::getHook()` backed by the retained hook method map.
+fn builtin_reflection_property_get_hook_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let hook_kind = reflection_property_hook_type_value(dummy_span);
+    let hooks = reflection_this_property("__hooks", dummy_span);
+    let hook_method = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(hooks.clone()),
+            index: Box::new(hook_kind.clone()),
+        },
+        dummy_span,
+    );
+    let has_hook = function_call("array_key_exists", vec![hook_kind, hooks], dummy_span);
+    ClassMethod {
+        name: "getHook".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("type".to_string(), Some(mixed_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(nullable_object_type("ReflectionMethod")),
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: has_hook,
+                    then_body: vec![Stmt::new(
+                        StmtKind::Return(Some(hook_method)),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(null_value(dummy_span))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `$type->value` for `PropertyHookType` arguments accepted by hook APIs.
+fn reflection_property_hook_type_value(span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(variable_expr("type", span)),
+            property: "value".to_string(),
+        },
+        span,
+    )
+}
+
 /// Returns `ReflectionProperty::getValue()` for dynamic public instance reflectors.
 fn builtin_reflection_property_get_value_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
@@ -3183,6 +3272,8 @@ fn add_reflection_member_flag_methods(
             "__hooks",
             array_type(),
         ));
+        methods.push(builtin_reflection_property_has_hook_method());
+        methods.push(builtin_reflection_property_get_hook_method());
         properties.push(builtin_property(
             "__string",
             Visibility::Private,
@@ -4156,6 +4247,33 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getHooks")) {
                     sig.return_type = reflection_property_hook_map_type();
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("hasHook")) {
+                    sig.params = vec![(
+                        "type".to_string(),
+                        PhpType::Object("PropertyHookType".to_string()),
+                    )];
+                    sig.param_type_exprs =
+                        vec![Some(TypeExpr::Named(Name::unqualified("PropertyHookType")))];
+                    sig.defaults = vec![None];
+                    sig.ref_params = vec![false];
+                    sig.declared_params = vec![true];
+                    sig.return_type = PhpType::Bool;
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getHook")) {
+                    sig.params = vec![(
+                        "type".to_string(),
+                        PhpType::Object("PropertyHookType".to_string()),
+                    )];
+                    sig.param_type_exprs =
+                        vec![Some(TypeExpr::Named(Name::unqualified("PropertyHookType")))];
+                    sig.defaults = vec![None];
+                    sig.ref_params = vec![false];
+                    sig.declared_params = vec![true];
+                    sig.return_type = PhpType::Union(vec![
+                        PhpType::Object("ReflectionMethod".to_string()),
+                        PhpType::Void,
+                    ]);
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
                     sig.return_type = PhpType::Int;

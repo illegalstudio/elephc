@@ -11,12 +11,13 @@
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Program, Stmt, StmtKind};
-use crate::types::EnumCaseInfo;
+use crate::types::{EnumCaseInfo, EnumCaseValue, PhpType};
 
 use super::schema::insert_enum_metadata;
 use super::Checker;
 
 const SORT_DIRECTION: &str = "SortDirection";
+const PROPERTY_HOOK_TYPE: &str = "PropertyHookType";
 
 /// Injects all builtin enum declarations into the checker.
 ///
@@ -41,6 +42,31 @@ pub(crate) fn inject_builtin_enums(
             EnumCaseInfo {
                 name: "Descending".to_string(),
                 value: None,
+                attribute_names: Vec::new(),
+                attribute_args: Vec::new(),
+            },
+        ],
+        &[],
+        &[],
+        &[],
+        checker,
+        next_class_id,
+    )?;
+
+    ensure_builtin_enum_name_available(program, checker, PROPERTY_HOOK_TYPE)?;
+    insert_enum_metadata(
+        PROPERTY_HOOK_TYPE,
+        Some(PhpType::Str),
+        vec![
+            EnumCaseInfo {
+                name: "Get".to_string(),
+                value: Some(EnumCaseValue::Str("get".to_string())),
+                attribute_names: Vec::new(),
+                attribute_args: Vec::new(),
+            },
+            EnumCaseInfo {
+                name: "Set".to_string(),
+                value: Some(EnumCaseValue::Str("set".to_string())),
                 attribute_names: Vec::new(),
                 attribute_args: Vec::new(),
             },

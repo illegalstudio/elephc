@@ -460,21 +460,35 @@ class ReflectPropertyHookMetadataTarget {
 $hooked = new ReflectionProperty(ReflectPropertyHookMetadataTarget::class, "doubled");
 $readonly = new ReflectionProperty(ReflectPropertyHookMetadataTarget::class, "readonlyHook");
 $plain = new ReflectionProperty(ReflectPropertyHookMetadataTarget::class, "plain");
+$getCase = PropertyHookType::Get;
+$setCase = PropertyHookType::Set;
+$caseList = PropertyHookType::cases();
 
+echo count($caseList) . ":" . $caseList[0]->value . ":";
+echo PropertyHookType::from("set")->name . ":";
+echo (PropertyHookType::tryFrom("missing") === null ? "T" : "t") . ":";
 echo ($hooked->hasHooks() ? "H" : "h") . ":";
 $hooks = $hooked->getHooks();
 echo count($hooks) . ":" . $hooks["get"]->getName() . ":" . $hooks["set"]->getName() . ":";
 echo $hooks["get"]->getDeclaringClass()->getName() . ":";
 echo $hooks["get"]->getNumberOfParameters() . ":";
 echo $hooks["set"]->getNumberOfParameters() . ":" . $hooks["set"]->getParameters()[0]->getName() . ":";
+echo ($hooked->hasHook($getCase) ? "G" : "g") . ":";
+echo ($hooked->hasHook(type: $setCase) ? "S" : "s") . ":";
+$get = $hooked->getHook($getCase);
+$set = $hooked->getHook(type: $setCase);
+echo $get->getName() . ":" . $set->getName() . ":";
 echo ($readonly->hasHooks() ? "R" : "r") . ":";
 $readonlyHooks = $readonly->getHooks();
 echo count($readonlyHooks) . ":" . $readonlyHooks["get"]->getName() . ":";
+echo ($readonly->hasHook($getCase) ? "RG" : "rg") . ":";
+echo ($readonly->hasHook($setCase) ? "bad" : "RS") . ":";
+echo ($readonly->getHook($setCase) === null ? "N" : "n") . ":";
 echo ($plain->hasHooks() ? "bad" : "plain") . ":" . count($plain->getHooks());
 "#,
     );
     assert_eq!(
         out,
-        "H:2:$doubled::get:$doubled::set:ReflectPropertyHookMetadataTarget:0:1:value:R:1:$readonlyHook::get:plain:0"
+        "2:get:Set:T:H:2:$doubled::get:$doubled::set:ReflectPropertyHookMetadataTarget:0:1:value:G:S:$doubled::get:$doubled::set:R:1:$readonlyHook::get:RG:RS:N:plain:0"
     );
 }
