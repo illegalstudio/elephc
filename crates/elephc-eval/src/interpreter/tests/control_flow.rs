@@ -402,3 +402,40 @@ fn execute_program_foreach_honors_break_and_continue() {
 
     assert_eq!(values.output, "2");
 }
+
+/// Verifies foreach drives eval-declared Iterator and IteratorAggregate objects.
+#[test]
+fn execute_program_foreach_iterates_eval_traversable_objects() {
+    let program = parse_fragment(
+        br#"class EvalForeachIterator implements Iterator {
+    private int $i = 0;
+    public function rewind(): void { echo "rewind:"; $this->i = 0; }
+    public function valid(): bool { echo "valid" . $this->i . ":"; return $this->i < 2; }
+    public function current(): mixed { echo "current" . $this->i . ":"; return "v" . $this->i; }
+    public function key(): mixed { echo "key" . $this->i . ":"; return "k" . $this->i; }
+    public function next(): void { echo "next" . $this->i . ":"; $this->i = $this->i + 1; }
+}
+class EvalForeachAggregate implements IteratorAggregate {
+    public function getIterator(): Traversable { echo "agg:"; return new EvalForeachIterator(); }
+}
+foreach (new EvalForeachIterator() as $key => $item) {
+    echo $key . "=" . $item . ":";
+    if ($item === "v0") { continue; }
+    break;
+}
+echo "|";
+foreach (new EvalForeachAggregate() as $item) {
+    echo $item . ":";
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "rewind:valid0:current0:key0:k0=v0:next0:valid1:current1:key1:k1=v1:|agg:rewind:valid0:current0:v0:next0:valid1:current1:v1:next1:valid2:"
+    );
+}

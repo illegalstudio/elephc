@@ -253,9 +253,34 @@ fn eval_declared_return_class_accepts(
     )?;
     let identity = values.object_identity(value)?;
     if let Some(class) = context.dynamic_object_class(identity) {
-        return Ok(context.class_is_a(class.name(), &target, false));
+        return Ok(eval_declared_dynamic_object_is_a(
+            class.name(),
+            &target,
+            context,
+        ));
     }
-    values.object_is_a(value, &target, false)
+    if values.object_is_a(value, &target, false)? {
+        return Ok(true);
+    }
+    if target.eq_ignore_ascii_case("Traversable") {
+        return Ok(values.object_is_a(value, "Iterator", false)?
+            || values.object_is_a(value, "IteratorAggregate", false)?);
+    }
+    Ok(false)
+}
+
+/// Returns whether one eval-created object class satisfies a declared return target.
+fn eval_declared_dynamic_object_is_a(
+    class_name: &str,
+    target: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    if context.class_is_a(class_name, target, false) {
+        return true;
+    }
+    target.eq_ignore_ascii_case("Traversable")
+        && (context.class_is_a(class_name, "Iterator", false)
+            || context.class_is_a(class_name, "IteratorAggregate", false))
 }
 
 /// Resolves class keywords and aliases in a declared return type atom.

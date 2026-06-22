@@ -4674,7 +4674,7 @@ pub(in crate::interpreter) fn execute_for_stmt(
     Ok(EvalControl::None)
 }
 
-/// Executes a PHP `foreach` loop over eval array values.
+/// Executes a PHP `foreach` loop over eval array and Traversable object values.
 pub(in crate::interpreter) fn execute_foreach_stmt(
     array: &EvalExpr,
     key_name: Option<&str>,
@@ -4685,6 +4685,27 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
     let array = eval_expr(array, context, scope, values)?;
+    match values.type_tag(array)? {
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
+            execute_foreach_array_stmt(array, key_name, value_name, body, context, scope, values)
+        }
+        EVAL_TAG_OBJECT => {
+            execute_foreach_object_stmt(array, key_name, value_name, body, context, scope, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Executes `foreach` over a PHP array value using insertion-order runtime hooks.
+fn execute_foreach_array_stmt(
+    array: RuntimeCellHandle,
+    key_name: Option<&str>,
+    value_name: &str,
+    body: &[EvalStmt],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
     let len = values.array_len(array)?;
     for index in 0..len {
         let key = values.array_iter_key(array, index)?;
@@ -4720,6 +4741,116 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
         }
     }
     Ok(EvalControl::None)
+}
+
+/// Executes `foreach` over an Iterator or IteratorAggregate object.
+fn execute_foreach_object_stmt(
+    object: RuntimeCellHandle,
+    key_name: Option<&str>,
+    value_name: &str,
+    body: &[EvalStmt],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    if eval_foreach_object_is_a(object, "Iterator", context, values)? {
+        return execute_foreach_iterator_stmt(
+            object, key_name, value_name, body, context, scope, values,
+        );
+    }
+    if eval_foreach_object_is_a(object, "IteratorAggregate", context, values)? {
+        let iterator = eval_method_call_result(object, "getIterator", Vec::new(), context, values)?;
+        return match values.type_tag(iterator)? {
+            EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => execute_foreach_array_stmt(
+                iterator, key_name, value_name, body, context, scope, values,
+            ),
+            EVAL_TAG_OBJECT if eval_foreach_object_is_a(iterator, "Iterator", context, values)? => {
+                execute_foreach_iterator_stmt(
+                    iterator, key_name, value_name, body, context, scope, values,
+                )
+            }
+            _ => Err(EvalStatus::RuntimeFatal),
+        };
+    }
+    Err(EvalStatus::RuntimeFatal)
+}
+
+/// Drives one Iterator object through PHP's `foreach` method-call sequence.
+fn execute_foreach_iterator_stmt(
+    iterator: RuntimeCellHandle,
+    key_name: Option<&str>,
+    value_name: &str,
+    body: &[EvalStmt],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    let result = eval_method_call_result(iterator, "rewind", Vec::new(), context, values)?;
+    values.release(result)?;
+    loop {
+        let valid = eval_method_call_result(iterator, "valid", Vec::new(), context, values)?;
+        let is_valid = values.truthy(valid)?;
+        values.release(valid)?;
+        if !is_valid {
+            return Ok(EvalControl::None);
+        }
+
+        let value = eval_method_call_result(iterator, "current", Vec::new(), context, values)?;
+        let key = if key_name.is_some() {
+            Some(eval_method_call_result(
+                iterator,
+                "key",
+                Vec::new(),
+                context,
+                values,
+            )?)
+        } else {
+            None
+        };
+        if let Some((key_name, key)) = key_name.zip(key) {
+            for replaced in set_scope_cell(
+                context,
+                scope,
+                key_name.to_string(),
+                key,
+                ScopeCellOwnership::Owned,
+            )? {
+                values.release(replaced)?;
+            }
+        }
+        for replaced in set_scope_cell(
+            context,
+            scope,
+            value_name.to_string(),
+            value,
+            ScopeCellOwnership::Owned,
+        )? {
+            values.release(replaced)?;
+        }
+
+        match execute_statements(body, context, scope, values)? {
+            EvalControl::None | EvalControl::Continue => {
+                let result =
+                    eval_method_call_result(iterator, "next", Vec::new(), context, values)?;
+                values.release(result)?;
+            }
+            EvalControl::Break => return Ok(EvalControl::None),
+            EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
+            EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
+            EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+        }
+    }
+}
+
+/// Returns whether a foreach object satisfies one iterator interface.
+fn eval_foreach_object_is_a(
+    object: RuntimeCellHandle,
+    target: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    dynamic_object_is_a(object, target, false, context, values)?
+        .map_or_else(|| values.object_is_a(object, target, false), Ok)
 }
 
 /// Returns PHP's next automatic integer key for `$array[]` append writes.

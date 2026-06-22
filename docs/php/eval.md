@@ -55,8 +55,9 @@ such a local alias removes the alias without unsetting the global value.
 | Namespaces | Both `namespace Name;` and `namespace Name { ... }` forms are supported, including simple and grouped `use`, `use function`, and `use const` declarations. |
 
 `foreach` supports value-only and key-value iteration over indexed and
-associative arrays. Eval associative arrays preserve PHP insertion order for
-iteration.
+associative arrays, plus eval-declared and generated/AOT `Iterator` and
+`IteratorAggregate` objects. Eval associative arrays preserve PHP insertion
+order for iteration.
 
 Includes follow PHP's cwd-first lookup and then fall back to the eval call-site
 directory. Included PHP files may contain normal `<?php ... ?>` blocks, raw text
