@@ -1493,6 +1493,40 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod accepts object targets and reflects the runtime class.
+#[test]
+fn execute_program_reflection_method_accepts_object_targets() {
+    let program = parse_fragment(
+        br#"class EvalReflectMethodObjectBase {
+    public function MiXeDCase() { return "base"; }
+}
+class EvalReflectMethodObjectChild extends EvalReflectMethodObjectBase {
+    public function childCase() { return "child"; }
+}
+$object = new EvalReflectMethodObjectChild();
+$inherited = new ReflectionMethod($object, "mixedcase");
+echo $inherited->getName(); echo ":";
+echo $inherited->getDeclaringClass()->getName(); echo ":";
+echo $inherited->invoke($object); echo ":";
+$own = new ReflectionMethod($object, "CHILDCASE");
+echo $own->getName(); echo ":";
+echo $own->getDeclaringClass()->getName(); echo ":";
+echo $own->invoke($object);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "MiXeDCase:EvalReflectMethodObjectBase:base:childCase:EvalReflectMethodObjectChild:child"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval member and enum-case reflectors expose their declaring class.
 #[test]
 fn execute_program_reflects_eval_declaring_class_metadata() {

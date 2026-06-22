@@ -8179,6 +8179,52 @@ echo $listed->invoke($object);');
     assert_eq!(out.stdout, "MiXeDCase:MiXeDCase:base:childCase:child");
 }
 
+/// Verifies eval ReflectionMethod accepts object targets through the bridge.
+#[test]
+fn test_eval_reflection_method_accepts_object_targets() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectMethodObjectBase {
+    public function aotBase() { return "aot-base"; }
+}
+class EvalAotReflectMethodObjectChild extends EvalAotReflectMethodObjectBase {
+    public function aotChild() { return "aot-child"; }
+}
+eval('class EvalReflectMethodObjectBase {
+    public function MiXeDCase() { return "base"; }
+}
+class EvalReflectMethodObjectChild extends EvalReflectMethodObjectBase {
+    public function childCase() { return "child"; }
+}
+$object = new EvalReflectMethodObjectChild();
+$inherited = new ReflectionMethod($object, "mixedcase");
+echo $inherited->getName() . ":";
+echo $inherited->getDeclaringClass()->getName() . ":";
+echo $inherited->invoke($object) . ":";
+$own = new ReflectionMethod($object, "CHILDCASE");
+echo $own->getName() . ":";
+echo $own->getDeclaringClass()->getName() . ":";
+echo $own->invoke($object) . "|";
+$aot = new EvalAotReflectMethodObjectChild();
+$aotInherited = new ReflectionMethod($aot, "aotbase");
+echo $aotInherited->getName() . ":";
+echo $aotInherited->getDeclaringClass()->getName() . ":";
+$aotOwn = new ReflectionMethod($aot, "aotchild");
+echo $aotOwn->getName() . ":";
+echo $aotOwn->getDeclaringClass()->getName();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "MiXeDCase:EvalReflectMethodObjectBase:base:childCase:EvalReflectMethodObjectChild:child|aotbase:EvalAotReflectMethodObjectBase:aotchild:EvalAotReflectMethodObjectChild"
+    );
+}
+
 /// Verifies eval-declared final properties cannot be redeclared by subclasses.
 #[test]
 fn test_eval_declared_final_property_override_fails() {
