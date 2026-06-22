@@ -460,6 +460,7 @@ fn flatten_enum_methods(
                 attributes: stmt.attributes.clone(),
                 constants: constants.clone(),
                 used_traits: Vec::new(),
+                trait_aliases: Vec::new(),
             };
             substitute_relative_class_types_in_methods(&mut flattened.methods, name, None);
             units.push(flattened);

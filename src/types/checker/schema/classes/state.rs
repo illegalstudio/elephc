@@ -163,6 +163,7 @@ impl ClassBuildState {
             constant_attribute_names,
             constant_attribute_args,
             used_traits: class.used_traits.clone(),
+            trait_aliases: class.trait_aliases.clone(),
             properties: self.prop_types,
             property_offsets: self.property_offsets,
             property_declaring_classes: self.property_declaring_classes,

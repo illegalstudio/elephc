@@ -32,6 +32,7 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
             attributes: Vec::new(),
             constants: multiple_iterator_constants(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 }

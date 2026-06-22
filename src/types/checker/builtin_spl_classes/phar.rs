@@ -44,6 +44,7 @@ fn insert_phar_like_class(class_map: &mut HashMap<String, FlattenedClass>, name:
             attributes: Vec::new(),
             constants: phar_constants(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 }
@@ -64,6 +65,7 @@ fn insert_phar_file_info_class(class_map: &mut HashMap<String, FlattenedClass>) 
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 }

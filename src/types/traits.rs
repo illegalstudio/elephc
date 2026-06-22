@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    ClassConst, ClassMethod, ClassProperty, Program, StmtKind, TraitUse,
+    ClassConst, ClassMethod, ClassProperty, Program, StmtKind, TraitAdaptation, TraitUse,
 };
 use crate::span::Span;
 
@@ -37,6 +37,7 @@ pub struct FlattenedClass {
     pub attributes: Vec<crate::parser::ast::AttributeGroup>,
     pub constants: Vec<ClassConst>,
     pub used_traits: Vec<String>,
+    pub trait_aliases: Vec<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -212,6 +213,7 @@ pub fn flatten_classes(
                     attributes: stmt.attributes.clone(),
                     constants: constants.clone(),
                     used_traits: used_trait_names(trait_uses),
+                    trait_aliases: used_trait_aliases(trait_uses, &trait_map),
                 });
             }
             StmtKind::EnumDecl {
@@ -284,6 +286,7 @@ pub fn flatten_classes(
                         attributes: stmt.attributes.clone(),
                         constants: constants.clone(),
                         used_traits: used_trait_names(trait_uses),
+                        trait_aliases: used_trait_aliases(trait_uses, &trait_map),
                     },
                 );
             }
@@ -305,4 +308,49 @@ fn used_trait_names(trait_uses: &[TraitUse]) -> Vec<String> {
                 .map(|name| name.as_str().to_string())
         })
         .collect()
+}
+
+/// Returns direct trait aliases in PHP's `alias => Trait::method` reflection format.
+fn used_trait_aliases(
+    trait_uses: &[TraitUse],
+    trait_map: &HashMap<String, TraitDeclInfo>,
+) -> Vec<(String, String)> {
+    trait_uses
+        .iter()
+        .flat_map(|use_decl| {
+            use_decl.adaptations.iter().filter_map(|adaptation| {
+                let TraitAdaptation::Alias {
+                    trait_name,
+                    method,
+                    alias: Some(alias),
+                    ..
+                } = adaptation
+                else {
+                    return None;
+                };
+                let source_trait = trait_name
+                    .as_ref()
+                    .map(|name| name.as_str().to_string())
+                    .or_else(|| trait_alias_source_trait(use_decl, method, trait_map))?;
+                Some((alias.clone(), format!("{source_trait}::{method}")))
+            })
+        })
+        .collect()
+}
+
+/// Resolves the direct trait that supplies one unqualified alias adaptation target.
+fn trait_alias_source_trait(
+    trait_use: &TraitUse,
+    method: &str,
+    trait_map: &HashMap<String, TraitDeclInfo>,
+) -> Option<String> {
+    let method_key = php_symbol_key(method);
+    trait_use.trait_names.iter().find_map(|trait_name| {
+        let trait_info = trait_map.get(trait_name.as_str())?;
+        trait_info
+            .methods
+            .iter()
+            .any(|candidate| php_symbol_key(&candidate.name) == method_key)
+            .then(|| trait_name.as_str().to_string())
+    })
 }

@@ -47,6 +47,7 @@ pub(crate) fn inject_builtin_user_filter(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 

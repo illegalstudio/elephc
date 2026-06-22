@@ -451,6 +451,7 @@ pub(crate) fn insert_enum_metadata(
             constant_attribute_names,
             constant_attribute_args,
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
             properties,
             property_offsets,
             property_declaring_classes,

@@ -21,6 +21,7 @@ use crate::codegen_ir::literal_defaults::{
     emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
     emit_boxed_int_literal_to_result, emit_boxed_null_literal_to_result,
     emit_boxed_string_literal_default_to_result, emit_empty_assoc_array_literal_to_result,
+    emit_string_literal_default_to_result,
 };
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, Op, TraitMethodInfo, ValueDef, ValueId};
@@ -42,6 +43,7 @@ struct ReflectionOwnerMetadata {
     attr_args: Vec<Option<Vec<AttrArgValue>>>,
     interface_names: Vec<String>,
     trait_names: Vec<String>,
+    trait_aliases: Vec<(String, String)>,
     parent_names: Vec<String>,
     method_names: Vec<String>,
     property_names: Vec<String>,
@@ -321,6 +323,11 @@ fn emit_reflection_owner_object(
                 &metadata.trait_names,
             )?;
             emit_reflection_class_array_property_by_name(ctx, "__traits", &metadata.trait_names)?;
+            emit_reflection_string_assoc_property_by_name(
+                ctx,
+                "__trait_aliases",
+                &metadata.trait_aliases,
+            )?;
             emit_reflection_string_array_property_by_name(
                 ctx,
                 "__parent_names",
@@ -562,6 +569,7 @@ fn reflection_class_metadata_for_name(
             attr_args: info.attribute_args.clone(),
             interface_names: info.interfaces.clone(),
             trait_names: info.used_traits.clone(),
+            trait_aliases: info.trait_aliases.clone(),
             parent_names: reflection_parent_class_names(ctx, info),
             method_names,
             property_names,
@@ -623,6 +631,7 @@ fn reflection_class_metadata_for_name(
             attr_args: Vec::new(),
             interface_names: reflection_interface_parent_names(ctx, interface_name),
             trait_names: Vec::new(),
+            trait_aliases: Vec::new(),
             parent_names: Vec::new(),
             method_names,
             property_names,
@@ -690,6 +699,7 @@ fn reflection_class_metadata_for_name(
             attr_args: Vec::new(),
             interface_names: Vec::new(),
             trait_names,
+            trait_aliases: Vec::new(),
             parent_names: Vec::new(),
             method_names,
             property_names,
@@ -843,6 +853,7 @@ fn reflection_method_owner_metadata(
         attr_args: member.attr_args,
         interface_names: Vec::new(),
         trait_names: Vec::new(),
+        trait_aliases: Vec::new(),
         parent_names: Vec::new(),
         method_names: Vec::new(),
         property_names: Vec::new(),
@@ -907,6 +918,7 @@ fn reflection_property_metadata(
                     .unwrap_or_default(),
                 interface_names: Vec::new(),
                 trait_names: Vec::new(),
+                trait_aliases: Vec::new(),
                 parent_names: Vec::new(),
                 method_names: Vec::new(),
                 property_names: Vec::new(),
@@ -1098,6 +1110,7 @@ fn reflection_class_constant_metadata(
             attr_args: case.attribute_args.clone(),
             interface_names: Vec::new(),
             trait_names: Vec::new(),
+            trait_aliases: Vec::new(),
             parent_names: Vec::new(),
             method_names: Vec::new(),
             property_names: Vec::new(),
@@ -1169,6 +1182,7 @@ fn reflection_enum_case_metadata(
                 attr_args: case.attribute_args.clone(),
                 interface_names: Vec::new(),
                 trait_names: Vec::new(),
+                trait_aliases: Vec::new(),
                 parent_names: Vec::new(),
                 method_names: Vec::new(),
                 property_names: Vec::new(),
@@ -1222,6 +1236,7 @@ fn reflection_class_constant_owner_metadata(
         attr_args: metadata.attr_args,
         interface_names: Vec::new(),
         trait_names: Vec::new(),
+        trait_aliases: Vec::new(),
         parent_names: Vec::new(),
         method_names: Vec::new(),
         property_names: Vec::new(),
@@ -3438,6 +3453,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         attr_args: Vec::new(),
         interface_names: Vec::new(),
         trait_names: Vec::new(),
+        trait_aliases: Vec::new(),
         parent_names: Vec::new(),
         method_names: Vec::new(),
         property_names: Vec::new(),
@@ -4097,6 +4113,89 @@ fn emit_reflection_class_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
                 "r9",
                 runtime_value_tag(&PhpType::Object("ReflectionClass".to_string())) as i64,
             );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        }
+    }
+}
+
+/// Replaces a ReflectionClass private slot with a string-keyed string-value map.
+fn emit_reflection_string_assoc_property_by_name(
+    ctx: &mut FunctionContext<'_>,
+    property_name: &str,
+    entries: &[(String, String)],
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get("ReflectionClass")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, property_name)?;
+    let high_offset = low_offset + 8;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+    emit_reflection_string_assoc_array(ctx, entries);
+    let assoc_type = PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Str),
+    };
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::secondary_scratch_reg(ctx.emitter),
+        runtime_value_tag(&assoc_type) as i64,
+    );
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::secondary_scratch_reg(ctx.emitter),
+        object_reg,
+        high_offset,
+    );
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    Ok(())
+}
+
+/// Allocates and populates a string-keyed associative array of string values.
+fn emit_reflection_string_assoc_array(
+    ctx: &mut FunctionContext<'_>,
+    entries: &[(String, String)],
+) {
+    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Str);
+    for (key, value) in entries {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_string_literal_default_to_result(ctx, value);
+        emit_reflection_string_hash_insert(ctx, key);
+    }
+}
+
+/// Inserts the current owned string value into the stacked associative array.
+#[rustfmt::skip]
+fn emit_reflection_string_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
+    let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            ctx.emitter.instruction("mov x3, x1");                              // pass the persistent Reflection string as the hash payload pointer
+            ctx.emitter.instruction("mov x4, x2");                              // pass the Reflection string length as the hash payload high word
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "x5", runtime_value_tag(&PhpType::Str) as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        }
+        Arch::X86_64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the persistent Reflection string as the hash payload pointer
+            ctx.emitter.instruction("mov r8, rdx");                             // pass the Reflection string length as the hash payload high word
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "r9", runtime_value_tag(&PhpType::Str) as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         }
     }
