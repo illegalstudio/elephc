@@ -2755,14 +2755,20 @@ fn test_reflection_parameter_exposes_object_default_values() {
     let out = compile_and_run_capture(
         r##"<?php
 class ReflectObjectDefaultValue {
+    const LABEL = "ctor";
+    const EXTRA = "default-extra";
     public mixed $label;
     public mixed $extra;
-    public function __construct(mixed $label = "ctor", mixed $extra = null) {
+    public function __construct(mixed $label = self::LABEL, mixed $extra = self::EXTRA) {
         $this->label = $label;
         $this->extra = $extra;
     }
 }
 class ReflectObjectDefaultValueArgs {
+    const ARG_LABEL = "arg";
+    const ARG_EXTRA = 42;
+    const METHOD_LABEL = "method-arg";
+    const METHOD_EXTRA = "M";
     public mixed $label;
     public mixed $extra;
     public function __construct(mixed $label, mixed $extra) {
@@ -2771,17 +2777,17 @@ class ReflectObjectDefaultValueArgs {
     }
 }
 function reflect_object_default(ReflectObjectDefaultValue $value = new ReflectObjectDefaultValue()) {}
-function reflect_object_default_args(ReflectObjectDefaultValueArgs $value = new ReflectObjectDefaultValueArgs("arg", 42)) {}
+function reflect_object_default_args(ReflectObjectDefaultValueArgs $value = new ReflectObjectDefaultValueArgs(ReflectObjectDefaultValueArgs::ARG_LABEL, ReflectObjectDefaultValueArgs::ARG_EXTRA)) {}
 class ReflectObjectDefaultMethod {
     public function run(ReflectObjectDefaultValue $value = new ReflectObjectDefaultValue()) {}
-    public function withArgs(ReflectObjectDefaultValueArgs $value = new ReflectObjectDefaultValueArgs("method-arg", "M")) {}
+    public function withArgs(ReflectObjectDefaultValueArgs $value = new ReflectObjectDefaultValueArgs(ReflectObjectDefaultValueArgs::METHOD_LABEL, ReflectObjectDefaultValueArgs::METHOD_EXTRA)) {}
 }
 $param = (new ReflectionFunction("reflect_object_default"))->getParameters()[0];
 echo $param->isDefaultValueAvailable() ? "D:" : "d:";
 $first = $param->getDefaultValue();
 $second = $param->getDefaultValue();
 if ($first instanceof ReflectObjectDefaultValue) {
-    echo "object:" . $first->label . ":";
+    echo "object:" . $first->label . ":" . $first->extra . ":";
 } else {
     echo "not-object:";
 }
@@ -2807,7 +2813,7 @@ echo $directMethodArgs instanceof ReflectObjectDefaultValueArgs ? ":direct-metho
     );
     assert_eq!(
         out.stdout,
-        "D:object:ctor:diff:direct:ctor:method:ctor:direct-method:ctor:args:arg:42:method-args:method-arg:M:direct-method-args:method-arg:M"
+        "D:object:ctor:default-extra:diff:direct:ctor:method:ctor:direct-method:ctor:args:arg:42:method-args:method-arg:M:direct-method-args:method-arg:M"
     );
 }
 

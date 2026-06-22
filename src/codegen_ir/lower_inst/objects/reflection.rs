@@ -3450,7 +3450,9 @@ fn reflection_parameter_default_value(
     current_info: Option<&crate::types::ClassInfo>,
     default: &Expr,
 ) -> Result<Option<ReflectionParameterDefaultValue>> {
-    if let Some(value) = reflection_object_parameter_default_value(ctx, default) {
+    if let Some(value) =
+        reflection_object_parameter_default_value(ctx, current_class, current_info, default)?
+    {
         return Ok(Some(value));
     }
     if let Some(value) = reflection_literal_parameter_default_value(default) {
@@ -3468,52 +3470,104 @@ fn reflection_parameter_default_value(
 /// Converts a top-level object parameter default into Reflection metadata.
 fn reflection_object_parameter_default_value(
     ctx: &FunctionContext<'_>,
+    current_class: &str,
+    current_info: Option<&crate::types::ClassInfo>,
     default: &Expr,
-) -> Option<ReflectionParameterDefaultValue> {
+) -> Result<Option<ReflectionParameterDefaultValue>> {
     let ExprKind::NewObject { class_name, args } = &default.kind else {
-        return None;
+        return Ok(None);
     };
-    let args = reflection_object_parameter_default_args(ctx, class_name.as_str(), args)?;
-    Some(ReflectionParameterDefaultValue::Object {
+    let Some(args) = reflection_object_parameter_default_args(
+        ctx,
+        current_class,
+        current_info,
+        class_name.as_str(),
+        args,
+    )?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ReflectionParameterDefaultValue::Object {
         class_name: class_name.as_str().to_string(),
         args,
-    })
+    }))
 }
 
 /// Returns constructor args for an object default, including supported omitted defaults.
 fn reflection_object_parameter_default_args(
     ctx: &FunctionContext<'_>,
+    current_class: &str,
+    current_info: Option<&crate::types::ClassInfo>,
     class_name: &str,
     args: &[Expr],
-) -> Option<Vec<ReflectionParameterDefaultValue>> {
+) -> Result<Option<Vec<ReflectionParameterDefaultValue>>> {
     if args.len() > 3 {
-        return None;
+        return Ok(None);
     }
-    let mut values = args
-        .iter()
-        .map(reflection_literal_parameter_default_non_object_value)
-        .collect::<Option<Vec<_>>>()?;
+    let mut values = Vec::with_capacity(args.len());
+    for arg in args {
+        let Some(value) =
+            reflection_parameter_default_non_object_value(ctx, current_class, current_info, arg)?
+        else {
+            return Ok(None);
+        };
+        values.push(value);
+    }
     let Some((_, class_info)) = resolve_reflection_class(ctx, class_name) else {
-        return Some(values);
+        return Ok(Some(values));
     };
     let constructor = class_info.methods.get(&php_symbol_key("__construct"));
     let Some(constructor) = constructor else {
-        return if values.is_empty() { Some(values) } else { None };
+        return if values.is_empty() {
+            Ok(Some(values))
+        } else {
+            Ok(None)
+        };
     };
     if constructor.variadic.is_some()
         || values.len() > constructor.params.len()
         || constructor.params.len() > 3
     {
-        return None;
+        return Ok(None);
     }
     for default in constructor.defaults.iter().skip(values.len()) {
-        let default = default.as_ref()?;
-        values.push(reflection_literal_parameter_default_non_object_value(default)?);
+        let Some(default) = default.as_ref() else {
+            return Ok(None);
+        };
+        let Some(value) = reflection_parameter_default_non_object_value(
+            ctx,
+            class_name,
+            Some(class_info),
+            default,
+        )?
+        else {
+            return Ok(None);
+        };
+        values.push(value);
     }
     if values.len() == constructor.params.len() {
-        Some(values)
+        Ok(Some(values))
     } else {
-        None
+        Ok(None)
+    }
+}
+
+/// Converts a supported non-object parameter default expression into metadata.
+fn reflection_parameter_default_non_object_value(
+    ctx: &FunctionContext<'_>,
+    current_class: &str,
+    current_info: Option<&crate::types::ClassInfo>,
+    default: &Expr,
+) -> Result<Option<ReflectionParameterDefaultValue>> {
+    if let Some(value) = reflection_literal_parameter_default_non_object_value(default) {
+        return Ok(Some(value));
+    }
+    match &default.kind {
+        ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {
+            let value = reflection_constant_value(ctx, current_class, current_info, default, 0)?;
+            Ok(reflection_parameter_default_from_constant_value(value))
+        }
+        _ => Ok(None),
     }
 }
 
