@@ -533,6 +533,27 @@ fn builtin_reflection_method_invoke_args_method() -> ClassMethod {
     }
 }
 
+/// Returns a public `setAccessible(bool $accessible)` no-op method shell.
+fn builtin_reflection_set_accessible_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "setAccessible".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("accessible".to_string(), Some(bool_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        body: Vec::new(),
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public variadic `ReflectionFunction::invoke()` method shell.
 ///
 /// Direct generated/AOT calls are lowered specially so the variadic source
@@ -2612,10 +2633,14 @@ fn builtin_reflection_owner_class(
     if name == "ReflectionMethod" {
         methods.push(builtin_reflection_method_invoke_method());
         methods.push(builtin_reflection_method_invoke_args_method());
+        methods.push(builtin_reflection_set_accessible_method());
     }
     if name == "ReflectionFunction" {
         methods.push(builtin_reflection_function_invoke_method());
         methods.push(builtin_reflection_function_invoke_args_method());
+    }
+    if name == "ReflectionProperty" {
+        methods.push(builtin_reflection_set_accessible_method());
     }
     properties.push(builtin_property(
         "__attrs",
@@ -3745,6 +3770,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
                     }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("setAccessible")) {
+                    sig.return_type = PhpType::Void;
                 }
             }
             if class_name == "ReflectionProperty" {

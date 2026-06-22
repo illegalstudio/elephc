@@ -383,3 +383,28 @@ echo ":" . $label->getValue($target);
     );
     assert_eq!(out, "4:8:old:new");
 }
+
+/// Verifies `ReflectionProperty::setAccessible()` is a no-op for AOT reflectors.
+#[test]
+fn test_reflection_property_set_accessible_is_noop_for_aot_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectPropertyAccessTarget {
+    private int $count = 4;
+    protected string $label = "old";
+}
+
+$target = new ReflectPropertyAccessTarget();
+$count = new ReflectionProperty(ReflectPropertyAccessTarget::class, "count");
+echo is_null($count->setAccessible(false)) ? "P" : "p";
+echo ":" . $count->getValue($target);
+$count->setValue($target, 9);
+echo ":" . $count->getValue($target);
+echo ":";
+$label = (new ReflectionClass(ReflectPropertyAccessTarget::class))->getProperty("label");
+echo is_null($label->setAccessible(accessible: true)) ? "L" : "l";
+echo ":" . $label->getValue($target);
+"#,
+    );
+    assert_eq!(out, "P:4:9:L:old");
+}

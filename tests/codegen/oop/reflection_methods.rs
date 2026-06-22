@@ -101,6 +101,30 @@ echo $object->label();
     assert_eq!(out, "null:XY:MN");
 }
 
+/// Verifies `ReflectionMethod::setAccessible()` is a no-op for AOT reflectors.
+#[test]
+fn test_reflection_method_set_accessible_is_noop_for_aot_methods() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectMethodAccessTarget {
+    private function hidden(): string {
+        return "secret";
+    }
+}
+
+$object = new ReflectMethodAccessTarget();
+$method = new ReflectionMethod(ReflectMethodAccessTarget::class, "hidden");
+echo is_null($method->setAccessible(false)) ? "M" : "m";
+echo ":" . $method->invoke($object);
+echo ":";
+$listed = (new ReflectionClass(ReflectMethodAccessTarget::class))->getMethod("hidden");
+echo is_null($listed->setAccessible(accessible: true)) ? "L" : "l";
+echo ":" . $listed->invoke($object);
+"#,
+    );
+    assert_eq!(out, "M:secret:L:secret");
+}
+
 /// Verifies inferred AOT method signatures are rejected instead of miscompiled.
 #[test]
 fn test_reflection_method_invoke_rejects_inferred_aot_signature() {
