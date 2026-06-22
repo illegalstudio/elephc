@@ -8499,7 +8499,7 @@ echo $void->isBuiltin() ? "B" : "b";');
     assert_eq!(out.stdout, "I:string:B:static:b:void:n:B");
 }
 
-/// Verifies eval ReflectionProperty materializes property type metadata through the bridge.
+/// Verifies eval ReflectionProperty materializes property get/set type metadata through the bridge.
 #[test]
 fn test_eval_reflection_property_get_type_metadata() {
     let out = compile_and_run_capture(
@@ -8537,7 +8537,13 @@ $direct = new ReflectionProperty("EvalReflectPropertyTypeTarget", "dep");
 $directType = $direct->getType();
 echo "direct:";
 echo $direct->hasType() ? "T:" : "t:";
-echo $directType->getName();');
+echo $directType->getName();
+$directSettableType = $direct->getSettableType();
+echo ":set:" . $directSettableType->getName();
+$plain = new ReflectionProperty("EvalReflectPropertyTypeTarget", "plain");
+echo ":plainSet:" . ($plain->getSettableType() === null ? "N" : "n");
+$directUnion = new ReflectionProperty("EvalReflectPropertyTypeTarget", "union");
+echo ":unionSet:" . count($directUnion->getSettableType()->getTypes());');
 "#,
     );
     assert!(
@@ -8547,7 +8553,7 @@ echo $directType->getName();');
     );
     assert_eq!(
         out.stdout,
-        "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:T:EvalReflectPropertyTypeDep"
+        "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:T:EvalReflectPropertyTypeDep:set:EvalReflectPropertyTypeDep:plainSet:N:unionSet:2"
     );
 }
 

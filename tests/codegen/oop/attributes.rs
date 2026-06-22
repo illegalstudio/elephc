@@ -2436,7 +2436,7 @@ if ($directType instanceof ReflectionNamedType) {
     );
 }
 
-/// Verifies that `ReflectionProperty::getType()` returns named and union metadata.
+/// Verifies that `ReflectionProperty::getType()` and `getSettableType()` return type metadata.
 #[test]
 fn test_reflection_property_get_type_returns_type_metadata() {
     let out = compile_and_run_capture(
@@ -2475,6 +2475,17 @@ $directType = $direct->getType();
 if ($directType instanceof ReflectionNamedType) {
     echo "direct:" . $directType->getName();
 }
+$directSettableType = $direct->getSettableType();
+if ($directSettableType instanceof ReflectionNamedType) {
+    echo ":set:" . $directSettableType->getName();
+}
+$plain = new ReflectionProperty(ReflectPropertyTypeTarget::class, "plain");
+echo ":plainSet:" . ($plain->getSettableType() === null ? "N" : "n");
+$directUnion = new ReflectionProperty(ReflectPropertyTypeTarget::class, "union");
+$directUnionSettableType = $directUnion->getSettableType();
+if ($directUnionSettableType instanceof ReflectionUnionType) {
+    echo ":unionSet:" . count($directUnionSettableType->getTypes());
+}
 "#,
     );
     assert!(
@@ -2484,7 +2495,7 @@ if ($directType instanceof ReflectionNamedType) {
     );
     assert_eq!(
         out.stdout,
-        "id:T:int!B|name:T:string?B|dep:T:ReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:ReflectPropertyTypeDep"
+        "id:T:int!B|name:T:string?B|dep:T:ReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:ReflectPropertyTypeDep:set:ReflectPropertyTypeDep:plainSet:N:unionSet:2"
     );
 }
 
