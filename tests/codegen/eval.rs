@@ -8557,6 +8557,11 @@ foreach ($params as $param) {
     echo $param->getName() . ":";
     echo $type->__toString() . "|";
 }
+$unionType = (new ReflectionParameter(["EvalReflectTypeStringTarget", "run"], "union"))->getType();
+echo "cast:" . (string)$unionType . "|";
+echo "concat:" . $unionType . "|";
+echo "echo:";
+echo $unionType;
 ');
 "#,
     );
@@ -8567,7 +8572,7 @@ foreach ($params as $param) {
     );
     assert_eq!(
         out.stdout,
-        "dep:?EvalReflectTypeStringDep|union:int|string|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|"
+        "dep:?EvalReflectTypeStringDep|union:int|string|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|cast:int|string|null|concat:int|string|null|echo:int|string|null"
     );
 }
 

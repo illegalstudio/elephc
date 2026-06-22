@@ -2319,6 +2319,11 @@ foreach ($params as $param) {
     echo $param->getName() . ":";
     echo $type->__toString() . "|";
 }
+$unionType = (new ReflectionParameter([ReflectTypeStringTarget::class, "run"], "union"))->getType();
+echo "cast:" . (string)$unionType . "|";
+echo "concat:" . $unionType . "|";
+echo "echo:";
+echo $unionType;
 "#,
     );
     assert!(
@@ -2328,7 +2333,7 @@ foreach ($params as $param) {
     );
     assert_eq!(
         out.stdout,
-        "dep:?ReflectTypeStringDep|union:int|string|null|both:ReflectTypeStringLeft&ReflectTypeStringRight|mixed:mixed|items:?array|"
+        "dep:?ReflectTypeStringDep|union:int|string|null|both:ReflectTypeStringLeft&ReflectTypeStringRight|mixed:mixed|items:?array|cast:int|string|null|concat:int|string|null|echo:int|string|null"
     );
 }
 

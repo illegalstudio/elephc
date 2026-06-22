@@ -129,6 +129,24 @@ fn parse_fragment_accepts_dynamic_instanceof_targets() {
     );
 }
 
+/// Verifies scalar cast syntax parses with PHP cast precedence across concatenation.
+#[test]
+fn parse_fragment_accepts_scalar_cast_source() {
+    let program =
+        parse_fragment(br#"return (string)$value . "!";"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Cast {
+            target: EvalCastType::String,
+            expr: Box::new(EvalExpr::Binary {
+                op: EvalBinOp::Concat,
+                left: Box::new(EvalExpr::LoadVar("value".to_string())),
+                right: Box::new(EvalExpr::Const(EvalConst::String("!".to_string()))),
+            }),
+        }))]
+    );
+}
+
 /// Verifies logical operators parse with `&&` binding tighter than `||`.
 #[test]
 fn parse_fragment_accepts_short_circuit_logical_source() {

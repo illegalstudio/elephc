@@ -5994,8 +5994,12 @@ fn lower_invoker_ref_arg(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 /// Lowers PHP echo output for a previously computed SSA value.
 fn lower_echo_value(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    if let PhpType::Object(class_name) = ctx.value_php_type(value)?.codegen_repr() {
-        return lower_object_echo_value(ctx, value, &class_name);
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Object(class_name) => return lower_object_echo_value(ctx, value, &class_name),
+        PhpType::Mixed | PhpType::Union(_) => {
+            return conversions::emit_mixed_string_context_stdout(ctx, value);
+        }
+        _ => {}
     }
     let ty = ctx.load_value_to_result(value)?;
     let raw_ty = ctx.raw_value_php_type(value)?;

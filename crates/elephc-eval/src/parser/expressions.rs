@@ -12,8 +12,8 @@ use super::cursor::*;
 use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalArrayElement, EvalBinOp, EvalCallArg, EvalConst, EvalExpr, EvalInstanceOfTarget,
-    EvalMagicConst, EvalMatchArm, EvalUnaryOp,
+    EvalArrayElement, EvalBinOp, EvalCallArg, EvalCastType, EvalConst, EvalExpr,
+    EvalInstanceOfTarget, EvalMagicConst, EvalMatchArm, EvalUnaryOp,
 };
 use crate::lexer::TokenKind;
 
@@ -305,6 +305,16 @@ impl Parser {
 
     /// Parses right-associative unary prefix expressions.
     pub(super) fn parse_unary(&mut self) -> Result<EvalExpr, EvalParseError> {
+        if let Some(target) = self.peek_scalar_cast_type() {
+            self.advance();
+            self.advance();
+            self.advance();
+            let expr = self.parse_concat()?;
+            return Ok(EvalExpr::Cast {
+                target,
+                expr: Box::new(expr),
+            });
+        }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "clone")) {
             self.advance();
             let expr = self.parse_unary()?;
@@ -339,6 +349,30 @@ impl Parser {
             });
         }
         self.parse_instanceof()
+    }
+
+    /// Returns the scalar cast target represented by the current `(type)` token window.
+    fn peek_scalar_cast_type(&self) -> Option<EvalCastType> {
+        if !matches!(self.current(), TokenKind::LParen) {
+            return None;
+        }
+        let Some(TokenKind::Ident(name)) = self.tokens.get(self.pos + 1) else {
+            return None;
+        };
+        if !matches!(self.tokens.get(self.pos + 2), Some(TokenKind::RParen)) {
+            return None;
+        }
+        if ident_eq(name, "int") || ident_eq(name, "integer") {
+            Some(EvalCastType::Int)
+        } else if ident_eq(name, "float") || ident_eq(name, "double") || ident_eq(name, "real") {
+            Some(EvalCastType::Float)
+        } else if ident_eq(name, "string") {
+            Some(EvalCastType::String)
+        } else if ident_eq(name, "bool") || ident_eq(name, "boolean") {
+            Some(EvalCastType::Bool)
+        } else {
+            None
+        }
     }
 
     /// Parses left-associative `instanceof` with PHP's high operator precedence.

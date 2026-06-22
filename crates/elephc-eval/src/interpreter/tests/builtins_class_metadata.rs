@@ -1720,6 +1720,11 @@ foreach ($params as $param) {
     echo $param->getName(); echo ":";
     echo $type->__toString(); echo "|";
 }
+$unionType = $params[1]->getType();
+echo "cast:" . (string)$unionType . "|";
+echo "concat:" . $unionType . "|";
+echo "echo:";
+echo $unionType;
 return true;"##,
     )
     .expect("parse eval fragment");
@@ -1730,7 +1735,7 @@ return true;"##,
 
     assert_eq!(
         values.output,
-        "dep:?EvalReflectTypeStringDep|union:int|string|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|"
+        "dep:?EvalReflectTypeStringDep|union:int|string|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|cast:int|string|null|concat:int|string|null|echo:int|string|null"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

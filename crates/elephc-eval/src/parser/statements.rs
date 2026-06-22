@@ -2620,6 +2620,7 @@ fn eval_constant_expression_default_is_supported(expr: &EvalExpr) -> bool {
                     .is_none_or(eval_constant_expression_default_is_supported)
                 && eval_constant_expression_default_is_supported(else_branch)
         }
+        EvalExpr::Cast { expr, .. } => eval_constant_expression_default_is_supported(expr),
         EvalExpr::Unary { expr, .. } => eval_constant_expression_default_is_supported(expr),
         EvalExpr::Binary { left, right, .. } => {
             eval_constant_expression_default_is_supported(left)
@@ -2838,6 +2839,7 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
         | EvalExpr::NamespacedConstFetch { .. }
         | EvalExpr::StaticPropertyGet { .. } => false,
         EvalExpr::Include { path, .. }
+        | EvalExpr::Cast { expr: path, .. }
         | EvalExpr::Clone(path)
         | EvalExpr::Print(path)
         | EvalExpr::Unary { expr: path, .. } => eval_expr_uses_this_property(path, property_name),

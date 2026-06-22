@@ -35,6 +35,7 @@ pub(in crate::interpreter) fn eval_expr(
             values.array_get(array, index)
         }
         EvalExpr::Call { name, args } => eval_call(name, args, context, scope, values),
+        EvalExpr::Cast { target, expr } => eval_cast_expr(target, expr, context, scope, values),
         EvalExpr::Const(value) => eval_const(value, values),
         EvalExpr::ConstFetch(name) => eval_const_fetch(name, context, values),
         EvalExpr::DynamicCall { callee, args } => {
@@ -243,6 +244,26 @@ pub(in crate::interpreter) fn eval_expr(
                 }
             }
         }
+    }
+}
+
+/// Evaluates one PHP scalar cast expression through the runtime conversion hooks.
+fn eval_cast_expr(
+    target: &EvalCastType,
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let value = eval_expr(expr, context, scope, values)?;
+    match target {
+        EvalCastType::Int => values.cast_int(value),
+        EvalCastType::Float => values.cast_float(value),
+        EvalCastType::String => {
+            let value = eval_string_context_value(value, context, values)?;
+            values.cast_string(value)
+        }
+        EvalCastType::Bool => values.cast_bool(value),
     }
 }
 

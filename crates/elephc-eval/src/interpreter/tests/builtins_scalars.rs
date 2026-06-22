@@ -108,6 +108,10 @@ fn execute_program_dispatches_cast_builtins() {
 echo floatval("3.5"); echo ":";
 echo strval(12); echo ":";
 echo boolval("0") ? "bad" : "false";
+echo ":"; echo (string)12;
+echo ":"; echo (int)"9";
+echo ":"; echo (float)"3.5";
+echo ":"; echo (bool)"0" ? "bad" : "false";
 echo ":"; echo call_user_func("strval", 7);
 return call_user_func_array("intval", ["9"]);"#,
     )
@@ -117,7 +121,7 @@ return call_user_func_array("intval", ["9"]);"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "42:3.5:12:false:7");
+    assert_eq!(values.output, "42:3.5:12:false:12:9:3.5:false:7");
     assert_eq!(values.get(result), FakeValue::Int(9));
 }
 /// Verifies eval `settype()` mutates direct variables and warns for callable by-value dispatch.

@@ -1923,6 +1923,10 @@ pub enum EvalExpr {
         name: String,
         args: Vec<EvalCallArg>,
     },
+    Cast {
+        target: EvalCastType,
+        expr: Box<EvalExpr>,
+    },
     Const(EvalConst),
     ConstFetch(String),
     DynamicCall {
@@ -2139,6 +2143,15 @@ pub enum EvalBinOp {
     Gt,
     GtEq,
     Spaceship,
+}
+
+/// Scalar cast targets supported by runtime eval expressions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvalCastType {
+    Int,
+    Float,
+    String,
+    Bool,
 }
 
 /// Unary operations supported by the initial EvalIR parser.

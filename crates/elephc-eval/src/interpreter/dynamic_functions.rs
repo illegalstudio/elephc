@@ -664,7 +664,7 @@ pub(in crate::interpreter) fn eval_method_parameter_scalar_coercion(
     }
 }
 
-/// Converts eval-declared objects in string contexts through `__toString()`.
+/// Converts objects in string contexts through the applicable `__toString()` dispatch path.
 pub(in crate::interpreter) fn eval_string_context_value(
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
@@ -676,7 +676,7 @@ pub(in crate::interpreter) fn eval_string_context_value(
     eval_dynamic_object_string_context_value(value, context, values)
 }
 
-/// Invokes `__toString()` for eval-created objects and rejects missing invalid hooks.
+/// Invokes `__toString()` for eval-declared objects and rejects missing invalid hooks.
 fn eval_dynamic_object_string_context_value(
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
@@ -684,7 +684,7 @@ fn eval_dynamic_object_string_context_value(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let identity = values.object_identity(value)?;
     let Some(class) = context.dynamic_object_class(identity) else {
-        return Ok(value);
+        return eval_runtime_object_string_context_value(value, context, values);
     };
     let called_class_name = class.name().to_string();
     let Some((declaring_class, method)) = context.class_method(&called_class_name, "__toString")
@@ -707,6 +707,30 @@ fn eval_dynamic_object_string_context_value(
         context,
         values,
     )?;
+    eval_tostring_result_to_string(result, values)
+}
+
+/// Invokes the interpreter method dispatcher for AOT/native objects in string contexts.
+fn eval_runtime_object_string_context_value(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let result = eval_method_call_result_with_evaluated_args(
+        value,
+        "__toString",
+        Vec::new(),
+        context,
+        values,
+    )?;
+    eval_tostring_result_to_string(result, values)
+}
+
+/// Normalizes one `__toString()` result to a boxed string cell.
+fn eval_tostring_result_to_string(
+    result: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if values.type_tag(result)? == EVAL_TAG_STRING {
         return Ok(result);
     }
@@ -781,6 +805,7 @@ fn eval_method_default_expr_is_supported(expr: &EvalExpr) -> bool {
                     .is_none_or(eval_method_default_expr_is_supported)
                 && eval_method_default_expr_is_supported(else_branch)
         }
+        EvalExpr::Cast { expr, .. } => eval_method_default_expr_is_supported(expr),
         EvalExpr::Unary { expr, .. } => eval_method_default_expr_is_supported(expr),
         EvalExpr::Binary { left, right, .. } => {
             eval_method_default_expr_is_supported(left)

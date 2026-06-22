@@ -37,10 +37,10 @@ use crate::context::{
 use crate::errors::{EvalParseError, EvalStatus};
 use crate::eval_ir::{
     EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalBinOp, EvalCallArg, EvalCatch,
-    EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst, EvalEnum,
-    EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalFunction, EvalInstanceOfTarget, EvalInterface,
-    EvalInterfaceMethod, EvalInterfaceProperty, EvalMagicConst, EvalMatchArm, EvalParameterType,
-    EvalParameterTypeVariant, EvalProgram, EvalStmt, EvalSwitchCase, EvalTrait,
+    EvalCastType, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst,
+    EvalEnum, EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalFunction, EvalInstanceOfTarget,
+    EvalInterface, EvalInterfaceMethod, EvalInterfaceProperty, EvalMagicConst, EvalMatchArm,
+    EvalParameterType, EvalParameterTypeVariant, EvalProgram, EvalStmt, EvalSwitchCase, EvalTrait,
     EvalTraitAdaptation, EvalUnaryOp, EvalVisibility,
 };
 use crate::json_validate::{self, JsonParseError, JsonParseErrorKind, JsonValue};
