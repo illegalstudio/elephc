@@ -1126,6 +1126,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionParameter::isPromoted()` | Same construction forms as `ReflectionParameter::isPassedByReference()` | Return whether the parameter came from constructor property promotion |
 | `ReflectionParameter::hasType()` | `new ReflectionParameter("function", "name" or 0)`, `new ReflectionParameter([ClassLike::class, "method"], "name" or 0)`, `new ReflectionParameter([$object_expr, "method"], "name" or 0)` with a statically known object type, or `ReflectionMethod::getParameters()` | Return whether the parameter has a declared type |
 | `ReflectionParameter::getType()` | Same as `ReflectionParameter::hasType()` | Return a `ReflectionNamedType` for simple named parameter types, a `ReflectionUnionType` for multi-member union parameter types, a `ReflectionIntersectionType` for intersection parameter types, or `null` when no type is declared or the declared type needs a broader Reflection type object |
+| `ReflectionParameter::getClass()` | Same as `ReflectionParameter::hasType()` | Return a `ReflectionClass` object for nullable or non-nullable named object parameter types, or `null` for builtin, union, intersection, or untyped parameters |
 | `ReflectionParameter::allowsNull()` | Same as `ReflectionParameter::hasType()` | Return PHP nullability for retained parameter type/default metadata |
 | `ReflectionParameter::isArray()` / `isCallable()` | Same as `ReflectionParameter::hasType()` | Return PHP's legacy named-type predicates for nullable or non-nullable `array` / `callable` parameter declarations; union declarations report `false` |
 | `ReflectionParameter::getAttributes()` | Same construction forms as `ReflectionParameter::hasType()` | Return `ReflectionAttribute` objects for function and method parameter attributes |
@@ -1195,10 +1196,12 @@ Limitations today:
 - `ReflectionClass::getMethods()` and `getProperties()` modifier filters are supported for materialized member lists, including runtime-held `ReflectionClass` objects. Inline or straight-line tracked `ReflectionClass(Known::class)` receivers with known integer or `ReflectionMethod::IS_*` / `ReflectionProperty::IS_*` filters can also be statically narrowed before materialization.
 - `ReflectionClass::getStaticProperties()`, `getStaticPropertyValue()`, and `setStaticPropertyValue()` expose current static-property values for eval-declared classes. For generated/AOT classes, these methods are lowered to live static-property storage, including private/protected static properties, when the receiver is an inline `new ReflectionClass(Known::class)` expression, or a straight-line local assigned from one; single-property get/set calls additionally require a literal property name. Runtime-held generated/AOT `ReflectionClass` objects also carry a materialized static-property map captured when the reflector is constructed; it includes initialized public/protected/private static properties, preserves initialized `null` values, omits uninitialized typed static properties, and lets `getStaticProperties()` plus map-backed `getStaticPropertyValue()` keep working after the reflector is passed through runtime storage. Missing literal properties can return the explicit default argument on both the tracked live path and the materialized-map path; the tracked live path also throws a catchable `ReflectionException` when no default is provided. The same tracked receiver metadata lets `newInstance()` and `newInstanceArgs()` normalize named constructor arguments through the reflected constructor signature, including straight-line locals assigned from literal argument arrays. Fully dynamic class/property lookup, live refresh after reflector construction, and dynamic `setStaticPropertyValue()` still require richer runtime metadata.
 - `ReflectionParameter::canBePassedByValue()`, `allowsNull()`, `isArray()`,
-  and `isCallable()` are supported for the retained parameter metadata
-  described above. `isArray()` / `isCallable()` follow PHP's legacy behavior:
-  nullable named `array` / `callable` types report `true`, while union types
-  report `false`.
+  `isCallable()`, and `getClass()` are supported for the retained parameter
+  metadata described above. `isArray()` / `isCallable()` follow PHP's legacy
+  behavior: nullable named `array` / `callable` types report `true`, while
+  union types report `false`. `getClass()` follows PHP's legacy behavior for
+  nullable or non-nullable named object types and reports `null` for builtin,
+  union, intersection, or untyped parameters.
 - `ReflectionProperty::getSettableType()` is supported for the same retained
   property type metadata as `ReflectionProperty::getType()` on the current
   property surface.

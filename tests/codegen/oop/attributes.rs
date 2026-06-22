@@ -2302,6 +2302,40 @@ if ($directType instanceof ReflectionNamedType) {
     );
 }
 
+/// Verifies that `ReflectionParameter::getClass()` exposes legacy object-type metadata.
+#[test]
+fn test_reflection_parameter_get_class_returns_named_object_type() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReflectParamClassDep {}
+interface ReflectParamClassA {}
+interface ReflectParamClassB {}
+class ReflectParamClassTarget {
+    public function run(ReflectParamClassDep $dep, ?ReflectParamClassDep $nullable, int $id, ReflectParamClassDep|int $unionObject, ReflectParamClassA&ReflectParamClassB $intersection, $plain) {}
+}
+function reflect_param_class_function(ReflectParamClassDep $dep) {}
+$params = (new ReflectionMethod(ReflectParamClassTarget::class, "run"))->getParameters();
+foreach ($params as $param) {
+    $class = $param->getClass();
+    echo $param->getName() . ":" . ($class ? $class->getName() : "null") . "|";
+}
+$direct = new ReflectionParameter([ReflectParamClassTarget::class, "run"], "nullable");
+echo "direct:" . $direct->getClass()->getName() . "|";
+$functionParam = new ReflectionParameter("reflect_param_class_function", "dep");
+echo "function:" . $functionParam->getClass()->getName();
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "dep:ReflectParamClassDep|nullable:ReflectParamClassDep|id:null|unionObject:null|intersection:null|plain:null|direct:ReflectParamClassDep|function:ReflectParamClassDep"
+    );
+}
+
 /// Verifies that `ReflectionProperty::getType()` and `getSettableType()` return type metadata.
 #[test]
 fn test_reflection_property_get_type_returns_type_metadata() {

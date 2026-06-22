@@ -3444,6 +3444,12 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
             null_expr(),
         ),
         builtin_property(
+            "__class",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ),
+        builtin_property(
             "__position",
             Visibility::Private,
             Some(TypeExpr::Int),
@@ -3557,6 +3563,7 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
         builtin_reflection_class_bool_method("isArray", "__is_array_type"),
         builtin_reflection_class_bool_method("isCallable", "__is_callable_type"),
         builtin_reflection_class_mixed_method("getType", "__type"),
+        builtin_reflection_class_mixed_method("getClass", "__class"),
         builtin_reflection_owner_get_attributes_method(),
         builtin_reflection_class_bool_method("isDefaultValueAvailable", "__has_default_value"),
         builtin_reflection_parameter_is_default_value_constant_method(),
