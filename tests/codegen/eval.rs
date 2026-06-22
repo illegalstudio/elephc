@@ -4757,6 +4757,35 @@ echo eval('$box = new EvalDynamicNewNamedCtor(right: "F", left: "E"); return $bo
     assert_eq!(out, "EF");
 }
 
+/// Verifies eval-declared methods resolve `new self/static/parent` through the bridge.
+#[test]
+fn test_eval_declared_methods_construct_relative_class_names() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalRelativeFactoryBase {
+    public string $label;
+    public function __construct($label = "base") { $this->label = $label; }
+    public function selfFactory() { return new self("self"); }
+    public function staticFactory() { return new static("static"); }
+}
+class EvalRelativeFactoryChild extends EvalRelativeFactoryBase {
+    public function parentFactory() { return new parent("parent"); }
+}
+$child = new EvalRelativeFactoryChild("root");
+$self = $child->selfFactory();
+$static = $child->staticFactory();
+$parent = $child->parentFactory();
+echo get_class($self); echo ":"; echo $self->label; echo ":";
+echo get_class($static); echo ":"; echo $static->label; echo ":";
+echo get_class($parent); echo ":"; echo $parent->label;');
+"#,
+    );
+    assert_eq!(
+        out,
+        "EvalRelativeFactoryBase:self:EvalRelativeFactoryChild:static:EvalRelativeFactoryBase:parent"
+    );
+}
+
 /// Verifies native callable probes can see functions declared by eval after the barrier.
 #[test]
 fn test_eval_declared_function_is_visible_to_callable_probes() {
