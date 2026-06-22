@@ -223,8 +223,8 @@ pub(in crate::interpreter) fn eval_arrays_builtin_with_values(
             eval_range_result(*start, *end, values)?
         }
         "count" => match evaluated_args {
-            [value] => eval_count_result(*value, None, values)?,
-            [value, mode] => eval_count_result(*value, Some(*mode), values)?,
+            [value] => eval_count_result(*value, None, context, values)?,
+            [value, mode] => eval_count_result(*value, Some(*mode), context, values)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         },
         "iterator_apply" => match evaluated_args {

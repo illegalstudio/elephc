@@ -829,6 +829,23 @@ echo defined("COUNT_RECURSIVE") ? "C" : "bad";');
     assert_eq!(out, "4:2:3:6:2:3:C");
 }
 
+/// Verifies eval `count()` dispatches through `Countable` for generated/AOT objects.
+#[test]
+fn test_eval_counts_aot_countable_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotCountableBag implements Countable {
+    private int $n;
+    public function __construct(int $n) { $this->n = $n; }
+    public function count(): int { echo "count:"; return $this->n; }
+}
+$bag = new EvalAotCountableBag(5);
+eval('echo count($bag); echo ":"; echo count($bag, COUNT_RECURSIVE); echo ":"; echo call_user_func_array("count", ["value" => $bag]);');
+"#,
+    );
+    assert_eq!(out, "count:5:count:5:count:5");
+}
+
 /// Verifies eval `json_encode()` serializes scalar, indexed, and associative values.
 #[test]
 fn test_eval_dispatches_json_encode_builtin_call() {

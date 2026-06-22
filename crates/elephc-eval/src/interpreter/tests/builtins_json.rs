@@ -29,6 +29,32 @@ return defined("COUNT_RECURSIVE");"#,
     assert_eq!(values.output, "3:3:6:2:3:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval `count()` dispatches to eval-declared `Countable` objects.
+#[test]
+fn execute_program_counts_eval_countable_objects() {
+    let program = parse_fragment(
+        br#"class EvalCountableBag implements Countable {
+    private int $n;
+    public function __construct($n) { $this->n = $n; }
+    public function count(): int { echo "count:"; return $this->n; }
+}
+$bag = new EvalCountableBag(4);
+echo count($bag); echo ":";
+echo count($bag, COUNT_RECURSIVE); echo ":";
+echo call_user_func_array("count", ["value" => $bag]);
+return function_exists("count");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "count:4:count:4:count:4");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval `json_encode()` serializes scalar, indexed, and associative values.
 #[test]
 fn execute_program_dispatches_json_encode_builtin() {

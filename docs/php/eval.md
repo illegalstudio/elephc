@@ -570,6 +570,11 @@ Eval `array_map()` supports one or more source arrays with a string callback or
 are reindexed, missing source values are padded with `null`, and
 `array_map(null, ...)` returns zipped row arrays.
 
+Eval `count()` supports normal and recursive array counting and dispatches
+top-level eval-declared or generated/AOT objects implementing `Countable`
+through their `count()` method. `COUNT_RECURSIVE` still validates as a mode for
+`Countable` objects, but the method result is used directly like PHP.
+
 Eval `array_filter()` supports the PHP default omitted/null callback form,
 filters falsey values, preserves source keys, and supports
 `ARRAY_FILTER_USE_VALUE`, `ARRAY_FILTER_USE_BOTH`, and
