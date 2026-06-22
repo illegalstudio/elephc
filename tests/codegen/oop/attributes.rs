@@ -1263,9 +1263,14 @@ echo $protected->isProtectedSet() ? "T" : "t";
 echo $protected->getModifiers();
 echo ":";
 echo $protected->isDynamic() ? "D" : "d";
+echo ":";
+$object = new ReflectSetVisibility();
+echo $protected->isLazy($object) ? "L" : "l";
+$protected->skipLazyInitialization($object);
+echo ":ok";
 "#,
     );
-    assert_eq!(out, "Pt4129:pT2049:d");
+    assert_eq!(out, "Pt4129:pT2049:d:l:ok");
 }
 
 /// Verifies that `ReflectionClass::isReadOnly()` reports readonly class metadata.
