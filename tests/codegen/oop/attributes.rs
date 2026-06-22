@@ -2348,6 +2348,7 @@ class ReflectPropertyDefaultTarget {
     public $explicitNull = null;
     public int $count = 7;
     public static string $label = "ok";
+    public array $items = [2, "b", null];
 }
 $implicit = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "implicit");
 echo $implicit->getName() . ":";
@@ -2385,6 +2386,14 @@ echo $label->isDefault() ? "Y:" : "N:";
 echo $label->hasDefaultValue() ? "D:" : "d:";
 echo $label->getDefaultValue() === null ? "null" : $label->getDefaultValue();
 echo "|";
+$items = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "items");
+$itemDefault = $items->getDefaultValue();
+echo $items->getName() . ":";
+echo $items->isDefault() ? "Y:" : "N:";
+echo $items->hasDefaultValue() ? "D:" : "d:";
+echo count($itemDefault) . ":" . $itemDefault[0] . ":" . $itemDefault[1] . ":";
+echo $itemDefault[2] === null ? "null" : "value";
+echo "|";
 $listed = (new ReflectionClass(ReflectPropertyDefaultTarget::class))->getProperty("implicit");
 echo "listed:";
 echo $listed->isDefault() ? "Y:" : "N:";
@@ -2399,7 +2408,7 @@ echo $listed->getDefaultValue() === null ? "null" : "bad";
     );
     assert_eq!(
         out.stdout,
-        "implicit:Y:D:null|typed:Y:d:null|nullableTyped:Y:d:null|explicitNull:Y:D:null|count:Y:D:7|label:Y:D:ok|listed:Y:D:null"
+        "implicit:Y:D:null|typed:Y:d:null|nullableTyped:Y:d:null|explicitNull:Y:D:null|count:Y:D:7|label:Y:D:ok|items:Y:D:3:2:b:null|listed:Y:D:null"
     );
 }
 
@@ -2421,6 +2430,7 @@ class ReflectClassDefaultChild extends ReflectClassDefaultBase {
     private int $shadow = 9;
     public static int $childStatic = 7;
     public $explicitNull = null;
+    public array $items = [8, "i"];
 }
 $defaults = (new ReflectionClass(ReflectClassDefaultChild::class))->getDefaultProperties();
 echo $defaults["childStatic"] . ":";
@@ -2429,6 +2439,9 @@ echo $defaults["child"] . ":";
 echo $defaults["shadow"] . ":";
 echo $defaults["base"] . ":";
 echo $defaults["prot"] . ":";
+echo count($defaults["items"]) . ":";
+echo $defaults["items"][0] . ":";
+echo $defaults["items"][1] . ":";
 $implicit = "i";
 $explicitNull = "e";
 $typed = "t";
@@ -2451,7 +2464,7 @@ echo $implicit . ":" . $explicitNull . ":" . $typed . ":" . count($defaults);
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "7:bs:5:9:1:p:I:E:t:8");
+    assert_eq!(out.stdout, "7:bs:5:9:1:p:2:8:i:I:E:t:9");
 }
 
 /// Verifies `ReflectionParameter::getAttributes()` exposes parameter attributes.
@@ -2492,12 +2505,12 @@ echo "direct:" . count($directAttrs) . ":" . $directAttrs[0]->getName() . ":" . 
     );
 }
 
-/// Verifies that `ReflectionParameter` exposes supported scalar/null defaults.
+/// Verifies that `ReflectionParameter` exposes supported scalar/null/array defaults.
 #[test]
 fn test_reflection_parameter_exposes_default_values() {
     let out = compile_and_run_capture(
         r##"<?php
-function reflect_default_function($required, int $id = 7, ?string $name = null, string $label = "ok") {}
+function reflect_default_function($required, int $id = 7, ?string $name = null, string $label = "ok", array $items = [1, "two", null, [3, false]]) {}
 $params = (new ReflectionFunction("reflect_default_function"))->getParameters();
 echo $params[0]->isDefaultValueAvailable() ? "D" : "d";
 try {
@@ -2515,6 +2528,15 @@ echo "|";
 $direct = new ReflectionParameter("reflect_default_function", "label");
 echo $direct->isDefaultValueAvailable() ? "D:" : "d:";
 echo $direct->getDefaultValue();
+echo "|";
+$items = $params[4]->getDefaultValue();
+echo $params[4]->isDefaultValueAvailable() ? "D:" : "d:";
+echo count($items) . ":" . $items[0] . ":" . $items[1] . ":";
+echo $items[2] === null ? "null" : "value";
+echo ":" . count($items[3]) . ":" . $items[3][0] . ":" . ($items[3][1] ? "T" : "F");
+echo "|";
+$directItems = (new ReflectionParameter("reflect_default_function", "items"))->getDefaultValue();
+echo count($directItems) . ":" . $directItems[1];
 "##,
     );
     assert!(
@@ -2522,7 +2544,7 @@ echo $direct->getDefaultValue();
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "d:E|D:7|D:null|D:ok");
+    assert_eq!(out.stdout, "d:E|D:7|D:null|D:ok|D:4:1:two:null:2:3:F|4:two");
 }
 
 /// Verifies `ReflectionParameter` exposes class-constant default metadata.

@@ -12,7 +12,11 @@
 //!   `__name`/`__attrs` slots instead of running their public empty bodies.
 
 use crate::codegen::platform::Arch;
-use crate::codegen::{abi, emit_box_current_value_as_mixed, runtime_value_tag};
+use crate::codegen::{
+    abi, emit_array_value_type_stamp, emit_box_current_owned_value_as_mixed,
+    emit_box_current_value_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
+    runtime_value_tag,
+};
 use crate::codegen_ir::literal_defaults::{
     emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
     emit_boxed_int_literal_to_result, emit_boxed_null_literal_to_result,
@@ -174,6 +178,7 @@ enum ReflectionParameterDefaultValue {
     Float(f64),
     Str(String),
     Null,
+    Array(Vec<ReflectionParameterDefaultValue>),
 }
 
 /// Metadata for one constant entry returned by `ReflectionClass::getConstants()`.
@@ -2762,6 +2767,11 @@ fn reflection_literal_parameter_default_value(
         ExprKind::FloatLiteral(value) => Some(ReflectionParameterDefaultValue::Float(*value)),
         ExprKind::StringLiteral(value) => Some(ReflectionParameterDefaultValue::Str(value.clone())),
         ExprKind::Null => Some(ReflectionParameterDefaultValue::Null),
+        ExprKind::ArrayLiteral(items) => items
+            .iter()
+            .map(reflection_literal_parameter_default_value)
+            .collect::<Option<Vec<_>>>()
+            .map(ReflectionParameterDefaultValue::Array),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value
                 .checked_neg()
@@ -4076,6 +4086,78 @@ fn emit_reflection_default_value_as_mixed(
             emit_boxed_string_literal_default_to_result(ctx, value)
         }
         ReflectionParameterDefaultValue::Null => emit_boxed_null_literal_to_result(ctx),
+        ReflectionParameterDefaultValue::Array(elements) => {
+            emit_reflection_indexed_array_default_as_mixed(ctx, elements)
+        }
+    }
+}
+
+/// Materializes an indexed Reflection default array as a boxed Mixed cell.
+fn emit_reflection_indexed_array_default_as_mixed(
+    ctx: &mut FunctionContext<'_>,
+    elements: &[ReflectionParameterDefaultValue],
+) {
+    emit_reflection_indexed_array_default_to_result(ctx, elements);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+}
+
+/// Allocates and populates an indexed array whose slots hold boxed Mixed defaults.
+fn emit_reflection_indexed_array_default_to_result(
+    ctx: &mut FunctionContext<'_>,
+    elements: &[ReflectionParameterDefaultValue],
+) {
+    emit_reflection_mixed_array_allocation(ctx, elements.len());
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    for element in elements {
+        emit_reflection_default_value_as_mixed(ctx, element);
+        append_reflection_mixed_array_default_element(ctx);
+    }
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+}
+
+/// Allocates an indexed array stamped for boxed Mixed payload slots.
+fn emit_reflection_mixed_array_allocation(ctx: &mut FunctionContext<'_>, element_count: usize) {
+    let capacity = element_count.max(4);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", capacity as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", 8);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", capacity as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", 8);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_new");
+    emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &PhpType::Mixed,
+    );
+}
+
+/// Appends the boxed Mixed result value to the indexed array saved on the stack.
+#[rustfmt::skip]
+fn append_reflection_mixed_array_default_element(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("mov x1, x0");                              // pass the boxed Reflection default to the array append helper
+            ctx.emitter.instruction("mov x0, x9");                              // pass the saved default-array pointer to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
+            emit_release_pushed_refcounted_temp_after_array_push(ctx.emitter, &PhpType::Mixed);
+            abi::emit_push_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "r11");
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the boxed Reflection default to the array append helper
+            ctx.emitter.instruction("mov rdi, r11");                            // pass the saved default-array pointer to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
+            emit_release_pushed_refcounted_temp_after_array_push(ctx.emitter, &PhpType::Mixed);
+            abi::emit_push_reg(ctx.emitter, "rax");
+        }
     }
 }
 
@@ -4542,21 +4624,8 @@ fn emit_reflection_owner_default_value_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     match default_value {
-        Some(ReflectionParameterDefaultValue::Int(value)) => {
-            emit_boxed_int_literal_to_result(ctx, *value)
-        }
-        Some(ReflectionParameterDefaultValue::Bool(value)) => {
-            emit_boxed_bool_literal_to_result(ctx, *value)
-        }
-        Some(ReflectionParameterDefaultValue::Float(value)) => {
-            emit_boxed_float_literal_to_result(ctx, *value)
-        }
-        Some(ReflectionParameterDefaultValue::Str(value)) => {
-            emit_boxed_string_literal_default_to_result(ctx, value)
-        }
-        Some(ReflectionParameterDefaultValue::Null) | None => {
-            emit_boxed_null_literal_to_result(ctx)
-        }
+        Some(value) => emit_reflection_default_value_as_mixed(ctx, value),
+        None => emit_boxed_null_literal_to_result(ctx),
     }
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, default_offset);
