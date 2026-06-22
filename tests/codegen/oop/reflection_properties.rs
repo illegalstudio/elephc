@@ -69,6 +69,66 @@ echo ":" . ReflectStaticValueAccessTarget::$count;
     assert_eq!(out, "2:17:19:old:new:23");
 }
 
+/// Verifies `ReflectionProperty::isInitialized()` observes typed instance
+/// property initialization without reading the property value.
+#[test]
+fn test_reflection_property_is_initialized_for_instance_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectInitializedInstanceTarget {
+    public int $typed;
+    public ?string $nullable = null;
+    public $implicit;
+    private int $hidden;
+
+    public function __construct() {
+        $this->hidden = 7;
+    }
+}
+
+$target = new ReflectInitializedInstanceTarget();
+$typed = new ReflectionProperty(ReflectInitializedInstanceTarget::class, "typed");
+echo $typed->isInitialized($target) ? "bad" : "uninit";
+$target->typed = 3;
+echo ":" . ($typed->isInitialized(object: $target) ? "typed" : "bad");
+echo ":" . ((new ReflectionProperty(ReflectInitializedInstanceTarget::class, "nullable"))->isInitialized($target) ? "nullable" : "bad");
+echo ":" . ((new ReflectionClass(ReflectInitializedInstanceTarget::class))->getProperty("implicit")->isInitialized($target) ? "implicit" : "bad");
+echo ":" . ((new ReflectionProperty(ReflectInitializedInstanceTarget::class, "hidden"))->isInitialized($target) ? "hidden" : "bad");
+"#,
+    );
+    assert_eq!(out, "uninit:typed:nullable:implicit:hidden");
+}
+
+/// Verifies `ReflectionProperty::isInitialized()` observes static-property
+/// initialization while bypassing property visibility.
+#[test]
+fn test_reflection_property_is_initialized_for_static_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectInitializedStaticTarget {
+    public static int $typed;
+    public static ?string $nullable = null;
+    private static int $hidden;
+
+    public static function initHidden(): void {
+        self::$hidden = 7;
+    }
+}
+
+$typed = new ReflectionProperty(ReflectInitializedStaticTarget::class, "typed");
+echo $typed->isInitialized() ? "bad" : "uninit";
+ReflectInitializedStaticTarget::$typed = 3;
+echo ":" . ($typed->isInitialized(object: null) ? "typed" : "bad");
+echo ":" . ((new ReflectionProperty(ReflectInitializedStaticTarget::class, "nullable"))->isInitialized() ? "nullable" : "bad");
+$hidden = (new ReflectionClass(ReflectInitializedStaticTarget::class))->getProperty("hidden");
+echo ":" . ($hidden->isInitialized() ? "bad" : "hidden-uninit");
+ReflectInitializedStaticTarget::initHidden();
+echo ":" . ($hidden->isInitialized() ? "hidden" : "bad");
+"#,
+    );
+    assert_eq!(out, "uninit:typed:nullable:hidden-uninit:hidden");
+}
+
 /// Verifies ReflectionProperty static value access bypasses visibility for
 /// private and protected properties when the reflected target is statically known.
 #[test]

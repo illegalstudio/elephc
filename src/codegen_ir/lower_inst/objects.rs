@@ -2417,6 +2417,24 @@ pub(super) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     store_if_result(ctx, inst)
 }
 
+/// Lowers a declared object-property initialization probe.
+pub(super) fn lower_prop_initialized(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let property = property_name_immediate(ctx, inst)?.to_string();
+    let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    if !slot.is_declared {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        return store_if_result(ctx, inst);
+    }
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, base_reg)?;
+    emit_typed_property_initialized_bool(ctx, &slot, base_reg);
+    store_if_result(ctx, inst)
+}
+
 /// Returns the receiver class when an undeclared property should route through `__get`.
 fn magic_get_receiver_class(
     ctx: &FunctionContext<'_>,
@@ -5471,6 +5489,33 @@ fn emit_uninitialized_typed_property_guard(
     }
     emit_uninitialized_typed_property_fatal(ctx, slot);
     ctx.emitter.label(&initialized_label);
+}
+
+/// Compares a typed instance-property marker with the uninitialized sentinel.
+fn emit_typed_property_initialized_bool(
+    ctx: &mut FunctionContext<'_>,
+    slot: &PropertySlot,
+    object_reg: &str,
+) {
+    let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, marker_reg, object_reg, slot.offset + 8);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        sentinel_reg,
+        UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the property marker against the uninitialized sentinel
+            ctx.emitter.instruction("cset x0, ne");                             // materialize true when the instance property is initialized
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the property marker against the uninitialized sentinel
+            ctx.emitter.instruction("setne al");                                // materialize true when the instance property is initialized
+            ctx.emitter.instruction("movzx rax, al");                           // widen the initialization flag into the integer result register
+        }
+    }
 }
 
 /// Emits the runtime fatal diagnostic for an uninitialized typed-property read.

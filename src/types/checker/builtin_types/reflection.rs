@@ -2223,6 +2223,57 @@ fn builtin_reflection_property_set_value_method() -> ClassMethod {
     }
 }
 
+/// Returns `ReflectionProperty::isInitialized()` for supported materialized reflectors.
+fn builtin_reflection_property_is_initialized_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let dynamic_return = Stmt::new(
+        StmtKind::If {
+            condition: reflection_this_property("__is_dynamic", dummy_span),
+            then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        dummy_span,
+    );
+    let defaulted_return = Stmt::new(
+        StmtKind::If {
+            condition: reflection_this_property("__has_default_value", dummy_span),
+            then_body: vec![Stmt::new(StmtKind::Return(true_bool()), dummy_span)],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: "isInitialized".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(mixed_type()), null_expr(), false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        body: vec![
+            reflection_property_static_value_guard("isInitialized", dummy_span),
+            reflection_property_object_required_guard("isInitialized", dummy_span),
+            dynamic_return,
+            defaulted_return,
+            throw_new_reflection_exception(
+                string_lit(
+                    "ReflectionProperty::isInitialized() for typed properties without defaults requires an inline known property",
+                    dummy_span,
+                ),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Builds a guard for static property value access that still needs inline lowering.
 fn reflection_property_static_value_guard(method: &str, span: crate::span::Span) -> Stmt {
     Stmt::new(
@@ -2690,6 +2741,7 @@ fn add_reflection_member_flag_methods(
         methods.push(builtin_reflection_property_skip_lazy_initialization_method());
         methods.push(builtin_reflection_property_get_value_method());
         methods.push(builtin_reflection_property_set_value_method());
+        methods.push(builtin_reflection_property_is_initialized_method());
         methods.push(builtin_reflection_property_modifier_mask_method(
             "isProtectedSet",
             2048,
@@ -3575,6 +3627,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "ispromoted",
                     "isvirtual",
                     "isdynamic",
+                    "isinitialized",
                     "isprotectedset",
                     "isprivateset",
                 ] {

@@ -279,7 +279,9 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         | EvalFunctionExists
         | EvalClassExists
         | EvalConstantExists
-        | EvalConstantFetch => {
+        | EvalConstantFetch
+        | PropInitialized
+        | ReflectionStaticPropertyInitialized => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
         LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
@@ -402,7 +404,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         }
         BufferNew => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         LoadLocal | LoadRefCell | LoadGlobal | LoadStaticLocal | LoadStaticProperty
-        | LoadReflectionStaticProperty | ExternGlobalLoad => {
+        | LoadReflectionStaticProperty | ReflectionStaticPropertyInitialized | ExternGlobalLoad => {
             check_count(inst_id, inst, 0, "0")
         }
         UnsetLocal | PromoteLocalRefCell | AliasLocalRefCell | ReleaseLocalRefCell => {
@@ -434,7 +436,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         BufferLen | BufferGet | BufferSet | BufferFree => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Buffer, "Heap(Buffer)")
         }
-        DynamicObjectNewWithoutConstructorMixed | PropGet | PropSet | DynamicPropGet
+        DynamicObjectNewWithoutConstructorMixed | PropGet | PropInitialized | PropSet | DynamicPropGet
         | DynamicPropSet | NullsafePropGet
         | NullsafeMethodCall | MethodLookup | MethodCall | InstanceOf | InstanceOfDynamic => {
             check_count_at_least(inst_id, inst, 1, "at least 1")

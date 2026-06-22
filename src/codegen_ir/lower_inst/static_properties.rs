@@ -90,6 +90,16 @@ pub(super) fn lower_load_reflection_static_property(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a Reflection static-property initialization probe.
+pub(super) fn lower_reflection_static_property_initialized(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = resolve_static_property_slot(ctx, inst, false)?;
+    emit_direct_static_property_initialized_result(ctx, &slot);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a Reflection static property write, bypassing PHP member visibility.
 pub(super) fn lower_store_reflection_static_property(
     ctx: &mut FunctionContext<'_>,
@@ -221,6 +231,18 @@ fn emit_direct_load_static_property_result(
     abi::emit_load_symbol_to_result(ctx.emitter, &slot.symbol, &slot.php_type);
 }
 
+/// Emits `true` when the static-property slot is initialized.
+fn emit_direct_static_property_initialized_result(
+    ctx: &mut FunctionContext<'_>,
+    slot: &StaticPropertySlot,
+) {
+    if !slot.is_declared {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        return;
+    }
+    emit_static_property_initialized_bool(ctx, slot);
+}
+
 /// Emits a direct static property store into the fallback declaring-class symbol.
 fn emit_direct_store_static_property_result(
     ctx: &mut FunctionContext<'_>,
@@ -229,6 +251,28 @@ fn emit_direct_store_static_property_result(
 ) {
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, release_previous);
     clear_uninitialized_marker_after_static_store(ctx, &slot.symbol, &slot.php_type);
+}
+
+/// Compares a typed static-property marker with the uninitialized sentinel.
+fn emit_static_property_initialized_bool(
+    ctx: &mut FunctionContext<'_>,
+    slot: &StaticPropertySlot,
+) {
+    let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, marker_reg, &slot.symbol, 8);
+    abi::emit_load_int_immediate(ctx.emitter, sentinel_reg, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the static property marker against the uninitialized sentinel
+            ctx.emitter.instruction("cset x0, ne");                             // materialize true when the static property is initialized
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the static property marker against the uninitialized sentinel
+            ctx.emitter.instruction("setne al");                                // materialize true when the static property is initialized
+            ctx.emitter.instruction("movzx rax, al");                           // widen the initialization flag into the integer result register
+        }
+    }
 }
 
 /// Loads the forwarded called-class id into `dest_reg` when the current frame has it.

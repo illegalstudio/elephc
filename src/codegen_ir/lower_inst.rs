@@ -163,6 +163,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
             objects::lower_dynamic_object_new_without_constructor_mixed(ctx, &inst)
         }
         Op::PropGet => objects::lower_prop_get(ctx, &inst),
+        Op::PropInitialized => objects::lower_prop_initialized(ctx, &inst),
         Op::NullsafePropGet => objects::lower_nullsafe_prop_get(ctx, &inst),
         Op::DynamicPropGet => objects::lower_dynamic_prop_get(ctx, &inst),
         Op::PropSet => objects::lower_prop_set(ctx, &inst),
@@ -177,6 +178,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
         Op::LoadReflectionStaticProperty => {
             static_properties::lower_load_reflection_static_property(ctx, &inst)
+        }
+        Op::ReflectionStaticPropertyInitialized => {
+            static_properties::lower_reflection_static_property_initialized(ctx, &inst)
         }
         Op::StoreReflectionStaticProperty => {
             static_properties::lower_store_reflection_static_property(ctx, &inst)

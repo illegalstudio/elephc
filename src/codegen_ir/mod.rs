@@ -958,6 +958,7 @@ fn referenced_static_property_class_names(module: &Module) -> HashSet<String> {
                     | Op::StoreStaticProperty
                     | Op::LoadReflectionStaticProperty
                     | Op::StoreReflectionStaticProperty
+                    | Op::ReflectionStaticPropertyInitialized
             ) {
                 continue;
             }

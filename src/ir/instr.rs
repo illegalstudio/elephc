@@ -179,6 +179,7 @@ pub enum Op {
     StoreStaticProperty,
     LoadReflectionStaticProperty,
     StoreReflectionStaticProperty,
+    ReflectionStaticPropertyInitialized,
     IAdd,
     ISub,
     IMul,
@@ -279,6 +280,7 @@ pub enum Op {
     DynamicObjectNewMixed,
     DynamicObjectNewWithoutConstructorMixed,
     PropGet,
+    PropInitialized,
     PropSet,
     DynamicPropGet,
     DynamicPropSet,
@@ -382,8 +384,9 @@ impl Op {
             },
             AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
             ReleaseLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
-            LoadGlobal | LoadStaticProperty | LoadReflectionStaticProperty | ScopedConstantGet
-            | ClassAttrNames | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
+            LoadGlobal | LoadStaticProperty | LoadReflectionStaticProperty
+            | ReflectionStaticPropertyInitialized | ScopedConstantGet | ClassAttrNames
+            | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
             StoreGlobal | StoreStaticLocal | StoreStaticProperty | StoreReflectionStaticProperty
             | InitStaticLocal | IncludeOnceMark | FunctionVariantMark | TryPushHandler
             | TryPopHandler => E::WRITES_GLOBAL,
@@ -405,7 +408,9 @@ impl Op {
             | HashCloneShallow | ObjectCloneShallow => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
-            ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet => E::READS_HEAP,
+            ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet | PropInitialized => {
+                E::READS_HEAP
+            }
             ArraySet | HashSet | ArrayPush | HashAppend | OffsetUnset | PropSet
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
@@ -496,6 +501,7 @@ impl Op {
             StoreStaticProperty => "store_static_property",
             LoadReflectionStaticProperty => "load_reflection_static_property",
             StoreReflectionStaticProperty => "store_reflection_static_property",
+            ReflectionStaticPropertyInitialized => "reflection_static_property_initialized",
             IAdd => "iadd",
             ISub => "isub",
             IMul => "imul",
@@ -598,6 +604,7 @@ impl Op {
                 "dynamic_object_new_without_constructor_mixed"
             }
             PropGet => "prop_get",
+            PropInitialized => "prop_initialized",
             PropSet => "prop_set",
             DynamicPropGet => "dynamic_prop_get",
             DynamicPropSet => "dynamic_prop_set",
