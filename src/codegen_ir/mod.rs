@@ -486,6 +486,193 @@ fn runtime_referenced_class_names(module: &Module) -> HashSet<String> {
     names
 }
 
+/// Returns enum names whose singleton case slots must be allocated before main runs.
+fn runtime_referenced_enum_singleton_names(module: &Module) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for function in all_runtime_scanned_functions(module) {
+        for inst in &function.instructions {
+            collect_scoped_constant_enum_singleton_name(module, inst, &mut names);
+            collect_static_method_enum_singleton_name(module, function, inst, &mut names);
+            collect_reflection_enum_singleton_name(module, function, inst, &mut names);
+        }
+    }
+    names
+}
+
+/// Iterates all function-like EIR bodies considered by runtime metadata scanners.
+fn all_runtime_scanned_functions(module: &Module) -> impl Iterator<Item = &Function> {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+}
+
+/// Adds enum names referenced by `Enum::Case` scoped constant reads.
+fn collect_scoped_constant_enum_singleton_name(
+    module: &Module,
+    inst: &crate::ir::Instruction,
+    names: &mut HashSet<String>,
+) {
+    if !matches!(inst.op, Op::ScopedConstantGet) {
+        return;
+    }
+    let Some(label) = data_string_immediate(module, inst) else {
+        return;
+    };
+    let Some((class_name, case_name)) = label.rsplit_once("::") else {
+        return;
+    };
+    let Some(enum_name) = canonical_module_enum_name(module, class_name) else {
+        return;
+    };
+    if module
+        .enum_infos
+        .get(&enum_name)
+        .is_some_and(|info| info.cases.iter().any(|case| case.name == case_name))
+    {
+        names.insert(enum_name);
+    }
+}
+
+/// Adds enum names referenced through `cases()`, `from()`, or `tryFrom()`.
+fn collect_static_method_enum_singleton_name(
+    module: &Module,
+    function: &Function,
+    inst: &crate::ir::Instruction,
+    names: &mut HashSet<String>,
+) {
+    if !matches!(inst.op, Op::StaticMethodCall) {
+        return;
+    }
+    let Some(label) = data_string_immediate(module, inst) else {
+        return;
+    };
+    let Some((receiver, method_name)) = label.rsplit_once("::") else {
+        return;
+    };
+    let Some(receiver) = resolve_static_method_metadata_class(module, function, receiver) else {
+        return;
+    };
+    let Some(enum_name) = canonical_module_enum_name(module, &receiver) else {
+        return;
+    };
+    if enum_static_method_needs_singletons(method_name) {
+        names.insert(enum_name);
+    }
+}
+
+/// Adds enum names whose case values can be materialized by known Reflection objects.
+fn collect_reflection_enum_singleton_name(
+    module: &Module,
+    function: &Function,
+    inst: &crate::ir::Instruction,
+    names: &mut HashSet<String>,
+) {
+    if !matches!(inst.op, Op::ObjectNew) || inst.operands.is_empty() {
+        return;
+    }
+    let Some(class_name) = class_name_immediate(module, inst) else {
+        return;
+    };
+    if !reflection_constructor_can_materialize_enum_case(class_name) {
+        return;
+    }
+    let Some(reflected_name) = const_class_like_name_value(module, function, inst.operands[0])
+    else {
+        return;
+    };
+    if let Some(enum_name) = canonical_module_enum_name(module, reflected_name) {
+        names.insert(enum_name);
+    }
+}
+
+/// Returns true for enum static helpers that load one or more singleton case objects.
+fn enum_static_method_needs_singletons(method_name: &str) -> bool {
+    matches!(
+        php_symbol_key(method_name).as_str(),
+        "cases" | "from" | "tryfrom"
+    )
+}
+
+/// Returns true for Reflection constructors whose methods can expose enum case values.
+fn reflection_constructor_can_materialize_enum_case(class_name: &str) -> bool {
+    matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "reflectionclass"
+            | "reflectionclassconstant"
+            | "reflectionenumunitcase"
+            | "reflectionenumbackedcase"
+    )
+}
+
+/// Returns a data-string immediate attached to an EIR instruction.
+fn data_string_immediate<'a>(module: &'a Module, inst: &crate::ir::Instruction) -> Option<&'a str> {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return None;
+    };
+    module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .map(String::as_str)
+}
+
+/// Returns a class-name immediate attached to an EIR instruction.
+fn class_name_immediate<'a>(module: &'a Module, inst: &crate::ir::Instruction) -> Option<&'a str> {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return None;
+    };
+    module
+        .data
+        .class_names
+        .get(data.as_raw() as usize)
+        .map(String::as_str)
+}
+
+/// Returns a compile-time class-like name from a string or `::class` value.
+fn const_class_like_name_value<'a>(
+    module: &'a Module,
+    function: &'a Function,
+    value: crate::ir::ValueId,
+) -> Option<&'a str> {
+    let value_ref = function.value(value)?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return None;
+    };
+    let inst_ref = function.instruction(inst)?;
+    let Some(Immediate::Data(data)) = inst_ref.immediate else {
+        return None;
+    };
+    match inst_ref.op {
+        Op::ConstClassName => module
+            .data
+            .class_names
+            .get(data.as_raw() as usize)
+            .map(String::as_str),
+        Op::ConstStr => module
+            .data
+            .strings
+            .get(data.as_raw() as usize)
+            .map(String::as_str),
+        _ => None,
+    }
+}
+
+/// Resolves an enum name against module metadata using PHP case-insensitive rules.
+fn canonical_module_enum_name(module: &Module, enum_name: &str) -> Option<String> {
+    let wanted = php_symbol_key(enum_name.trim_start_matches('\\'));
+    module
+        .enum_infos
+        .keys()
+        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == wanted)
+        .cloned()
+}
+
 /// Adds builtin throwable classes that runtime helpers can materialize without EIR class references.
 fn seed_runtime_throwable_class_names(module: &Module, names: &mut HashSet<String>) {
     if names.contains("Fiber") && module.class_infos.contains_key("FiberError") {
