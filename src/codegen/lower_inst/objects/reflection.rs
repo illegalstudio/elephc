@@ -3926,11 +3926,6 @@ fn emit_reflection_static_property_array_property_by_name(
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_static_property_array(ctx, members);
-    let assoc_type = PhpType::AssocArray {
-        key: Box::new(PhpType::Str),
-        value: Box::new(PhpType::Mixed),
-    };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
