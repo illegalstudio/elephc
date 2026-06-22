@@ -381,8 +381,10 @@ fn resolve_properties(
         .collect()
 }
 
-/// Resolves a trait use statement by rewriting its trait names and adaptations
-/// (aliases and instead-of rules) through `resolved_class_name` and `php_symbol_key`.
+/// Resolves a trait use statement by rewriting trait names and method selectors.
+///
+/// Alias display names keep their declared spelling because Reflection exposes
+/// them, while later method lookup still normalizes through `php_symbol_key`.
 pub(super) fn resolve_trait_use(
     trait_use: &TraitUse,
     current_namespace: Option<&str>,
@@ -421,7 +423,7 @@ pub(super) fn resolve_trait_use(
                         ))
                     }),
                     method: php_symbol_key(method),
-                    alias: alias.as_ref().map(|alias| php_symbol_key(alias)),
+                    alias: alias.clone(),
                     visibility: visibility.clone(),
                 }),
                 TraitAdaptation::InsteadOf {

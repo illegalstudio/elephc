@@ -115,6 +115,7 @@ pub(crate) fn inject_builtin_reflection(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
     class_map.insert("ReflectionClass".to_string(), builtin_reflection_class());
@@ -279,6 +280,14 @@ fn reflection_class_object_map_type() -> PhpType {
     PhpType::AssocArray {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Object("ReflectionClass".to_string())),
+    }
+}
+
+/// Returns `array<string, string>` for trait-alias reflection maps.
+fn reflection_string_map_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Str),
     }
 }
 
@@ -1255,6 +1264,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 empty_array(),
             ),
             builtin_property(
+                "__trait_aliases",
+                Visibility::Private,
+                Some(string_array_type()),
+                empty_array(),
+            ),
+            builtin_property(
                 "__parent_names",
                 Visibility::Private,
                 Some(string_array_type()),
@@ -1361,6 +1376,11 @@ fn builtin_reflection_class() -> FlattenedClass {
                 "__traits",
                 object_array_type("ReflectionClass"),
             ),
+            builtin_reflection_class_array_method(
+                "getTraitAliases",
+                "__trait_aliases",
+                string_array_type(),
+            ),
             builtin_reflection_class_bool_method("isFinal", "__is_final"),
             builtin_reflection_class_bool_method("isAbstract", "__is_abstract"),
             builtin_reflection_class_bool_method("isInterface", "__is_interface"),
@@ -1429,6 +1449,7 @@ fn builtin_reflection_class() -> FlattenedClass {
         attributes: Vec::new(),
         constants: reflection_class_constants(),
         used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
     }
 }
 
@@ -3013,6 +3034,7 @@ fn builtin_reflection_owner_class(
         attributes: Vec::new(),
         constants: reflection_owner_constants(name),
         used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
     }
 }
 
@@ -3488,8 +3510,14 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
             }
             if class_name == "ReflectionClass" {
                 for (property_name, property_type) in &mut class_info.properties {
-                    if matches!(property_name.as_str(), "__interfaces" | "__traits") {
-                        *property_type = reflection_class_object_map_type();
+                    match property_name.as_str() {
+                        "__interfaces" | "__traits" => {
+                            *property_type = reflection_class_object_map_type();
+                        }
+                        "__trait_aliases" => {
+                            *property_type = reflection_string_map_type();
+                        }
+                        _ => {}
                     }
                 }
                 for method_name in [
@@ -3525,6 +3553,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = reflection_class_object_map_type();
                     }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getTraitAliases")) {
+                    sig.return_type = reflection_string_map_type();
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getMethods")) {
                     sig.return_type =

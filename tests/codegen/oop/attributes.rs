@@ -1634,6 +1634,34 @@ echo count($parentInterfaceObjects) . ":" . $parentInterfaceObjects["StaticRelat
     );
 }
 
+/// Verifies that `ReflectionClass::getTraitAliases()` reports direct trait
+/// method aliases as PHP's alias-name to `Trait::method` map.
+#[test]
+fn test_reflection_class_reports_trait_aliases() {
+    let out = compile_and_run(
+        r#"<?php
+trait StaticAliasOne {
+    public function first(): string { return "first"; }
+}
+trait StaticAliasTwo {
+    public function second(): string { return "second"; }
+}
+class StaticAliasTarget {
+    use StaticAliasOne, StaticAliasTwo {
+        StaticAliasOne::first as relationAlias;
+        StaticAliasTwo::second as private hiddenOther;
+    }
+}
+$aliases = (new ReflectionClass(StaticAliasTarget::class))->getTraitAliases();
+echo count($aliases) . ":" . $aliases["relationAlias"] . ":" . $aliases["hiddenOther"];
+"#,
+    );
+    assert_eq!(
+        out,
+        "2:StaticAliasOne::first:StaticAliasTwo::second"
+    );
+}
+
 /// Verifies that `ReflectionClass::implementsInterface()` reports class, enum,
 /// and interface metadata using case-insensitive interface names.
 #[test]

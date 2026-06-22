@@ -1919,6 +1919,7 @@ mod tests {
             constant_attribute_names: HashMap::new(),
             constant_attribute_args: HashMap::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
             properties: Vec::new(),
             property_offsets: HashMap::new(),
             property_declaring_classes: HashMap::new(),

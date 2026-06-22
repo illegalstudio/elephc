@@ -132,6 +132,7 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
     class_map.insert(
@@ -161,6 +162,7 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
     // RuntimeException, ReflectionException, and JsonException inherit the
@@ -180,6 +182,7 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
     class_map.insert(
@@ -196,6 +199,7 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
     class_map.insert(
@@ -212,6 +216,7 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -229,6 +234,7 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
     class_map.insert(
@@ -245,6 +251,7 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
     class_map.insert(
@@ -283,6 +290,7 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 
@@ -301,6 +309,7 @@ pub(crate) fn inject_builtin_throwables(
             attributes: Vec::new(),
             constants: Vec::new(),
             used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
         },
     );
 

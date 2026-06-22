@@ -284,6 +284,8 @@ pub struct ClassInfo {
     pub constant_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     /// Trait names used directly by this class declaration, preserving source order.
     pub used_traits: Vec<String>,
+    /// Trait method aliases declared directly by this class, as `(alias, Trait::method)`.
+    pub trait_aliases: Vec<(String, String)>,
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
