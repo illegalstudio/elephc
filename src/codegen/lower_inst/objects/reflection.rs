@@ -27,7 +27,10 @@ use crate::names::{
     enum_case_symbol, php_symbol_key, property_hook_get_method, property_hook_set_method,
 };
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
-use crate::types::{AttrArgEntry, EnumCaseInfo, EnumCaseValue, FunctionSig, InterfaceInfo, PhpType};
+use crate::types::{
+    is_php_integer_array_key, AttrArgEntry, EnumCaseInfo, EnumCaseValue, FunctionSig,
+    InterfaceInfo, PhpType,
+};
 
 use super::super::super::context::FunctionContext;
 
@@ -176,6 +179,21 @@ enum ReflectionParameterDefaultValue {
     Str(String),
     Null,
     Array(Vec<ReflectionParameterDefaultValue>),
+    AssocArray(Vec<ReflectionDefaultAssocEntry>),
+}
+
+/// Metadata for one key/value pair in an associative Reflection default array.
+#[derive(Clone)]
+struct ReflectionDefaultAssocEntry {
+    key: ReflectionDefaultArrayKey,
+    value: ReflectionParameterDefaultValue,
+}
+
+/// Normalized PHP key forms for associative Reflection default arrays.
+#[derive(Clone)]
+enum ReflectionDefaultArrayKey {
+    Int(i64),
+    Str(String),
 }
 
 /// Metadata for one constant entry returned by `ReflectionClass::getConstants()`.
@@ -2789,6 +2807,7 @@ fn reflection_literal_parameter_default_value(
             .map(reflection_literal_parameter_default_value)
             .collect::<Option<Vec<_>>>()
             .map(ReflectionParameterDefaultValue::Array),
+        ExprKind::ArrayLiteralAssoc(entries) => reflection_assoc_array_default_value(entries),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value
                 .checked_neg()
@@ -2797,6 +2816,50 @@ fn reflection_literal_parameter_default_value(
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// Converts an associative array literal into normalized Reflection default metadata.
+fn reflection_assoc_array_default_value(
+    entries: &[(Expr, Expr)],
+) -> Option<ReflectionParameterDefaultValue> {
+    entries
+        .iter()
+        .map(|(key, value)| {
+            let key = reflection_default_array_key(key)?;
+            let value = reflection_literal_parameter_default_value(value)?;
+            Some(ReflectionDefaultAssocEntry { key, value })
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(ReflectionParameterDefaultValue::AssocArray)
+}
+
+/// Converts one supported associative-array key expression into PHP-normalized metadata.
+fn reflection_default_array_key(key: &Expr) -> Option<ReflectionDefaultArrayKey> {
+    match &key.kind {
+        ExprKind::IntLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value)),
+        ExprKind::BoolLiteral(value) => Some(ReflectionDefaultArrayKey::Int(i64::from(*value))),
+        ExprKind::FloatLiteral(value) => Some(ReflectionDefaultArrayKey::Int(*value as i64)),
+        ExprKind::StringLiteral(value) => reflection_default_string_array_key(value),
+        ExprKind::Null => Some(ReflectionDefaultArrayKey::Str(String::new())),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => value.checked_neg().map(ReflectionDefaultArrayKey::Int),
+            ExprKind::FloatLiteral(value) => Some(ReflectionDefaultArrayKey::Int((-*value) as i64)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Normalizes a string array key according to PHP integer-string key rules.
+fn reflection_default_string_array_key(value: &str) -> Option<ReflectionDefaultArrayKey> {
+    if is_php_integer_array_key(value) {
+        value
+            .parse::<i64>()
+            .ok()
+            .map(ReflectionDefaultArrayKey::Int)
+    } else {
+        Some(ReflectionDefaultArrayKey::Str(value.to_string()))
     }
 }
 
@@ -4106,6 +4169,9 @@ fn emit_reflection_default_value_as_mixed(
         ReflectionParameterDefaultValue::Array(elements) => {
             emit_reflection_indexed_array_default_as_mixed(ctx, elements)
         }
+        ReflectionParameterDefaultValue::AssocArray(entries) => {
+            emit_reflection_assoc_array_default_as_mixed(ctx, entries)
+        }
     }
 }
 
@@ -4174,6 +4240,104 @@ fn append_reflection_mixed_array_default_element(ctx: &mut FunctionContext<'_>) 
             abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
             emit_release_pushed_refcounted_temp_after_array_push(ctx.emitter, &PhpType::Mixed);
             abi::emit_push_reg(ctx.emitter, "rax");
+        }
+    }
+}
+
+/// Materializes an associative Reflection default array as a boxed Mixed cell.
+fn emit_reflection_assoc_array_default_as_mixed(
+    ctx: &mut FunctionContext<'_>,
+    entries: &[ReflectionDefaultAssocEntry],
+) {
+    emit_reflection_assoc_array_default_to_result(ctx, entries);
+    emit_box_current_owned_value_as_mixed(
+        ctx.emitter,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+    );
+}
+
+/// Allocates and populates an associative array whose values are boxed Mixed defaults.
+fn emit_reflection_assoc_array_default_to_result(
+    ctx: &mut FunctionContext<'_>,
+    entries: &[ReflectionDefaultAssocEntry],
+) {
+    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Mixed);
+    for entry in entries {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_reflection_default_value_as_mixed(ctx, &entry.value);
+        emit_reflection_assoc_array_default_insert(ctx, &entry.key);
+    }
+}
+
+/// Inserts the current boxed Mixed default value into the stacked associative default array.
+#[rustfmt::skip]
+fn emit_reflection_assoc_array_default_insert(
+    ctx: &mut FunctionContext<'_>,
+    key: &ReflectionDefaultArrayKey,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x0");                              // pass the boxed Reflection default as the hash payload
+            ctx.emitter.instruction("mov x4, xzr");                             // boxed Mixed hash payloads do not use the high word
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            emit_reflection_default_array_key_aarch64(ctx, key);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x5",
+                runtime_value_tag(&PhpType::Mixed) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the boxed Reflection default as the hash payload
+            ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash payloads do not use the high word
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            emit_reflection_default_array_key_x86_64(ctx, key);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "r9",
+                runtime_value_tag(&PhpType::Mixed) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        }
+    }
+}
+
+/// Materializes an associative default-array key in AArch64 hash-key registers.
+fn emit_reflection_default_array_key_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    key: &ReflectionDefaultArrayKey,
+) {
+    match key {
+        ReflectionDefaultArrayKey::Int(value) => {
+            abi::emit_load_int_immediate(ctx.emitter, "x1", *value);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
+        }
+        ReflectionDefaultArrayKey::Str(value) => {
+            let (key_label, key_len) = ctx.data.add_string(value.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
+        }
+    }
+}
+
+/// Materializes an associative default-array key in x86_64 SysV hash-key registers.
+fn emit_reflection_default_array_key_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    key: &ReflectionDefaultArrayKey,
+) {
+    match key {
+        ReflectionDefaultArrayKey::Int(value) => {
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", *value);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+        }
+        ReflectionDefaultArrayKey::Str(value) => {
+            let (key_label, key_len) = ctx.data.add_string(value.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
         }
     }
 }

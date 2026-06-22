@@ -2519,9 +2519,12 @@ class ReflectPropertyDefaultTarget {
     public int $count = 7;
     public static string $label = "ok";
     public array $items = [2, "b", null];
-}
-$implicit = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "implicit");
-echo $implicit->getName() . ":";
+	    public $assoc = ["name" => "Ada", "1" => "one", false => "zero"];
+	}
+	$obj = new ReflectPropertyDefaultTarget();
+	echo "runtime:" . $obj->assoc["name"] . ":" . $obj->assoc[1] . "|";
+	$implicit = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "implicit");
+	echo $implicit->getName() . ":";
 echo $implicit->isDefault() ? "Y:" : "N:";
 echo $implicit->hasDefaultValue() ? "D:" : "d:";
 echo $implicit->getDefaultValue() === null ? "null" : $implicit->getDefaultValue();
@@ -2564,6 +2567,14 @@ echo $items->hasDefaultValue() ? "D:" : "d:";
 echo count($itemDefault) . ":" . $itemDefault[0] . ":" . $itemDefault[1] . ":";
 echo $itemDefault[2] === null ? "null" : "value";
 echo "|";
+$assoc = new ReflectionProperty(ReflectPropertyDefaultTarget::class, "assoc");
+$assocDefault = $assoc->getDefaultValue();
+echo $assoc->getName() . ":";
+echo $assoc->isDefault() ? "Y:" : "N:";
+echo $assoc->hasDefaultValue() ? "D:" : "d:";
+echo count($assocDefault) . ":" . $assocDefault["name"] . ":" . $assocDefault[1] . ":";
+echo $assocDefault[0];
+echo "|";
 $listed = (new ReflectionClass(ReflectPropertyDefaultTarget::class))->getProperty("implicit");
 echo "listed:";
 echo $listed->isDefault() ? "Y:" : "N:";
@@ -2577,9 +2588,9 @@ echo $listed->getDefaultValue() === null ? "null" : "bad";
         out.stdout, out.stderr
     );
     assert_eq!(
-        out.stdout,
-        "implicit:Y:D:null|typed:Y:d:null|nullableTyped:Y:d:null|explicitNull:Y:D:null|count:Y:D:7|label:Y:D:ok|items:Y:D:3:2:b:null|listed:Y:D:null"
-    );
+	        out.stdout,
+	        "runtime:Ada:one|implicit:Y:D:null|typed:Y:d:null|nullableTyped:Y:d:null|explicitNull:Y:D:null|count:Y:D:7|label:Y:D:ok|items:Y:D:3:2:b:null|assoc:Y:D:3:Ada:one:zero|listed:Y:D:null"
+	    );
 }
 
 /// Verifies that `ReflectionClass::getDefaultProperties()` exposes supported property defaults.
@@ -2596,22 +2607,28 @@ class ReflectClassDefaultBase {
     public static string $baseStatic = "bs";
 }
 class ReflectClassDefaultChild extends ReflectClassDefaultBase {
-    public int $child = 5;
-    private int $shadow = 9;
-    public static int $childStatic = 7;
-    public $explicitNull = null;
-    public array $items = [8, "i"];
+	    public int $child = 5;
+	    private int $shadow = 9;
+	    public static int $childStatic = 7;
+	    public static $assocStatic = ["s" => "S2", "2" => "two"];
+	    public $explicitNull = null;
+	    public array $items = [8, "i"];
+	    public $assoc = ["side" => "S", "4" => "four"];
 }
 $defaults = (new ReflectionClass(ReflectClassDefaultChild::class))->getDefaultProperties();
 echo $defaults["childStatic"] . ":";
 echo $defaults["baseStatic"] . ":";
 echo $defaults["child"] . ":";
 echo $defaults["shadow"] . ":";
-echo $defaults["base"] . ":";
-echo $defaults["prot"] . ":";
-echo count($defaults["items"]) . ":";
+	echo $defaults["base"] . ":";
+	echo $defaults["prot"] . ":";
+	echo ReflectClassDefaultChild::$assocStatic["s"] . ":";
+	echo count($defaults["items"]) . ":";
 echo $defaults["items"][0] . ":";
 echo $defaults["items"][1] . ":";
+echo count($defaults["assoc"]) . ":";
+echo $defaults["assoc"]["side"] . ":";
+echo $defaults["assoc"][4] . ":";
 $implicit = "i";
 $explicitNull = "e";
 $typed = "t";
@@ -2634,7 +2651,7 @@ echo $implicit . ":" . $explicitNull . ":" . $typed . ":" . count($defaults);
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "7:bs:5:9:1:p:2:8:i:I:E:t:9");
+    assert_eq!(out.stdout, "7:bs:5:9:1:p:S2:2:8:i:2:S:four:I:E:t:11");
 }
 
 /// Verifies `ReflectionParameter::getAttributes()` exposes parameter attributes.
@@ -2680,7 +2697,7 @@ echo "direct:" . count($directAttrs) . ":" . $directAttrs[0]->getName() . ":" . 
 fn test_reflection_parameter_exposes_default_values() {
     let out = compile_and_run_capture(
         r##"<?php
-function reflect_default_function($required, int $id = 7, ?string $name = null, string $label = "ok", array $items = [1, "two", null, [3, false]]) {}
+function reflect_default_function($required, int $id = 7, ?string $name = null, string $label = "ok", array $items = [1, "two", null, [3, false]], array $assoc = ["name" => "Ada", "1" => "one", false => "zero", 3 => ["deep" => 4]]) {}
 $params = (new ReflectionFunction("reflect_default_function"))->getParameters();
 echo $params[0]->isDefaultValueAvailable() ? "D" : "d";
 try {
@@ -2707,6 +2724,11 @@ echo ":" . count($items[3]) . ":" . $items[3][0] . ":" . ($items[3][1] ? "T" : "
 echo "|";
 $directItems = (new ReflectionParameter("reflect_default_function", "items"))->getDefaultValue();
 echo count($directItems) . ":" . $directItems[1];
+echo "|";
+$assoc = $params[5]->getDefaultValue();
+echo $params[5]->isDefaultValueAvailable() ? "D:" : "d:";
+echo count($assoc) . ":" . $assoc["name"] . ":" . $assoc[1] . ":";
+echo $assoc[0] . ":" . $assoc[3]["deep"];
 "##,
     );
     assert!(
@@ -2714,7 +2736,10 @@ echo count($directItems) . ":" . $directItems[1];
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "d:E|D:7|D:null|D:ok|D:4:1:two:null:2:3:F|4:two");
+    assert_eq!(
+        out.stdout,
+        "d:E|D:7|D:null|D:ok|D:4:1:two:null:2:3:F|4:two|D:4:Ada:one:zero:4"
+    );
 }
 
 /// Verifies `ReflectionParameter` exposes class-constant default metadata.
