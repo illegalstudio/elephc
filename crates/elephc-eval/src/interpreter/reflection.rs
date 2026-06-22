@@ -43,6 +43,7 @@ const EVAL_REFLECTION_MEMBER_FLAG_PROMOTED: u64 = 512;
 const EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL: u64 = 1024;
 const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET: u64 = 2048;
 const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET: u64 = 4096;
+const EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC: u64 = 8192;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
@@ -79,6 +80,7 @@ struct EvalReflectionMemberMetadata {
     is_abstract: bool,
     is_readonly: bool,
     is_promoted: bool,
+    is_dynamic: bool,
     modifiers: u64,
     type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
@@ -1099,6 +1101,17 @@ pub(in crate::interpreter) fn eval_reflection_property_get_value_result(
         return Ok(None);
     };
     let object = eval_reflection_property_get_value_arg(evaluated_args)?;
+    if context.eval_reflection_property_is_dynamic(identity) {
+        let object = object.ok_or(EvalStatus::RuntimeFatal)?;
+        return eval_reflection_dynamic_property_get_value(
+            &declaring_class,
+            &property_name,
+            object,
+            context,
+            values,
+        )
+        .map(Some);
+    }
     let Some(member) = eval_reflection_property_metadata(&declaring_class, &property_name, context)
     else {
         return Err(EvalStatus::RuntimeFatal);
@@ -1144,11 +1157,23 @@ pub(in crate::interpreter) fn eval_reflection_property_set_value_result(
     else {
         return Ok(None);
     };
+    let (object_or_value, value) = eval_reflection_property_set_value_args(evaluated_args)?;
+    if context.eval_reflection_property_is_dynamic(identity) {
+        let value = value.ok_or(EvalStatus::RuntimeFatal)?;
+        eval_reflection_dynamic_property_set_value(
+            &declaring_class,
+            &property_name,
+            object_or_value,
+            value,
+            context,
+            values,
+        )?;
+        return values.null().map(Some);
+    }
     let Some(member) = eval_reflection_property_metadata(&declaring_class, &property_name, context)
     else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let (object_or_value, value) = eval_reflection_property_set_value_args(evaluated_args)?;
     if member.is_static {
         let value = value.unwrap_or(object_or_value);
         let declaring_class = member
@@ -1194,6 +1219,18 @@ pub(in crate::interpreter) fn eval_reflection_property_is_initialized_result(
         return Ok(None);
     };
     let object = eval_reflection_property_get_value_arg(evaluated_args)?;
+    if context.eval_reflection_property_is_dynamic(identity) {
+        let object = object.ok_or(EvalStatus::RuntimeFatal)?;
+        return eval_reflection_dynamic_property_is_initialized(
+            &declaring_class,
+            &property_name,
+            object,
+            context,
+            values,
+        )
+        .and_then(|initialized| values.bool_value(initialized))
+        .map(Some);
+    }
     let Some(member) = eval_reflection_property_metadata(&declaring_class, &property_name, context)
     else {
         return Err(EvalStatus::RuntimeFatal);
@@ -1242,11 +1279,29 @@ pub(in crate::interpreter) fn eval_reflection_property_lazy_result(
     };
     if method_name.eq_ignore_ascii_case("isLazy") {
         let object = eval_reflection_property_raw_value_arg(evaluated_args)?;
+        if context.eval_reflection_property_is_dynamic(identity) {
+            eval_reflection_dynamic_property_validate_object(
+                &declaring_class,
+                object,
+                context,
+                values,
+            )?;
+            return values.bool_value(false).map(Some);
+        }
         eval_reflection_property_validate_object(&declaring_class, object, context, values)?;
         return values.bool_value(false).map(Some);
     }
     if method_name.eq_ignore_ascii_case("skipLazyInitialization") {
         let object = eval_reflection_property_raw_value_arg(evaluated_args)?;
+        if context.eval_reflection_property_is_dynamic(identity) {
+            eval_reflection_dynamic_property_validate_object(
+                &declaring_class,
+                object,
+                context,
+                values,
+            )?;
+            return Err(EvalStatus::RuntimeFatal);
+        }
         let (_, property) = eval_reflection_instance_property_target(
             &declaring_class,
             &property_name,
@@ -1283,6 +1338,11 @@ pub(in crate::interpreter) fn eval_reflection_property_to_string_result(
         return Ok(None);
     };
     eval_reflection_bind_no_args(evaluated_args)?;
+    if context.eval_reflection_property_is_dynamic(identity) {
+        let member = eval_reflection_dynamic_property_metadata(&declaring_class);
+        let text = eval_reflection_property_to_string(&property_name, &member);
+        return values.string(&text).map(Some);
+    }
     let member = if let Some(member) =
         eval_reflection_property_metadata(&declaring_class, &property_name, context)
     {
@@ -1319,6 +1379,16 @@ pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
     };
     if method_name.eq_ignore_ascii_case("getRawValue") {
         let object = eval_reflection_property_raw_value_arg(evaluated_args)?;
+        if context.eval_reflection_property_is_dynamic(identity) {
+            return eval_reflection_dynamic_property_get_value(
+                &declaring_class,
+                &property_name,
+                object,
+                context,
+                values,
+            )
+            .map(Some);
+        }
         return eval_reflection_instance_property_get_raw_value(
             &declaring_class,
             &property_name,
@@ -1332,6 +1402,17 @@ pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
         || method_name.eq_ignore_ascii_case("setRawValueWithoutLazyInitialization")
     {
         let (object, value) = eval_reflection_property_set_raw_value_args(evaluated_args)?;
+        if context.eval_reflection_property_is_dynamic(identity) {
+            eval_reflection_dynamic_property_set_value(
+                &declaring_class,
+                &property_name,
+                object,
+                value,
+                context,
+                values,
+            )?;
+            return values.null().map(Some);
+        }
         eval_reflection_instance_property_set_raw_value(
             &declaring_class,
             &property_name,
@@ -1940,9 +2021,12 @@ fn eval_reflection_property_new(
         &[String::from("class_name"), String::from("property_name")],
         evaluated_args,
     )?;
+    let property_name = eval_reflection_string_arg(args[1], values)?;
+    if values.type_tag(args[0])? == EVAL_TAG_OBJECT {
+        return eval_reflection_property_new_for_object(args[0], &property_name, context, values);
+    }
     let class_name = eval_reflection_string_arg(args[0], values)?;
     if !eval_reflection_class_like_exists(&class_name, context) {
-        let property_name = eval_reflection_string_arg(args[1], values)?;
         if let Some(property) = eval_reflection_aot_property_metadata_if_exists(
             &class_name,
             &property_name,
@@ -1960,7 +2044,6 @@ fn eval_reflection_property_new(
         }
         return Ok(None);
     }
-    let property_name = eval_reflection_string_arg(args[1], values)?;
     let property = eval_reflection_property_metadata(&class_name, &property_name, context)
         .ok_or(EvalStatus::RuntimeFatal)?;
     eval_reflection_member_object_result(
@@ -1971,6 +2054,104 @@ fn eval_reflection_property_new(
         values,
     )
     .map(Some)
+}
+
+/// Builds a ReflectionProperty from an object argument, including dynamic properties.
+fn eval_reflection_property_new_for_object(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let class_name = eval_reflection_object_class_name(object, context, values)?;
+    if let Some(property) = eval_reflection_property_metadata(&class_name, property_name, context) {
+        return eval_reflection_member_object_result(
+            EVAL_REFLECTION_OWNER_PROPERTY,
+            property_name,
+            &property,
+            context,
+            values,
+        )
+        .map(Some);
+    }
+    if !eval_reflection_object_dynamic_property_exists(object, property_name, values)? {
+        return Ok(None);
+    }
+    let property = eval_reflection_dynamic_property_metadata(&class_name);
+    eval_reflection_member_object_result(
+        EVAL_REFLECTION_OWNER_PROPERTY,
+        property_name,
+        &property,
+        context,
+        values,
+    )
+    .map(Some)
+}
+
+/// Returns the class name for an object passed to a Reflection constructor.
+fn eval_reflection_object_class_name(
+    object: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let identity = values.object_identity(object)?;
+    if let Some(class) = context.dynamic_object_class(identity) {
+        return Ok(class.name().trim_start_matches('\\').to_string());
+    }
+    let class_name = values.object_class_name(object)?;
+    let bytes = values.string_bytes(class_name);
+    values.release(class_name)?;
+    let class_name = String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+    Ok(class_name.trim_start_matches('\\').to_string())
+}
+
+/// Returns whether one object has a public dynamic property by exact PHP name.
+fn eval_reflection_object_dynamic_property_exists(
+    object: RuntimeCellHandle,
+    property_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if property_name.contains('\0') {
+        return Ok(false);
+    }
+    let property_count = values.object_property_len(object)?;
+    for position in 0..property_count {
+        let key = values.object_property_iter_key(object, position)?;
+        let key_bytes = values.string_bytes(key);
+        values.release(key)?;
+        if key_bytes? == property_name.as_bytes() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Builds PHP reflection metadata for a public dynamic object property.
+fn eval_reflection_dynamic_property_metadata(class_name: &str) -> EvalReflectionMemberMetadata {
+    EvalReflectionMemberMetadata {
+        declaring_class_name: Some(class_name.trim_start_matches('\\').to_string()),
+        attributes: Vec::new(),
+        visibility: EvalVisibility::Public,
+        is_static: false,
+        is_final: false,
+        is_abstract: false,
+        is_readonly: false,
+        is_promoted: false,
+        is_dynamic: true,
+        modifiers: eval_reflection_property_modifiers(
+            EvalVisibility::Public,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
+        type_metadata: None,
+        return_type_metadata: None,
+        default_value: None,
+        required_parameter_count: 0,
+        parameters: Vec::new(),
+    }
 }
 
 /// Returns generated AOT ReflectionMethod metadata when the runtime table has a matching row.
@@ -2074,6 +2255,7 @@ fn eval_reflection_aot_method_metadata(
         is_abstract: flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT != 0,
         is_readonly: false,
         is_promoted: false,
+        is_dynamic: false,
         modifiers: eval_reflection_method_modifiers_from_flags(flags),
         type_metadata: None,
         return_type_metadata,
@@ -2327,6 +2509,7 @@ fn eval_reflection_aot_property_metadata(
         is_abstract,
         is_readonly,
         is_promoted: flags & EVAL_REFLECTION_MEMBER_FLAG_PROMOTED != 0,
+        is_dynamic: false,
         modifiers,
         type_metadata,
         return_type_metadata: None,
@@ -2639,7 +2822,14 @@ fn eval_reflection_owner_object_with_members(
         context.register_eval_reflection_function(identity, reflected_name);
     } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
         if let Some(declaring_class) = parent_class_name {
-            if eval_reflection_class_like_exists(declaring_class, context) {
+            if flags & EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC != 0 {
+                let identity = values.object_identity(object)?;
+                context.register_eval_dynamic_reflection_property(
+                    identity,
+                    declaring_class,
+                    reflected_name,
+                );
+            } else if eval_reflection_class_like_exists(declaring_class, context) {
                 let identity = values.object_identity(object)?;
                 context.register_eval_reflection_property(
                     identity,
@@ -3282,6 +3472,9 @@ fn eval_reflection_member_object_result(
     if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY && (member.modifiers & 512) != 0 {
         flags |= EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL;
     }
+    if member.is_dynamic {
+        flags |= EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC;
+    }
     let owner_modifiers = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
         member.required_parameter_count as u64
     } else {
@@ -3827,6 +4020,9 @@ fn eval_reflection_property_to_string(
     property_name: &str,
     member: &EvalReflectionMemberMetadata,
 ) -> String {
+    if member.is_dynamic {
+        return format!("Property [ <dynamic> public ${property_name} ]\n");
+    }
     let mut parts = Vec::new();
     if member.is_abstract {
         parts.push(String::from("abstract"));
@@ -4140,6 +4336,7 @@ fn eval_reflection_method_metadata(
                     is_abstract: method.is_abstract(),
                     is_readonly: false,
                     is_promoted: false,
+                    is_dynamic: false,
                     modifiers: eval_reflection_method_modifiers(
                         method.visibility(),
                         method.is_static(),
@@ -4202,6 +4399,7 @@ fn eval_reflection_method_metadata(
                     is_abstract: true,
                     is_readonly: false,
                     is_promoted: false,
+                    is_dynamic: false,
                     modifiers: eval_reflection_method_modifiers(
                         EvalVisibility::Public,
                         method.is_static(),
@@ -4266,6 +4464,7 @@ fn eval_reflection_method_metadata(
                     is_abstract: method.is_abstract(),
                     is_readonly: false,
                     is_promoted: false,
+                    is_dynamic: false,
                     modifiers: eval_reflection_method_modifiers(
                         method.visibility(),
                         method.is_static(),
@@ -4301,6 +4500,7 @@ fn eval_reflection_property_metadata(
                     is_abstract: property.is_abstract(),
                     is_readonly: property.is_readonly(),
                     is_promoted: property.is_promoted(),
+                    is_dynamic: false,
                     modifiers: eval_reflection_property_modifiers(
                         property.visibility(),
                         property.is_static(),
@@ -4334,6 +4534,7 @@ fn eval_reflection_property_metadata(
                 is_abstract: true,
                 is_readonly: false,
                 is_promoted: false,
+                is_dynamic: false,
                 modifiers: eval_reflection_property_modifiers(
                     EvalVisibility::Public,
                     false,
@@ -4367,6 +4568,7 @@ fn eval_reflection_property_metadata(
                     is_abstract: property.is_abstract(),
                     is_readonly: property.is_readonly(),
                     is_promoted: property.is_promoted(),
+                    is_dynamic: false,
                     modifiers: eval_reflection_property_modifiers(
                         property.visibility(),
                         property.is_static(),
@@ -4695,6 +4897,7 @@ fn eval_reflection_property_hook_method_metadata(
         is_abstract: property.is_abstract(),
         is_readonly: false,
         is_promoted: false,
+        is_dynamic: false,
         modifiers: eval_reflection_method_modifiers(
             property.visibility(),
             false,
@@ -5149,6 +5352,67 @@ fn eval_reflection_instance_property_set_raw_value(
     let identity = values.object_identity(object)?;
     context.mark_dynamic_property_initialized(identity, &storage_property_name);
     Ok(())
+}
+
+/// Reads a public dynamic property through ReflectionProperty semantics.
+fn eval_reflection_dynamic_property_get_value(
+    declaring_class: &str,
+    property_name: &str,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_reflection_dynamic_property_validate_object(declaring_class, object, context, values)?;
+    values.property_get(object, property_name)
+}
+
+/// Writes a public dynamic property through ReflectionProperty semantics.
+fn eval_reflection_dynamic_property_set_value(
+    declaring_class: &str,
+    property_name: &str,
+    object: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    eval_reflection_dynamic_property_validate_object(declaring_class, object, context, values)?;
+    values.property_set(object, property_name, value)?;
+    let identity = values.object_identity(object)?;
+    context.mark_dynamic_property_initialized(identity, property_name);
+    Ok(())
+}
+
+/// Returns whether a public dynamic property currently exists on the target object.
+fn eval_reflection_dynamic_property_is_initialized(
+    declaring_class: &str,
+    property_name: &str,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    eval_reflection_dynamic_property_validate_object(declaring_class, object, context, values)?;
+    eval_reflection_object_dynamic_property_exists(object, property_name, values)
+}
+
+/// Validates the object argument used by dynamic ReflectionProperty operations.
+fn eval_reflection_dynamic_property_validate_object(
+    declaring_class: &str,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let object_class_name = eval_reflection_object_class_name(object, context, values)?;
+    if eval_reflection_class_like_exists(declaring_class, context) {
+        if context.class_is_a(&object_class_name, declaring_class, false) {
+            return Ok(());
+        }
+    } else if object_class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case(declaring_class.trim_start_matches('\\'))
+    {
+        return Ok(());
+    }
+    Err(EvalStatus::RuntimeFatal)
 }
 
 /// Validates the object argument shared by non-mutating ReflectionProperty instance APIs.

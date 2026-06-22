@@ -20,6 +20,7 @@ const EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE: u64 = 128;
 const EVAL_REFLECTION_MEMBER_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
 const EVAL_REFLECTION_MEMBER_FLAG_PROMOTED: u64 = 512;
 const EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL: u64 = 1024;
+const EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC: u64 = 8192;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
@@ -455,7 +456,12 @@ impl FakeOps {
                     .map_or_else(|| self.bool_value(false), Ok)
             }
             (FakeValue::Object(properties), "isdefault") if args.is_empty() => {
-                self.bool_value(Self::object_property(&properties, "__has_default_value").is_some())
+                match Self::object_property(&properties, "__is_dynamic") {
+                    Some(is_dynamic) => {
+                        self.bool_value(!matches!(self.get(is_dynamic), FakeValue::Bool(true)))
+                    }
+                    None => self.bool_value(true),
+                }
             }
             (FakeValue::Object(properties), "allowsnull") if args.is_empty() => {
                 Self::object_property(&properties, "__allows_null")
@@ -694,6 +700,8 @@ impl FakeOps {
                     self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_PROMOTED) != 0)?;
                 let is_virtual =
                     self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL) != 0)?;
+                let is_dynamic =
+                    self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC) != 0)?;
                 properties.push(("__is_final".to_string(), is_final));
                 properties.push(("__is_abstract".to_string(), is_abstract));
                 properties.push(("__is_readonly".to_string(), is_readonly));
@@ -702,6 +710,7 @@ impl FakeOps {
                 properties.push(("__has_default_value".to_string(), has_default_value));
                 properties.push(("__is_promoted".to_string(), is_promoted));
                 properties.push(("__is_virtual".to_string(), is_virtual));
+                properties.push(("__is_dynamic".to_string(), is_dynamic));
                 properties.push(("__default_value".to_string(), property_objects));
             }
         }

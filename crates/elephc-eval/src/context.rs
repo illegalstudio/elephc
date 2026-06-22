@@ -321,6 +321,7 @@ pub struct ElephcEvalContext {
     eval_reflection_functions: HashMap<u64, String>,
     eval_reflection_methods: HashMap<u64, (String, String)>,
     eval_reflection_properties: HashMap<u64, (String, String)>,
+    eval_dynamic_reflection_properties: HashSet<u64>,
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
     class_stack: Vec<String>,
@@ -375,6 +376,7 @@ impl ElephcEvalContext {
             eval_reflection_functions: HashMap::new(),
             eval_reflection_methods: HashMap::new(),
             eval_reflection_properties: HashMap::new(),
+            eval_dynamic_reflection_properties: HashSet::new(),
             global_scope: None,
             function_stack: Vec::new(),
             class_stack: Vec::new(),
@@ -430,6 +432,7 @@ impl ElephcEvalContext {
             eval_reflection_functions: HashMap::new(),
             eval_reflection_methods: HashMap::new(),
             eval_reflection_properties: HashMap::new(),
+            eval_dynamic_reflection_properties: HashSet::new(),
             global_scope: None,
             function_stack: Vec::new(),
             class_stack: Vec::new(),
@@ -1015,6 +1018,18 @@ impl ElephcEvalContext {
                 property_name.to_string(),
             ),
         );
+        self.eval_dynamic_reflection_properties.remove(&identity);
+    }
+
+    /// Records reflected dynamic-property metadata for one synthetic ReflectionProperty object.
+    pub fn register_eval_dynamic_reflection_property(
+        &mut self,
+        identity: u64,
+        declaring_class: &str,
+        property_name: &str,
+    ) {
+        self.register_eval_reflection_property(identity, declaring_class, property_name);
+        self.eval_dynamic_reflection_properties.insert(identity);
     }
 
     /// Returns the declaring class and property name attached to a synthetic ReflectionProperty.
@@ -1022,6 +1037,11 @@ impl ElephcEvalContext {
         self.eval_reflection_properties
             .get(&identity)
             .map(|(class, property)| (class.as_str(), property.as_str()))
+    }
+
+    /// Returns whether a synthetic ReflectionProperty represents a dynamic property.
+    pub fn eval_reflection_property_is_dynamic(&self, identity: u64) -> bool {
+        self.eval_dynamic_reflection_properties.contains(&identity)
     }
 
     /// Returns eval-declared class metadata from parent to child for construction.

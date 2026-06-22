@@ -1126,9 +1126,9 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionProperty::isReadOnly()` | `new ReflectionProperty($class_name, $property_name)` | Return whether the reflected property is readonly |
 | `ReflectionProperty::isPromoted()` | `new ReflectionProperty($class_name, $property_name)` | Return whether the reflected property came from constructor property promotion |
 | `ReflectionProperty::getModifiers()` | `new ReflectionProperty($class_name, $property_name)` | Return PHP's `ReflectionProperty::IS_*` visibility/static/finality/abstract/readonly/virtual/set-visibility bitmask |
-| `ReflectionProperty::isDefault()` | `new ReflectionProperty($class_name, $property_name)` or `ReflectionClass::getProperty()` / `getProperties()` | Return whether the reflected property is declared/default rather than dynamic |
-| `ReflectionProperty::isDynamic()` | Same as `ReflectionProperty::isDefault()` | Return `false` for supported declared properties; dynamic object properties are not yet materialized as `ReflectionProperty` objects |
-| `ReflectionProperty::isLazy()` | Same as `ReflectionProperty::isDefault()` plus an object argument | Return `false` for supported declared properties because elephc does not implement lazy properties |
+| `ReflectionProperty::isDefault()` | `new ReflectionProperty($class_name, $property_name)`, `new ReflectionProperty($object, $property_name)`, or `ReflectionClass::getProperty()` / `getProperties()` | Return whether the reflected property is declared/default rather than dynamic |
+| `ReflectionProperty::isDynamic()` | Same as `ReflectionProperty::isDefault()` | Return `false` for supported declared properties and `true` for public dynamic object properties materialized from an object argument |
+| `ReflectionProperty::isLazy()` | Same as `ReflectionProperty::isDefault()` plus an object argument | Return `false` for supported declared and dynamic properties because elephc does not implement lazy properties |
 | `ReflectionProperty::skipLazyInitialization()` | Same as `ReflectionProperty::isLazy()` | Accepted as a no-op for supported non-static, non-virtual declared properties |
 | `ReflectionProperty::hasType()` | `new ReflectionProperty($class_name, $property_name)` or `ReflectionClass::getProperty()` / `getProperties()` | Return whether the reflected property has a retained declared type |
 | `ReflectionProperty::getType()` | Same as `ReflectionProperty::hasType()` | Return a `ReflectionNamedType`, `ReflectionUnionType`, or `ReflectionIntersectionType` for supported property types, or `null` when no type is declared |
@@ -1167,13 +1167,12 @@ Limitations today:
   property type metadata as `ReflectionProperty::getType()` on the current
   property surface.
 - `ReflectionProperty::isDynamic()` reports `false` for supported declared
-  properties. elephc does not currently materialize dynamic object properties as
-  `ReflectionProperty` instances.
+  properties and `true` for public dynamic object properties materialized with
+  `new ReflectionProperty($object, $property_name)`.
 
 `ReflectionProperty::isDefault()` is also supported for materialized declared
-properties. elephc does not currently materialize dynamic object properties as
-`ReflectionProperty` instances, so supported reflected properties report
-`true`.
+and dynamic properties. Declared properties report `true`; supported dynamic
+properties report `false`.
 
 ### Class constants
 

@@ -8601,6 +8601,47 @@ echo $listed->getDefaultValue() === null ? "null" : "bad";');
     );
 }
 
+/// Verifies eval ReflectionProperty materializes dynamic object properties through the bridge.
+#[test]
+fn test_eval_reflection_property_supports_dynamic_properties() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectDynamicBridgeBase {}
+class EvalReflectDynamicBridgeChild extends EvalReflectDynamicBridgeBase {}
+$object = new EvalReflectDynamicBridgeBase();
+$object->dynamic = "first";
+$child = new EvalReflectDynamicBridgeChild();
+$child->dynamic = "child";
+$empty = new EvalReflectDynamicBridgeChild();
+$property = new ReflectionProperty($object, "dynamic");
+echo $property->getName(); echo ":";
+echo $property->isDynamic() ? "D" : "d"; echo ":";
+echo $property->isDefault() ? "Y" : "N"; echo ":";
+echo $property->getModifiers(); echo ":";
+echo $property->hasDefaultValue() ? "H" : "h"; echo ":";
+echo is_null($property->getType()) ? "T" : "t"; echo ":";
+echo $property->isInitialized($object) ? "I" : "i"; echo ":";
+echo $property->getValue($object); echo ":";
+echo $property->getValue($child); echo ":";
+echo $property->isInitialized($empty) ? "E" : "e"; echo ":";
+$property->setValue($empty, "filled");
+echo $property->getValue($empty); echo ":";
+$property->setRawValue($object, "raw");
+echo $property->getRawValue($object); echo ":";
+echo str_replace("\n", "\\n", $property->__toString());');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "dynamic:D:N:1:h:T:I:first:child:e:filled:raw:Property [ <dynamic> public $dynamic ]\n"
+    );
+}
+
 /// Verifies eval ReflectionProperty formats retained property metadata through `__toString()`.
 #[test]
 fn test_eval_reflection_property_to_string() {

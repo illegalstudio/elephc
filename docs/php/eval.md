@@ -375,10 +375,12 @@ bitmask. `isPromoted()` reports generated/AOT and eval-declared
 promoted-property metadata. `isProtectedSet()` and `isPrivateSet()` derive from
 the retained modifier bitmask, including generated/AOT asymmetric visibility and
 public readonly property metadata. `isDynamic()` reports `false` for supported
-declared properties because eval does not yet materialize dynamic object
-properties as `ReflectionProperty` objects. `isInitialized()` tracks eval-backed
-instance and static property storage, including typed properties without
-defaults, unset properties, and virtual property hooks.
+declared properties and `true` for public dynamic object properties
+materialized with `new ReflectionProperty($object, $property_name)`.
+`ReflectionProperty::isDefault()` is the inverse for those supported dynamic
+properties. `isInitialized()` tracks eval-backed instance and static property
+storage, including typed properties without defaults, unset properties, virtual
+property hooks, and public dynamic properties on the inspected object.
 `ReflectionProperty::hasType()`, `getType()`, and `getSettableType()` expose
 retained property type metadata through `ReflectionNamedType`,
 `ReflectionUnionType`, and `ReflectionIntersectionType` where eval has retained
