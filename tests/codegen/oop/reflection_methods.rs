@@ -13,6 +13,36 @@
 
 use super::*;
 
+/// Verifies AOT `ReflectionMethod` exposes function-abstract predicate metadata.
+#[test]
+fn test_reflection_method_reports_aot_function_abstract_predicates() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectMethodAbstractPredicateTarget {
+    #[Deprecated]
+    public function deprecated(): void {}
+    public function generator() { yield 1; }
+    public function plain(): void {}
+}
+
+$deprecated = new ReflectionMethod(ReflectMethodAbstractPredicateTarget::class, "deprecated");
+$generator = new ReflectionMethod(ReflectMethodAbstractPredicateTarget::class, "generator");
+$plain = new ReflectionMethod(ReflectMethodAbstractPredicateTarget::class, "plain");
+$listed = (new ReflectionClass(ReflectMethodAbstractPredicateTarget::class))->getMethod("generator");
+echo ($deprecated->isDeprecated() ? "D" : "d") . ":";
+echo ($plain->isDeprecated() ? "D" : "d") . ":";
+echo ($generator->isGenerator() ? "G" : "g") . ":";
+echo ($listed->isGenerator() ? "L" : "l") . ":";
+echo ($plain->isGenerator() ? "G" : "g") . ":";
+echo ($plain->isClosure() ? "C" : "c") . ":";
+echo ($plain->returnsReference() ? "R" : "r") . ":";
+echo ($plain->hasTentativeReturnType() ? "H" : "h") . ":";
+echo $plain->getTentativeReturnType() === null ? "Q" : "q";
+"#,
+    );
+    assert_eq!(out, "D:d:G:L:g:c:r:h:Q");
+}
+
 /// Verifies `ReflectionMethod` exposes declared AOT return type metadata.
 #[test]
 fn test_reflection_method_reports_aot_return_type_metadata() {

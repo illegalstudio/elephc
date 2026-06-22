@@ -63,6 +63,8 @@ struct ReflectionOwnerMetadata {
     type_metadata: Option<ReflectionParameterTypeMetadata>,
     property_default_value: Option<ReflectionParameterDefaultValue>,
     required_parameter_count: i64,
+    is_deprecated: bool,
+    is_generator: bool,
     is_final: bool,
     is_abstract: bool,
     is_interface: bool,
@@ -101,6 +103,8 @@ struct ReflectionListedMember {
     type_metadata: Option<ReflectionParameterTypeMetadata>,
     default_value: Option<ReflectionParameterDefaultValue>,
     required_parameter_count: i64,
+    is_deprecated: bool,
+    is_generator: bool,
     parameters: Vec<ReflectionParameterMember>,
 }
 
@@ -135,6 +139,8 @@ enum ReflectionDeclaringFunctionMember {
         attr_args: Vec<Option<Vec<AttrArgEntry>>>,
         required_parameter_count: i64,
         type_metadata: Option<ReflectionParameterTypeMetadata>,
+        is_deprecated: bool,
+        is_generator: bool,
     },
     Method {
         name: String,
@@ -144,6 +150,8 @@ enum ReflectionDeclaringFunctionMember {
         flags: ReflectionMemberFlags,
         required_parameter_count: i64,
         type_metadata: Option<ReflectionParameterTypeMetadata>,
+        is_deprecated: bool,
+        is_generator: bool,
     },
 }
 
@@ -472,6 +480,18 @@ fn emit_reflection_owner_object(
             metadata.type_metadata.is_some(),
         )?;
         emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__is_deprecated",
+            metadata.is_deprecated,
+        )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__is_generator",
+            metadata.is_generator,
+        )?;
     }
     if matches!(
         class_name,
@@ -694,6 +714,8 @@ fn reflection_class_metadata_for_name(
             type_metadata: None,
             property_default_value: None,
             required_parameter_count: 0,
+            is_deprecated: false,
+            is_generator: false,
             is_final: info.is_final,
             is_abstract: info.is_abstract,
             is_interface: false,
@@ -757,6 +779,8 @@ fn reflection_class_metadata_for_name(
             type_metadata: None,
             property_default_value: None,
             required_parameter_count: 0,
+            is_deprecated: false,
+            is_generator: false,
             is_final: false,
             is_abstract: false,
             is_interface: true,
@@ -826,6 +850,8 @@ fn reflection_class_metadata_for_name(
             type_metadata: None,
             property_default_value: None,
             required_parameter_count: 0,
+            is_deprecated: false,
+            is_generator: false,
             is_final: false,
             is_abstract: false,
             is_interface: false,
@@ -892,6 +918,8 @@ fn reflection_function_metadata(
         attr_args: function.attribute_args.clone(),
         required_parameter_count,
         type_metadata: type_metadata.clone(),
+        is_deprecated: signature.deprecation.is_some(),
+        is_generator: function.flags.is_generator,
     };
     let mut metadata = empty_reflection_metadata();
     metadata.reflected_name = Some(reflected_name);
@@ -908,6 +936,8 @@ fn reflection_function_metadata(
     )?;
     metadata.required_parameter_count = required_parameter_count;
     metadata.type_metadata = type_metadata;
+    metadata.is_deprecated = signature.deprecation.is_some();
+    metadata.is_generator = function.flags.is_generator;
     Ok(metadata)
 }
 
@@ -984,6 +1014,8 @@ fn reflection_method_owner_metadata(
         type_metadata: member.type_metadata,
         property_default_value: None,
         required_parameter_count: member.required_parameter_count,
+        is_deprecated: member.is_deprecated,
+        is_generator: member.is_generator,
         is_final: false,
         is_abstract: false,
         is_interface: false,
@@ -1050,6 +1082,8 @@ fn reflection_property_metadata(
                 type_metadata: reflection_property_type_metadata(info, &property_name),
                 property_default_value: reflection_property_default_value(info, &property_name),
                 required_parameter_count: 0,
+                is_deprecated: false,
+                is_generator: false,
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -1126,6 +1160,8 @@ fn reflection_function_parameter_metadata(
         attr_args: function.attribute_args.clone(),
         required_parameter_count: reflection_required_parameter_count(signature),
         type_metadata,
+        is_deprecated: signature.deprecation.is_some(),
+        is_generator: function.flags.is_generator,
     };
     let parameters = reflection_parameter_members_with_declaring_function(
         ctx,
@@ -1248,6 +1284,8 @@ fn reflection_class_constant_metadata(
             type_metadata: None,
             property_default_value: None,
             required_parameter_count: 0,
+            is_deprecated: false,
+            is_generator: false,
             is_final: false,
             is_abstract: false,
             is_interface: false,
@@ -1321,6 +1359,8 @@ fn reflection_enum_case_metadata(
                 type_metadata: None,
                 property_default_value: None,
                 required_parameter_count: 0,
+                is_deprecated: false,
+                is_generator: false,
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -1373,6 +1413,8 @@ fn reflection_class_constant_owner_metadata(
         type_metadata: None,
         property_default_value: None,
         required_parameter_count: 0,
+        is_deprecated: false,
+        is_generator: false,
         is_final,
         is_abstract: false,
         is_interface: false,
@@ -2216,6 +2258,8 @@ fn push_unique_constant_reflection_member(
         type_metadata: None,
         default_value: None,
         required_parameter_count: 0,
+        is_deprecated: false,
+        is_generator: false,
         parameters: Vec::new(),
     });
 }
@@ -2407,6 +2451,11 @@ fn reflection_class_method_member(
     };
     let required_parameter_count = reflection_required_parameter_count(sig);
     let type_metadata = reflection_return_type_metadata(sig);
+    let is_generator = reflection_method_is_generator(
+        ctx,
+        declaring_class_name.as_deref().unwrap_or(class_name),
+        &method_key,
+    );
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: method_key.clone(),
         declaring_class_name: declaring_class_name.clone(),
@@ -2415,6 +2464,8 @@ fn reflection_class_method_member(
         flags,
         required_parameter_count,
         type_metadata: type_metadata.clone(),
+        is_deprecated: sig.deprecation.is_some(),
+        is_generator,
     };
     let parameters = reflection_parameter_members_with_declaring_class(
         ctx,
@@ -2437,6 +2488,8 @@ fn reflection_class_method_member(
         type_metadata,
         default_value: None,
         required_parameter_count,
+        is_deprecated: sig.deprecation.is_some(),
+        is_generator,
         parameters,
     }))
 }
@@ -2492,6 +2545,8 @@ fn reflection_interface_method_member(
         flags,
         required_parameter_count,
         type_metadata: type_metadata.clone(),
+        is_deprecated: sig.deprecation.is_some(),
+        is_generator: false,
     };
     let parameters = reflection_parameter_members_with_declaring_class(
         ctx,
@@ -2514,6 +2569,8 @@ fn reflection_interface_method_member(
         type_metadata,
         default_value: None,
         required_parameter_count,
+        is_deprecated: sig.deprecation.is_some(),
+        is_generator: false,
         parameters,
     }))
 }
@@ -2556,6 +2613,7 @@ fn reflection_trait_method_member(
     );
     let required_parameter_count = reflection_required_parameter_count(&info.signature);
     let type_metadata = reflection_return_type_metadata(&info.signature);
+    let is_generator = reflection_method_is_generator(ctx, trait_name, &method_key);
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: method_key.clone(),
         declaring_class_name: Some(trait_name.to_string()),
@@ -2564,6 +2622,8 @@ fn reflection_trait_method_member(
         flags,
         required_parameter_count,
         type_metadata: type_metadata.clone(),
+        is_deprecated: info.signature.deprecation.is_some(),
+        is_generator,
     };
     let parameters = reflection_parameter_members_with_declaring_class(
         ctx,
@@ -2586,8 +2646,27 @@ fn reflection_trait_method_member(
         type_metadata,
         default_value: None,
         required_parameter_count,
+        is_deprecated: info.signature.deprecation.is_some(),
+        is_generator,
         parameters,
     }))
+}
+
+/// Returns whether the lowered method body is a generator function.
+fn reflection_method_is_generator(
+    ctx: &FunctionContext<'_>,
+    declaring_class_name: &str,
+    method_name: &str,
+) -> bool {
+    let expected_key = php_symbol_key(&format!(
+        "{}::{}",
+        declaring_class_name.trim_start_matches('\\'),
+        method_name
+    ));
+    ctx.module.class_methods.iter().any(|function| {
+        php_symbol_key(function.name.trim_start_matches('\\')) == expected_key
+            && function.flags.is_generator
+    })
 }
 
 /// Builds ReflectionProperty array entries for the properties visible on one class.
@@ -2644,6 +2723,8 @@ fn reflection_class_property_member(
         type_metadata,
         default_value,
         required_parameter_count: 0,
+        is_deprecated: false,
+        is_generator: false,
         parameters: Vec::new(),
     })
 }
@@ -2728,6 +2809,8 @@ fn default_method_members(
             type_metadata: None,
             default_value: None,
             required_parameter_count: 0,
+            is_deprecated: false,
+            is_generator: false,
             parameters: Vec::new(),
         })
         .collect()
@@ -2768,6 +2851,8 @@ fn default_property_members(
             type_metadata: None,
             default_value: None,
             required_parameter_count: 0,
+            is_deprecated: false,
+            is_generator: false,
             parameters: Vec::new(),
         })
         .collect()
@@ -3637,6 +3722,8 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         type_metadata: None,
         property_default_value: None,
         required_parameter_count: 0,
+        is_deprecated: false,
+        is_generator: false,
         is_final: false,
         is_abstract: false,
         is_interface: false,
@@ -4832,6 +4919,18 @@ fn emit_reflection_member_object(
             member.type_metadata.is_some(),
         )?;
         emit_reflection_owner_type_property(ctx, member_class_name, member.type_metadata.as_ref())?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            member_class_name,
+            "__is_deprecated",
+            member.is_deprecated,
+        )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            member_class_name,
+            "__is_generator",
+            member.is_generator,
+        )?;
         emit_reflection_owner_int_property(
             ctx,
             member_class_name,
@@ -5052,6 +5151,8 @@ fn emit_reflection_parameter_declaring_function_property(
             attr_args,
             required_parameter_count,
             type_metadata,
+            is_deprecated,
+            is_generator,
         }) => {
             let mut metadata = empty_reflection_metadata();
             metadata.reflected_name = Some(name.clone());
@@ -5059,6 +5160,8 @@ fn emit_reflection_parameter_declaring_function_property(
             metadata.attr_args = attr_args.clone();
             metadata.required_parameter_count = *required_parameter_count;
             metadata.type_metadata = type_metadata.clone();
+            metadata.is_deprecated = *is_deprecated;
+            metadata.is_generator = *is_generator;
             emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
             emit_box_current_value_as_mixed(
                 ctx.emitter,
@@ -5073,6 +5176,8 @@ fn emit_reflection_parameter_declaring_function_property(
             flags,
             required_parameter_count,
             type_metadata,
+            is_deprecated,
+            is_generator,
         }) => {
             let mut metadata = empty_reflection_metadata();
             metadata.reflected_name = Some(name.clone());
@@ -5083,6 +5188,8 @@ fn emit_reflection_parameter_declaring_function_property(
             metadata.required_parameter_count = *required_parameter_count;
             metadata.type_metadata = type_metadata.clone();
             metadata.modifiers = reflection_method_modifiers_from_flags(*flags);
+            metadata.is_deprecated = *is_deprecated;
+            metadata.is_generator = *is_generator;
             emit_reflection_owner_object(ctx, "ReflectionMethod", &metadata)?;
             emit_box_current_value_as_mixed(
                 ctx.emitter,
