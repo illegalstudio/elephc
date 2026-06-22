@@ -21,6 +21,8 @@
 
 use std::sync::{Mutex, OnceLock};
 
+use crate::ffi_guard;
+
 /// Scale factor for the 16.16 fixed-point values pushed across the ABI.
 const FIXED_ONE: f64 = 65536.0;
 
@@ -39,11 +41,15 @@ pub(crate) fn values() -> Vec<f64> {
 /// Clears the float buffer before a new matrix is described.
 #[no_mangle]
 pub extern "C" fn elephc_img_fbuf_reset() {
-    fbuf_cell().lock().unwrap().clear();
+    ffi_guard((), move || {
+        fbuf_cell().lock().unwrap().clear();
+    })
 }
 
 /// Appends one matrix element, decoding it from 16.16 fixed-point back to f64.
 #[no_mangle]
 pub extern "C" fn elephc_img_fbuf_push(fixed16: i64) {
-    fbuf_cell().lock().unwrap().push(fixed16 as f64 / FIXED_ONE);
+    ffi_guard((), move || {
+        fbuf_cell().lock().unwrap().push(fixed16 as f64 / FIXED_ONE);
+    })
 }

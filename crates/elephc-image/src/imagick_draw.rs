@@ -27,6 +27,7 @@ use crate::draw::{
     elephc_img_filled_rectangle, elephc_img_line, elephc_img_poly_add, elephc_img_poly_fill,
     elephc_img_poly_line, elephc_img_poly_reset, elephc_img_rectangle, elephc_img_set_thickness,
 };
+use crate::ffi_guard;
 use crate::gd::elephc_img_set_pixel;
 use crate::imagick::current_handle;
 
@@ -103,107 +104,127 @@ fn push_cmd(draw_id: i64, kind: CmdKind) {
 /// fill, no stroke, stroke width 1.
 #[no_mangle]
 pub extern "C" fn elephc_idraw_new() -> i64 {
-    let id = next_draw_id();
-    draws().lock().unwrap().insert(
-        id,
-        DrawState {
-            fill: 0,
-            stroke: NO_COLOR,
-            width: 1,
-            cmds: Vec::new(),
-            poly_buf: Vec::new(),
-        },
-    );
-    id
+    ffi_guard(-1, move || {
+        let id = next_draw_id();
+        draws().lock().unwrap().insert(
+            id,
+            DrawState {
+                fill: 0,
+                stroke: NO_COLOR,
+                width: 1,
+                cmds: Vec::new(),
+                poly_buf: Vec::new(),
+            },
+        );
+        id
+    })
 }
 
 /// Destroys an ImagickDraw, releasing its buffer. Idempotent. Backs
 /// `ImagickDraw::destroy` and `__destruct`.
 #[no_mangle]
 pub extern "C" fn elephc_idraw_destroy(draw_id: i64) {
-    draws().lock().unwrap().remove(&draw_id);
+    ffi_guard((), move || {
+        draws().lock().unwrap().remove(&draw_id);
+    })
 }
 
 /// Clears all recorded commands and resets state to defaults. Backs
 /// `ImagickDraw::clear`.
 #[no_mangle]
 pub extern "C" fn elephc_idraw_clear(draw_id: i64) {
-    if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
-        state.fill = 0;
-        state.stroke = NO_COLOR;
-        state.width = 1;
-        state.cmds.clear();
-        state.poly_buf.clear();
-    }
+    ffi_guard((), move || {
+        if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
+            state.fill = 0;
+            state.stroke = NO_COLOR;
+            state.width = 1;
+            state.cmds.clear();
+            state.poly_buf.clear();
+        }
+    })
 }
 
 /// Sets the current fill color (GD packed). Backs `ImagickDraw::setFillColor`.
 #[no_mangle]
 pub extern "C" fn elephc_idraw_set_fill(draw_id: i64, color: i64) {
-    if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
-        state.fill = color;
-    }
+    ffi_guard((), move || {
+        if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
+            state.fill = color;
+        }
+    })
 }
 
 /// Sets the current stroke color (GD packed, or `-1` for none). Backs
 /// `ImagickDraw::setStrokeColor`.
 #[no_mangle]
 pub extern "C" fn elephc_idraw_set_stroke(draw_id: i64, color: i64) {
-    if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
-        state.stroke = color;
-    }
+    ffi_guard((), move || {
+        if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
+            state.stroke = color;
+        }
+    })
 }
 
 /// Sets the current stroke width in pixels (clamped to at least 1). Backs
 /// `ImagickDraw::setStrokeWidth`.
 #[no_mangle]
 pub extern "C" fn elephc_idraw_set_stroke_width(draw_id: i64, width: i64) {
-    if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
-        state.width = width.max(1);
-    }
+    ffi_guard((), move || {
+        if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
+            state.width = width.max(1);
+        }
+    })
 }
 
 /// Returns the current fill color, or `-1` for an unknown draw. Backs
 /// `ImagickDraw::getFillColor` (the PHP layer wraps it in an ImagickPixel).
 #[no_mangle]
 pub extern "C" fn elephc_idraw_get_fill(draw_id: i64) -> i64 {
-    match draws().lock().unwrap().get(&draw_id) {
-        Some(state) => state.fill,
-        None => NO_COLOR,
-    }
+    ffi_guard(-1, move || {
+        match draws().lock().unwrap().get(&draw_id) {
+            Some(state) => state.fill,
+            None => NO_COLOR,
+        }
+    })
 }
 
 /// Records a line from `(x1, y1)` to `(x2, y2)`. Backs `ImagickDraw::line`.
 #[no_mangle]
 pub extern "C" fn elephc_idraw_line(draw_id: i64, x1: i64, y1: i64, x2: i64, y2: i64) {
-    push_cmd(draw_id, CmdKind::Line(x1, y1, x2, y2));
+    ffi_guard((), move || {
+        push_cmd(draw_id, CmdKind::Line(x1, y1, x2, y2));
+    })
 }
 
 /// Records a rectangle through opposite corners `(x1, y1)`-`(x2, y2)`. Backs
 /// `ImagickDraw::rectangle`.
 #[no_mangle]
 pub extern "C" fn elephc_idraw_rectangle(draw_id: i64, x1: i64, y1: i64, x2: i64, y2: i64) {
-    push_cmd(draw_id, CmdKind::Rectangle(x1, y1, x2, y2));
+    ffi_guard((), move || {
+        push_cmd(draw_id, CmdKind::Rectangle(x1, y1, x2, y2));
+    })
 }
 
 /// Records a full circle centered at `(ox, oy)` whose radius is the distance to
 /// the perimeter point `(px, py)`, matching `ImagickDraw::circle`'s argument form.
 #[no_mangle]
 pub extern "C" fn elephc_idraw_circle(draw_id: i64, ox: i64, oy: i64, px: i64, py: i64) {
-    let dx = (px - ox) as f64;
-    let dy = (py - oy) as f64;
-    let r = (dx * dx + dy * dy).sqrt().round() as i64;
-    push_cmd(
-        draw_id,
-        CmdKind::Ellipse {
-            cx: ox,
-            cy: oy,
-            rx: r,
-            ry: r,
-            start: 0,
-            end: 360_000,
-        },
-    );
+    ffi_guard((), move || {
+        let dx = (px - ox) as f64;
+        let dy = (py - oy) as f64;
+        let r = (dx * dx + dy * dy).sqrt().round() as i64;
+        push_cmd(
+            draw_id,
+            CmdKind::Ellipse {
+                cx: ox,
+                cy: oy,
+                rx: r,
+                ry: r,
+                start: 0,
+                end: 360_000,
+            },
+        );
+    })
 }
 
 /// Records an ellipse/arc centered at the packed `oxy` with packed radii `rxy` and
@@ -211,53 +232,63 @@ pub extern "C" fn elephc_idraw_circle(draw_id: i64, ox: i64, oy: i64, px: i64, p
 /// (a full ellipse uses `0`-`360`).
 #[no_mangle]
 pub extern "C" fn elephc_idraw_ellipse(draw_id: i64, oxy: i64, rxy: i64, se: i64) {
-    let (ox, oy) = crate::unpack_pair(oxy);
-    let (rx, ry) = crate::unpack_pair(rxy);
-    let (start, end) = crate::unpack_pair(se);
-    push_cmd(
-        draw_id,
-        CmdKind::Ellipse {
-            cx: ox,
-            cy: oy,
-            rx,
-            ry,
-            start: start * 1000,
-            end: end * 1000,
-        },
-    );
+    ffi_guard((), move || {
+        let (ox, oy) = crate::unpack_pair(oxy);
+        let (rx, ry) = crate::unpack_pair(rxy);
+        let (start, end) = crate::unpack_pair(se);
+        push_cmd(
+            draw_id,
+            CmdKind::Ellipse {
+                cx: ox,
+                cy: oy,
+                rx,
+                ry,
+                start: start * 1000,
+                end: end * 1000,
+            },
+        );
+    })
 }
 
 /// Records a single point at `(x, y)`. Backs `ImagickDraw::point`.
 #[no_mangle]
 pub extern "C" fn elephc_idraw_point(draw_id: i64, x: i64, y: i64) {
-    push_cmd(draw_id, CmdKind::Point(x, y));
+    ffi_guard((), move || {
+        push_cmd(draw_id, CmdKind::Point(x, y));
+    })
 }
 
 /// Clears the polygon-point scratch buffer before a new polygon is described.
 #[no_mangle]
 pub extern "C" fn elephc_idraw_poly_reset(draw_id: i64) {
-    if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
-        state.poly_buf.clear();
-    }
+    ffi_guard((), move || {
+        if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
+            state.poly_buf.clear();
+        }
+    })
 }
 
 /// Appends a vertex to the polygon-point scratch buffer.
 #[no_mangle]
 pub extern "C" fn elephc_idraw_poly_point(draw_id: i64, x: i64, y: i64) {
-    if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
-        state.poly_buf.push((x, y));
-    }
+    ffi_guard((), move || {
+        if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
+            state.poly_buf.push((x, y));
+        }
+    })
 }
 
 /// Commits the buffered polygon points as a polygon command. Backs
 /// `ImagickDraw::polygon`.
 #[no_mangle]
 pub extern "C" fn elephc_idraw_polygon(draw_id: i64) {
-    let pts = match draws().lock().unwrap().get(&draw_id) {
-        Some(state) => state.poly_buf.clone(),
-        None => return,
-    };
-    push_cmd(draw_id, CmdKind::Polygon(pts));
+    ffi_guard((), move || {
+        let pts = match draws().lock().unwrap().get(&draw_id) {
+            Some(state) => state.poly_buf.clone(),
+            None => return,
+        };
+        push_cmd(draw_id, CmdKind::Polygon(pts));
+    })
 }
 
 /// Replays an ImagickDraw's command list onto the current frame of `wand_id`.
@@ -265,27 +296,29 @@ pub extern "C" fn elephc_idraw_polygon(draw_id: i64) {
 /// Backs `Imagick::drawImage`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_draw(wand_id: i64, draw_id: i64) -> i64 {
-    let Some(handle) = current_handle(wand_id) else {
-        return -1;
-    };
-    // Snapshot the command list so the draws() lock is not held during rendering
-    // (the GD entry points take the images() lock, never draws()).
-    let cmds: Vec<(CmdSnapshot, i64, i64, i64)> = {
-        let guard = draws().lock().unwrap();
-        let Some(state) = guard.get(&draw_id) else {
+    ffi_guard(-1, move || {
+        let Some(handle) = current_handle(wand_id) else {
             return -1;
         };
-        state
-            .cmds
-            .iter()
-            .map(|c| (CmdSnapshot::from(&c.kind), c.fill, c.stroke, c.width))
-            .collect()
-    };
-    for (kind, fill, stroke, width) in cmds {
-        elephc_img_set_thickness(handle, width);
-        render_one(handle, &kind, fill, stroke);
-    }
-    0
+        // Snapshot the command list so the draws() lock is not held during rendering
+        // (the GD entry points take the images() lock, never draws()).
+        let cmds: Vec<(CmdSnapshot, i64, i64, i64)> = {
+            let guard = draws().lock().unwrap();
+            let Some(state) = guard.get(&draw_id) else {
+                return -1;
+            };
+            state
+                .cmds
+                .iter()
+                .map(|c| (CmdSnapshot::from(&c.kind), c.fill, c.stroke, c.width))
+                .collect()
+        };
+        for (kind, fill, stroke, width) in cmds {
+            elephc_img_set_thickness(handle, width);
+            render_one(handle, &kind, fill, stroke);
+        }
+        0
+    })
 }
 
 /// A render-time copy of a command's geometry, decoupled from the draws() table.

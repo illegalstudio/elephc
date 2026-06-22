@@ -150,6 +150,45 @@ pub(crate) fn insert_image(obj: ImageObj) -> i64 {
     id
 }
 
+/// Runs an FFI entry-point body, converting any panic into `fallback` so a panic
+/// never unwinds across the C ABI boundary. On rustc ≥ 1.81 an unwinding panic out
+/// of an `extern "C"` function aborts the process; catching it here instead lets the
+/// bridge return PHP's failure sentinel (`false`/`-1`/null) and keep running, matching
+/// PHP's "return false on error" semantics (mirrors `elephc-phar`). `AssertUnwindSafe`
+/// is sound here: the bodies touch only process-global tables guarded by their own
+/// `Mutex`es, and a poisoned lock after a caught panic degrades to further sentinels
+/// rather than memory unsafety.
+pub(crate) fn ffi_guard<T>(fallback: T, body: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(value) => value,
+        Err(_) => fallback,
+    }
+}
+
+/// Allocates a `width`×`height` RGBA image filled with `fill`, or returns `None`
+/// when the request cannot be satisfied: non-positive dimensions, a `width*height*4`
+/// byte count that overflows `usize`, or an allocation failure. Callers translate
+/// `None` into PHP's failure sentinel (`false`/`-1`) instead of letting an oversized
+/// request abort the process — `RgbaImage::from_pixel` would otherwise panic on a
+/// capacity overflow or abort on allocation failure. `width`/`height` are `i64`
+/// (the C ABI passes PHP ints) and validated to fit `u32` here.
+pub(crate) fn try_new_rgba(width: i64, height: i64, fill: Rgba<u8>) -> Option<RgbaImage> {
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let w = u32::try_from(width).ok()?;
+    let h = u32::try_from(height).ok()?;
+    let bytes = (w as usize).checked_mul(h as usize)?.checked_mul(4)?;
+    let mut buf: Vec<u8> = Vec::new();
+    buf.try_reserve_exact(bytes).ok()?;
+    // Capacity is reserved above, so neither `resize` nor the pattern fill reallocates.
+    buf.resize(bytes, 0);
+    for chunk in buf.chunks_exact_mut(4) {
+        chunk.copy_from_slice(&fill.0);
+    }
+    RgbaImage::from_raw(w, h, buf)
+}
+
 /// Borrows a C string argument as `&str`, returning `None` on null/!utf8.
 pub(crate) unsafe fn cstr_arg<'a>(p: *const c_char) -> Option<&'a str> {
     if p.is_null() {

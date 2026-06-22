@@ -23,7 +23,7 @@
 
 use image::{Rgba, RgbaImage};
 
-use crate::{fbuf, images};
+use crate::{ffi_guard, fbuf, images};
 
 /// Built-in 3×3 convolution kernels keyed by `IMG_FILTER_*` selector, paired with
 /// their divisor. Matches libgd's `gd_filter.c` definitions.
@@ -220,36 +220,38 @@ fn scatter(img: &mut RgbaImage, sub: i64, plus: i64) -> bool {
 /// pixelate block). `a1`-`a4` carry the selector's scalar arguments.
 #[no_mangle]
 pub extern "C" fn elephc_img_filter(handle: i64, filter: i64, a1: i64, a2: i64, a3: i64, a4: i64) -> i64 {
-    let mut guard = images().lock().unwrap();
-    let Some(obj) = guard.get_mut(&handle) else {
-        return -1;
-    };
-    match filter {
-        0 => negate(&mut obj.img),
-        1 => grayscale(&mut obj.img),
-        2 => brightness(&mut obj.img, a1),
-        3 => contrast(&mut obj.img, a1),
-        4 => colorize(&mut obj.img, a1, a2, a3, a4),
-        5 | 6 | 7 | 8 | 9 | 10 => {
-            let Some((kernel, div)) = builtin_kernel(filter, a1 as f64) else {
-                return -1;
-            };
-            let orig = obj.img.clone();
-            convolve3x3(&mut obj.img, &orig, kernel, div, 0.0);
-        }
-        11 => {
-            if !pixelate(&mut obj.img, a1, a2 != 0) {
-                return -1;
+    ffi_guard(-1, move || {
+        let mut guard = images().lock().unwrap();
+        let Some(obj) = guard.get_mut(&handle) else {
+            return -1;
+        };
+        match filter {
+            0 => negate(&mut obj.img),
+            1 => grayscale(&mut obj.img),
+            2 => brightness(&mut obj.img, a1),
+            3 => contrast(&mut obj.img, a1),
+            4 => colorize(&mut obj.img, a1, a2, a3, a4),
+            5 | 6 | 7 | 8 | 9 | 10 => {
+                let Some((kernel, div)) = builtin_kernel(filter, a1 as f64) else {
+                    return -1;
+                };
+                let orig = obj.img.clone();
+                convolve3x3(&mut obj.img, &orig, kernel, div, 0.0);
             }
-        }
-        12 => {
-            if !scatter(&mut obj.img, a1, a2) {
-                return -1;
+            11 => {
+                if !pixelate(&mut obj.img, a1, a2 != 0) {
+                    return -1;
+                }
             }
+            12 => {
+                if !scatter(&mut obj.img, a1, a2) {
+                    return -1;
+                }
+            }
+            _ => return -1,
         }
-        _ => return -1,
-    }
-    0
+        0
+    })
 }
 
 /// Applies the 3×3 kernel pushed via [`fbuf`] (`imageconvolution`), dividing by
@@ -257,20 +259,22 @@ pub extern "C" fn elephc_img_filter(handle: i64, filter: i64, a1: i64, a2: i64, 
 /// `-1` for an unknown handle or a wrong-length kernel.
 #[no_mangle]
 pub extern "C" fn elephc_img_convolution(handle: i64, div_fixed: i64, offset_fixed: i64) -> i64 {
-    let m = fbuf::values();
-    if m.len() != 9 {
-        return -1;
-    }
-    let kernel = [m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]];
-    let div = div_fixed as f64 / 65536.0;
-    let offset = offset_fixed as f64 / 65536.0;
-    let mut guard = images().lock().unwrap();
-    let Some(obj) = guard.get_mut(&handle) else {
-        return -1;
-    };
-    let orig = obj.img.clone();
-    convolve3x3(&mut obj.img, &orig, kernel, div, offset);
-    0
+    ffi_guard(-1, move || {
+        let m = fbuf::values();
+        if m.len() != 9 {
+            return -1;
+        }
+        let kernel = [m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]];
+        let div = div_fixed as f64 / 65536.0;
+        let offset = offset_fixed as f64 / 65536.0;
+        let mut guard = images().lock().unwrap();
+        let Some(obj) = guard.get_mut(&handle) else {
+            return -1;
+        };
+        let orig = obj.img.clone();
+        convolve3x3(&mut obj.img, &orig, kernel, div, offset);
+        0
+    })
 }
 
 /// Applies gamma correction (`imagegammacorrect`): each RGB channel becomes
@@ -278,56 +282,66 @@ pub extern "C" fn elephc_img_convolution(handle: i64, div_fixed: i64, offset_fix
 /// Returns `0` on success and `-1` for an unknown handle or a non-positive gamma.
 #[no_mangle]
 pub extern "C" fn elephc_img_gamma(handle: i64, in_fixed: i64, out_fixed: i64) -> i64 {
-    let ig = in_fixed as f64 / 65536.0;
-    let og = out_fixed as f64 / 65536.0;
-    if ig <= 0.0 || og <= 0.0 {
-        return -1;
-    }
-    let g = ig / og;
-    let mut guard = images().lock().unwrap();
-    let Some(obj) = guard.get_mut(&handle) else {
-        return -1;
-    };
-    let ch = |c: u8| ((c as f64 / 255.0).powf(g) * 255.0).round().clamp(0.0, 255.0) as u8;
-    for p in obj.img.pixels_mut() {
-        p.0[0] = ch(p.0[0]);
-        p.0[1] = ch(p.0[1]);
-        p.0[2] = ch(p.0[2]);
-    }
-    0
+    ffi_guard(-1, move || {
+        let ig = in_fixed as f64 / 65536.0;
+        let og = out_fixed as f64 / 65536.0;
+        if ig <= 0.0 || og <= 0.0 {
+            return -1;
+        }
+        let g = ig / og;
+        let mut guard = images().lock().unwrap();
+        let Some(obj) = guard.get_mut(&handle) else {
+            return -1;
+        };
+        let ch = |c: u8| ((c as f64 / 255.0).powf(g) * 255.0).round().clamp(0.0, 255.0) as u8;
+        for p in obj.img.pixels_mut() {
+            p.0[0] = ch(p.0[0]);
+            p.0[1] = ch(p.0[1]);
+            p.0[2] = ch(p.0[2]);
+        }
+        0
+    })
 }
 
 /// Stores the interpolation method (`imagesetinterpolation`). Unknown handles
 /// ignored.
 #[no_mangle]
 pub extern "C" fn elephc_img_set_interpolation(handle: i64, method: i64) {
-    if let Some(obj) = images().lock().unwrap().get_mut(&handle) {
-        obj.interpolation = method;
-    }
+    ffi_guard((), move || {
+        if let Some(obj) = images().lock().unwrap().get_mut(&handle) {
+            obj.interpolation = method;
+        }
+    })
 }
 
 /// Returns the stored interpolation method, or `-1` for an unknown handle.
 #[no_mangle]
 pub extern "C" fn elephc_img_get_interpolation(handle: i64) -> i64 {
-    match images().lock().unwrap().get(&handle) {
-        Some(obj) => obj.interpolation,
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        match images().lock().unwrap().get(&handle) {
+            Some(obj) => obj.interpolation,
+            None => -1,
+        }
+    })
 }
 
 /// Sets the interlace flag (`imageinterlace`). Unknown handles ignored.
 #[no_mangle]
 pub extern "C" fn elephc_img_set_interlace(handle: i64, on: i64) {
-    if let Some(obj) = images().lock().unwrap().get_mut(&handle) {
-        obj.interlace = on != 0;
-    }
+    ffi_guard((), move || {
+        if let Some(obj) = images().lock().unwrap().get_mut(&handle) {
+            obj.interlace = on != 0;
+        }
+    })
 }
 
 /// Returns the interlace flag as `1`/`0`, or `-1` for an unknown handle.
 #[no_mangle]
 pub extern "C" fn elephc_img_get_interlace(handle: i64) -> i64 {
-    match images().lock().unwrap().get(&handle) {
-        Some(obj) => obj.interlace as i64,
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        match images().lock().unwrap().get(&handle) {
+            Some(obj) => obj.interlace as i64,
+            None => -1,
+        }
+    })
 }

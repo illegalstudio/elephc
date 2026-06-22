@@ -26,7 +26,7 @@
 
 use image::{imageops, imageops::FilterType, Rgba, RgbaImage};
 
-use crate::{blend_over, fbuf, images, insert_image, unpack_color, unpack_pair, ImageObj};
+use crate::{ffi_guard, blend_over, fbuf, images, insert_image, unpack_color, unpack_pair, ImageObj};
 
 /// GD interpolation code for nearest-neighbour sampling (`IMG_NEAREST_NEIGHBOUR`);
 /// any other stored interpolation selects a linear filter for scaling.
@@ -69,24 +69,26 @@ fn clone_region(src: &RgbaImage, sx: i64, sy: i64, sw: i64, sh: i64) -> RgbaImag
 /// `dxy`/`sxy`/`swh` pack the destination origin, source origin, and source size.
 #[no_mangle]
 pub extern "C" fn elephc_img_copy(dst_h: i64, src_h: i64, dxy: i64, sxy: i64, swh: i64) -> i64 {
-    let (dx, dy) = unpack_pair(dxy);
-    let (sx, sy) = unpack_pair(sxy);
-    let (sw, sh) = unpack_pair(swh);
-    let mut guard = images().lock().unwrap();
-    let Some(src) = guard.get(&src_h) else {
-        return -1;
-    };
-    let region = clone_region(&src.img, sx, sy, sw, sh);
-    let Some(dst) = guard.get_mut(&dst_h) else {
-        return -1;
-    };
-    let blending = dst.alpha_blending;
-    for j in 0..region.height() {
-        for i in 0..region.width() {
-            put_blend(&mut dst.img, blending, dx + i as i64, dy + j as i64, *region.get_pixel(i, j));
+    ffi_guard(-1, move || {
+        let (dx, dy) = unpack_pair(dxy);
+        let (sx, sy) = unpack_pair(sxy);
+        let (sw, sh) = unpack_pair(swh);
+        let mut guard = images().lock().unwrap();
+        let Some(src) = guard.get(&src_h) else {
+            return -1;
+        };
+        let region = clone_region(&src.img, sx, sy, sw, sh);
+        let Some(dst) = guard.get_mut(&dst_h) else {
+            return -1;
+        };
+        let blending = dst.alpha_blending;
+        for j in 0..region.height() {
+            for i in 0..region.width() {
+                put_blend(&mut dst.img, blending, dx + i as i64, dy + j as i64, *region.get_pixel(i, j));
+            }
         }
-    }
-    0
+        0
+    })
 }
 
 /// Merges a source region into the destination at `(dx, dy)` with `pct` opacity
@@ -101,7 +103,9 @@ pub extern "C" fn elephc_img_copy_merge(
     swh: i64,
     pct: i64,
 ) -> i64 {
-    copy_merge_impl(dst_h, src_h, dxy, sxy, swh, pct, false)
+    ffi_guard(-1, move || {
+        copy_merge_impl(dst_h, src_h, dxy, sxy, swh, pct, false)
+    })
 }
 
 /// Merges a source region into the destination with `pct` opacity after first
@@ -116,7 +120,9 @@ pub extern "C" fn elephc_img_copy_merge_gray(
     swh: i64,
     pct: i64,
 ) -> i64 {
-    copy_merge_impl(dst_h, src_h, dxy, sxy, swh, pct, true)
+    ffi_guard(-1, move || {
+        copy_merge_impl(dst_h, src_h, dxy, sxy, swh, pct, true)
+    })
 }
 
 /// Shared body for `imagecopymerge`/`imagecopymergegray`: with `gray` set the
@@ -218,7 +224,9 @@ pub extern "C" fn elephc_img_copy_resized(
     dwh: i64,
     swh: i64,
 ) -> i64 {
-    copy_scaled(dst_h, src_h, dxy, sxy, dwh, swh, false)
+    ffi_guard(-1, move || {
+        copy_scaled(dst_h, src_h, dxy, sxy, dwh, swh, false)
+    })
 }
 
 /// Backs `imagecopyresampled` (bilinear region copy with scaling).
@@ -231,7 +239,9 @@ pub extern "C" fn elephc_img_copy_resampled(
     dwh: i64,
     swh: i64,
 ) -> i64 {
-    copy_scaled(dst_h, src_h, dxy, sxy, dwh, swh, true)
+    ffi_guard(-1, move || {
+        copy_scaled(dst_h, src_h, dxy, sxy, dwh, swh, true)
+    })
 }
 
 /// Scales an image to `new_w`×`new_h`, returning a new handle (`imagescale`). A
@@ -239,26 +249,28 @@ pub extern "C" fn elephc_img_copy_resampled(
 /// selects nearest sampling; anything else uses a bilinear (triangle) filter.
 #[no_mangle]
 pub extern "C" fn elephc_img_scale(src_h: i64, new_w: i64, new_h: i64, mode: i64) -> i64 {
-    if new_w <= 0 {
-        return -1;
-    }
-    let guard = images().lock().unwrap();
-    let Some(src) = guard.get(&src_h) else {
-        return -1;
-    };
-    let (w0, h0) = (src.img.width(), src.img.height());
-    let nh = if new_h < 0 {
-        ((new_w as f64) * (h0 as f64) / (w0 as f64)).round().max(1.0) as u32
-    } else if new_h == 0 {
-        return -1;
-    } else {
-        new_h as u32
-    };
-    let filter = if mode == IMG_NEAREST_NEIGHBOUR { FilterType::Nearest } else { FilterType::Triangle };
-    let scaled = imageops::resize(&src.img, new_w as u32, nh, filter);
-    let truecolor = src.truecolor;
-    drop(guard);
-    insert_image(ImageObj::new(scaled, truecolor))
+    ffi_guard(-1, move || {
+        if new_w <= 0 {
+            return -1;
+        }
+        let guard = images().lock().unwrap();
+        let Some(src) = guard.get(&src_h) else {
+            return -1;
+        };
+        let (w0, h0) = (src.img.width(), src.img.height());
+        let nh = if new_h < 0 {
+            ((new_w as f64) * (h0 as f64) / (w0 as f64)).round().max(1.0) as u32
+        } else if new_h == 0 {
+            return -1;
+        } else {
+            new_h as u32
+        };
+        let filter = if mode == IMG_NEAREST_NEIGHBOUR { FilterType::Nearest } else { FilterType::Triangle };
+        let scaled = imageops::resize(&src.img, new_w as u32, nh, filter);
+        let truecolor = src.truecolor;
+        drop(guard);
+        insert_image(ImageObj::new(scaled, truecolor))
+    })
 }
 
 /// Crops a `w`×`h` rectangle anchored at `(x, y)`, returning a new handle
@@ -266,17 +278,19 @@ pub extern "C" fn elephc_img_scale(src_h: i64, new_w: i64, new_h: i64, mode: i64
 /// behavior for a rectangle that extends past the source.
 #[no_mangle]
 pub extern "C" fn elephc_img_crop(src_h: i64, x: i64, y: i64, w: i64, h: i64) -> i64 {
-    if w <= 0 || h <= 0 {
-        return -1;
-    }
-    let guard = images().lock().unwrap();
-    let Some(src) = guard.get(&src_h) else {
-        return -1;
-    };
-    let cropped = clone_region(&src.img, x, y, w, h);
-    let truecolor = src.truecolor;
-    drop(guard);
-    insert_image(ImageObj::new(cropped, truecolor))
+    ffi_guard(-1, move || {
+        if w <= 0 || h <= 0 {
+            return -1;
+        }
+        let guard = images().lock().unwrap();
+        let Some(src) = guard.get(&src_h) else {
+            return -1;
+        };
+        let cropped = clone_region(&src.img, x, y, w, h);
+        let truecolor = src.truecolor;
+        drop(guard);
+        insert_image(ImageObj::new(cropped, truecolor))
+    })
 }
 
 /// Returns whether a pixel counts as "border" for `imagecropauto`, by mode:
@@ -308,68 +322,72 @@ pub extern "C" fn elephc_img_crop_auto(
     color: i64,
     threshold_permille: i64,
 ) -> i64 {
-    let guard = images().lock().unwrap();
-    let Some(src) = guard.get(&src_h) else {
-        return -1;
-    };
-    let img = &src.img;
-    let (w, h) = (img.width(), img.height());
-    if w == 0 || h == 0 {
-        return -1;
-    }
-    let refc = match mode {
-        2 => Rgba([0, 0, 0, 255]),
-        3 => Rgba([255, 255, 255, 255]),
-        5 => unpack_color(color),
-        _ => *img.get_pixel(0, 0),
-    };
-    // Max RGB Euclidean distance is sqrt(3)*255; scale the per-mille threshold to it.
-    let thr = (threshold_permille as f64 / 1000.0) * (3.0_f64.sqrt() * 255.0);
-    let (mut min_x, mut min_y, mut max_x, mut max_y) = (w, h, 0u32, 0u32);
-    let mut found = false;
-    for y in 0..h {
-        for x in 0..w {
-            if !is_border(*img.get_pixel(x, y), mode, refc, thr) {
-                found = true;
-                min_x = min_x.min(x);
-                min_y = min_y.min(y);
-                max_x = max_x.max(x);
-                max_y = max_y.max(y);
+    ffi_guard(-1, move || {
+        let guard = images().lock().unwrap();
+        let Some(src) = guard.get(&src_h) else {
+            return -1;
+        };
+        let img = &src.img;
+        let (w, h) = (img.width(), img.height());
+        if w == 0 || h == 0 {
+            return -1;
+        }
+        let refc = match mode {
+            2 => Rgba([0, 0, 0, 255]),
+            3 => Rgba([255, 255, 255, 255]),
+            5 => unpack_color(color),
+            _ => *img.get_pixel(0, 0),
+        };
+        // Max RGB Euclidean distance is sqrt(3)*255; scale the per-mille threshold to it.
+        let thr = (threshold_permille as f64 / 1000.0) * (3.0_f64.sqrt() * 255.0);
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (w, h, 0u32, 0u32);
+        let mut found = false;
+        for y in 0..h {
+            for x in 0..w {
+                if !is_border(*img.get_pixel(x, y), mode, refc, thr) {
+                    found = true;
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                    max_x = max_x.max(x);
+                    max_y = max_y.max(y);
+                }
             }
         }
-    }
-    if !found {
-        return -1;
-    }
-    let cropped = clone_region(
-        img,
-        min_x as i64,
-        min_y as i64,
-        (max_x - min_x + 1) as i64,
-        (max_y - min_y + 1) as i64,
-    );
-    let truecolor = src.truecolor;
-    drop(guard);
-    insert_image(ImageObj::new(cropped, truecolor))
+        if !found {
+            return -1;
+        }
+        let cropped = clone_region(
+            img,
+            min_x as i64,
+            min_y as i64,
+            (max_x - min_x + 1) as i64,
+            (max_y - min_y + 1) as i64,
+        );
+        let truecolor = src.truecolor;
+        drop(guard);
+        insert_image(ImageObj::new(cropped, truecolor))
+    })
 }
 
 /// Flips an image in place (`imageflip`): mode 1 horizontal, 2 vertical, 3 both.
 #[no_mangle]
 pub extern "C" fn elephc_img_flip(handle: i64, mode: i64) -> i64 {
-    let mut guard = images().lock().unwrap();
-    let Some(obj) = guard.get_mut(&handle) else {
-        return -1;
-    };
-    match mode {
-        1 => imageops::flip_horizontal_in_place(&mut obj.img),
-        2 => imageops::flip_vertical_in_place(&mut obj.img),
-        3 => {
-            imageops::flip_horizontal_in_place(&mut obj.img);
-            imageops::flip_vertical_in_place(&mut obj.img);
+    ffi_guard(-1, move || {
+        let mut guard = images().lock().unwrap();
+        let Some(obj) = guard.get_mut(&handle) else {
+            return -1;
+        };
+        match mode {
+            1 => imageops::flip_horizontal_in_place(&mut obj.img),
+            2 => imageops::flip_vertical_in_place(&mut obj.img),
+            3 => {
+                imageops::flip_horizontal_in_place(&mut obj.img);
+                imageops::flip_vertical_in_place(&mut obj.img);
+            }
+            _ => return -1,
         }
-        _ => return -1,
-    }
-    0
+        0
+    })
 }
 
 /// Rotates an image counter-clockwise by `angle_mdeg` millidegrees about its
@@ -378,27 +396,29 @@ pub extern "C" fn elephc_img_flip(handle: i64, mode: i64) -> i64 {
 /// fill exposed area with `bgcolor`. The result is enlarged to fit the rotation.
 #[no_mangle]
 pub extern "C" fn elephc_img_rotate(src_h: i64, angle_mdeg: i64, bgcolor: i64) -> i64 {
-    let guard = images().lock().unwrap();
-    let Some(src) = guard.get(&src_h) else {
-        return -1;
-    };
-    let truecolor = src.truecolor;
-    let deg = (angle_mdeg as f64 / 1000.0).rem_euclid(360.0);
-    // Right-angle multiples are exact permutations (PHP rotates counter-clockwise,
-    // so a CCW quarter turn is image's clockwise rotate270, and vice versa).
-    let out = if (deg - 0.0).abs() < 1e-6 {
-        src.img.clone()
-    } else if (deg - 90.0).abs() < 1e-6 {
-        imageops::rotate270(&src.img)
-    } else if (deg - 180.0).abs() < 1e-6 {
-        imageops::rotate180(&src.img)
-    } else if (deg - 270.0).abs() < 1e-6 {
-        imageops::rotate90(&src.img)
-    } else {
-        rotate_arbitrary(&src.img, deg, unpack_color(bgcolor))
-    };
-    drop(guard);
-    insert_image(ImageObj::new(out, truecolor))
+    ffi_guard(-1, move || {
+        let guard = images().lock().unwrap();
+        let Some(src) = guard.get(&src_h) else {
+            return -1;
+        };
+        let truecolor = src.truecolor;
+        let deg = (angle_mdeg as f64 / 1000.0).rem_euclid(360.0);
+        // Right-angle multiples are exact permutations (PHP rotates counter-clockwise,
+        // so a CCW quarter turn is image's clockwise rotate270, and vice versa).
+        let out = if (deg - 0.0).abs() < 1e-6 {
+            src.img.clone()
+        } else if (deg - 90.0).abs() < 1e-6 {
+            imageops::rotate270(&src.img)
+        } else if (deg - 180.0).abs() < 1e-6 {
+            imageops::rotate180(&src.img)
+        } else if (deg - 270.0).abs() < 1e-6 {
+            imageops::rotate90(&src.img)
+        } else {
+            rotate_arbitrary(&src.img, deg, unpack_color(bgcolor))
+        };
+        drop(guard);
+        insert_image(ImageObj::new(out, truecolor))
+    })
 }
 
 /// Rotates `img` counter-clockwise by `deg` degrees about its center into a buffer
@@ -437,53 +457,55 @@ fn rotate_arbitrary(img: &RgbaImage, deg: f64, bg: Rgba<u8>) -> RgbaImage {
 /// singular (non-invertible) transform.
 #[no_mangle]
 pub extern "C" fn elephc_img_affine(src_h: i64) -> i64 {
-    let m = fbuf::values();
-    if m.len() != 6 {
-        return -1;
-    }
-    let (a, b, c, d, e, f) = (m[0], m[1], m[2], m[3], m[4], m[5]);
-    let det = a * d - b * c;
-    if det.abs() < 1e-12 {
-        return -1;
-    }
-    let guard = images().lock().unwrap();
-    let Some(src) = guard.get(&src_h) else {
-        return -1;
-    };
-    let img = &src.img;
-    let (w, h) = (img.width() as f64, img.height() as f64);
-    // Transform the four corners to find the output bounding box.
-    let corners = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)];
-    let mut min_x = f64::MAX;
-    let mut min_y = f64::MAX;
-    let mut max_x = f64::MIN;
-    let mut max_y = f64::MIN;
-    for (x, y) in corners {
-        let tx = a * x + c * y + e;
-        let ty = b * x + d * y + f;
-        min_x = min_x.min(tx);
-        min_y = min_y.min(ty);
-        max_x = max_x.max(tx);
-        max_y = max_y.max(ty);
-    }
-    let new_w = (max_x - min_x).ceil().max(1.0);
-    let new_h = (max_y - min_y).ceil().max(1.0);
-    // Inverse 2×2 for mapping output pixels back to source coordinates.
-    let (ia, ib, ic, id) = (d / det, -b / det, -c / det, a / det);
-    let mut out = RgbaImage::from_pixel(new_w as u32, new_h as u32, Rgba([0, 0, 0, 0]));
-    for dy in 0..out.height() {
-        for dx in 0..out.width() {
-            let wx = dx as f64 + 0.5 + min_x;
-            let wy = dy as f64 + 0.5 + min_y;
-            let sxf = ia * (wx - e) + ic * (wy - f);
-            let syf = ib * (wx - e) + id * (wy - f);
-            let (sxi, syi) = (sxf.floor() as i64, syf.floor() as i64);
-            if sxi >= 0 && syi >= 0 && (sxi as u32) < img.width() && (syi as u32) < img.height() {
-                out.put_pixel(dx, dy, *img.get_pixel(sxi as u32, syi as u32));
+    ffi_guard(-1, move || {
+        let m = fbuf::values();
+        if m.len() != 6 {
+            return -1;
+        }
+        let (a, b, c, d, e, f) = (m[0], m[1], m[2], m[3], m[4], m[5]);
+        let det = a * d - b * c;
+        if det.abs() < 1e-12 {
+            return -1;
+        }
+        let guard = images().lock().unwrap();
+        let Some(src) = guard.get(&src_h) else {
+            return -1;
+        };
+        let img = &src.img;
+        let (w, h) = (img.width() as f64, img.height() as f64);
+        // Transform the four corners to find the output bounding box.
+        let corners = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)];
+        let mut min_x = f64::MAX;
+        let mut min_y = f64::MAX;
+        let mut max_x = f64::MIN;
+        let mut max_y = f64::MIN;
+        for (x, y) in corners {
+            let tx = a * x + c * y + e;
+            let ty = b * x + d * y + f;
+            min_x = min_x.min(tx);
+            min_y = min_y.min(ty);
+            max_x = max_x.max(tx);
+            max_y = max_y.max(ty);
+        }
+        let new_w = (max_x - min_x).ceil().max(1.0);
+        let new_h = (max_y - min_y).ceil().max(1.0);
+        // Inverse 2×2 for mapping output pixels back to source coordinates.
+        let (ia, ib, ic, id) = (d / det, -b / det, -c / det, a / det);
+        let mut out = RgbaImage::from_pixel(new_w as u32, new_h as u32, Rgba([0, 0, 0, 0]));
+        for dy in 0..out.height() {
+            for dx in 0..out.width() {
+                let wx = dx as f64 + 0.5 + min_x;
+                let wy = dy as f64 + 0.5 + min_y;
+                let sxf = ia * (wx - e) + ic * (wy - f);
+                let syf = ib * (wx - e) + id * (wy - f);
+                let (sxi, syi) = (sxf.floor() as i64, syf.floor() as i64);
+                if sxi >= 0 && syi >= 0 && (sxi as u32) < img.width() && (syi as u32) < img.height() {
+                    out.put_pixel(dx, dy, *img.get_pixel(sxi as u32, syi as u32));
+                }
             }
         }
-    }
-    let truecolor = src.truecolor;
-    drop(guard);
-    insert_image(ImageObj::new(out, truecolor))
+        let truecolor = src.truecolor;
+        drop(guard);
+        insert_image(ImageObj::new(out, truecolor))
+    })
 }

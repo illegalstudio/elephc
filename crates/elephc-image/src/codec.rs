@@ -31,6 +31,7 @@ use std::sync::{Mutex, OnceLock};
 use image::{DynamicImage, ExtendedColorType, ImageEncoder, ImageFormat, RgbaImage};
 
 use crate::{
+    ffi_guard,
     cstr_arg, fmt_code_to_format, format_to_imagetype, images, insert_image, ImageObj, FMT_JPEG,
 };
 
@@ -122,13 +123,15 @@ fn decode_bytes(bytes: &[u8], expected_fmt: i64) -> Option<RgbaImage> {
 /// `elephc_img_create_from_stage`.
 #[no_mangle]
 pub extern "C" fn elephc_img_stage_ptr(len: i64) -> *mut u8 {
-    if len <= 0 {
-        return std::ptr::null_mut();
-    }
-    let mut guard = stage_cell().lock().unwrap();
-    guard.clear();
-    guard.resize(len as usize, 0);
-    guard.as_mut_ptr()
+    ffi_guard(std::ptr::null_mut(), move || {
+        if len <= 0 {
+            return std::ptr::null_mut();
+        }
+        let mut guard = stage_cell().lock().unwrap();
+        guard.clear();
+        guard.resize(len as usize, 0);
+        guard.as_mut_ptr()
+    })
 }
 
 /// Returns the `IMAGETYPE_*` code guessed from the first `len` staged bytes, or
@@ -151,20 +154,22 @@ pub(crate) fn stage_guess_imagetype(len: usize) -> i64 {
 /// length or undecodable bytes. Backs `imagecreatefromstring`.
 #[no_mangle]
 pub extern "C" fn elephc_img_create_from_stage(len: i64) -> i64 {
-    if len <= 0 {
-        return -1;
-    }
-    let guard = stage_cell().lock().unwrap();
-    let len = len as usize;
-    if guard.len() < len {
-        return -1;
-    }
-    let decoded = decode_bytes(&guard[..len], -1);
-    drop(guard);
-    match decoded {
-        Some(img) => insert_image(ImageObj::new(img, true)),
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        if len <= 0 {
+            return -1;
+        }
+        let guard = stage_cell().lock().unwrap();
+        let len = len as usize;
+        if guard.len() < len {
+            return -1;
+        }
+        let decoded = decode_bytes(&guard[..len], -1);
+        drop(guard);
+        match decoded {
+            Some(img) => insert_image(ImageObj::new(img, true)),
+            None => -1,
+        }
+    })
 }
 
 /// Decodes an image file into a new true-color image and returns its handle, or
@@ -176,29 +181,31 @@ pub unsafe extern "C" fn elephc_img_create_from_file(
     path: *const c_char,
     expected_fmt: i64,
 ) -> i64 {
-    let Some(path) = cstr_arg(path) else {
-        return -1;
-    };
-    let Ok(mut reader) = image::ImageReader::open(path).and_then(|r| r.with_guessed_format()) else {
-        return -1;
-    };
-    if expected_fmt > 0 {
-        let Some(expected) = fmt_code_to_format(expected_fmt) else {
+    ffi_guard(-1, move || unsafe {
+        let Some(path) = cstr_arg(path) else {
             return -1;
         };
-        match reader.format() {
-            // Sniffed format must match the requested one so imagecreatefrompng
-            // rejects a JPEG.
-            Some(guessed) if guessed != expected => return -1,
-            // No sniffed format (TGA's header has no magic the sniffer recognizes)
-            // or an exact match: pin the requested format and decode it.
-            _ => reader.set_format(expected),
+        let Ok(mut reader) = image::ImageReader::open(path).and_then(|r| r.with_guessed_format()) else {
+            return -1;
+        };
+        if expected_fmt > 0 {
+            let Some(expected) = fmt_code_to_format(expected_fmt) else {
+                return -1;
+            };
+            match reader.format() {
+                // Sniffed format must match the requested one so imagecreatefrompng
+                // rejects a JPEG.
+                Some(guessed) if guessed != expected => return -1,
+                // No sniffed format (TGA's header has no magic the sniffer recognizes)
+                // or an exact match: pin the requested format and decode it.
+                _ => reader.set_format(expected),
+            }
         }
-    }
-    let Ok(dynimg) = reader.decode() else {
-        return -1;
-    };
-    insert_image(ImageObj::new(dynimg.to_rgba8(), true))
+        let Ok(dynimg) = reader.decode() else {
+            return -1;
+        };
+        insert_image(ImageObj::new(dynimg.to_rgba8(), true))
+    })
 }
 
 /// Encodes an image to `path` in the given format. Returns `0` on success and
@@ -211,21 +218,23 @@ pub unsafe extern "C" fn elephc_img_write_file(
     path: *const c_char,
     quality: i64,
 ) -> i64 {
-    let Some(path) = cstr_arg(path) else {
-        return -1;
-    };
-    let guard = images().lock().unwrap();
-    let Some(obj) = guard.get(&handle) else {
-        return -1;
-    };
-    let Some(bytes) = encode_to_vec(obj, fmt, quality) else {
-        return -1;
-    };
-    drop(guard);
-    match std::fs::write(path, bytes) {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
+    ffi_guard(-1, move || unsafe {
+        let Some(path) = cstr_arg(path) else {
+            return -1;
+        };
+        let guard = images().lock().unwrap();
+        let Some(obj) = guard.get(&handle) else {
+            return -1;
+        };
+        let Some(bytes) = encode_to_vec(obj, fmt, quality) else {
+            return -1;
+        };
+        drop(guard);
+        match std::fs::write(path, bytes) {
+            Ok(()) => 0,
+            Err(_) => -1,
+        }
+    })
 }
 
 /// Encodes an image into the encode cell. Returns `0` on success and `-1` on an
@@ -234,16 +243,18 @@ pub unsafe extern "C" fn elephc_img_write_file(
 /// for the no-file output path.
 #[no_mangle]
 pub extern "C" fn elephc_img_encode(handle: i64, fmt: i64, quality: i64) -> i64 {
-    let guard = images().lock().unwrap();
-    let Some(obj) = guard.get(&handle) else {
-        return -1;
-    };
-    let Some(bytes) = encode_to_vec(obj, fmt, quality) else {
-        return -1;
-    };
-    drop(guard);
-    *encode_cell().lock().unwrap() = bytes;
-    0
+    ffi_guard(-1, move || {
+        let guard = images().lock().unwrap();
+        let Some(obj) = guard.get(&handle) else {
+            return -1;
+        };
+        let Some(bytes) = encode_to_vec(obj, fmt, quality) else {
+            return -1;
+        };
+        drop(guard);
+        *encode_cell().lock().unwrap() = bytes;
+        0
+    })
 }
 
 /// Stores already-encoded bytes (e.g. a Cairo surface PNG) into the shared encode
@@ -258,19 +269,25 @@ pub(crate) fn set_encoded(bytes: Vec<u8>) {
 /// successful `elephc_img_encode`.
 #[no_mangle]
 pub extern "C" fn elephc_img_encoded_ptr() -> *const u8 {
-    encode_cell().lock().unwrap().as_ptr()
+    ffi_guard(std::ptr::null(), move || {
+        encode_cell().lock().unwrap().as_ptr()
+    })
 }
 
 /// Returns the byte length of the encode cell.
 #[no_mangle]
 pub extern "C" fn elephc_img_encoded_len() -> i64 {
-    encode_cell().lock().unwrap().len() as i64
+    ffi_guard(-1, move || {
+        encode_cell().lock().unwrap().len() as i64
+    })
 }
 
 /// Empties the encode cell, releasing its bytes once the prelude has copied them.
 #[no_mangle]
 pub extern "C" fn elephc_img_encoded_clear() {
-    encode_cell().lock().unwrap().clear();
+    ffi_guard((), move || {
+        encode_cell().lock().unwrap().clear();
+    })
 }
 
 /// Probes an image file for its dimensions and format without fully decoding it,
@@ -278,27 +295,29 @@ pub extern "C" fn elephc_img_encoded_clear() {
 /// if the file is missing/unreadable or its format is unrecognized.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_img_probe_file(path: *const c_char) -> i64 {
-    let Some(path) = cstr_arg(path) else {
-        return -1;
-    };
-    let Ok(reader) = image::ImageReader::open(path).and_then(|r| r.with_guessed_format()) else {
-        return -1;
-    };
-    let Some(format) = reader.format() else {
-        return -1;
-    };
-    let channels = if format == ImageFormat::Jpeg { 3 } else { 4 };
-    let Ok((width, height)) = reader.into_dimensions() else {
-        return -1;
-    };
-    *probe_cell().lock().unwrap() = ProbeResult {
-        width: width as i64,
-        height: height as i64,
-        image_type: format_to_imagetype(format),
-        bits: 8,
-        channels,
-    };
-    0
+    ffi_guard(-1, move || unsafe {
+        let Some(path) = cstr_arg(path) else {
+            return -1;
+        };
+        let Ok(reader) = image::ImageReader::open(path).and_then(|r| r.with_guessed_format()) else {
+            return -1;
+        };
+        let Some(format) = reader.format() else {
+            return -1;
+        };
+        let channels = if format == ImageFormat::Jpeg { 3 } else { 4 };
+        let Ok((width, height)) = reader.into_dimensions() else {
+            return -1;
+        };
+        *probe_cell().lock().unwrap() = ProbeResult {
+            width: width as i64,
+            height: height as i64,
+            image_type: format_to_imagetype(format),
+            bits: 8,
+            channels,
+        };
+        0
+    })
 }
 
 /// Probes the staging buffer — the bytes the prelude staged via
@@ -308,61 +327,73 @@ pub unsafe extern "C" fn elephc_img_probe_file(path: *const c_char) -> i64 {
 /// unrecognized. Backs `getimagesizefromstring`.
 #[no_mangle]
 pub extern "C" fn elephc_img_probe_stage(len: i64) -> i64 {
-    if len <= 0 {
-        return -1;
-    }
-    let guard = stage_cell().lock().unwrap();
-    let len = len as usize;
-    if guard.len() < len {
-        return -1;
-    }
-    let Ok(reader) = image::ImageReader::new(Cursor::new(&guard[..len])).with_guessed_format() else {
-        return -1;
-    };
-    let Some(format) = reader.format() else {
-        return -1;
-    };
-    let channels = if format == ImageFormat::Jpeg { 3 } else { 4 };
-    let Ok((width, height)) = reader.into_dimensions() else {
-        return -1;
-    };
-    drop(guard);
-    *probe_cell().lock().unwrap() = ProbeResult {
-        width: width as i64,
-        height: height as i64,
-        image_type: format_to_imagetype(format),
-        bits: 8,
-        channels,
-    };
-    0
+    ffi_guard(-1, move || {
+        if len <= 0 {
+            return -1;
+        }
+        let guard = stage_cell().lock().unwrap();
+        let len = len as usize;
+        if guard.len() < len {
+            return -1;
+        }
+        let Ok(reader) = image::ImageReader::new(Cursor::new(&guard[..len])).with_guessed_format() else {
+            return -1;
+        };
+        let Some(format) = reader.format() else {
+            return -1;
+        };
+        let channels = if format == ImageFormat::Jpeg { 3 } else { 4 };
+        let Ok((width, height)) = reader.into_dimensions() else {
+            return -1;
+        };
+        drop(guard);
+        *probe_cell().lock().unwrap() = ProbeResult {
+            width: width as i64,
+            height: height as i64,
+            image_type: format_to_imagetype(format),
+            bits: 8,
+            channels,
+        };
+        0
+    })
 }
 
 /// Returns the width from the last successful probe.
 #[no_mangle]
 pub extern "C" fn elephc_img_probe_width() -> i64 {
-    probe_cell().lock().unwrap().width
+    ffi_guard(-1, move || {
+        probe_cell().lock().unwrap().width
+    })
 }
 
 /// Returns the height from the last successful probe.
 #[no_mangle]
 pub extern "C" fn elephc_img_probe_height() -> i64 {
-    probe_cell().lock().unwrap().height
+    ffi_guard(-1, move || {
+        probe_cell().lock().unwrap().height
+    })
 }
 
 /// Returns the IMAGETYPE_* code from the last successful probe.
 #[no_mangle]
 pub extern "C" fn elephc_img_probe_type() -> i64 {
-    probe_cell().lock().unwrap().image_type
+    ffi_guard(-1, move || {
+        probe_cell().lock().unwrap().image_type
+    })
 }
 
 /// Returns the bit depth from the last successful probe.
 #[no_mangle]
 pub extern "C" fn elephc_img_probe_bits() -> i64 {
-    probe_cell().lock().unwrap().bits
+    ffi_guard(-1, move || {
+        probe_cell().lock().unwrap().bits
+    })
 }
 
 /// Returns the channel count from the last successful probe.
 #[no_mangle]
 pub extern "C" fn elephc_img_probe_channels() -> i64 {
-    probe_cell().lock().unwrap().channels
+    ffi_guard(-1, move || {
+        probe_cell().lock().unwrap().channels
+    })
 }

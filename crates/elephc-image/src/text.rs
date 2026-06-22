@@ -19,7 +19,7 @@
 
 use std::os::raw::c_char;
 
-use crate::{cstr_arg, images, unpack_color};
+use crate::{ffi_guard, cstr_arg, images, unpack_color};
 
 /// Renders a string with the built-in 8×8 font at `(x, y)`. When `vertical` is
 /// set the layout is rotated 90° counter-clockwise (`imagestringup`). The `font`
@@ -64,10 +64,12 @@ pub unsafe extern "C" fn elephc_img_string(
     color: i64,
     text: *const c_char,
 ) {
-    let _ = font;
-    if let Some(text) = cstr_arg(text) {
-        render_builtin(handle, x, y, color, text, false);
-    }
+    ffi_guard((), move || unsafe {
+        let _ = font;
+        if let Some(text) = cstr_arg(text) {
+            render_builtin(handle, x, y, color, text, false);
+        }
+    })
 }
 
 /// Draws a string vertically (rotated up) with the built-in font
@@ -81,8 +83,10 @@ pub unsafe extern "C" fn elephc_img_string_up(
     color: i64,
     text: *const c_char,
 ) {
-    let _ = font;
-    if let Some(text) = cstr_arg(text) {
-        render_builtin(handle, x, y, color, text, true);
-    }
+    ffi_guard((), move || unsafe {
+        let _ = font;
+        if let Some(text) = cstr_arg(text) {
+            render_builtin(handle, x, y, color, text, true);
+        }
+    })
 }

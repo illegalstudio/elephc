@@ -29,7 +29,7 @@ use image::{imageops, Rgba, RgbaImage};
 use crate::filter::{elephc_img_convolution, elephc_img_filter};
 use crate::imagick::{current_handle, replace_current};
 use crate::transform::{elephc_img_crop, elephc_img_flip, elephc_img_rotate, elephc_img_scale};
-use crate::{blend_over, images};
+use crate::{ffi_guard, blend_over, images};
 
 /// Imagick `COMPOSITE_OVER` operator code (also the default). Source-over blend.
 const COMPOSITE_OVER: i64 = 40;
@@ -41,23 +41,27 @@ const COMPOSITE_COPY: i64 = 42;
 /// (the prelude resolves best-fit dimensions before calling).
 #[no_mangle]
 pub extern "C" fn elephc_imagick_resize(wand_id: i64, cols: i64, rows: i64) -> i64 {
-    let Some(handle) = current_handle(wand_id) else {
-        return -1;
-    };
-    // mode 0 is not IMG_NEAREST_NEIGHBOUR (16), so elephc_img_scale uses bilinear.
-    let new_handle = elephc_img_scale(handle, cols, rows, 0);
-    replace_current(wand_id, new_handle)
+    ffi_guard(-1, move || {
+        let Some(handle) = current_handle(wand_id) else {
+            return -1;
+        };
+        // mode 0 is not IMG_NEAREST_NEIGHBOUR (16), so elephc_img_scale uses bilinear.
+        let new_handle = elephc_img_scale(handle, cols, rows, 0);
+        replace_current(wand_id, new_handle)
+    })
 }
 
 /// Scales the active frame to `cols`×`rows` with nearest-neighbour sampling,
 /// returning `0`/`-1`. Backs `Imagick::scaleImage`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_scale(wand_id: i64, cols: i64, rows: i64) -> i64 {
-    let Some(handle) = current_handle(wand_id) else {
-        return -1;
-    };
-    let new_handle = elephc_img_scale(handle, cols, rows, 16);
-    replace_current(wand_id, new_handle)
+    ffi_guard(-1, move || {
+        let Some(handle) = current_handle(wand_id) else {
+            return -1;
+        };
+        let new_handle = elephc_img_scale(handle, cols, rows, 16);
+        replace_current(wand_id, new_handle)
+    })
 }
 
 /// Crops a `width`×`height` rectangle at `(x, y)` from the active frame, returning
@@ -70,11 +74,13 @@ pub extern "C" fn elephc_imagick_crop(
     x: i64,
     y: i64,
 ) -> i64 {
-    let Some(handle) = current_handle(wand_id) else {
-        return -1;
-    };
-    let new_handle = elephc_img_crop(handle, x, y, width, height);
-    replace_current(wand_id, new_handle)
+    ffi_guard(-1, move || {
+        let Some(handle) = current_handle(wand_id) else {
+            return -1;
+        };
+        let new_handle = elephc_img_crop(handle, x, y, width, height);
+        replace_current(wand_id, new_handle)
+    })
 }
 
 /// Rotates the active frame by `angle_mdeg` millidegrees (clockwise, Imagick
@@ -82,32 +88,38 @@ pub extern "C" fn elephc_imagick_crop(
 /// `Imagick::rotateImage`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_rotate(wand_id: i64, angle_mdeg: i64, bg: i64) -> i64 {
-    let Some(handle) = current_handle(wand_id) else {
-        return -1;
-    };
-    // GD/elephc rotate is counter-clockwise; Imagick is clockwise, so negate.
-    let new_handle = elephc_img_rotate(handle, -angle_mdeg, bg);
-    replace_current(wand_id, new_handle)
+    ffi_guard(-1, move || {
+        let Some(handle) = current_handle(wand_id) else {
+            return -1;
+        };
+        // GD/elephc rotate is counter-clockwise; Imagick is clockwise, so negate.
+        let new_handle = elephc_img_rotate(handle, -angle_mdeg, bg);
+        replace_current(wand_id, new_handle)
+    })
 }
 
 /// Flips the active frame vertically (top↔bottom) in place, returning `0`/`-1`.
 /// Backs `Imagick::flipImage`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_flip(wand_id: i64) -> i64 {
-    match current_handle(wand_id) {
-        Some(handle) => elephc_img_flip(handle, 2),
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        match current_handle(wand_id) {
+            Some(handle) => elephc_img_flip(handle, 2),
+            None => -1,
+        }
+    })
 }
 
 /// Flops the active frame horizontally (left↔right) in place, returning `0`/`-1`.
 /// Backs `Imagick::flopImage`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_flop(wand_id: i64) -> i64 {
-    match current_handle(wand_id) {
-        Some(handle) => elephc_img_flip(handle, 1),
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        match current_handle(wand_id) {
+            Some(handle) => elephc_img_flip(handle, 1),
+            None => -1,
+        }
+    })
 }
 
 /// Gaussian-blurs the active frame with the given `sigma` (16.16-free milli
@@ -115,16 +127,18 @@ pub extern "C" fn elephc_imagick_flop(wand_id: i64) -> i64 {
 /// `Imagick::blurImage` and `gaussianBlurImage`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_blur(wand_id: i64, sigma_milli: i64) -> i64 {
-    let Some(handle) = current_handle(wand_id) else {
-        return -1;
-    };
-    let sigma = (sigma_milli as f32 / 1000.0).max(0.1);
-    let mut guard = images().lock().unwrap();
-    let Some(obj) = guard.get_mut(&handle) else {
-        return -1;
-    };
-    obj.img = imageops::blur(&obj.img, sigma);
-    0
+    ffi_guard(-1, move || {
+        let Some(handle) = current_handle(wand_id) else {
+            return -1;
+        };
+        let sigma = (sigma_milli as f32 / 1000.0).max(0.1);
+        let mut guard = images().lock().unwrap();
+        let Some(obj) = guard.get_mut(&handle) else {
+            return -1;
+        };
+        obj.img = imageops::blur(&obj.img, sigma);
+        0
+    })
 }
 
 /// Negates (inverts) the active frame's RGB channels, returning `0`/`-1`. The
@@ -132,11 +146,13 @@ pub extern "C" fn elephc_imagick_blur(wand_id: i64, sigma_milli: i64) -> i64 {
 /// Backs `Imagick::negateImage`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_negate(wand_id: i64, only_gray: i64) -> i64 {
-    let _ = only_gray;
-    match current_handle(wand_id) {
-        Some(handle) => elephc_img_filter(handle, 0, 0, 0, 0, 0),
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        let _ = only_gray;
+        match current_handle(wand_id) {
+            Some(handle) => elephc_img_filter(handle, 0, 0, 0, 0, 0),
+            None => -1,
+        }
+    })
 }
 
 /// Converts a straight-alpha RGB pixel to HSL (each component in `0.0..=1.0`).
@@ -196,27 +212,29 @@ pub extern "C" fn elephc_imagick_modulate(
     saturation_pct: i64,
     hue_pct: i64,
 ) -> i64 {
-    let Some(handle) = current_handle(wand_id) else {
-        return -1;
-    };
-    let bf = brightness_pct as f64 / 100.0;
-    let sf = saturation_pct as f64 / 100.0;
-    // Imagick maps hue 0..200 to a -180..+180 degree rotation (100 = no change).
-    let hue_shift = (hue_pct as f64 - 100.0) / 100.0; // in turns (1.0 = 360°)
-    let mut guard = images().lock().unwrap();
-    let Some(obj) = guard.get_mut(&handle) else {
-        return -1;
-    };
-    for pixel in obj.img.pixels_mut() {
-        let [r, g, b, a] = pixel.0;
-        let (mut h, mut s, mut l) = rgb_to_hsl(r, g, b);
-        h = (h + hue_shift).rem_euclid(1.0);
-        s = (s * sf).clamp(0.0, 1.0);
-        l = (l * bf).clamp(0.0, 1.0);
-        let (nr, ng, nb) = hsl_to_rgb(h, s, l);
-        *pixel = Rgba([nr, ng, nb, a]);
-    }
-    0
+    ffi_guard(-1, move || {
+        let Some(handle) = current_handle(wand_id) else {
+            return -1;
+        };
+        let bf = brightness_pct as f64 / 100.0;
+        let sf = saturation_pct as f64 / 100.0;
+        // Imagick maps hue 0..200 to a -180..+180 degree rotation (100 = no change).
+        let hue_shift = (hue_pct as f64 - 100.0) / 100.0; // in turns (1.0 = 360°)
+        let mut guard = images().lock().unwrap();
+        let Some(obj) = guard.get_mut(&handle) else {
+            return -1;
+        };
+        for pixel in obj.img.pixels_mut() {
+            let [r, g, b, a] = pixel.0;
+            let (mut h, mut s, mut l) = rgb_to_hsl(r, g, b);
+            h = (h + hue_shift).rem_euclid(1.0);
+            s = (s * sf).clamp(0.0, 1.0);
+            l = (l * bf).clamp(0.0, 1.0);
+            let (nr, ng, nb) = hsl_to_rgb(h, s, l);
+            *pixel = Rgba([nr, ng, nb, a]);
+        }
+        0
+    })
 }
 
 /// Sharpens the active frame with a fixed 3×3 unsharp kernel, returning `0`/`-1`.
@@ -224,39 +242,41 @@ pub extern "C" fn elephc_imagick_modulate(
 /// fixed. Backs `Imagick::sharpenImage`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_sharpen(wand_id: i64, radius_milli: i64, sigma_milli: i64) -> i64 {
-    let _ = (radius_milli, sigma_milli);
-    let Some(handle) = current_handle(wand_id) else {
-        return -1;
-    };
-    let mut guard = images().lock().unwrap();
-    let Some(obj) = guard.get_mut(&handle) else {
-        return -1;
-    };
-    let orig = obj.img.clone();
-    let (w, h) = (orig.width(), orig.height());
-    // 3×3 sharpen kernel (sum 1): center 5, edge-neighbours -1.
-    let k = [0.0, -1.0, 0.0, -1.0, 5.0, -1.0, 0.0, -1.0, 0.0];
-    for y in 0..h {
-        for x in 0..w {
-            let mut acc = [0.0f64; 3];
-            for ky in 0..3 {
-                for kx in 0..3 {
-                    let px = (x as i64 + kx as i64 - 1).clamp(0, w as i64 - 1) as u32;
-                    let py = (y as i64 + ky as i64 - 1).clamp(0, h as i64 - 1) as u32;
-                    let s = orig.get_pixel(px, py).0;
-                    let coef = k[ky * 3 + kx];
-                    acc[0] += s[0] as f64 * coef;
-                    acc[1] += s[1] as f64 * coef;
-                    acc[2] += s[2] as f64 * coef;
+    ffi_guard(-1, move || {
+        let _ = (radius_milli, sigma_milli);
+        let Some(handle) = current_handle(wand_id) else {
+            return -1;
+        };
+        let mut guard = images().lock().unwrap();
+        let Some(obj) = guard.get_mut(&handle) else {
+            return -1;
+        };
+        let orig = obj.img.clone();
+        let (w, h) = (orig.width(), orig.height());
+        // 3×3 sharpen kernel (sum 1): center 5, edge-neighbours -1.
+        let k = [0.0, -1.0, 0.0, -1.0, 5.0, -1.0, 0.0, -1.0, 0.0];
+        for y in 0..h {
+            for x in 0..w {
+                let mut acc = [0.0f64; 3];
+                for ky in 0..3 {
+                    for kx in 0..3 {
+                        let px = (x as i64 + kx as i64 - 1).clamp(0, w as i64 - 1) as u32;
+                        let py = (y as i64 + ky as i64 - 1).clamp(0, h as i64 - 1) as u32;
+                        let s = orig.get_pixel(px, py).0;
+                        let coef = k[ky * 3 + kx];
+                        acc[0] += s[0] as f64 * coef;
+                        acc[1] += s[1] as f64 * coef;
+                        acc[2] += s[2] as f64 * coef;
+                    }
                 }
+                let a = orig.get_pixel(x, y).0[3];
+                let ch = |v: f64| v.round().clamp(0.0, 255.0) as u8;
+                obj.img
+                    .put_pixel(x, y, Rgba([ch(acc[0]), ch(acc[1]), ch(acc[2]), a]));
             }
-            let a = orig.get_pixel(x, y).0[3];
-            let ch = |v: f64| v.round().clamp(0.0, 255.0) as u8;
-            obj.img
-                .put_pixel(x, y, Rgba([ch(acc[0]), ch(acc[1]), ch(acc[2]), a]));
         }
-    }
-    0
+        0
+    })
 }
 
 /// Applies the 3×3 convolution kernel previously pushed via the `fbuf` buffer to
@@ -266,10 +286,12 @@ pub extern "C" fn elephc_imagick_sharpen(wand_id: i64, radius_milli: i64, sigma_
 /// `ImagickKernel`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_convolve(wand_id: i64, div_fixed: i64, offset_fixed: i64) -> i64 {
-    match current_handle(wand_id) {
-        Some(handle) => elephc_img_convolution(handle, div_fixed, offset_fixed),
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        match current_handle(wand_id) {
+            Some(handle) => elephc_img_convolution(handle, div_fixed, offset_fixed),
+            None => -1,
+        }
+    })
 }
 
 /// Composites the current frame of `src_wand` onto the current frame of
@@ -284,42 +306,44 @@ pub extern "C" fn elephc_imagick_composite(
     x: i64,
     y: i64,
 ) -> i64 {
-    if op != COMPOSITE_OVER && op != COMPOSITE_COPY {
-        return -2;
-    }
-    let Some(dst_handle) = current_handle(dst_wand) else {
-        return -1;
-    };
-    let Some(src_handle) = current_handle(src_wand) else {
-        return -1;
-    };
-    // Clone the source frame so a self-composite (same handle) cannot alias.
-    let src_img: RgbaImage = {
-        let guard = images().lock().unwrap();
-        let Some(obj) = guard.get(&src_handle) else {
+    ffi_guard(-1, move || {
+        if op != COMPOSITE_OVER && op != COMPOSITE_COPY {
+            return -2;
+        }
+        let Some(dst_handle) = current_handle(dst_wand) else {
             return -1;
         };
-        obj.img.clone()
-    };
-    let blend = op == COMPOSITE_OVER;
-    let mut guard = images().lock().unwrap();
-    let Some(dst) = guard.get_mut(&dst_handle) else {
-        return -1;
-    };
-    for j in 0..src_img.height() {
-        for i in 0..src_img.width() {
-            let (tx, ty) = (x + i as i64, y + j as i64);
-            if tx < 0 || ty < 0 || tx as u32 >= dst.img.width() || ty as u32 >= dst.img.height() {
-                continue;
-            }
-            let src_pixel = *src_img.get_pixel(i, j);
-            let out = if blend {
-                blend_over(src_pixel, *dst.img.get_pixel(tx as u32, ty as u32))
-            } else {
-                src_pixel
+        let Some(src_handle) = current_handle(src_wand) else {
+            return -1;
+        };
+        // Clone the source frame so a self-composite (same handle) cannot alias.
+        let src_img: RgbaImage = {
+            let guard = images().lock().unwrap();
+            let Some(obj) = guard.get(&src_handle) else {
+                return -1;
             };
-            dst.img.put_pixel(tx as u32, ty as u32, out);
+            obj.img.clone()
+        };
+        let blend = op == COMPOSITE_OVER;
+        let mut guard = images().lock().unwrap();
+        let Some(dst) = guard.get_mut(&dst_handle) else {
+            return -1;
+        };
+        for j in 0..src_img.height() {
+            for i in 0..src_img.width() {
+                let (tx, ty) = (x + i as i64, y + j as i64);
+                if tx < 0 || ty < 0 || tx as u32 >= dst.img.width() || ty as u32 >= dst.img.height() {
+                    continue;
+                }
+                let src_pixel = *src_img.get_pixel(i, j);
+                let out = if blend {
+                    blend_over(src_pixel, *dst.img.get_pixel(tx as u32, ty as u32))
+                } else {
+                    src_pixel
+                };
+                dst.img.put_pixel(tx as u32, ty as u32, out);
+            }
         }
-    }
-    0
+        0
+    })
 }

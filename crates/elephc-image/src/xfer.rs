@@ -23,6 +23,8 @@
 
 use std::sync::{Mutex, OnceLock};
 
+use crate::ffi_guard;
+
 /// Input staging buffer: the prelude resizes it via `elephc_img_in_ptr`, copies a
 /// PHP string into it with `ptr_write_string`, then calls a parser/embedder that
 /// reads the first `len` bytes back through [`in_bytes`].
@@ -83,13 +85,15 @@ pub(crate) fn set_kv(list: Vec<(String, Vec<u8>)>) -> i64 {
 /// `string` inputs of `iptcparse` and `iptcembed`.
 #[no_mangle]
 pub extern "C" fn elephc_img_in_ptr(len: i64) -> *mut u8 {
-    if len <= 0 {
-        return std::ptr::null_mut();
-    }
-    let mut guard = in_cell().lock().unwrap();
-    guard.clear();
-    guard.resize(len as usize, 0);
-    guard.as_mut_ptr()
+    ffi_guard(std::ptr::null_mut(), move || {
+        if len <= 0 {
+            return std::ptr::null_mut();
+        }
+        let mut guard = in_cell().lock().unwrap();
+        guard.clear();
+        guard.resize(len as usize, 0);
+        guard.as_mut_ptr()
+    })
 }
 
 /// Returns a read pointer to the output buffer's bytes, valid until the next call
@@ -97,37 +101,45 @@ pub extern "C" fn elephc_img_in_ptr(len: i64) -> *mut u8 {
 /// returned a non-negative length.
 #[no_mangle]
 pub extern "C" fn elephc_img_out_ptr() -> *const u8 {
-    out_cell().lock().unwrap().as_ptr()
+    ffi_guard(std::ptr::null(), move || {
+        out_cell().lock().unwrap().as_ptr()
+    })
 }
 
 /// Returns the number of entries in the current parsed key/value result list.
 #[no_mangle]
 pub extern "C" fn elephc_img_kv_count() -> i64 {
-    kv_list().lock().unwrap().len() as i64
+    ffi_guard(-1, move || {
+        kv_list().lock().unwrap().len() as i64
+    })
 }
 
 /// Copies the key of result entry `index` into the output buffer and returns its
 /// byte length, or `-1` if the index is out of range.
 #[no_mangle]
 pub extern "C" fn elephc_img_kv_key(index: i64) -> i64 {
-    let guard = kv_list().lock().unwrap();
-    let Some((key, _)) = usize::try_from(index).ok().and_then(|i| guard.get(i)) else {
-        return -1;
-    };
-    let bytes = key.clone().into_bytes();
-    drop(guard);
-    set_out(bytes)
+    ffi_guard(-1, move || {
+        let guard = kv_list().lock().unwrap();
+        let Some((key, _)) = usize::try_from(index).ok().and_then(|i| guard.get(i)) else {
+            return -1;
+        };
+        let bytes = key.clone().into_bytes();
+        drop(guard);
+        set_out(bytes)
+    })
 }
 
 /// Copies the value of result entry `index` into the output buffer and returns its
 /// byte length, or `-1` if the index is out of range.
 #[no_mangle]
 pub extern "C" fn elephc_img_kv_val(index: i64) -> i64 {
-    let guard = kv_list().lock().unwrap();
-    let Some((_, val)) = usize::try_from(index).ok().and_then(|i| guard.get(i)) else {
-        return -1;
-    };
-    let bytes = val.clone();
-    drop(guard);
-    set_out(bytes)
+    ffi_guard(-1, move || {
+        let guard = kv_list().lock().unwrap();
+        let Some((_, val)) = usize::try_from(index).ok().and_then(|i| guard.get(i)) else {
+            return -1;
+        };
+        let bytes = val.clone();
+        drop(guard);
+        set_out(bytes)
+    })
 }

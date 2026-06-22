@@ -90,6 +90,26 @@ imagedestroy($im);
     assert_eq!(out, "640x480");
 }
 
+/// An oversized image request fails gracefully instead of aborting the process.
+///
+/// `imagecreatetruecolor(2e9, 2e9)` would compute a `width*height*4` byte count
+/// that overflows `usize`; the bridge previously called `RgbaImage::from_pixel`,
+/// which panics on the capacity overflow and (since the panic crosses the C ABI)
+/// aborts the program. The fix validates the size and returns a failed handle, so
+/// the program keeps running and subsequent queries report the failure (`-1`).
+#[test]
+fn test_oversized_image_create_does_not_abort() {
+    let out = compile_and_run(
+        r#"<?php
+$im = imagecreatetruecolor(2000000000, 2000000000);
+echo "created\n";
+echo imagesx($im) . "\n";
+echo "survived\n";
+"#,
+    );
+    assert_eq!(out, "created\n-1\nsurvived\n");
+}
+
 /// `getimagesize` returns `false` for a path that does not resolve to a readable
 /// image, matching PHP.
 #[test]

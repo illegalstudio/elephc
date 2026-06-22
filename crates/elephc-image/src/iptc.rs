@@ -22,8 +22,8 @@
 use std::os::raw::c_char;
 use std::sync::{Mutex, OnceLock};
 
-use crate::cstr_arg;
 use crate::xfer::{in_bytes, set_out};
+use crate::{cstr_arg, ffi_guard};
 
 /// Datasets from the last `iptcparse`, grouped by `record#dataset` key in
 /// first-seen order, each key holding its values in occurrence order. PHP's
@@ -40,70 +40,80 @@ fn iptc_groups() -> &'static Mutex<Vec<(String, Vec<Vec<u8>>)>> {
 /// `false`).
 #[no_mangle]
 pub extern "C" fn elephc_iptc_parse(len: i64) -> i64 {
-    let Some(data) = in_bytes(len) else {
-        return -1;
-    };
-    let Some(flat) = parse_iim(&data) else {
-        return -1;
-    };
-    // Group by key, preserving first-seen key order and per-key value order.
-    let mut groups: Vec<(String, Vec<Vec<u8>>)> = Vec::new();
-    for (key, value) in flat {
-        match groups.iter_mut().find(|(k, _)| *k == key) {
-            Some((_, values)) => values.push(value),
-            None => groups.push((key, vec![value])),
+    ffi_guard(-1, move || {
+        let Some(data) = in_bytes(len) else {
+            return -1;
+        };
+        let Some(flat) = parse_iim(&data) else {
+            return -1;
+        };
+        // Group by key, preserving first-seen key order and per-key value order.
+        let mut groups: Vec<(String, Vec<Vec<u8>>)> = Vec::new();
+        for (key, value) in flat {
+            match groups.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, values)) => values.push(value),
+                None => groups.push((key, vec![value])),
+            }
         }
-    }
-    let count = groups.len() as i64;
-    *iptc_groups().lock().unwrap() = groups;
-    count
+        let count = groups.len() as i64;
+        *iptc_groups().lock().unwrap() = groups;
+        count
+    })
 }
 
 /// Returns the number of distinct keys from the last `iptcparse`.
 #[no_mangle]
 pub extern "C" fn elephc_iptc_key_count() -> i64 {
-    iptc_groups().lock().unwrap().len() as i64
+    ffi_guard(-1, move || {
+        iptc_groups().lock().unwrap().len() as i64
+    })
 }
 
 /// Writes the key of group `index` to the shared output buffer and returns its
 /// byte length, or `-1` if the index is out of range.
 #[no_mangle]
 pub extern "C" fn elephc_iptc_key(index: i64) -> i64 {
-    let guard = iptc_groups().lock().unwrap();
-    let Some((key, _)) = usize::try_from(index).ok().and_then(|i| guard.get(i)) else {
-        return -1;
-    };
-    let bytes = key.clone().into_bytes();
-    drop(guard);
-    set_out(bytes)
+    ffi_guard(-1, move || {
+        let guard = iptc_groups().lock().unwrap();
+        let Some((key, _)) = usize::try_from(index).ok().and_then(|i| guard.get(i)) else {
+            return -1;
+        };
+        let bytes = key.clone().into_bytes();
+        drop(guard);
+        set_out(bytes)
+    })
 }
 
 /// Returns the number of values held under group `index`, or `-1` if the index is
 /// out of range.
 #[no_mangle]
 pub extern "C" fn elephc_iptc_val_count(index: i64) -> i64 {
-    let guard = iptc_groups().lock().unwrap();
-    match usize::try_from(index).ok().and_then(|i| guard.get(i)) {
-        Some((_, values)) => values.len() as i64,
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        let guard = iptc_groups().lock().unwrap();
+        match usize::try_from(index).ok().and_then(|i| guard.get(i)) {
+            Some((_, values)) => values.len() as i64,
+            None => -1,
+        }
+    })
 }
 
 /// Writes value `val_index` of group `key_index` to the shared output buffer and
 /// returns its byte length, or `-1` if either index is out of range.
 #[no_mangle]
 pub extern "C" fn elephc_iptc_val(key_index: i64, val_index: i64) -> i64 {
-    let guard = iptc_groups().lock().unwrap();
-    let value = usize::try_from(key_index)
-        .ok()
-        .and_then(|i| guard.get(i))
-        .and_then(|(_, values)| usize::try_from(val_index).ok().and_then(|j| values.get(j)));
-    let Some(value) = value else {
-        return -1;
-    };
-    let bytes = value.clone();
-    drop(guard);
-    set_out(bytes)
+    ffi_guard(-1, move || {
+        let guard = iptc_groups().lock().unwrap();
+        let value = usize::try_from(key_index)
+            .ok()
+            .and_then(|i| guard.get(i))
+            .and_then(|(_, values)| usize::try_from(val_index).ok().and_then(|j| values.get(j)));
+        let Some(value) = value else {
+            return -1;
+        };
+        let bytes = value.clone();
+        drop(guard);
+        set_out(bytes)
+    })
 }
 
 /// Walks an IPTC IIM block, returning each dataset as a `(record#dataset, value)`
@@ -156,22 +166,24 @@ fn parse_iim(data: &[u8]) -> Option<Vec<(String, Vec<u8>)>> {
 /// too large for a single APP13 segment.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_iptc_embed(path: *const c_char, in_len: i64) -> i64 {
-    let Some(iptc) = in_bytes(in_len) else {
-        return -1;
-    };
-    let Some(path) = cstr_arg(path) else {
-        return -1;
-    };
-    let Ok(jpeg) = std::fs::read(path) else {
-        return -1;
-    };
-    let Some(app13) = build_app13(&iptc) else {
-        return -1;
-    };
-    let Some(out) = embed_app13(&jpeg, &app13) else {
-        return -1;
-    };
-    set_out(out)
+    ffi_guard(-1, move || unsafe {
+        let Some(iptc) = in_bytes(in_len) else {
+            return -1;
+        };
+        let Some(path) = cstr_arg(path) else {
+            return -1;
+        };
+        let Ok(jpeg) = std::fs::read(path) else {
+            return -1;
+        };
+        let Some(app13) = build_app13(&iptc) else {
+            return -1;
+        };
+        let Some(out) = embed_app13(&jpeg, &app13) else {
+            return -1;
+        };
+        set_out(out)
+    })
 }
 
 /// Wraps an IPTC block in a Photoshop `8BIM` IPTC resource inside an APP13

@@ -27,7 +27,7 @@ use std::sync::{Mutex, OnceLock};
 
 use image::{Rgba, RgbaImage};
 
-use crate::{blend_over, images, unpack_color, unpack_pair};
+use crate::{ffi_guard, blend_over, images, unpack_color, unpack_pair};
 
 /// Static point buffer for the polygon builder, filled by `elephc_img_poly_add`
 /// and consumed by `elephc_img_poly_line` / `elephc_img_poly_fill`.
@@ -310,7 +310,7 @@ fn fill_polygon(img: &mut RgbaImage, blending: bool, pts: &[(i64, i64)], src: Rg
                 xs.push(x1 as f64 + t * (x2 - x1) as f64);
             }
         }
-        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        xs.sort_by(|a, b| a.total_cmp(b));
         let mut i = 0;
         while i + 1 < xs.len() {
             let xa = xs[i].ceil() as i64;
@@ -326,43 +326,51 @@ fn fill_polygon(img: &mut RgbaImage, blending: bool, pts: &[(i64, i64)], src: Rg
 /// Sets the current line thickness. Unknown handles are ignored.
 #[no_mangle]
 pub extern "C" fn elephc_img_set_thickness(handle: i64, thickness: i64) {
-    if let Some(obj) = images().lock().unwrap().get_mut(&handle) {
-        obj.thickness = thickness.max(1);
-    }
+    ffi_guard((), move || {
+        if let Some(obj) = images().lock().unwrap().get_mut(&handle) {
+            obj.thickness = thickness.max(1);
+        }
+    })
 }
 
 /// Draws a straight line between two points with the current thickness.
 #[no_mangle]
 pub extern "C" fn elephc_img_line(handle: i64, x1: i64, y1: i64, x2: i64, y2: i64, color: i64) {
-    let mut guard = images().lock().unwrap();
-    if let Some(obj) = guard.get_mut(&handle) {
-        let (b, t) = (obj.alpha_blending, obj.thickness);
-        draw_line(&mut obj.img, b, x1, y1, x2, y2, unpack_color(color), t, false);
-    }
+    ffi_guard((), move || {
+        let mut guard = images().lock().unwrap();
+        if let Some(obj) = guard.get_mut(&handle) {
+            let (b, t) = (obj.alpha_blending, obj.thickness);
+            draw_line(&mut obj.img, b, x1, y1, x2, y2, unpack_color(color), t, false);
+        }
+    })
 }
 
 /// Draws a dashed line between two points.
 #[no_mangle]
 pub extern "C" fn elephc_img_dashed_line(handle: i64, x1: i64, y1: i64, x2: i64, y2: i64, color: i64) {
-    let mut guard = images().lock().unwrap();
-    if let Some(obj) = guard.get_mut(&handle) {
-        let (b, t) = (obj.alpha_blending, obj.thickness);
-        draw_line(&mut obj.img, b, x1, y1, x2, y2, unpack_color(color), t, true);
-    }
+    ffi_guard((), move || {
+        let mut guard = images().lock().unwrap();
+        if let Some(obj) = guard.get_mut(&handle) {
+            let (b, t) = (obj.alpha_blending, obj.thickness);
+            draw_line(&mut obj.img, b, x1, y1, x2, y2, unpack_color(color), t, true);
+        }
+    })
 }
 
 /// Draws a rectangle outline through its two opposite corners.
 #[no_mangle]
 pub extern "C" fn elephc_img_rectangle(handle: i64, x1: i64, y1: i64, x2: i64, y2: i64, color: i64) {
-    let mut guard = images().lock().unwrap();
-    if let Some(obj) = guard.get_mut(&handle) {
-        let (b, t) = (obj.alpha_blending, obj.thickness);
-        let src = unpack_color(color);
-        draw_line(&mut obj.img, b, x1, y1, x2, y1, src, t, false);
-        draw_line(&mut obj.img, b, x2, y1, x2, y2, src, t, false);
-        draw_line(&mut obj.img, b, x2, y2, x1, y2, src, t, false);
-        draw_line(&mut obj.img, b, x1, y2, x1, y1, src, t, false);
-    }
+    ffi_guard((), move || {
+        let mut guard = images().lock().unwrap();
+        if let Some(obj) = guard.get_mut(&handle) {
+            let (b, t) = (obj.alpha_blending, obj.thickness);
+            let src = unpack_color(color);
+            draw_line(&mut obj.img, b, x1, y1, x2, y1, src, t, false);
+            draw_line(&mut obj.img, b, x2, y1, x2, y2, src, t, false);
+            draw_line(&mut obj.img, b, x2, y2, x1, y2, src, t, false);
+            draw_line(&mut obj.img, b, x1, y2, x1, y1, src, t, false);
+        }
+    })
 }
 
 /// Draws a filled rectangle through its two opposite corners.
@@ -375,21 +383,25 @@ pub extern "C" fn elephc_img_filled_rectangle(
     y2: i64,
     color: i64,
 ) {
-    let mut guard = images().lock().unwrap();
-    if let Some(obj) = guard.get_mut(&handle) {
-        let b = obj.alpha_blending;
-        fill_rect(&mut obj.img, b, x1, y1, x2, y2, unpack_color(color));
-    }
+    ffi_guard((), move || {
+        let mut guard = images().lock().unwrap();
+        if let Some(obj) = guard.get_mut(&handle) {
+            let b = obj.alpha_blending;
+            fill_rect(&mut obj.img, b, x1, y1, x2, y2, unpack_color(color));
+        }
+    })
 }
 
 /// Draws an ellipse outline centered at `(cx, cy)` with the given width/height.
 #[no_mangle]
 pub extern "C" fn elephc_img_ellipse(handle: i64, cx: i64, cy: i64, w: i64, h: i64, color: i64) {
-    let mut guard = images().lock().unwrap();
-    if let Some(obj) = guard.get_mut(&handle) {
-        let (b, t) = (obj.alpha_blending, obj.thickness);
-        ellipse_outline(&mut obj.img, b, cx, cy, w, h, unpack_color(color), t);
-    }
+    ffi_guard((), move || {
+        let mut guard = images().lock().unwrap();
+        if let Some(obj) = guard.get_mut(&handle) {
+            let (b, t) = (obj.alpha_blending, obj.thickness);
+            ellipse_outline(&mut obj.img, b, cx, cy, w, h, unpack_color(color), t);
+        }
+    })
 }
 
 /// Draws a filled ellipse centered at `(cx, cy)` with the given width/height.
@@ -402,24 +414,28 @@ pub extern "C" fn elephc_img_filled_ellipse(
     h: i64,
     color: i64,
 ) {
-    let mut guard = images().lock().unwrap();
-    if let Some(obj) = guard.get_mut(&handle) {
-        let b = obj.alpha_blending;
-        fill_ellipse(&mut obj.img, b, cx, cy, w, h, unpack_color(color));
-    }
+    ffi_guard((), move || {
+        let mut guard = images().lock().unwrap();
+        if let Some(obj) = guard.get_mut(&handle) {
+            let b = obj.alpha_blending;
+            fill_ellipse(&mut obj.img, b, cx, cy, w, h, unpack_color(color));
+        }
+    })
 }
 
 /// Draws an arc outline (degrees, GD's clockwise-from-3-o'clock convention).
 /// `cxy` packs `(cx, cy)` and `wh` packs `(w, h)` — see [`unpack_pair`].
 #[no_mangle]
 pub extern "C" fn elephc_img_arc(handle: i64, cxy: i64, wh: i64, start: i64, end: i64, color: i64) {
-    let (cx, cy) = unpack_pair(cxy);
-    let (w, h) = unpack_pair(wh);
-    let mut guard = images().lock().unwrap();
-    if let Some(obj) = guard.get_mut(&handle) {
-        let (b, t) = (obj.alpha_blending, obj.thickness);
-        arc_outline(&mut obj.img, b, cx, cy, w, h, start as f64, end as f64, unpack_color(color), t);
-    }
+    ffi_guard((), move || {
+        let (cx, cy) = unpack_pair(cxy);
+        let (w, h) = unpack_pair(wh);
+        let mut guard = images().lock().unwrap();
+        if let Some(obj) = guard.get_mut(&handle) {
+            let (b, t) = (obj.alpha_blending, obj.thickness);
+            arc_outline(&mut obj.img, b, cx, cy, w, h, start as f64, end as f64, unpack_color(color), t);
+        }
+    })
 }
 
 /// Fills the pie slice of an arc from `start` to `end` degrees. The GD `$style`
@@ -435,74 +451,88 @@ pub extern "C" fn elephc_img_filled_arc(
     end: i64,
     color: i64,
 ) {
-    let (cx, cy) = unpack_pair(cxy);
-    let (w, h) = unpack_pair(wh);
-    let mut guard = images().lock().unwrap();
-    if let Some(obj) = guard.get_mut(&handle) {
-        let b = obj.alpha_blending;
-        fill_pie(&mut obj.img, b, cx, cy, w, h, start as f64, end as f64, unpack_color(color));
-    }
+    ffi_guard((), move || {
+        let (cx, cy) = unpack_pair(cxy);
+        let (w, h) = unpack_pair(wh);
+        let mut guard = images().lock().unwrap();
+        if let Some(obj) = guard.get_mut(&handle) {
+            let b = obj.alpha_blending;
+            fill_pie(&mut obj.img, b, cx, cy, w, h, start as f64, end as f64, unpack_color(color));
+        }
+    })
 }
 
 /// Flood-fills from `(x, y)` with the given color (`imagefill`).
 #[no_mangle]
 pub extern "C" fn elephc_img_fill(handle: i64, x: i64, y: i64, color: i64) {
-    let mut guard = images().lock().unwrap();
-    if let Some(obj) = guard.get_mut(&handle) {
-        flood_fill(&mut obj.img, x, y, unpack_color(color));
-    }
+    ffi_guard((), move || {
+        let mut guard = images().lock().unwrap();
+        if let Some(obj) = guard.get_mut(&handle) {
+            flood_fill(&mut obj.img, x, y, unpack_color(color));
+        }
+    })
 }
 
 /// Flood-fills from `(x, y)` up to the `border` color (`imagefilltoborder`).
 #[no_mangle]
 pub extern "C" fn elephc_img_fill_to_border(handle: i64, x: i64, y: i64, border: i64, color: i64) {
-    let mut guard = images().lock().unwrap();
-    if let Some(obj) = guard.get_mut(&handle) {
-        fill_to_border(&mut obj.img, x, y, unpack_color(border), unpack_color(color));
-    }
+    ffi_guard((), move || {
+        let mut guard = images().lock().unwrap();
+        if let Some(obj) = guard.get_mut(&handle) {
+            fill_to_border(&mut obj.img, x, y, unpack_color(border), unpack_color(color));
+        }
+    })
 }
 
 /// Clears the polygon point buffer before a new polygon is described.
 #[no_mangle]
 pub extern "C" fn elephc_img_poly_reset() {
-    poly_cell().lock().unwrap().clear();
+    ffi_guard((), move || {
+        poly_cell().lock().unwrap().clear();
+    })
 }
 
 /// Appends a point to the polygon buffer.
 #[no_mangle]
 pub extern "C" fn elephc_img_poly_add(x: i64, y: i64) {
-    poly_cell().lock().unwrap().push((x, y));
+    ffi_guard((), move || {
+        poly_cell().lock().unwrap().push((x, y));
+    })
 }
 
 /// Draws the buffered polygon's outline; `closed` (1) connects the last point
 /// back to the first (`imagepolygon`), `0` leaves it open (`imageopenpolygon`).
 #[no_mangle]
 pub extern "C" fn elephc_img_poly_line(handle: i64, color: i64, closed: i64) {
-    let pts = poly_cell().lock().unwrap().clone();
-    if pts.len() < 2 {
-        return;
-    }
-    let mut guard = images().lock().unwrap();
-    if let Some(obj) = guard.get_mut(&handle) {
-        let (b, t) = (obj.alpha_blending, obj.thickness);
-        let src = unpack_color(color);
-        for i in 0..pts.len() - 1 {
-            draw_line(&mut obj.img, b, pts[i].0, pts[i].1, pts[i + 1].0, pts[i + 1].1, src, t, false);
+    ffi_guard((), move || {
+        let pts = poly_cell().lock().unwrap().clone();
+        if pts.len() < 2 {
+            return;
         }
-        if closed != 0 {
-            let last = pts.len() - 1;
-            draw_line(&mut obj.img, b, pts[last].0, pts[last].1, pts[0].0, pts[0].1, src, t, false);
+        let mut guard = images().lock().unwrap();
+        if let Some(obj) = guard.get_mut(&handle) {
+            let (b, t) = (obj.alpha_blending, obj.thickness);
+            let src = unpack_color(color);
+            for i in 0..pts.len() - 1 {
+                draw_line(&mut obj.img, b, pts[i].0, pts[i].1, pts[i + 1].0, pts[i + 1].1, src, t, false);
+            }
+            if closed != 0 {
+                let last = pts.len() - 1;
+                draw_line(&mut obj.img, b, pts[last].0, pts[last].1, pts[0].0, pts[0].1, src, t, false);
+            }
         }
-    }
+    })
 }
 
 /// Fills the buffered polygon (`imagefilledpolygon`).
 #[no_mangle]
 pub extern "C" fn elephc_img_poly_fill(handle: i64, color: i64) {
-    let pts = poly_cell().lock().unwrap().clone();
-    let mut guard = images().lock().unwrap();
-    if let Some(obj) = guard.get_mut(&handle) {
-        let b = obj.alpha_blending;
-        fill_polygon(&mut obj.img, b, &pts, unpack_color(color));
-    }
+    ffi_guard((), move || {
+        let pts = poly_cell().lock().unwrap().clone();
+        let mut guard = images().lock().unwrap();
+        if let Some(obj) = guard.get_mut(&handle) {
+            let b = obj.alpha_blending;
+            fill_polygon(&mut obj.img, b, &pts, unpack_color(color));
+        }
+    })
 }

@@ -39,8 +39,9 @@ use crate::codec::{
 };
 use crate::gd::{elephc_img_color_at, elephc_img_destroy, elephc_img_sx, elephc_img_sy};
 use crate::{
-    cstr_arg, images, insert_image, unpack_color, ImageObj, FMT_BMP, FMT_GIF, FMT_JPEG, FMT_PNG,
-    FMT_WEBP,
+    ffi_guard,
+    cstr_arg, images, insert_image, try_new_rgba, unpack_color, ImageObj, FMT_BMP, FMT_GIF,
+    FMT_JPEG, FMT_PNG, FMT_WEBP,
 };
 
 /// A live Imagick wand: an ordered list of frame handles (each a GD image in the
@@ -139,17 +140,19 @@ fn append_frame(wand_id: i64, handle: i64, fmt: i64) -> i64 {
 /// Creates a new empty wand and returns its handle.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_new() -> i64 {
-    let id = next_wand_id();
-    wands().lock().unwrap().insert(
-        id,
-        Wand {
-            frames: Vec::new(),
-            current: 0,
-            format: FMT_PNG,
-            quality: -1,
-        },
-    );
-    id
+    ffi_guard(-1, move || {
+        let id = next_wand_id();
+        wands().lock().unwrap().insert(
+            id,
+            Wand {
+                frames: Vec::new(),
+                current: 0,
+                format: FMT_PNG,
+                quality: -1,
+            },
+        );
+        id
+    })
 }
 
 /// Destroys a wand, freeing every frame it owns and removing it from the table.
@@ -157,37 +160,43 @@ pub extern "C" fn elephc_imagick_new() -> i64 {
 /// and the `__destruct` path.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_destroy(wand_id: i64) {
-    let frames = wands().lock().unwrap().remove(&wand_id).map(|w| w.frames);
-    if let Some(frames) = frames {
-        for handle in frames {
-            elephc_img_destroy(handle);
+    ffi_guard((), move || {
+        let frames = wands().lock().unwrap().remove(&wand_id).map(|w| w.frames);
+        if let Some(frames) = frames {
+            for handle in frames {
+                elephc_img_destroy(handle);
+            }
         }
-    }
+    })
 }
 
 /// Frees every frame of a wand but keeps the (now empty) wand alive. Backs
 /// `Imagick::clear`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_clear(wand_id: i64) {
-    let mut guard = wands().lock().unwrap();
-    if let Some(wand) = guard.get_mut(&wand_id) {
-        let frames = std::mem::take(&mut wand.frames);
-        wand.current = 0;
-        drop(guard);
-        for handle in frames {
-            elephc_img_destroy(handle);
+    ffi_guard((), move || {
+        let mut guard = wands().lock().unwrap();
+        if let Some(wand) = guard.get_mut(&wand_id) {
+            let frames = std::mem::take(&mut wand.frames);
+            wand.current = 0;
+            drop(guard);
+            for handle in frames {
+                elephc_img_destroy(handle);
+            }
         }
-    }
+    })
 }
 
 /// Returns the number of frames in a wand, or `-1` for an unknown wand. Backs
 /// `Imagick::getNumberImages` and the `Countable` `count()`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_count(wand_id: i64) -> i64 {
-    match wands().lock().unwrap().get(&wand_id) {
-        Some(wand) => wand.frames.len() as i64,
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        match wands().lock().unwrap().get(&wand_id) {
+            Some(wand) => wand.frames.len() as i64,
+            None => -1,
+        }
+    })
 }
 
 /// Reads an image file (auto-detecting the format) and appends it as a new frame,
@@ -196,21 +205,23 @@ pub extern "C" fn elephc_imagick_count(wand_id: i64) -> i64 {
 /// `Imagick::readImage` / the path constructor.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_imagick_read_file(wand_id: i64, path: *const c_char) -> i64 {
-    if cstr_arg(path).is_none() {
-        return -1;
-    }
-    // Probe first so the detected IMAGETYPE is available for the format record,
-    // then decode the pixels (auto-detect via expected_fmt = 0).
-    let fmt = if elephc_img_probe_file(path) == 0 {
-        imagetype_to_fmt(elephc_img_probe_type())
-    } else {
-        FMT_PNG
-    };
-    let handle = elephc_img_create_from_file(path, 0);
-    if handle < 0 {
-        return -1;
-    }
-    append_frame(wand_id, handle, fmt)
+    ffi_guard(-1, move || unsafe {
+        if cstr_arg(path).is_none() {
+            return -1;
+        }
+        // Probe first so the detected IMAGETYPE is available for the format record,
+        // then decode the pixels (auto-detect via expected_fmt = 0).
+        let fmt = if elephc_img_probe_file(path) == 0 {
+            imagetype_to_fmt(elephc_img_probe_type())
+        } else {
+            FMT_PNG
+        };
+        let handle = elephc_img_create_from_file(path, 0);
+        if handle < 0 {
+            return -1;
+        }
+        append_frame(wand_id, handle, fmt)
+    })
 }
 
 /// Decodes the first `len` bytes of the shared staging buffer (filled by the
@@ -219,15 +230,17 @@ pub unsafe extern "C" fn elephc_imagick_read_file(wand_id: i64, path: *const c_c
 /// or undecodable bytes. Backs `Imagick::readImageBlob`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_read_blob(wand_id: i64, len: i64) -> i64 {
-    if len <= 0 {
-        return -1;
-    }
-    let fmt = imagetype_to_fmt(stage_guess_imagetype(len as usize));
-    let handle = elephc_img_create_from_stage(len);
-    if handle < 0 {
-        return -1;
-    }
-    append_frame(wand_id, handle, fmt)
+    ffi_guard(-1, move || {
+        if len <= 0 {
+            return -1;
+        }
+        let fmt = imagetype_to_fmt(stage_guess_imagetype(len as usize));
+        let handle = elephc_img_create_from_stage(len);
+        if handle < 0 {
+            return -1;
+        }
+        append_frame(wand_id, handle, fmt)
+    })
 }
 
 /// Creates a blank `width`×`height` frame filled with the GD packed `bg` color,
@@ -241,13 +254,14 @@ pub extern "C" fn elephc_imagick_new_image(
     bg: i64,
     fmt: i64,
 ) -> i64 {
-    if width <= 0 || height <= 0 {
-        return -1;
-    }
-    let fill = unpack_color(bg);
-    let img = image::RgbaImage::from_pixel(width as u32, height as u32, fill);
-    let handle = insert_image(ImageObj::new(img, true));
-    append_frame(wand_id, handle, if fmt > 0 { fmt } else { FMT_PNG })
+    ffi_guard(-1, move || {
+        let fill = unpack_color(bg);
+        let Some(img) = try_new_rgba(width, height, fill) else {
+            return -1;
+        };
+        let handle = insert_image(ImageObj::new(img, true));
+        append_frame(wand_id, handle, if fmt > 0 { fmt } else { FMT_PNG })
+    })
 }
 
 /// Clones the current frame of `src_wand` and appends it to `dst_wand`, carrying
@@ -255,84 +269,98 @@ pub extern "C" fn elephc_imagick_new_image(
 /// source frame is missing. Backs `Imagick::addImage`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_add_image(dst_wand: i64, src_wand: i64) -> i64 {
-    let Some(src_handle) = current_handle(src_wand) else {
-        return -1;
-    };
-    let src_fmt = wands()
-        .lock()
-        .unwrap()
-        .get(&src_wand)
-        .map(|w| w.format)
-        .unwrap_or(FMT_PNG);
-    let cloned = {
-        let guard = images().lock().unwrap();
-        let Some(obj) = guard.get(&src_handle) else {
+    ffi_guard(-1, move || {
+        let Some(src_handle) = current_handle(src_wand) else {
             return -1;
         };
-        let img = obj.img.clone();
-        let truecolor = obj.truecolor;
-        drop(guard);
-        insert_image(ImageObj::new(img, truecolor))
-    };
-    append_frame(dst_wand, cloned, src_fmt)
+        let src_fmt = wands()
+            .lock()
+            .unwrap()
+            .get(&src_wand)
+            .map(|w| w.format)
+            .unwrap_or(FMT_PNG);
+        let cloned = {
+            let guard = images().lock().unwrap();
+            let Some(obj) = guard.get(&src_handle) else {
+                return -1;
+            };
+            let img = obj.img.clone();
+            let truecolor = obj.truecolor;
+            drop(guard);
+            insert_image(ImageObj::new(img, truecolor))
+        };
+        append_frame(dst_wand, cloned, src_fmt)
+    })
 }
 
 /// Returns the active frame's width in pixels, or `-1`. Backs
 /// `Imagick::getImageWidth`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_cur_width(wand_id: i64) -> i64 {
-    match current_handle(wand_id) {
-        Some(handle) => elephc_img_sx(handle),
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        match current_handle(wand_id) {
+            Some(handle) => elephc_img_sx(handle),
+            None => -1,
+        }
+    })
 }
 
 /// Returns the active frame's height in pixels, or `-1`. Backs
 /// `Imagick::getImageHeight`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_cur_height(wand_id: i64) -> i64 {
-    match current_handle(wand_id) {
-        Some(handle) => elephc_img_sy(handle),
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        match current_handle(wand_id) {
+            Some(handle) => elephc_img_sy(handle),
+            None => -1,
+        }
+    })
 }
 
 /// Sets the wand's `FMT_*` format code. Unknown wands are ignored. Backs
 /// `Imagick::setImageFormat` (the PHP layer maps the format string to `FMT_*`).
 #[no_mangle]
 pub extern "C" fn elephc_imagick_set_format(wand_id: i64, fmt: i64) {
-    if let Some(wand) = wands().lock().unwrap().get_mut(&wand_id) {
-        wand.format = fmt;
-    }
+    ffi_guard((), move || {
+        if let Some(wand) = wands().lock().unwrap().get_mut(&wand_id) {
+            wand.format = fmt;
+        }
+    })
 }
 
 /// Returns the wand's `FMT_*` format code, or `-1` for an unknown wand. Backs
 /// `Imagick::getImageFormat`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_get_format(wand_id: i64) -> i64 {
-    match wands().lock().unwrap().get(&wand_id) {
-        Some(wand) => wand.format,
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        match wands().lock().unwrap().get(&wand_id) {
+            Some(wand) => wand.format,
+            None => -1,
+        }
+    })
 }
 
 /// Sets the wand's compression quality (0-100, or `-1` for default). Unknown
 /// wands ignored. Backs `Imagick::setImageCompressionQuality`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_set_quality(wand_id: i64, quality: i64) {
-    if let Some(wand) = wands().lock().unwrap().get_mut(&wand_id) {
-        wand.quality = quality;
-    }
+    ffi_guard((), move || {
+        if let Some(wand) = wands().lock().unwrap().get_mut(&wand_id) {
+            wand.quality = quality;
+        }
+    })
 }
 
 /// Returns the wand's compression quality, or `-1` for an unknown wand (also the
 /// "default" sentinel). Backs `Imagick::getImageCompressionQuality`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_get_quality(wand_id: i64) -> i64 {
-    match wands().lock().unwrap().get(&wand_id) {
-        Some(wand) => wand.quality,
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        match wands().lock().unwrap().get(&wand_id) {
+            Some(wand) => wand.quality,
+            None => -1,
+        }
+    })
 }
 
 /// Encodes the active frame to `path`. `fmt_override > 0` forces a format,
@@ -345,18 +373,20 @@ pub unsafe extern "C" fn elephc_imagick_write_file(
     path: *const c_char,
     fmt_override: i64,
 ) -> i64 {
-    let Some(handle) = current_handle(wand_id) else {
-        return -1;
-    };
-    let (fmt, quality) = {
-        let guard = wands().lock().unwrap();
-        let Some(wand) = guard.get(&wand_id) else {
+    ffi_guard(-1, move || unsafe {
+        let Some(handle) = current_handle(wand_id) else {
             return -1;
         };
-        let fmt = if fmt_override > 0 { fmt_override } else { wand.format };
-        (fmt, wand.quality)
-    };
-    elephc_img_write_file(handle, fmt, path, quality)
+        let (fmt, quality) = {
+            let guard = wands().lock().unwrap();
+            let Some(wand) = guard.get(&wand_id) else {
+                return -1;
+            };
+            let fmt = if fmt_override > 0 { fmt_override } else { wand.format };
+            (fmt, wand.quality)
+        };
+        elephc_img_write_file(handle, fmt, path, quality)
+    })
 }
 
 /// Encodes the active frame into the shared encode cell (read out by the prelude
@@ -365,31 +395,35 @@ pub unsafe extern "C" fn elephc_imagick_write_file(
 /// `Imagick::getImageBlob`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_get_blob(wand_id: i64, fmt_override: i64) -> i64 {
-    let Some(handle) = current_handle(wand_id) else {
-        return -1;
-    };
-    let (fmt, quality) = {
-        let guard = wands().lock().unwrap();
-        let Some(wand) = guard.get(&wand_id) else {
+    ffi_guard(-1, move || {
+        let Some(handle) = current_handle(wand_id) else {
             return -1;
         };
-        let fmt = if fmt_override > 0 { fmt_override } else { wand.format };
-        (fmt, wand.quality)
-    };
-    if elephc_img_encode(handle, fmt, quality) != 0 {
-        return -1;
-    }
-    elephc_img_encoded_len()
+        let (fmt, quality) = {
+            let guard = wands().lock().unwrap();
+            let Some(wand) = guard.get(&wand_id) else {
+                return -1;
+            };
+            let fmt = if fmt_override > 0 { fmt_override } else { wand.format };
+            (fmt, wand.quality)
+        };
+        if elephc_img_encode(handle, fmt, quality) != 0 {
+            return -1;
+        }
+        elephc_img_encoded_len()
+    })
 }
 
 /// Returns the current iterator index, or `-1` for an unknown wand. Backs
 /// `Imagick::getIteratorIndex` / `getImageIndex`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_get_index(wand_id: i64) -> i64 {
-    match wands().lock().unwrap().get(&wand_id) {
-        Some(wand) => wand.current as i64,
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        match wands().lock().unwrap().get(&wand_id) {
+            Some(wand) => wand.current as i64,
+            None => -1,
+        }
+    })
 }
 
 /// Sets the current iterator index. Returns `0` on success and `-1` for an
@@ -397,15 +431,17 @@ pub extern "C" fn elephc_imagick_get_index(wand_id: i64) -> i64 {
 /// `setImageIndex`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_set_index(wand_id: i64, index: i64) -> i64 {
-    let mut guard = wands().lock().unwrap();
-    let Some(wand) = guard.get_mut(&wand_id) else {
-        return -1;
-    };
-    if index < 0 || index as usize >= wand.frames.len() {
-        return -1;
-    }
-    wand.current = index as usize;
-    0
+    ffi_guard(-1, move || {
+        let mut guard = wands().lock().unwrap();
+        let Some(wand) = guard.get_mut(&wand_id) else {
+            return -1;
+        };
+        if index < 0 || index as usize >= wand.frames.len() {
+            return -1;
+        }
+        wand.current = index as usize;
+        0
+    })
 }
 
 /// Advances the iterator to the next frame. Returns `1` if it moved (there was a
@@ -413,16 +449,18 @@ pub extern "C" fn elephc_imagick_set_index(wand_id: i64, index: i64) -> i64 {
 /// Backs `Imagick::nextImage`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_next(wand_id: i64) -> i64 {
-    let mut guard = wands().lock().unwrap();
-    let Some(wand) = guard.get_mut(&wand_id) else {
-        return -1;
-    };
-    if wand.current + 1 < wand.frames.len() {
-        wand.current += 1;
-        1
-    } else {
-        0
-    }
+    ffi_guard(-1, move || {
+        let mut guard = wands().lock().unwrap();
+        let Some(wand) = guard.get_mut(&wand_id) else {
+            return -1;
+        };
+        if wand.current + 1 < wand.frames.len() {
+            wand.current += 1;
+            1
+        } else {
+            0
+        }
+    })
 }
 
 /// Moves the iterator to the previous frame. Returns `1` if it moved, `0` if
@@ -430,36 +468,42 @@ pub extern "C" fn elephc_imagick_next(wand_id: i64) -> i64 {
 /// `Imagick::previousImage`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_previous(wand_id: i64) -> i64 {
-    let mut guard = wands().lock().unwrap();
-    let Some(wand) = guard.get_mut(&wand_id) else {
-        return -1;
-    };
-    if wand.current > 0 {
-        wand.current -= 1;
-        1
-    } else {
-        0
-    }
+    ffi_guard(-1, move || {
+        let mut guard = wands().lock().unwrap();
+        let Some(wand) = guard.get_mut(&wand_id) else {
+            return -1;
+        };
+        if wand.current > 0 {
+            wand.current -= 1;
+            1
+        } else {
+            0
+        }
+    })
 }
 
 /// Resets the iterator to the first frame. Unknown wands ignored. Backs
 /// `Imagick::setFirstIterator`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_first(wand_id: i64) {
-    if let Some(wand) = wands().lock().unwrap().get_mut(&wand_id) {
-        wand.current = 0;
-    }
+    ffi_guard((), move || {
+        if let Some(wand) = wands().lock().unwrap().get_mut(&wand_id) {
+            wand.current = 0;
+        }
+    })
 }
 
 /// Moves the iterator to the last frame. Unknown wands ignored. Backs
 /// `Imagick::setLastIterator`.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_last(wand_id: i64) {
-    if let Some(wand) = wands().lock().unwrap().get_mut(&wand_id) {
-        if !wand.frames.is_empty() {
-            wand.current = wand.frames.len() - 1;
+    ffi_guard((), move || {
+        if let Some(wand) = wands().lock().unwrap().get_mut(&wand_id) {
+            if !wand.frames.is_empty() {
+                wand.current = wand.frames.len() - 1;
+            }
         }
-    }
+    })
 }
 
 /// Returns the GD packed color of a pixel in the active frame, or `-1` for an
@@ -467,10 +511,12 @@ pub extern "C" fn elephc_imagick_last(wand_id: i64) {
 /// (the PHP layer wraps the result in an `ImagickPixel`).
 #[no_mangle]
 pub extern "C" fn elephc_imagick_pixel_color(wand_id: i64, x: i64, y: i64) -> i64 {
-    match current_handle(wand_id) {
-        Some(handle) => elephc_img_color_at(handle, x, y),
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        match current_handle(wand_id) {
+            Some(handle) => elephc_img_color_at(handle, x, y),
+            None => -1,
+        }
+    })
 }
 
 /// Fills the active frame entirely with the GD packed `color`. Returns `0` on
@@ -478,16 +524,18 @@ pub extern "C" fn elephc_imagick_pixel_color(wand_id: i64, x: i64, y: i64) -> i6
 /// `Imagick::setImageBackgroundColor` applied to an existing image.
 #[no_mangle]
 pub extern "C" fn elephc_imagick_fill(wand_id: i64, color: i64) -> i64 {
-    let Some(handle) = current_handle(wand_id) else {
-        return -1;
-    };
-    let fill = unpack_color(color);
-    let mut guard = images().lock().unwrap();
-    let Some(obj) = guard.get_mut(&handle) else {
-        return -1;
-    };
-    for pixel in obj.img.pixels_mut() {
-        *pixel = Rgba(fill.0);
-    }
-    0
+    ffi_guard(-1, move || {
+        let Some(handle) = current_handle(wand_id) else {
+            return -1;
+        };
+        let fill = unpack_color(color);
+        let mut guard = images().lock().unwrap();
+        let Some(obj) = guard.get_mut(&handle) else {
+            return -1;
+        };
+        for pixel in obj.img.pixels_mut() {
+            *pixel = Rgba(fill.0);
+        }
+        0
+    })
 }

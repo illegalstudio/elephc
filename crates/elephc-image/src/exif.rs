@@ -28,7 +28,7 @@ use exif::{In, Value};
 
 use crate::exif_tags::php_tag_name;
 use crate::xfer::{set_kv, set_out};
-use crate::{cstr_arg, format_to_imagetype};
+use crate::{ffi_guard, cstr_arg, format_to_imagetype};
 
 /// Dimensions and IMAGETYPE code of the most recently extracted thumbnail.
 #[derive(Clone, Copy, Default)]
@@ -107,23 +107,25 @@ fn read_file(path: &str) -> Option<Vec<u8>> {
 /// rendering of the field.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_exif_read(path: *const c_char) -> i64 {
-    let Some(path) = cstr_arg(path) else {
-        return -1;
-    };
-    let Some(bytes) = read_file(path) else {
-        return -1;
-    };
-    let reader = exif::Reader::new();
-    let Ok(exif) = reader.read_from_container(&mut Cursor::new(&bytes)) else {
-        return -1;
-    };
-    let mut list: Vec<(String, Vec<u8>)> = Vec::new();
-    for field in exif.fields() {
-        let key = php_tag_name(field.tag.context(), field.tag.number());
-        let val = render_value(&field.value).into_bytes();
-        list.push((key, val));
-    }
-    set_kv(list)
+    ffi_guard(-1, move || unsafe {
+        let Some(path) = cstr_arg(path) else {
+            return -1;
+        };
+        let Some(bytes) = read_file(path) else {
+            return -1;
+        };
+        let reader = exif::Reader::new();
+        let Ok(exif) = reader.read_from_container(&mut Cursor::new(&bytes)) else {
+            return -1;
+        };
+        let mut list: Vec<(String, Vec<u8>)> = Vec::new();
+        for field in exif.fields() {
+            let key = php_tag_name(field.tag.context(), field.tag.number());
+            let val = render_value(&field.value).into_bytes();
+            list.push((key, val));
+        }
+        set_kv(list)
+    })
 }
 
 /// Looks up the `exif_tagname` mnemonic for a tag number, writing it to the shared
@@ -131,13 +133,15 @@ pub unsafe extern "C" fn elephc_exif_read(path: *const c_char) -> i64 {
 /// `exif_tagname` returns `false`).
 #[no_mangle]
 pub extern "C" fn elephc_exif_tagname(number: i64) -> i64 {
-    let Ok(number) = u16::try_from(number) else {
-        return -1;
-    };
-    match crate::exif_tags::tagname_default(number) {
-        Some(name) => set_out(name.as_bytes().to_vec()),
-        None => -1,
-    }
+    ffi_guard(-1, move || {
+        let Ok(number) = u16::try_from(number) else {
+            return -1;
+        };
+        match crate::exif_tags::tagname_default(number) {
+            Some(name) => set_out(name.as_bytes().to_vec()),
+            None => -1,
+        }
+    })
 }
 
 /// Extracts the embedded EXIF thumbnail from `path` into the shared output buffer,
@@ -146,17 +150,19 @@ pub extern "C" fn elephc_exif_tagname(number: i64) -> i64 {
 /// thumbnails are supported; uncompressed-TIFF thumbnails are a documented gap.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_exif_thumbnail(path: *const c_char) -> i64 {
-    let Some(path) = cstr_arg(path) else {
-        return -1;
-    };
-    let Some(bytes) = read_file(path) else {
-        return -1;
-    };
-    let Some((thumb, meta)) = extract_thumbnail(&bytes) else {
-        return -1;
-    };
-    *thumb_meta().lock().unwrap() = meta;
-    set_out(thumb)
+    ffi_guard(-1, move || unsafe {
+        let Some(path) = cstr_arg(path) else {
+            return -1;
+        };
+        let Some(bytes) = read_file(path) else {
+            return -1;
+        };
+        let Some((thumb, meta)) = extract_thumbnail(&bytes) else {
+            return -1;
+        };
+        *thumb_meta().lock().unwrap() = meta;
+        set_out(thumb)
+    })
 }
 
 /// Parses EXIF, locates IFD1's JPEG thumbnail offset/length, rebases the offset
@@ -221,17 +227,23 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// Returns the width of the most recently extracted thumbnail.
 #[no_mangle]
 pub extern "C" fn elephc_exif_thumb_width() -> i64 {
-    thumb_meta().lock().unwrap().width
+    ffi_guard(-1, move || {
+        thumb_meta().lock().unwrap().width
+    })
 }
 
 /// Returns the height of the most recently extracted thumbnail.
 #[no_mangle]
 pub extern "C" fn elephc_exif_thumb_height() -> i64 {
-    thumb_meta().lock().unwrap().height
+    ffi_guard(-1, move || {
+        thumb_meta().lock().unwrap().height
+    })
 }
 
 /// Returns the IMAGETYPE code of the most recently extracted thumbnail.
 #[no_mangle]
 pub extern "C" fn elephc_exif_thumb_type() -> i64 {
-    thumb_meta().lock().unwrap().image_type
+    ffi_guard(-1, move || {
+        thumb_meta().lock().unwrap().image_type
+    })
 }
