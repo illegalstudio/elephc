@@ -383,6 +383,9 @@ impl FakeOps {
             (FakeValue::Object(properties), "gettype" | "getsettabletype") if args.is_empty() => {
                 Self::object_property(&properties, "__type").map_or_else(|| self.null(), Ok)
             }
+            (FakeValue::Object(properties), "getclass") if args.is_empty() => {
+                Self::object_property(&properties, "__class").map_or_else(|| self.null(), Ok)
+            }
             (FakeValue::Object(properties), "isdynamic") if args.is_empty() => {
                 Self::object_property(&properties, "__is_dynamic")
                     .map_or_else(|| self.bool_value(false), Ok)
@@ -788,6 +791,7 @@ impl FakeOps {
                 self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_ARRAY_TYPE) != 0)?;
             let is_callable_type =
                 self.bool_value((flags & EVAL_REFLECTION_PARAMETER_FLAG_CALLABLE_TYPE) != 0)?;
+            let class_value = self.reflection_parameter_class_value(method_objects)?;
             properties.push(("__position".to_string(), position));
             properties.push(("__is_optional".to_string(), is_optional));
             properties.push(("__is_variadic".to_string(), is_variadic));
@@ -801,6 +805,7 @@ impl FakeOps {
             properties.push(("__is_array_type".to_string(), is_array_type));
             properties.push(("__is_callable_type".to_string(), is_callable_type));
             properties.push(("__type".to_string(), method_objects));
+            properties.push(("__class".to_string(), class_value));
             properties.push(("__has_default_value".to_string(), has_default_value));
             properties.push((
                 "__is_default_value_constant".to_string(),
@@ -831,6 +836,36 @@ impl FakeOps {
             .insert(object.as_ptr() as usize, class_name.to_string());
         Ok(object)
     }
+
+    /// Builds the fake `ReflectionParameter::getClass()` value from a named non-builtin type.
+    fn reflection_parameter_class_value(
+        &mut self,
+        type_value: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        if !self
+            .object_classes
+            .get(&(type_value.as_ptr() as usize))
+            .is_some_and(|class_name| class_name == "ReflectionNamedType")
+        {
+            return self.null();
+        }
+        let FakeValue::Object(type_properties) = self.get(type_value) else {
+            return self.null();
+        };
+        let is_builtin = Self::object_property(&type_properties, "__is_builtin")
+            .is_some_and(|value| matches!(self.get(value), FakeValue::Bool(true)));
+        if is_builtin {
+            return self.null();
+        }
+        let Some(name) = Self::object_property(&type_properties, "__name") else {
+            return self.null();
+        };
+        let FakeValue::String(name) = self.get(name) else {
+            return self.null();
+        };
+        self.fake_reflection_class_object(&name)
+    }
+
     /// Checks whether a private fake object array property contains one string.
     fn object_string_array_contains(
         &mut self,

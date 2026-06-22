@@ -104,6 +104,8 @@ struct ReflectionOwnerLayout {
     has_type_hi: Option<usize>,
     parameter_type_lo: Option<usize>,
     parameter_type_hi: Option<usize>,
+    parameter_class_lo: Option<usize>,
+    parameter_class_hi: Option<usize>,
     has_default_value_lo: Option<usize>,
     has_default_value_hi: Option<usize>,
     is_default_value_constant_lo: Option<usize>,
@@ -268,6 +270,7 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let is_passed_by_reference_lo = reflection_property_offset(info, "__is_passed_by_reference");
     let has_type_lo = reflection_property_offset(info, "__has_type");
     let parameter_type_lo = reflection_property_offset(info, "__type");
+    let parameter_class_lo = reflection_property_offset(info, "__class");
     let has_default_value_lo = reflection_property_offset(info, "__has_default_value");
     let is_default_value_constant_lo =
         reflection_property_offset(info, "__is_default_value_constant");
@@ -365,6 +368,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         has_type_hi: has_type_lo.map(|offset| offset + 8),
         parameter_type_lo,
         parameter_type_hi: parameter_type_lo.map(|offset| offset + 8),
+        parameter_class_lo,
+        parameter_class_hi: parameter_class_lo.map(|offset| offset + 8),
         has_default_value_lo,
         has_default_value_hi: has_default_value_lo.map(|offset| offset + 8),
         is_default_value_constant_lo,
@@ -795,6 +800,7 @@ fn emit_aarch64_owner_kind_body(
     emit_set_owner_named_type_flags_property_aarch64(emitter, layout);
     emit_set_owner_parameter_property_aarch64(emitter, layout);
     emit_set_owner_parameter_type_property_aarch64(emitter, layout, fail_label);
+    emit_set_owner_parameter_class_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_parameter_default_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_parameter_default_constant_name_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_metadata_arrays_property_aarch64(emitter, layout, fail_label);
@@ -829,6 +835,7 @@ fn emit_x86_64_owner_kind_body(
     emit_set_owner_named_type_flags_property_x86_64(emitter, layout);
     emit_set_owner_parameter_property_x86_64(emitter, layout);
     emit_set_owner_parameter_type_property_x86_64(emitter, layout, fail_label);
+    emit_set_owner_parameter_class_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_parameter_default_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_parameter_default_constant_name_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_metadata_arrays_property_x86_64(emitter, layout, fail_label);
@@ -1756,6 +1763,27 @@ fn emit_set_owner_parameter_type_property_aarch64(
     abi::emit_store_zero_to_address(emitter, "x9", type_hi);
 }
 
+/// Stores incoming ARM64 ReflectionParameter class-type metadata.
+fn emit_set_owner_parameter_class_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (Some(class_lo), Some(class_hi)) =
+        (layout.parameter_class_lo, layout.parameter_class_hi)
+    else {
+        return;
+    };
+    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the boxed ReflectionParameter class value
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null class metadata
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed class value across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the boxed class value for ReflectionParameter storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained boxed class value
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the ReflectionParameter object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", class_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", class_hi);
+}
+
 /// Stores incoming ARM64 ReflectionParameter default-value metadata.
 fn emit_set_owner_parameter_default_property_aarch64(
     emitter: &mut Emitter,
@@ -1957,6 +1985,28 @@ fn emit_set_owner_parameter_type_property_x86_64(
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionParameter object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", type_lo);
     abi::emit_store_zero_to_address(emitter, "r10", type_hi);
+}
+
+/// Stores incoming x86_64 ReflectionParameter class-type metadata.
+fn emit_set_owner_parameter_class_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+    fail_label: &str,
+) {
+    let (Some(class_lo), Some(class_hi)) =
+        (layout.parameter_class_lo, layout.parameter_class_hi)
+    else {
+        return;
+    };
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the boxed ReflectionParameter class value
+    emitter.instruction("test rax, rax");                                       // check whether the boxed class value is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null class metadata
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed class value across incref
+    emitter.instruction("call __rt_incref");                                    // retain the boxed class value for ReflectionParameter storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed class value
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionParameter object pointer
+    abi::emit_store_to_address(emitter, "rdi", "r10", class_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", class_hi);
 }
 
 /// Stores incoming x86_64 ReflectionParameter default-value metadata.

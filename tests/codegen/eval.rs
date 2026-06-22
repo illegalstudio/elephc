@@ -8540,6 +8540,41 @@ foreach ($params as $param) {
     );
 }
 
+/// Verifies eval ReflectionParameter::getClass() reports retained object type metadata.
+#[test]
+fn test_eval_reflection_parameter_get_class_reports_named_object_type() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectParamClassDep {}
+interface EvalReflectParamClassLeft {}
+interface EvalReflectParamClassRight {}
+class EvalReflectParamClassTarget {
+    public function run(EvalReflectParamClassDep $dep, ?EvalReflectParamClassDep $nullable, int $id, EvalReflectParamClassDep|int $unionObject, EvalReflectParamClassLeft&EvalReflectParamClassRight $intersection, $plain) {}
+}
+function eval_reflect_param_class_function(EvalReflectParamClassDep $dep) {}
+$params = (new ReflectionMethod("EvalReflectParamClassTarget", "run"))->getParameters();
+foreach ($params as $param) {
+    $class = $param->getClass();
+    echo $param->getName() . ":" . ($class ? $class->getName() : "null") . "|";
+}
+$direct = new ReflectionParameter(["EvalReflectParamClassTarget", "run"], "nullable");
+echo "direct:" . $direct->getClass()->getName() . "|";
+$functionParam = new ReflectionParameter("eval_reflect_param_class_function", "dep");
+echo "function:" . $functionParam->getClass()->getName();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "dep:EvalReflectParamClassDep|nullable:EvalReflectParamClassDep|id:null|unionObject:null|intersection:null|plain:null|direct:EvalReflectParamClassDep|function:EvalReflectParamClassDep"
+    );
+}
+
 /// Verifies eval direct ReflectionParameter construction accepts runtime object method targets.
 #[test]
 fn test_eval_reflection_parameter_accepts_object_expression_target() {

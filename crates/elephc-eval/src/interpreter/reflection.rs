@@ -3333,12 +3333,13 @@ fn eval_reflection_parameter_object_result(
         Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
         None => values.null()?,
     };
+    let class_value = eval_reflection_parameter_class_value(parameter, context, values)?;
     let default_value = eval_reflection_parameter_default_value(parameter, context, values)?;
     let default_value_constant_name = match parameter.default_value_constant_name.as_deref() {
         Some(name) => values.string(name)?,
         None => values.null()?,
     };
-    let backing_value = values.null()?;
+    let constructor = values.null()?;
     let flags = eval_reflection_parameter_flags(parameter);
     let object = values.reflection_owner_new(
         EVAL_REFLECTION_OWNER_PARAMETER,
@@ -3355,8 +3356,8 @@ fn eval_reflection_parameter_object_result(
         parameter.position as u64,
         0,
         default_value_constant_name,
-        backing_value,
-        backing_value,
+        class_value,
+        constructor,
     )?;
     values.release(attrs)?;
     values.release(declaring_function)?;
@@ -3368,8 +3369,33 @@ fn eval_reflection_parameter_object_result(
     values.release(default_value)?;
     values.release(parent_class)?;
     values.release(default_value_constant_name)?;
-    values.release(backing_value)?;
+    values.release(class_value)?;
+    values.release(constructor)?;
     Ok(object)
+}
+
+/// Materializes the legacy ReflectionParameter::getClass() value for known named object types.
+fn eval_reflection_parameter_class_value(
+    parameter: &EvalReflectionParameterMetadata,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match eval_reflection_parameter_class_name(parameter) {
+        Some(class_name) => eval_reflection_shallow_class_object_result(class_name, context, values),
+        None => values.null(),
+    }
+}
+
+/// Returns the retained object type name used by ReflectionParameter::getClass().
+fn eval_reflection_parameter_class_name(
+    parameter: &EvalReflectionParameterMetadata,
+) -> Option<&str> {
+    match &parameter.type_metadata.as_ref()?.kind {
+        EvalReflectionParameterTypeKind::Named(named_type) if !named_type.is_builtin => {
+            Some(named_type.name.as_str())
+        }
+        _ => None,
+    }
 }
 
 /// Materializes one ReflectionParameter default using the declaring class scope when present.

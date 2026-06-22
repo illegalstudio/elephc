@@ -350,7 +350,10 @@ named type metadata through
 `ReflectionParameter::getType()` / `ReflectionNamedType::getName()`,
 `allowsNull()`, and `isBuiltin()`, and the legacy
 `ReflectionParameter::isArray()` / `isCallable()` predicates for named `array`
-and `callable` parameter types. Multi-member union metadata is exposed through
+and `callable` parameter types. `ReflectionParameter::getClass()` returns a
+`ReflectionClass` object for retained nullable or non-nullable named object
+parameter types and `null` for builtin, union, intersection, or untyped
+parameters. Multi-member union metadata is exposed through
 `ReflectionUnionType::getTypes()` and `allowsNull()`. Intersection parameter
 metadata is exposed through `ReflectionIntersectionType::getTypes()` and
 `allowsNull()`. Function, method, and parameter attributes are exposed through
