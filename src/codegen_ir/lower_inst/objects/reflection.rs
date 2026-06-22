@@ -66,6 +66,7 @@ struct ReflectionOwnerMetadata {
     required_parameter_count: i64,
     is_deprecated: bool,
     is_generator: bool,
+    prototype_member: Option<Box<ReflectionListedMember>>,
     is_final: bool,
     is_abstract: bool,
     is_interface: bool,
@@ -106,6 +107,7 @@ struct ReflectionListedMember {
     required_parameter_count: i64,
     is_deprecated: bool,
     is_generator: bool,
+    prototype_member: Option<Box<ReflectionListedMember>>,
     parameters: Vec<ReflectionParameterMember>,
 }
 
@@ -517,6 +519,13 @@ fn emit_reflection_owner_object(
     }
     if class_name == "ReflectionMethod" {
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__has_prototype",
+            metadata.prototype_member.is_some(),
+        )?;
+        emit_reflection_method_prototype_property(ctx, metadata.prototype_member.as_deref())?;
     }
     if class_name == "ReflectionProperty" {
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
@@ -697,6 +706,7 @@ fn reflection_class_metadata_for_name(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+            prototype_member: None,
             is_final: info.is_final,
             is_abstract: info.is_abstract,
             is_interface: false,
@@ -762,6 +772,7 @@ fn reflection_class_metadata_for_name(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+            prototype_member: None,
             is_final: false,
             is_abstract: false,
             is_interface: true,
@@ -833,6 +844,7 @@ fn reflection_class_metadata_for_name(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+            prototype_member: None,
             is_final: false,
             is_abstract: false,
             is_interface: false,
@@ -997,6 +1009,7 @@ fn reflection_method_owner_metadata(
         required_parameter_count: member.required_parameter_count,
         is_deprecated: member.is_deprecated,
         is_generator: member.is_generator,
+        prototype_member: member.prototype_member,
         is_final: false,
         is_abstract: false,
         is_interface: false,
@@ -1065,6 +1078,7 @@ fn reflection_property_metadata(
                 required_parameter_count: 0,
                 is_deprecated: false,
                 is_generator: false,
+                prototype_member: None,
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -1267,6 +1281,7 @@ fn reflection_class_constant_metadata(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+            prototype_member: None,
             is_final: false,
             is_abstract: false,
             is_interface: false,
@@ -1342,6 +1357,7 @@ fn reflection_enum_case_metadata(
                 required_parameter_count: 0,
                 is_deprecated: false,
                 is_generator: false,
+                prototype_member: None,
                 is_final: false,
                 is_abstract: false,
                 is_interface: false,
@@ -1396,6 +1412,7 @@ fn reflection_class_constant_owner_metadata(
         required_parameter_count: 0,
         is_deprecated: false,
         is_generator: false,
+        prototype_member: None,
         is_final,
         is_abstract: false,
         is_interface: false,
@@ -2241,6 +2258,7 @@ fn push_unique_constant_reflection_member(
         required_parameter_count: 0,
         is_deprecated: false,
         is_generator: false,
+        prototype_member: None,
         parameters: Vec::new(),
     });
 }
@@ -2286,10 +2304,127 @@ fn reflection_method_declaring_class_name(
     info: &crate::types::ClassInfo,
     method_key: &str,
 ) -> Option<String> {
-    info.method_impl_classes
+    info.method_declaring_classes
         .get(method_key)
-        .or_else(|| info.static_method_impl_classes.get(method_key))
+        .or_else(|| info.static_method_declaring_classes.get(method_key))
         .cloned()
+}
+
+/// Returns a prototype method for a reflected generated/AOT class method, if PHP exposes one.
+fn reflection_class_method_prototype_member(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    info: &crate::types::ClassInfo,
+    method_key: &str,
+    flags: ReflectionMemberFlags,
+) -> Result<Option<Box<ReflectionListedMember>>> {
+    if !reflection_method_is_declared_on_class(info, class_name, method_key, flags.is_static) {
+        return Ok(None);
+    }
+    if let Some(member) =
+        reflection_parent_method_prototype_member(ctx, info, method_key, flags.is_static)?
+    {
+        return Ok(Some(Box::new(member)));
+    }
+    reflection_interface_method_prototype_member(ctx, info, method_key, flags.is_static)
+        .map(|member| member.map(Box::new))
+}
+
+/// Returns whether a visible method entry is declared by the reflected class itself.
+fn reflection_method_is_declared_on_class(
+    info: &crate::types::ClassInfo,
+    class_name: &str,
+    method_key: &str,
+    is_static: bool,
+) -> bool {
+    let declaring_class = if is_static {
+        info.static_method_declaring_classes.get(method_key)
+    } else {
+        info.method_declaring_classes.get(method_key)
+    };
+    declaring_class
+        .map(|declaring_class| {
+            php_symbol_key(declaring_class.trim_start_matches('\\'))
+                == php_symbol_key(class_name.trim_start_matches('\\'))
+        })
+        .unwrap_or(false)
+}
+
+/// Finds the nearest parent-class method that is a valid PHP prototype.
+fn reflection_parent_method_prototype_member(
+    ctx: &FunctionContext<'_>,
+    info: &crate::types::ClassInfo,
+    method_key: &str,
+    is_static: bool,
+) -> Result<Option<ReflectionListedMember>> {
+    let mut current = reflection_parent_class_name(ctx, info);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(parent_name) = current {
+        if !seen.insert(php_symbol_key(&parent_name)) {
+            break;
+        }
+        let Some((resolved_parent_name, parent_info)) = resolve_reflection_class(ctx, &parent_name)
+        else {
+            break;
+        };
+        if reflection_class_has_method_kind(parent_info, method_key, is_static) {
+            if let Some(member) =
+                reflection_class_method_member(ctx, resolved_parent_name, parent_info, method_key)?
+            {
+                if !member.flags.is_private && member.flags.is_static == is_static {
+                    return Ok(Some(member));
+                }
+            }
+        }
+        current = reflection_parent_class_name(ctx, parent_info);
+    }
+    Ok(None)
+}
+
+/// Returns whether a class metadata entry has a method with the requested staticness.
+fn reflection_class_has_method_kind(
+    info: &crate::types::ClassInfo,
+    method_key: &str,
+    is_static: bool,
+) -> bool {
+    if is_static {
+        info.static_methods.contains_key(method_key)
+    } else {
+        info.methods.contains_key(method_key)
+    }
+}
+
+/// Finds the first implemented interface method that is a valid PHP prototype.
+fn reflection_interface_method_prototype_member(
+    ctx: &FunctionContext<'_>,
+    info: &crate::types::ClassInfo,
+    method_key: &str,
+    is_static: bool,
+) -> Result<Option<ReflectionListedMember>> {
+    for interface_name in &info.interfaces {
+        let Some(interface_name) = resolve_reflection_interface(ctx, interface_name) else {
+            continue;
+        };
+        let Some(interface_info) = ctx.module.interface_infos.get(interface_name) else {
+            continue;
+        };
+        let has_method = if is_static {
+            interface_info.static_methods.contains_key(method_key)
+        } else {
+            interface_info.methods.contains_key(method_key)
+        };
+        if !has_method {
+            continue;
+        }
+        if let Some(member) =
+            reflection_interface_method_member(ctx, interface_info, interface_name, method_key)?
+        {
+            if member.flags.is_static == is_static {
+                return Ok(Some(member));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Returns the class that declares one reflected instance or static property.
@@ -2437,6 +2572,8 @@ fn reflection_class_method_member(
         declaring_class_name.as_deref().unwrap_or(class_name),
         &method_key,
     );
+    let prototype_member =
+        reflection_class_method_prototype_member(ctx, class_name, info, &method_key, flags)?;
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: method_key.clone(),
         declaring_class_name: declaring_class_name.clone(),
@@ -2471,6 +2608,7 @@ fn reflection_class_method_member(
         required_parameter_count,
         is_deprecated: sig.deprecation.is_some(),
         is_generator,
+        prototype_member,
         parameters,
     }))
 }
@@ -2552,6 +2690,7 @@ fn reflection_interface_method_member(
         required_parameter_count,
         is_deprecated: sig.deprecation.is_some(),
         is_generator: false,
+        prototype_member: None,
         parameters,
     }))
 }
@@ -2629,6 +2768,7 @@ fn reflection_trait_method_member(
         required_parameter_count,
         is_deprecated: info.signature.deprecation.is_some(),
         is_generator,
+        prototype_member: None,
         parameters,
     }))
 }
@@ -2706,6 +2846,7 @@ fn reflection_class_property_member(
         required_parameter_count: 0,
         is_deprecated: false,
         is_generator: false,
+        prototype_member: None,
         parameters: Vec::new(),
     })
 }
@@ -2792,6 +2933,7 @@ fn default_method_members(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+            prototype_member: None,
             parameters: Vec::new(),
         })
         .collect()
@@ -2834,6 +2976,7 @@ fn default_property_members(
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
+            prototype_member: None,
             parameters: Vec::new(),
         })
         .collect()
@@ -3705,6 +3848,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         required_parameter_count: 0,
         is_deprecated: false,
         is_generator: false,
+        prototype_member: None,
         is_final: false,
         is_abstract: false,
         is_interface: false,
@@ -4175,6 +4319,37 @@ fn emit_reflection_constructor_property(
         );
     } else {
         super::emit_boxed_null(ctx);
+    }
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    Ok(())
+}
+
+/// Replaces a ReflectionMethod private prototype slot with `ReflectionMethod|null`.
+fn emit_reflection_method_prototype_property(
+    ctx: &mut FunctionContext<'_>,
+    member: Option<&ReflectionListedMember>,
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get("ReflectionMethod")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, "__prototype")?;
+    let high_offset = low_offset + 8;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    if let Some(member) = member {
+        emit_reflection_member_object(ctx, "ReflectionMethod", member)?;
+        emit_box_current_value_as_mixed(
+            ctx.emitter,
+            &PhpType::Object("ReflectionMethod".to_string()),
+        );
+    } else {
+        emit_boxed_null_literal_to_result(ctx);
     }
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
@@ -4918,6 +5093,13 @@ fn emit_reflection_member_object(
             "__modifiers",
             member.modifiers,
         )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            member_class_name,
+            "__has_prototype",
+            member.prototype_member.is_some(),
+        )?;
+        emit_reflection_method_prototype_property(ctx, member.prototype_member.as_deref())?;
     }
     if member_class_name == "ReflectionProperty" {
         emit_reflection_owner_int_property(

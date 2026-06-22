@@ -2108,6 +2108,53 @@ fn builtin_reflection_class_bool_method(method_name: &str, property: &str) -> Cl
     }
 }
 
+/// Returns `ReflectionMethod::getPrototype()` backed by a retained prototype reflector.
+fn builtin_reflection_method_get_prototype_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "getPrototype".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("ReflectionMethod"))),
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: Expr::new(
+                        ExprKind::Not(Box::new(reflection_this_property(
+                            "__has_prototype",
+                            dummy_span,
+                        ))),
+                        dummy_span,
+                    ),
+                    then_body: vec![throw_new_reflection_exception(
+                        string_lit("Method does not have a prototype", dummy_span),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(reflection_this_property(
+                    "__prototype",
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns `ReflectionProperty::isDefault()` backed by the dynamic-property slot.
 fn builtin_reflection_property_is_default_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
@@ -2701,6 +2748,23 @@ fn builtin_reflection_owner_class(
         methods.push(builtin_reflection_function_method_is_variadic_method());
     }
     if name == "ReflectionMethod" {
+        properties.push(builtin_property(
+            "__has_prototype",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
+            "__prototype",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "hasPrototype",
+            "__has_prototype",
+        ));
+        methods.push(builtin_reflection_method_get_prototype_method());
         methods.push(builtin_reflection_method_invoke_method());
         methods.push(builtin_reflection_method_invoke_args_method());
         methods.push(builtin_reflection_set_accessible_method());
@@ -4050,10 +4114,19 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
             }
             if class_name == "ReflectionMethod" {
-                for method_name in ["isfinal", "isabstract", "isconstructor", "isdestructor"] {
+                for method_name in [
+                    "isfinal",
+                    "isabstract",
+                    "isconstructor",
+                    "isdestructor",
+                    "hasPrototype",
+                ] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
                     }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getPrototype")) {
+                    sig.return_type = PhpType::Object("ReflectionMethod".to_string());
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
                     sig.return_type = PhpType::Int;

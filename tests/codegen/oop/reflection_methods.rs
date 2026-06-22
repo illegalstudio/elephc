@@ -118,6 +118,61 @@ echo $method->isUserDefined() ? "U" : "u";
     assert_eq!(out, "run:run::N:i:U");
 }
 
+/// Verifies AOT `ReflectionMethod::hasPrototype()` and `getPrototype()` follow PHP inheritance rules.
+#[test]
+fn test_reflection_method_reports_aot_prototypes() {
+    let out = compile_and_run(
+        r#"<?php
+interface ReflectMethodProtoParentIface {
+    public function parented(): void;
+}
+interface ReflectMethodProtoChildIface extends ReflectMethodProtoParentIface {}
+interface ReflectMethodProtoIface {
+    public function iface(): void;
+}
+class ReflectMethodProtoBase {
+    public function run(): void {}
+    public function inherited(): void {}
+}
+class ReflectMethodProtoChild extends ReflectMethodProtoBase implements ReflectMethodProtoIface, ReflectMethodProtoChildIface {
+    public function run(): void {}
+    public function iface(): void {}
+    public function parented(): void {}
+    public function own(): void {}
+}
+
+$override = new ReflectionMethod(ReflectMethodProtoChild::class, "run");
+$overrideProto = $override->getPrototype();
+echo ($override->hasPrototype() ? "Y" : "N") . ":";
+echo $overrideProto->getDeclaringClass()->getName() . "::";
+echo $overrideProto->getName() . ":";
+$iface = (new ReflectionClass(ReflectMethodProtoChild::class))->getMethod("iface");
+$ifaceProto = $iface->getPrototype();
+echo ($iface->hasPrototype() ? "Y" : "N") . ":";
+echo $ifaceProto->getDeclaringClass()->getName() . "::";
+echo $ifaceProto->getName() . ":";
+$parentIface = new ReflectionMethod(ReflectMethodProtoChild::class, "parented");
+$parentIfaceProto = $parentIface->getPrototype();
+echo $parentIfaceProto->getDeclaringClass()->getName() . "::";
+echo $parentIfaceProto->getName() . ":";
+$own = new ReflectionMethod(ReflectMethodProtoChild::class, "own");
+echo ($own->hasPrototype() ? "Y" : "N") . ":";
+try {
+    $own->getPrototype();
+} catch (ReflectionException $e) {
+    echo "E";
+}
+echo ":";
+$inherited = new ReflectionMethod(ReflectMethodProtoChild::class, "inherited");
+echo $inherited->hasPrototype() ? "Y" : "N";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Y:ReflectMethodProtoBase::run:Y:ReflectMethodProtoIface::iface:ReflectMethodProtoParentIface::parented:N:E:N"
+    );
+}
+
 /// Verifies `ReflectionMethod::invoke()` calls declared AOT instance and static methods.
 #[test]
 fn test_reflection_method_invoke_calls_declared_aot_methods() {
