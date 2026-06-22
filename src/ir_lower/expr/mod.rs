@@ -9181,7 +9181,7 @@ fn reflection_property_instance_target(
     ctx: &LoweringContext<'_, '_>,
     object_expr: &Expr,
 ) -> Option<(String, String, PhpType)> {
-    let (class_name, property) = reflection_property_constructor_target(ctx, object_expr)?;
+    let (class_name, property) = reflection_property_reflected_target(ctx, object_expr)?;
     let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
     if class_info
         .static_properties
@@ -9199,6 +9199,15 @@ fn reflection_property_instance_target(
         property,
         normalize_value_php_type(property_ty.codegen_repr()),
     ))
+}
+
+/// Extracts the known class and property name from a supported ReflectionProperty source.
+fn reflection_property_reflected_target(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<(String, String)> {
+    reflection_property_constructor_target(ctx, object_expr)
+        .or_else(|| reflection_property_class_get_property_target(ctx, object_expr))
 }
 
 /// Extracts the known class and property name from an inline ReflectionProperty constructor.
@@ -9223,6 +9232,37 @@ fn reflection_property_constructor_target(
         return None;
     };
     Some((class_name, property))
+}
+
+/// Extracts the property target from inline `ReflectionClass::getProperty()` calls.
+fn reflection_property_class_get_property_target(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<(String, String)> {
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+    } = &object_expr.kind
+    else {
+        return None;
+    };
+    if php_symbol_key(method) != "getproperty" {
+        return None;
+    }
+    let class_name = reflection_class_reflected_class(ctx, object)?;
+    let property = reflection_class_member_name_arg(args)?;
+    Some((class_name, property))
+}
+
+/// Returns the literal name argument passed to a ReflectionClass member lookup.
+fn reflection_class_member_name_arg(args: &[Expr]) -> Option<String> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    let (name, _) = reflection_class_static_property_regular_args(&args, "name", None)?;
+    reflection_class_static_property_name_arg(name.as_ref()?)
 }
 
 /// Returns normalized constructor args for `ReflectionProperty($class, $property)`.
