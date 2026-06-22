@@ -316,12 +316,12 @@ preserve named arguments for the invoked method, follow PHP's by-value
 `invoke()` variadic forwarding, accept `null` or an object for static methods,
 and throw catchable `ReflectionException` values when an instance receiver is
 not compatible with the reflected declaring class. For generated/AOT classes,
-`ReflectionMethod::invoke()` is also lowered for inline or straight-line
+`ReflectionMethod::invoke()` and `invokeArgs()` are also lowered for inline or straight-line
 tracked reflectors when the reflected method has declared parameter types;
 the lowered call supports instance and static methods, method-name
 case-insensitivity, defaults, and named arguments. Generated/AOT
-`ReflectionMethod::invokeArgs()` and invoke targets whose parameter types only
-come from call-site inference still require richer runtime/typechecker support.
+invoke targets whose parameter types only come from call-site inference and
+runtime-only argument arrays still require richer runtime/typechecker support.
 Eval-declared method parameter type hints are checked when the method is
 entered. Supported checks include scalar hints with PHP-style weak scalar
 coercion, `array`, `object`, `iterable`, `mixed`, nullable/union forms, and

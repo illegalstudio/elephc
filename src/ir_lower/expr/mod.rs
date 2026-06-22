@@ -9296,7 +9296,7 @@ fn reflection_member_constructor_expr(
     )
 }
 
-/// Lowers `ReflectionMethod::invoke()` for statically-known reflected methods.
+/// Lowers reflected method invocation for statically-known `ReflectionMethod` objects.
 fn lower_reflection_method_invoke_call(
     ctx: &mut LoweringContext<'_, '_>,
     object_expr: Option<&Expr>,
@@ -9304,17 +9304,19 @@ fn lower_reflection_method_invoke_call(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    if php_symbol_key(method) != "invoke" {
-        return None;
-    }
+    let method_key = php_symbol_key(method);
     let object_expr = object_expr?;
     let (class_name, reflected_method) = reflection_method_reflected_target(ctx, object_expr)?;
-    let Some((object_arg, forwarded_args)) = reflection_method_invoke_args(args) else {
-        return Some(lower_reflection_method_invoke_unsupported(ctx, expr));
+    let Some((object_arg, forwarded_args)) = (match method_key.as_str() {
+        "invoke" => reflection_method_invoke_args(args),
+        "invokeargs" => reflection_method_invoke_args_array(ctx, args),
+        _ => return None,
+    }) else {
+        return Some(lower_reflection_method_invoke_unsupported(ctx, &method_key, expr));
     };
     let Some(target_kind) = reflection_method_target_kind(ctx, &class_name, &reflected_method)
     else {
-        return Some(lower_reflection_method_invoke_unsupported(ctx, expr));
+        return Some(lower_reflection_method_invoke_unsupported(ctx, &method_key, expr));
     };
     if !reflection_method_target_has_declared_params(
         ctx,
@@ -9323,7 +9325,7 @@ fn lower_reflection_method_invoke_call(
         target_kind,
     )
     {
-        return Some(lower_reflection_method_invoke_unsupported(ctx, expr));
+        return Some(lower_reflection_method_invoke_unsupported(ctx, &method_key, expr));
     }
     match target_kind {
         ReflectionMethodTargetKind::Static => Some(lower_reflection_static_method_invoke(
@@ -9426,6 +9428,51 @@ fn reflection_method_invoke_args(args: &[Expr]) -> Option<(Expr, Vec<Expr>)> {
     object.map(|object| (object, forwarded))
 }
 
+/// Splits `ReflectionMethod::invokeArgs($object, $args)` into receiver and method args.
+fn reflection_method_invoke_args_array(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<(Expr, Vec<Expr>)> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    if !crate::types::call_args::has_named_args(&args) {
+        return match args.as_slice() {
+            [object, forwarded] => {
+                let forwarded = reflection_class_new_instance_args_value(forwarded)?;
+                Some((object.clone(), forwarded))
+            }
+            _ => None,
+        };
+    }
+    let sig = ctx
+        .classes
+        .get("ReflectionMethod")
+        .and_then(|class_info| class_info.methods.get(&php_symbol_key("invokeArgs")))?;
+    let call_span = args
+        .first()
+        .map(|arg| arg.span)
+        .unwrap_or_else(crate::span::Span::dummy);
+    let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+        sig,
+        &args,
+        call_span,
+        crate::types::call_args::regular_param_count(sig),
+        false,
+        true,
+        &assoc_spread_sources(ctx, &args),
+    )
+    .ok()?;
+    if plan.has_spread_args() {
+        return None;
+    }
+    let object = planned_regular_arg_expr(plan.regular_args.first()?)?.clone();
+    let forwarded_arg = planned_regular_arg_expr(plan.regular_args.get(1)?)?;
+    let forwarded = reflection_class_new_instance_args_value(forwarded_arg)?;
+    Some((object, forwarded))
+}
+
 /// Classifies whether a known reflected method is static or instance-dispatched.
 fn reflection_method_target_kind(
     ctx: &LoweringContext<'_, '_>,
@@ -9481,12 +9528,19 @@ enum ReflectionMethodTargetKind {
 /// Emits a runtime fatal for ReflectionMethod invocation forms not yet lowered.
 fn lower_reflection_method_invoke_unsupported(
     ctx: &mut LoweringContext<'_, '_>,
+    method_key: &str,
     expr: &Expr,
 ) -> LoweredValue {
     let result = lower_boxed_null(ctx, expr);
-    let message = ctx.intern_string(
-        "Fatal error: unsupported ReflectionMethod::invoke() target or argument forwarding\n",
-    );
+    let method_name = if method_key == "invokeargs" {
+        "invokeArgs"
+    } else {
+        "invoke"
+    };
+    let message = ctx.intern_string(&format!(
+        "Fatal error: unsupported ReflectionMethod::{}() target or argument forwarding\n",
+        method_name
+    ));
     ctx.builder.terminate(Terminator::Fatal { message });
     result
 }

@@ -6,7 +6,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - `ReflectionMethod::invoke()` is lowered only for statically-known
+//! - `ReflectionMethod::invoke()` and `invokeArgs()` are lowered only for statically-known
 //!   reflectors whose target method has declared parameter types.
 //! - Tests cover inline constructors, ReflectionClass lookup, local tracking,
 //!   case-insensitive method names, default values, and named arguments.
@@ -37,6 +37,32 @@ echo $method->invoke($object, "L", "M");
 "#,
     );
     assert_eq!(out, "AC:DB:EF:XY:LM");
+}
+
+/// Verifies `ReflectionMethod::invokeArgs()` forwards static argument arrays.
+#[test]
+fn test_reflection_method_invoke_args_calls_declared_aot_methods() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectInvokeArgsTarget {
+    public function join(string $left, string $right = "B"): string { return $left . $right; }
+    public static function make(string $left, string $right = "S"): string { return $left . $right; }
+}
+
+$object = new ReflectInvokeArgsTarget();
+echo (new ReflectionMethod(ReflectInvokeArgsTarget::class, "join"))->invokeArgs($object, ["right" => "Y", "left" => "X"]);
+echo ":";
+echo (new ReflectionMethod(ReflectInvokeArgsTarget::class, "JOIN"))->invokeArgs($object, ["Q"]);
+echo ":";
+echo (new ReflectionMethod(ReflectInvokeArgsTarget::class, "make"))->invokeArgs(null, ["right" => "N", "left" => "M"]);
+echo ":";
+echo (new ReflectionClass(ReflectInvokeArgsTarget::class))->getMethod("join")->invokeArgs(object: $object, args: ["left" => "L"]);
+echo ":";
+$method = new ReflectionMethod(ReflectInvokeArgsTarget::class, "join");
+echo $method->invokeArgs(...[$object, ["A", "C"]]);
+"#,
+    );
+    assert_eq!(out, "XY:QB:MN:LB:AC");
 }
 
 /// Verifies inferred AOT method signatures are rejected instead of miscompiled.
