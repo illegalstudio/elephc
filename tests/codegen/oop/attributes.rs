@@ -2527,6 +2527,12 @@ echo ":" . (new ReflectionClass(ReflectStaticValueTarget::class))->getStaticProp
 (new ReflectionClass(ReflectStaticValueTarget::class))->setStaticPropertyValue("count", 11);
 echo ":" . ReflectStaticValueTarget::$count;
 echo ":" . (new ReflectionClass(ReflectStaticValueTarget::class))->getStaticPropertyValue("missing", "fallback");
+try {
+    (new ReflectionClass(ReflectStaticValueTarget::class))->getStaticPropertyValue("missing");
+    echo ":bad";
+} catch (ReflectionException $e) {
+    echo ":" . get_class($e) . ":" . $e->getMessage();
+}
 "#,
     );
     assert!(
@@ -2534,7 +2540,10 @@ echo ":" . (new ReflectionClass(ReflectStaticValueTarget::class))->getStaticProp
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "7:9:11:fallback");
+    assert_eq!(
+        out.stdout,
+        "7:9:11:fallback:ReflectionException:Property ReflectStaticValueTarget::$missing does not exist"
+    );
 }
 
 /// Verifies a local `ReflectionClass` receiver keeps statically-known class metadata.
