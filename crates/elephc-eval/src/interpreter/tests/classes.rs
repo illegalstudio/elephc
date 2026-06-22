@@ -34,6 +34,45 @@ return $user->label();"#,
     assert_eq!(values.get(result), FakeValue::String("7:Ada".to_string()));
 }
 
+/// Verifies `new self/static/parent` resolve inside eval-declared methods.
+#[test]
+fn execute_program_constructs_relative_class_names_from_eval_methods() {
+    let program = parse_fragment(
+        br#"class EvalRelativeFactoryBase {
+    public string $label;
+    public function __construct($label = "base") { $this->label = $label; }
+    public function selfFactory() { return new self("self"); }
+    public function staticFactory() { return new static("static"); }
+}
+class EvalRelativeFactoryChild extends EvalRelativeFactoryBase {
+    public function parentFactory() { return new parent("parent"); }
+}
+$child = new EvalRelativeFactoryChild("root");
+$self = $child->selfFactory();
+$static = $child->staticFactory();
+$parent = $child->parentFactory();
+echo get_class($self); echo ":"; echo $self->label; echo ":";
+echo get_class($static); echo ":"; echo $static->label; echo ":";
+echo get_class($parent); echo ":"; echo $parent->label;
+return $self instanceof EvalRelativeFactoryBase
+    && !($self instanceof EvalRelativeFactoryChild)
+    && $static instanceof EvalRelativeFactoryChild
+    && $parent instanceof EvalRelativeFactoryBase
+    && !($parent instanceof EvalRelativeFactoryChild);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "EvalRelativeFactoryBase:self:EvalRelativeFactoryChild:static:EvalRelativeFactoryBase:parent"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies by-reference promoted properties stay aliased to caller variables.
 #[test]
 fn execute_program_aliases_by_reference_promoted_variable_properties() {
