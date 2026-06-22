@@ -398,6 +398,12 @@ fn emit_reflection_owner_object(
             let (_, short_name) = reflection_name_parts(reflected_name);
             emit_reflection_string_property_by_name(ctx, "__short_name", short_name)?;
         }
+        if class_name == "ReflectionFunction" {
+            emit_reflection_function_name_parts(ctx, reflected_name)?;
+        }
+        if class_name == "ReflectionMethod" {
+            emit_reflection_method_name_parts(ctx, reflected_name)?;
+        }
     }
     emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
     if class_name == "ReflectionClass" {
@@ -438,6 +444,13 @@ fn emit_reflection_owner_object(
         )?;
     }
     if matches!(class_name, "ReflectionFunction" | "ReflectionMethod") {
+        emit_reflection_owner_bool_property(ctx, class_name, "__is_internal", false)?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__is_user_defined",
+            metadata.reflected_name.is_some(),
+        )?;
         emit_reflection_parameter_array_property_by_name(
             ctx,
             class_name,
@@ -528,6 +541,54 @@ fn emit_reflection_class_name_parts(
     emit_reflection_string_property_by_name(ctx, "__short_name", short_name)?;
     emit_reflection_string_property_by_name(ctx, "__namespace_name", namespace_name)?;
     emit_reflection_bool_property(ctx, "__in_namespace", !namespace_name.is_empty())?;
+    Ok(())
+}
+
+/// Stores namespace-aware name parts for a statically materialized ReflectionFunction.
+fn emit_reflection_function_name_parts(
+    ctx: &mut FunctionContext<'_>,
+    reflected_name: &str,
+) -> Result<()> {
+    let (namespace_name, short_name) = reflection_name_parts(reflected_name);
+    emit_reflection_owner_string_property_by_name(
+        ctx,
+        "ReflectionFunction",
+        "__short_name",
+        short_name,
+    )?;
+    emit_reflection_owner_string_property_by_name(
+        ctx,
+        "ReflectionFunction",
+        "__namespace_name",
+        namespace_name,
+    )?;
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionFunction",
+        "__in_namespace",
+        !namespace_name.is_empty(),
+    )?;
+    Ok(())
+}
+
+/// Stores PHP's method reflection name parts for a statically materialized method.
+fn emit_reflection_method_name_parts(
+    ctx: &mut FunctionContext<'_>,
+    reflected_name: &str,
+) -> Result<()> {
+    emit_reflection_owner_string_property_by_name(
+        ctx,
+        "ReflectionMethod",
+        "__short_name",
+        reflected_name,
+    )?;
+    emit_reflection_owner_string_property_by_name(
+        ctx,
+        "ReflectionMethod",
+        "__namespace_name",
+        "",
+    )?;
+    emit_reflection_owner_bool_property(ctx, "ReflectionMethod", "__in_namespace", false)?;
     Ok(())
 }
 
@@ -3709,6 +3770,23 @@ fn emit_reflection_string_property_by_name(
         .module
         .class_infos
         .get("ReflectionClass")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, property_name)?;
+    emit_reflection_string_property(ctx, value, low_offset, low_offset + 8);
+    Ok(())
+}
+
+/// Writes a heap-persisted string into a named Reflection owner property slot.
+fn emit_reflection_owner_string_property_by_name(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property_name: &str,
+    value: &str,
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(class_name)
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, property_name)?;
     emit_reflection_string_property(ctx, value, low_offset, low_offset + 8);
