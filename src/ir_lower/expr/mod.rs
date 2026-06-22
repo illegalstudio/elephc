@@ -8242,15 +8242,8 @@ fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> 
 /// Metadata operand source for direct `ReflectionParameter` constructor lowering.
 enum ReflectionParameterConstructorOperand {
     Expr(Expr),
-    ClassName {
-        name: String,
-        span: Span,
-    },
-    ObjectExprClassName {
-        expr: Expr,
-        name: String,
-        span: Span,
-    },
+    ClassName { name: String, span: Span },
+    ObjectExpr { expr: Expr, span: Span },
 }
 
 /// Lowers validated `ReflectionParameter` constructor arguments into metadata operands.
@@ -8277,12 +8270,14 @@ fn lower_reflection_parameter_constructor_operand(
 ) -> ValueId {
     match operand {
         ReflectionParameterConstructorOperand::Expr(expr) => lower_expr(ctx, expr).value,
-        ReflectionParameterConstructorOperand::ObjectExprClassName { expr, name, span } => {
+        ReflectionParameterConstructorOperand::ObjectExpr { expr, span } => {
             let object = lower_expr(ctx, expr);
+            let class_name = reflection_parameter_lowered_object_class_name(ctx, object.value)
+                .expect("ReflectionParameter object target must be type-checked as a known object");
             if ctx.value_is_owning_temporary(object) {
                 crate::ir_lower::ownership::release_if_owned(ctx, object, Some(*span));
             }
-            emit_reflection_parameter_class_name_operand(ctx, name, *span)
+            emit_reflection_parameter_class_name_operand(ctx, &class_name, *span)
         }
         ReflectionParameterConstructorOperand::ClassName { name, span } => {
             emit_reflection_parameter_class_name_operand(ctx, name, *span)
@@ -8402,22 +8397,19 @@ fn reflection_parameter_method_owner_operand(
                     span: owner.span,
                 })
         }
-        _ => reflection_parameter_object_expr_class_name(ctx, owner).map(|name| {
-            ReflectionParameterConstructorOperand::ObjectExprClassName {
-                expr: owner.clone(),
-                name,
-                span: owner.span,
-            }
+        _ => Some(ReflectionParameterConstructorOperand::ObjectExpr {
+            expr: owner.clone(),
+            span: owner.span,
         }),
     }
 }
 
-/// Returns the concrete class name for an object expression usable as reflection metadata.
-fn reflection_parameter_object_expr_class_name(
+/// Returns the concrete class name from a lowered object target.
+fn reflection_parameter_lowered_object_class_name(
     ctx: &LoweringContext<'_, '_>,
-    owner: &Expr,
+    value: ValueId,
 ) -> Option<String> {
-    let PhpType::Object(class_name) = fallback_expr_type(owner).codegen_repr() else {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(value).codegen_repr() else {
         return None;
     };
     if class_name.is_empty() || !ctx.classes.contains_key(class_name.as_str()) {

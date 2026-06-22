@@ -169,6 +169,12 @@ class ReflectPromotedParamUser {
     }
     public function run(int $id) {}
 }
+class ReflectPromotedParamFactory {
+    public function make(): ReflectPromotedParamUser {
+        echo "F";
+        return new ReflectPromotedParamUser(2);
+    }
+}
 $ctor = new ReflectionMethod(ReflectPromotedParamUser::class, "__construct");
 $params = $ctor->getParameters();
 echo $params[0]->isPromoted() ? "I" : "i";
@@ -179,7 +185,10 @@ $run = new ReflectionParameter([ReflectPromotedParamUser::class, "run"], "id");
 echo $run->isPromoted() ? "R" : "r";
 $inline = new ReflectionParameter([new ReflectPromotedParamUser(1), "run"], 0);
 echo ":" . $inline->getName();
+$factory = new ReflectPromotedParamFactory();
+$fromReturn = new ReflectionParameter([$factory->make(), "run"], 0);
+echo ":" . $fromReturn->getName();
 "#,
     );
-    assert_eq!(out, "InDrC:id");
+    assert_eq!(out, "InDrC:idFC:id");
 }
