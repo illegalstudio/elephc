@@ -1104,18 +1104,20 @@ fn emit_apply_loaded_iterator_object(
     callback: &IteratorApplyCallback,
 ) -> Result<()> {
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
-    ctx.emitter.instruction(&format!(
+    let save_receiver = format!(
         "mov {}, {}",
         receiver_reg,
         abi::int_result_reg(ctx.emitter)
-    )); // preserve iterator_apply()'s receiver while initializing the count slot
+    );
+    ctx.emitter.instruction(&save_receiver);                                    // preserve iterator_apply()'s receiver while initializing the count slot
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    ctx.emitter.instruction(&format!(
+    let restore_receiver = format!(
         "mov {}, {}",
         abi::int_result_reg(ctx.emitter),
         receiver_reg
-    )); // restore iterator_apply()'s receiver for the Iterator loop
+    );
+    ctx.emitter.instruction(&restore_receiver);                                 // restore iterator_apply()'s receiver for the Iterator loop
 
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     reload_saved_iterator_receiver(ctx);
@@ -1206,22 +1208,24 @@ fn emit_to_array_loaded_traversable_object(
     let aggregate_case = ctx.next_label("iterator_to_array_object_aggregate");
     let done = ctx.next_label("iterator_to_array_object_done");
 
-    ctx.emitter.instruction(&format!(
+    let save_receiver = format!(
         "mov {}, {}",
         receiver_reg,
         abi::int_result_reg(ctx.emitter)
-    )); // preserve iterator_to_array()'s receiver while allocating the result container
+    );
+    ctx.emitter.instruction(&save_receiver);                                    // preserve iterator_to_array()'s receiver while allocating the result container
     if preserve_keys {
         emit_new_mixed_hash(ctx);
     } else {
         emit_new_mixed_indexed_array(ctx);
     }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    ctx.emitter.instruction(&format!(
+    let restore_receiver = format!(
         "mov {}, {}",
         abi::int_result_reg(ctx.emitter),
         receiver_reg
-    )); // restore iterator_to_array()'s receiver for Traversable probing
+    );
+    ctx.emitter.instruction(&restore_receiver);                                 // restore iterator_to_array()'s receiver for Traversable probing
 
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     emit_branch_if_saved_receiver_implements(ctx, "Iterator", &direct_case)?;
@@ -1340,18 +1344,20 @@ fn emit_insert_current_with_iterator_key(ctx: &mut FunctionContext<'_>) -> Resul
 /// Counts a loaded Iterator object by driving rewind(), valid(), and next().
 fn emit_count_loaded_iterator_object(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
-    ctx.emitter.instruction(&format!(
+    let save_receiver = format!(
         "mov {}, {}",
         receiver_reg,
         abi::int_result_reg(ctx.emitter)
-    )); // preserve iterator_count()'s receiver while initializing the count slot
+    );
+    ctx.emitter.instruction(&save_receiver);                                    // preserve iterator_count()'s receiver while initializing the count slot
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    ctx.emitter.instruction(&format!(
+    let restore_receiver = format!(
         "mov {}, {}",
         abi::int_result_reg(ctx.emitter),
         receiver_reg
-    )); // restore iterator_count()'s receiver for the Iterator loop
+    );
+    ctx.emitter.instruction(&restore_receiver);                                 // restore iterator_count()'s receiver for the Iterator loop
 
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     reload_saved_iterator_receiver(ctx);

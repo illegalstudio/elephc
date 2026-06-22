@@ -118,17 +118,19 @@ pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId)
 fn emit_tagged_scalar_null_bool(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!(
+            let cmp_inst = format!(
                 "cmp x1, #{}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
-            ));                                                                 // compare the tagged scalar tag against PHP null
+            );
+            ctx.emitter.instruction(&cmp_inst);                                 // compare the tagged scalar tag against PHP null
             ctx.emitter.instruction("cset x0, eq");                             // materialize true when the tagged scalar is null
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!(
+            let cmp_inst = format!(
                 "cmp rdx, {}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
-            ));                                                                 // compare the tagged scalar tag against PHP null
+            );
+            ctx.emitter.instruction(&cmp_inst);                                 // compare the tagged scalar tag against PHP null
             ctx.emitter.instruction("sete al");                                 // materialize true when the tagged scalar is null
             ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }

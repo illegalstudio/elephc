@@ -4,6 +4,11 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- EIR dead store elimination over PHP local slots: a CFG-liveness pass that drops `store_local` writes to scalar locals that are never read before being overwritten or the function exits, gated by `--ir-opt`. Refcounted and by-reference-aliased slots are left untouched to preserve ownership and aliasing semantics.
+- EIR branch simplification: folds constant-condition `cond_br`/`switch` terminators to unconditional branches (e.g. `while (true)` loops), threads predecessors through empty forwarding blocks, and neutralizes unreachable blocks, gated by `--ir-opt`.
+
+## [0.25.0] - 2026-06-19
+- EIR dead instruction elimination over CFG liveness, registered after identity and peephole passes and gated by `--ir-opt`.
 - PHP date/time, timezone, and calendar parity (EIR backend): `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, and `DatePeriod`, the PHP 8.3 date exception hierarchy, plus the procedural `getdate`/`localtime`/`mktime`/`gmmktime`/`checkdate`/`microtime`/`hrtime`/`strtotime`, `date`/`gmdate` format tokens, solar functions (`date_sun_info`/`date_sunrise`/`date_sunset`), and `ext/calendar` functions — backed by a bundled IANA timezone database (`elephc-tz` crate).
 - Date/time correctness fixes: `getdate()`/`localtime()` default to UTC like PHP, `gmdate("T")` reports `GMT` on every target, `createFromTimestamp()` keeps fractional-second microseconds, `DateInterval` requires a leading `P`, `diff()` and `DatePeriod::createFromISO8601String()` match PHP signatures (`$targetObject`, `$specification` + `$options`).
 - General fixes surfaced by the date/time work: `var_dump` renders heterogeneous indexed-array bodies, `array_fill` terminates on a negative count on ARM64, and user-declared functions/classes are no longer hijacked when their name collides with a procedural date alias.
@@ -382,7 +387,8 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.24.3...HEAD
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/illegalstudio/elephc/compare/v0.24.3...v0.25.0
 [0.24.3]: https://github.com/illegalstudio/elephc/compare/v0.24.2...v0.24.3
 [0.24.2]: https://github.com/illegalstudio/elephc/compare/v0.24.1...v0.24.2
 [0.24.1]: https://github.com/illegalstudio/elephc/compare/v0.24.0...v0.24.1

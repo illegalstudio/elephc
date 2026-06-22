@@ -1214,17 +1214,19 @@ fn emit_tagged_scalar_int_predicate(
     ctx.load_value_to_result(value)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!(
+            let cmp_inst = format!(
                 "cmp x1, #{}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
-            ));                                                                 // does the tagged scalar carry the runtime null tag?
+            );
+            ctx.emitter.instruction(&cmp_inst);                                 // does the tagged scalar carry the runtime null tag?
             ctx.emitter.instruction("cset x0, ne");                             // materialize true when the tagged scalar holds an integer
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!(
+            let cmp_inst = format!(
                 "cmp rdx, {}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
-            ));                                                                 // does the tagged scalar carry the runtime null tag?
+            );
+            ctx.emitter.instruction(&cmp_inst);                                 // does the tagged scalar carry the runtime null tag?
             ctx.emitter.instruction("setne al");                                // materialize true when the tagged scalar holds an integer
             ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }

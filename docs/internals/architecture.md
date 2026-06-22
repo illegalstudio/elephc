@@ -126,9 +126,9 @@ PHP source (.php)
 ┌─────────────┐
 │ EIR passes  │  src/ir_passes/
 │             │  Fixed-point optimization pass driver (identity folding,
-│             │  peephole, …) and linear-scan register allocation (liveness,
-│             │  intervals, pools)
-│             │  over EIR functions before codegen.
+│             │  peephole rewrites, dead-instruction elimination, dead-store
+│             │  elimination, branch simplification) plus linear-scan register
+│             │  allocation (liveness, intervals, pools) before codegen.
 └──────┬──────┘
        │
        ▼
@@ -174,6 +174,8 @@ src/
 ├── linker.rs                  Assembler and linker invocation
 ├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
+├── intrinsics.rs              Compiler-recognized intrinsic method calls for runtime-managed core objects
+├── string_bytes.rs            Parser string-literal payload → PHP runtime bytes conversion
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── magic_constants/           File/scope/trait magic-constant walkers
 ├── conditional/               Build-time `ifdef` pass
@@ -183,13 +185,21 @@ src/
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
 ├── ir_lower/                  Active checked-AST to EIR lowering
-├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, and linear-scan register allocation
+├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, dead-instruction elimination, dead-store elimination, branch simplification, and linear-scan register allocation
 ├── codegen_ir/                Active EIR to target assembly backend
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
 ├── termination.rs             Structured terminal-effect analysis shared by checker and optimizer
 ├── names.rs                   Qualified/FQN name model + assembly symbol mangling
 ├── name_resolver/             Namespace/use resolution to canonical names
+├── pdo_prelude.rs             PDO standard-library prelude injection entry point
+├── pdo_prelude/               PDO driver detection from the DSN prefix
+├── tz_prelude.rs              Timezone-introspection prelude injection entry point
+├── tz_prelude/                Timezone-introspection prelude usage detection
+├── list_id_prelude.rs         DateTimeZone identifier-list prelude injection entry point
+├── list_id_prelude/           Identifier-list prelude detection and baked table data
+├── var_export_prelude.rs      var_export prelude injection entry point
+├── var_export_prelude/        var_export prelude usage detection
 │
 ├── lexer/
 │   ├── mod.rs                 tokenize() → Vec<(Token, Span)>
@@ -331,7 +341,7 @@ src/
 │   │   ├── io/                fopen, fwrite, file_get_contents, streams, sockets, scandir, ... (142 files)
 │   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ... (16 files)
 │   │   ├── spl/               iterator_to_array, iterator_count, iterator_apply, iterator_common (5 files)
-│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, attribute reflection, ... (32 files)
+│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, attribute reflection, ... (38 files)
 │   │
 │   └── runtime/               Runtime routines and target-specific emission helpers
 │       ├── mod.rs             Runtime module boundary; re-exports the emission entry points
@@ -339,9 +349,9 @@ src/
 │       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
 │       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (71 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (131 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (132 files)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed plus callable descriptor release (3 files)
-│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (108 files)
+│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (109 files)
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (6 files)

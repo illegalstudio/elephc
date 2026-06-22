@@ -891,6 +891,7 @@ foreach ($items as $it) { echo $it->weight, ","; }
     assert_eq!(out, "10,20,30,");
 }
 
+/// Verifies dynamic static callable arrays across fixed-callback array helpers.
 #[test]
 fn test_dynamic_static_callable_array_variable_fixed_callback_runtimes() {
     let out = compile_and_run(

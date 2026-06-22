@@ -21,24 +21,28 @@ PHP source
   -> (conditional)     apply compiler ifdef branches from --define
   -> autoload-build    discover autoload rules
   -> resolve           resolve include/require and declarations
-  -> pdo-prelude       inject the PDO prelude when used
-  -> name-resolve      apply namespace/use rules, canonicalize names
-  -> autoload-run      run autoload insertion
-  -> opt-fold          AST constant folding
-  -> typecheck         Type checker / warnings
-  -> exports-scan      collect #[Export] functions (cdylib)
-  -> opt-prop          AST constant propagation
-  -> opt-post          prune constant control flow
-  -> opt-norm          control-flow normalization
-  -> dce               AST dead-code elimination
-  -> ir-lower          AST -> EIR lowering + EIR validation
-  -> ir-opt            EIR optimization passes (fixed-point driver)
-  -> runtime-cache     build/reuse the prebuilt runtime object
-  -> codegen-ir        EIR -> target assembly
-  -> write-asm         write the generated assembly
-  -> source-map        write the .map sidecar (with --source-map)
-  -> assemble          assembler: assembly -> object file
-  -> link              linker: object files -> binary
+  -> pdo-prelude        inject the PDO prelude when used
+  -> tz-prelude         inject the timezone-introspection prelude when used
+  -> list-id-prelude    inject the DateTimeZone identifier-list prelude when used
+  -> var-export-prelude inject the var_export prelude when used
+  -> name-resolve       apply namespace/use rules, canonicalize names
+  -> autoload-run       run autoload insertion
+  -> opt-fold           AST constant folding
+  -> typecheck          Type checker / warnings
+  -> exports-scan       collect #[Export] functions (cdylib)
+  -> opt-prop           AST constant propagation
+  -> opt-post           prune constant control flow
+  -> opt-norm           control-flow normalization
+  -> dce                AST dead-code elimination
+  -> ir-lower           AST -> EIR lowering + EIR validation
+  -> ir-opt             EIR optimization passes (fixed-point driver)
+  -> ir-print           print EIR and stop (with --emit-ir)
+  -> runtime-cache      build/reuse the prebuilt runtime object
+  -> codegen-ir         EIR -> target assembly
+  -> write-asm          write the generated assembly
+  -> source-map         write the .map sidecar (with --source-map)
+  -> assemble           assembler: assembly -> object file
+  -> link               linker: object files -> binary
 ```
 
 ## Front end: source to checked AST
@@ -50,9 +54,12 @@ PHP source
   substituted before any later pass sees them.
 - **conditional compilation** — `ifdef` branches are resolved using the symbols
   passed with [`--define`](linking-and-conditional-compilation.md#conditional-compilation).
-- **resolve / name-resolve** — `include`/`require` are resolved, declarations are
-  discovered, and namespace/`use` rules rewrite references to fully-qualified
-  names. Autoloading is wired in around these steps.
+- **resolve / prelude injection / name-resolve** — `include`/`require` are
+  resolved, declarations are discovered, demand-loaded PHP preludes for PDO,
+  timezone introspection, `DateTimeZone::listIdentifiers()`, and `var_export()`
+  are injected only when referenced, and namespace/`use` rules rewrite
+  references to fully-qualified names. Autoloading is wired in around these
+  steps.
 - **typecheck** — the [Type Checker](../internals/the-type-checker.md) infers and
   validates types and emits warnings.
 
@@ -72,9 +79,14 @@ behind a flag.
   dominance, ownership, and effect invariants. See
   [The EIR Design](../internals/the-ir.md).
 - **ir-opt** — the [EIR optimization passes](optimization.md#eir-optimization-passes)
-  run a fixed-point driver over each function (currently identity arithmetic
-  folding). In debug/test builds the function is re-validated after every pass.
-  This phase can be turned off with [`--no-ir-opt`](optimization.md#eir-optimization-passes).
+  run a fixed-point driver over each function: identity arithmetic folding,
+  local peephole rewrites, CFG-aware dead-instruction elimination, dead-store
+  elimination, and branch simplification. In
+  debug/test builds the function is re-validated after every pass. This phase
+  can be turned off with [`--no-ir-opt`](optimization.md#eir-optimization-passes).
+- **ir-print** — only present with [`--emit-ir`](output-and-diagnostics.md#--emit-ir);
+  formats the optimized or unoptimized EIR textual form, prints it to stdout,
+  and stops before runtime preparation or code generation.
 - **runtime-cache** — the hand-written runtime is assembled once and cached in
   `~/.cache/elephc/`, then reused across compiles. See
   [The Runtime](../internals/the-runtime.md).

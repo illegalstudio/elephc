@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ir::{BasicBlock, BlockId, Function, Terminator, ValueId};
+use crate::ir::{BasicBlock, BlockId, Function, Op, Terminator, ValueId};
 
 /// Per-block liveness result: which values are live entering and leaving each
 /// block. Live-in/live-out are keyed by `BlockId` for every block in the
@@ -115,6 +115,9 @@ fn block_facts(func: &Function, block: &BasicBlock) -> BlockFacts {
         let inst = func
             .instruction(*inst_id)
             .expect("block references a valid instruction");
+        if inst.op == Op::Nop {
+            continue;
+        }
         for operand in &inst.operands {
             uses.insert(*operand);
         }

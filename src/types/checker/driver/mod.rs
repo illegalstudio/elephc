@@ -332,6 +332,7 @@ fn flatten_enum_methods(program: &[Stmt]) -> Vec<FlattenedClass> {
     units
 }
 
+/// Rewrites `self`/`static`/`parent` annotations across flattened class metadata.
 fn substitute_relative_class_types_in_flattened(classes: &mut [FlattenedClass]) {
     for class in classes.iter_mut() {
         let self_class = class.name.clone();

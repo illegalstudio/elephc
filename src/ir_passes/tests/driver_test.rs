@@ -39,9 +39,11 @@ fn sample_function() -> Function {
 /// A pass that never changes anything.
 struct NoopPass;
 impl IrPass for NoopPass {
+    /// Returns the stable synthetic pass name reported in driver diagnostics.
     fn name(&self) -> &'static str {
         "noop"
     }
+    /// Reports no changes so the driver can stop after one pass iteration.
     fn run(&self, _function: &mut Function, _data: &mut DataPool) -> bool {
         false
     }
@@ -50,9 +52,11 @@ impl IrPass for NoopPass {
 /// A pass that mutates once (appends `!` to the name) then reports stable.
 struct AppendBangPass;
 impl IrPass for AppendBangPass {
+    /// Returns the synthetic pass name used when this pass runs.
     fn name(&self) -> &'static str {
         "append-bang"
     }
+    /// Appends one marker to the function name and then converges.
     fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
         if function.name.ends_with('!') {
             false
@@ -66,9 +70,11 @@ impl IrPass for AppendBangPass {
 /// A pass that always reports a change, so the driver can never converge.
 struct AlwaysChangePass;
 impl IrPass for AlwaysChangePass {
+    /// Returns the synthetic pass name used in non-convergence diagnostics.
     fn name(&self) -> &'static str {
         "always-change"
     }
+    /// Always reports a change so the driver's fixed-point cap is exercised.
     fn run(&self, _function: &mut Function, _data: &mut DataPool) -> bool {
         true
     }
@@ -77,9 +83,11 @@ impl IrPass for AlwaysChangePass {
 /// A pass that corrupts the IR by removing the entry block's terminator.
 struct DropTerminatorPass;
 impl IrPass for DropTerminatorPass {
+    /// Returns the synthetic pass name used in validation diagnostics.
     fn name(&self) -> &'static str {
         "drop-terminator"
     }
+    /// Removes the entry terminator and reports a change to trigger validation.
     fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
         let entry = function.entry;
         if let Some(block) = function.block_mut(entry) {

@@ -19,11 +19,10 @@
 //!   ref-cell promote/alias/release or invoker-ref op. Escaping slots are skipped
 //!   entirely. This matters because by-reference call arguments require the value
 //!   to remain a real `load_local` (the backend takes the slot's address), and a
-//!   callee may mutate the slot, so a later load must not be forwarded to a
-//!   pre-call value.
-//! - Non-escaping plain locals are never aliased and cannot be mutated by a call,
-//!   so forwarding is dominance-safe: the resident value was defined earlier in
-//!   the same block and dominates the folded load and its uses.
+//!   callee may mutate the slot.
+//! - Forwarding also stops at any effectful instruction. This keeps the peephole
+//!   local and avoids extending scalar live ranges across calls or runtime
+//!   helpers while backend call-clobber handling remains conservative.
 
 use std::collections::{HashMap, HashSet};
 
@@ -64,7 +63,9 @@ pub(super) fn collect(function: &Function, rewrites: &mut Rewrites) {
                 }
                 Op::StoreLocal => {
                     let Some(slot) = slot_of(inst) else { continue };
-                    let Some(&stored) = inst.operands.first() else { continue };
+                    let Some(&stored) = inst.operands.first() else {
+                        continue;
+                    };
                     if !is_tracked_slot(function, slot) || escaping.contains(&slot) {
                         continue;
                     }
@@ -76,6 +77,10 @@ pub(super) fn collect(function: &Function, rewrites: &mut Rewrites) {
                     }
                 }
                 _ => {
+                    if !inst.effects.is_pure() {
+                        resident.clear();
+                        continue;
+                    }
                     // Any other instruction that names a slot invalidates it.
                     for slot in slots_of(inst) {
                         resident.remove(&slot);

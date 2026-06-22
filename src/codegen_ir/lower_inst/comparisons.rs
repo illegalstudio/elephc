@@ -39,11 +39,12 @@ pub(super) fn lower_str_cmp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             abi::emit_call_label(ctx.emitter, "__rt_strcmp");
             ctx.emitter
                 .instruction(&format!("cmp {}, #0", result_reg));               // compare the lexicographic result against zero
-            ctx.emitter.instruction(&format!(
+            let set_inst = format!(
                 "cset {}, {}",
                 result_reg,
                 super::aarch64_condition(predicate)?
-            )); // materialize the ordered predicate as 0 or 1
+            );
+            ctx.emitter.instruction(&set_inst);                                 // materialize the ordered predicate as 0 or 1
         }
         Arch::X86_64 => {
             ctx.load_string_value_to_regs(lhs, "rdi", "rsi")?;

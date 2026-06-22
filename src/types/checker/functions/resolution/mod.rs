@@ -82,6 +82,8 @@ impl Checker {
         CompileError::new(span, &format!("Undefined function: {}", name))
     }
 
+    /// Checks a function call, including externs, declared functions, variants,
+    /// builtins, call-argument normalization, and return-type inference.
     pub fn check_function_call(
         &mut self,
         name: &str,

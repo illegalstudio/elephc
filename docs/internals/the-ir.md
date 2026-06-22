@@ -948,6 +948,100 @@ phase commits them, sharing `replace_all_uses`, `resolve_chains`, and
   `persistent` so cleanup never frees the literal. Nested concats converge across
   driver sweeps.
 
+### Dead Instruction Elimination
+
+The third registered transform (`src/ir_passes/dead_inst.rs`) removes
+result-producing instructions whose values are not live over the CFG and whose
+effect metadata says they are pure. It computes liveness with successor live-in
+sets, initializes each block's backward walk with those live-out values plus
+terminator uses, and then neutralizes dead instructions to `nop`.
+
+Neutralization preserves instruction/result value table slots, so the validator
+does not need value renumbering or block-list surgery. Read-only, allocation,
+mutation, refcounting, output, warning, fatal, throw, and deopt-capable
+instructions stay intact; dead read elimination is deferred until a later pass
+can prove equivalent PHP and ownership behavior. Dead chains in one block
+collapse during the backward walk; chains that cross block boundaries converge
+through the fixed-point pass driver after liveness is recomputed.
+
+### Dead Store Elimination
+
+The fourth registered transform (`src/ir_passes/dead_store.rs`) removes
+`store_local` instructions whose stored value is never read on any path before
+the slot is overwritten or the function exits. Unlike dead instruction
+elimination, which works at SSA-value granularity, this pass reasons about local
+*slots*: it runs a backward dataflow that gens a slot at each `load_local` and
+kills it at each `store_local`, iterating to a fixed point so live-out is the
+union of successor live-in sets. A store is dead when its slot is not live
+immediately after it, so an earlier store with no intervening read also dies.
+
+The pass is restricted to slots that are (1) ordinary `PhpLocal`s, (2) of a
+non-refcounted storage type (`!php_type_needs_lifetime_tracking`), (3) named only
+by plain `load_local`/`store_local`, and (4) never address-escaped by reference.
+The refcounting restriction is the key correctness boundary: assignment lowering
+wraps a refcounted slot's store with separate `acquire`/`release` instructions
+and releases the prior occupant, so dropping the `store_local` alone would leak
+the acquired value. Scalar slots carry no such ownership ops and their scope-exit
+cleanup is a no-op, so removing a dead scalar store is refcount-neutral. Any other
+slot-naming op (ref-cell promote/alias/release, `unset_local`, static-local or
+global access) makes a slot ineligible because it could read or alias the slot in
+a way the pass does not model.
+
+Condition (4) is subtle: a by-reference call argument (`new Box($v)` for a
+`public int &$value` constructor) or a by-reference closure capture
+(`use (&$x)`) is lowered as an ordinary `load_local`, and codegen later resolves
+that argument value back to its defining `load_local` and passes the slot's
+*address* — so the callee reads or mutates the slot through an alias that forward
+`load_local`-only liveness cannot see. Because a single-function pass has no
+callee signatures (which parameters are by-reference), the pass uses a
+conservative default-deny allowlist: a slot is excluded whenever any of its
+`load_local` results is consumed by an instruction that is not a proven
+value-only consumer (arithmetic, comparison, cast, output, store, string, or
+refcount op). Every call, object construction, closure capture, property/array
+access, and any future opcode is treated as a possible by-reference escape.
+Feeding a load into a value-only op first is safe because codegen only traces a
+*direct* `load_local` back to a slot.
+
+This complements the peephole pass's per-block, value-equality store forwarding
+(which drops a store of the value already resident): dead store elimination is
+liveness-based and crosses block boundaries, so it removes a store of a
+*different* value whose result is never observed. Stores are neutralized to
+`nop`; a pure value left feeding a removed store is then cleaned up by dead
+instruction elimination on a later driver sweep.
+
+### Branch Simplification
+
+The fifth registered transform (`src/ir_passes/branch_simplify.rs`) prunes the
+CFG in three ways:
+
+- **Constant-condition folding** — a `cond_br` whose condition resolves to a
+  constant (`const_bool`, `const_i64` via PHP truthiness, or `const_null`) becomes
+  an unconditional `br` to the taken edge. A `switch` on a `const_i64`/`const_bool`
+  scrutinee folds to a `br` to the matching case (or the default). A `while (true)`
+  loop, for example, lowers to a constant `cond_br` that this fold collapses.
+- **Empty-block jump threading** — a non-entry block with no parameters and only
+  `nop` instructions that ends in an unconditional `br` is a forwarding block.
+  Edges targeting it are redirected to the end of the forwarding chain (with cycle
+  detection). Because forwarding blocks have no parameters, every edge into them
+  carries empty arguments, so retargeting needs no argument rewriting.
+- **Unreachable-block neutralization** — blocks no longer reachable from the entry
+  have their terminator set to `Unreachable` and their instructions rewritten to
+  `nop`.
+
+Like the other passes, unreachable blocks are neutralized **in place** rather than
+physically removed. The validator requires `block.id == index` and reports any
+*use* in an unreachable block as `UseNotDominated` (an unreachable block's
+dominator set collapses to itself). Neutralizing clears every use — terminator
+and instruction operands — so the block stays valid, while the block, value, and
+instruction table slots keep their indices. This avoids renumbering and, crucially,
+keeps `try` handler block-id tokens (encoded in `try_push_handler` immediates)
+correct. Functions that use any exception-handling opcode are skipped wholesale,
+because their handler blocks are reachable through implicit edges absent from the
+terminator graph, so terminator-only reachability could wrongly neutralize a live
+handler. Removing edges only enlarges dominator sets and threaded forwarding blocks
+carry no definitions, so simplification never invalidates a use that was valid
+before; cross-block cascades converge through the fixed-point driver.
+
 ## AST Lowering Catalogue
 
 Lowering must cover every variant in `src/parser/ast/expr.rs` and

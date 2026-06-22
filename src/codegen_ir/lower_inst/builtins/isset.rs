@@ -403,17 +403,19 @@ fn emit_tagged_scalar_value_is_null(ctx: &mut FunctionContext<'_>, value: ValueI
     ctx.load_value_to_result(value)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!(
+            let cmp_inst = format!(
                 "cmp x1, #{}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
-            ));                                                                 // compare the tagged scalar tag against PHP null
+            );
+            ctx.emitter.instruction(&cmp_inst);                                 // compare the tagged scalar tag against PHP null
             ctx.emitter.instruction("cset x0, eq");                             // report the operand as missing when it is null
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!(
+            let cmp_inst = format!(
                 "cmp rdx, {}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
-            ));                                                                 // compare the tagged scalar tag against PHP null
+            );
+            ctx.emitter.instruction(&cmp_inst);                                 // compare the tagged scalar tag against PHP null
             ctx.emitter.instruction("sete al");                                 // set the low byte when the tagged scalar is null
             ctx.emitter.instruction("movzx rax, al");                           // widen the null-check result into the integer result register
         }

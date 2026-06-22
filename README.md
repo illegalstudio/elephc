@@ -5,6 +5,10 @@
 <h1 align="center">Elephc</h1>
 
 <p align="center">
+  <sub><strong>Pronounced</strong> <em>el-ef-see</em> — just spell out &ldquo;LFC&rdquo;.</sub>
+</p>
+
+<p align="center">
   <em>Write PHP. Ship a native binary.</em>
 </p>
 
@@ -176,7 +180,7 @@ elephc --check hello.php
 # Fall back to stack-only value placement (default is linear-scan registers)
 elephc --regalloc=stack hot.php
 
-# Disable the EIR optimization passes (identity folding, …) for A/B comparison
+# Disable the EIR optimization passes (identity folding, peepholes, dead instruction elimination, …) for A/B comparison
 elephc --no-ir-opt hot.php
 
 # Link extra native libraries or frameworks for FFI
@@ -379,7 +383,7 @@ elephc already performs a small but useful AST-level optimization pipeline befor
 
 The optimizer is intentionally conservative. It does not yet do full function-level CFG fixed-point propagation, aggressive whole-program optimization, or assembly-level peephole rewriting, but it does compute lightweight effect summaries and local CFG-lite reachability for known call targets and structured control flow so AST rewrites can stay more precise without becoming risky.
 
-At the EIR level, the backend runs a fixed-point **optimization pass driver** (on by default, gated by `--ir-opt`): identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …) and local peephole rewrites (box/unbox cancellation, scalar load/store forwarding, paired acquire/release cancellation, string-literal concat folding, and redundant `move` / `borrow` cleanup). Use `--no-ir-opt` to turn the passes off for A/B comparison.
+At the EIR level, the backend runs a fixed-point **optimization pass driver** (on by default, gated by `--ir-opt`): identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …), local peephole rewrites (box/unbox cancellation, scalar load/store forwarding, paired acquire/release cancellation, string-literal concat folding, and redundant `move` / `borrow` cleanup), CFG-aware dead instruction elimination for unused pure results, CFG-aware dead store elimination for scalar local writes that are never read before being overwritten, and branch simplification (folding constant-condition `cond_br` / `switch`, threading empty forwarding blocks, and removing unreachable blocks). Use `--no-ir-opt` to turn the passes off for A/B comparison.
 
 It then runs a **linear-scan register allocator** (Poletto-Sarkar) with liveness analysis, live intervals, and separate integer/float register pools. Hot scalar values live in callee-saved registers across calls instead of being spilled to the stack on every use, which speeds up compute-heavy code substantially. Use `--regalloc=stack` to fall back to the original spill-everything placement.
 
@@ -449,6 +453,12 @@ src/
 ├── name_resolver/       # Namespace/use resolution to canonical names
 ├── pdo_prelude.rs       # PDO standard-library prelude (PHP source) injection entry point
 ├── pdo_prelude/         # PDO driver detection from the DSN prefix (sqlite/pgsql/mysql)
+├── tz_prelude.rs        # Timezone-introspection prelude injection entry point
+├── tz_prelude/          # Timezone-introspection prelude usage detection
+├── list_id_prelude.rs   # DateTimeZone identifier-list prelude injection entry point
+├── list_id_prelude/     # Identifier-list prelude detection and baked table data
+├── var_export_prelude.rs # var_export prelude injection entry point
+├── var_export_prelude/  # var_export prelude usage detection
 │
 ├── lexer/               # Source text → token stream
 │   ├── token.rs         # Token enum

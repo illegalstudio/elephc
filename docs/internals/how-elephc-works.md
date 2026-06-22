@@ -116,6 +116,13 @@ In this example, there's nothing to resolve — the AST passes through unchanged
 
 **File:** `src/name_resolver/`
 
+Between include resolution and name resolution, elephc injects demand-loaded PHP
+preludes for built-in surfaces that need helper declarations: PDO,
+timezone-introspection APIs, `DateTimeZone::listIdentifiers()` filtering, and
+`var_export()`. These passes run after includes so usage inside included files is
+detected, and before name resolution so injected declarations participate in the
+same canonical-name pipeline as user code.
+
 After includes are flattened, elephc resolves namespace-aware names. This pass applies the current `namespace`, any `use` / `use function` / `use const` imports, and rewrites references to their canonical fully-qualified names before semantic analysis.
 
 In this example there are no namespaces or imports, so the AST still passes through unchanged.
@@ -278,7 +285,7 @@ function main:
   return
 ```
 
-After validation, a fixed-point optimization pass driver (`src/ir_passes/`) runs the registered EIR transformation passes over each function until none reports a change. The first pass is [identity arithmetic folding](the-ir.md#optimization-passes) (`x + 0` → `x`, `x * 0` → `0`, …); later releases add more passes to the same driver. In debug and test builds the driver re-validates each function after every pass, so an optimization bug aborts the compile immediately. These passes are on by default and can be disabled with [`--no-ir-opt`](../compiling/optimization.md#eir-optimization-passes).
+After validation, a fixed-point optimization pass driver (`src/ir_passes/`) runs the registered EIR transformation passes over each function until none reports a change. The current pass set performs [identity arithmetic folding](the-ir.md#optimization-passes) (`x + 0` → `x`, `x * 0` → `0`, …), local peephole rewrites, and CFG-aware dead-instruction elimination for unused pure results. In debug and test builds the driver re-validates each function after every pass, so an optimization bug aborts the compile immediately. These passes are on by default and can be disabled with [`--no-ir-opt`](../compiling/optimization.md#eir-optimization-passes).
 
 The exact textual IR contains value ids, types, ownership, spans, and terminators, but the important point is that the removed `if` shell does not reappear. `--emit-ir` stops here after printing the optimized, validated textual EIR; add `--no-ir-opt` to see the IR before the passes run.
 
@@ -388,6 +395,8 @@ The binary runs directly on the CPU. There is no PHP interpreter or VM at runtim
                     ▼ Conditional (ifdef no-op here)
                     │
                     ▼ Resolver (no-op here)
+                    │
+                    ▼ Demand-loaded preludes (no-op here)
                     │
                     ▼ NameResolver (no-op here)
                     │

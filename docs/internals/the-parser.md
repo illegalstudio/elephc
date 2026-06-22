@@ -142,7 +142,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `Global { vars }` | `global $x, $y;` — declares variables as referencing global storage |
 | `StaticVar { name, init }` | `static $count = 0;` — declares a variable that persists across function calls |
 | `ClassDecl { name, extends, implements, is_abstract, is_final, is_readonly_class, trait_uses, properties, constants, methods }` | `final readonly class Point extends Shape implements Named { use NamedTrait; ... }` |
-| `EnumDecl { name, backing_type, cases }` | `enum Status: int { case Ok = 1; case Err = 2; }` |
+| `EnumDecl { name, backing_type, cases, implements, methods, constants }` | `enum Status: int { case Ok = 1; case Err = 2; }` |
 | `PackedClassDecl { name, fields }` | `packed class Vec2 { public float $x; public float $y; }` |
 | `InterfaceDecl { name, extends, properties, methods, constants }` | `interface Named extends Stringable { public string $name { get; } public function name(): string; }` |
 | `TraitDecl { name, trait_uses, properties, constants, methods }` | `trait Named { public const KIND = "name"; ... }` |

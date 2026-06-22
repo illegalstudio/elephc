@@ -151,6 +151,7 @@ fn validate_scalar_signature(
     Ok(())
 }
 
+/// Returns whether `ty` can be marshaled as a v1 C-ABI export parameter.
 fn is_v1_param_type(ty: &PhpType) -> bool {
     matches!(
         ty,
@@ -158,6 +159,7 @@ fn is_v1_param_type(ty: &PhpType) -> bool {
     )
 }
 
+/// Returns whether `ty` can be marshaled as a v1 C-ABI export return value.
 fn is_v1_return_type(ty: &PhpType) -> bool {
     matches!(
         ty,

@@ -126,9 +126,11 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let resolved = elephc::var_export_prelude::inject_if_used(resolved);
     let resolved = elephc::image_prelude::inject_if_used(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let resolved = elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
+    let resolved =
+        elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
     let resolved = elephc::optimize::fold_constants(resolved);
-    let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
+    let check_result =
+        elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     let optimized = elephc::optimize::propagate_constants(resolved);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
@@ -202,16 +204,28 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     (user_asm, runtime_asm, required_libraries)
 }
 
-/// Lowers codegen fixtures to structurally valid EIR for validation and optional IR emission.
+/// Lowers codegen fixtures to EIR, runs the default-on IR optimizer, and validates the result.
 fn lower_and_validate_ir_for_codegen_fixture(
     program: &elephc::parser::ast::Program,
     check_result: &elephc::types::CheckResult,
 ) -> elephc::ir::Module {
-    let module = elephc::ir_lower::lower_program(program, check_result, target())
+    let mut module = elephc::ir_lower::lower_program(program, check_result, target())
         .expect("AST-to-EIR lowering failed for codegen fixture");
-    elephc::ir::validate_module(&module)
-        .expect("EIR validation failed for codegen fixture");
+    if ir_opt_enabled_for_codegen_fixture() {
+        elephc::ir_passes::optimize_module(&mut module);
+    }
+    elephc::ir::validate_module(&module).expect("EIR validation failed for codegen fixture");
     module
+}
+
+/// Returns whether the codegen fixture should run EIR optimization passes,
+/// matching the CLI's `ELEPHC_IR_OPT=off|on` default-on behavior.
+fn ir_opt_enabled_for_codegen_fixture() -> bool {
+    match std::env::var("ELEPHC_IR_OPT").as_deref() {
+        Ok("off") => false,
+        Ok("on") => true,
+        _ => true,
+    }
 }
 
 // Injects an exit harness into user assembly before the final `ret` instruction.
@@ -242,7 +256,11 @@ pub(crate) fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
 // Used for error-test fixtures that verify compile-time diagnostic messages.
 // Cleans up the temporary directory after execution.
 /// Provides the Compile harness expect failure helper used by the compiler module.
-pub(crate) fn compile_harness_expect_failure(source: &str, heap_size: usize, harness: &str) -> String {
+pub(crate) fn compile_harness_expect_failure(
+    source: &str,
+    heap_size: usize,
+    harness: &str,
+) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
