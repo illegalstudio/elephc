@@ -33,7 +33,10 @@ echo ":" . $target->label;
 echo ":" . (new ReflectionClass(ReflectValueAccessTarget::class))->getProperty("count")->getValue($target);
 (new ReflectionClass(ReflectValueAccessTarget::class))->getProperty("count")->setValue($target, 11);
 echo ":" . $target->count;
+echo ":" . (new ReflectionProperty(ReflectValueAccessTarget::class, "count"))->getValue(object: $target);
+(new ReflectionClass(ReflectValueAccessTarget::class))->getProperty("count")->setValue(value: 13, object: $target);
+echo ":" . $target->count;
 "#,
     );
-    assert_eq!(out, "1:7:old:new:7:11");
+    assert_eq!(out, "1:7:old:new:7:11:11:13");
 }

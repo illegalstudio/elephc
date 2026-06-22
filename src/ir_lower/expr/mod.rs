@@ -9153,27 +9153,70 @@ fn lower_reflection_property_value_call(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    if php_symbol_key(method) != "getvalue" {
-        return None;
-    }
     let (_, property, _) = reflection_property_instance_target(ctx, object_expr?)?;
-    let object_arg = reflection_property_get_value_object_arg(args)?;
+    match php_symbol_key(method).as_str() {
+        "getvalue" => lower_reflection_property_get_value(ctx, &property, args, expr),
+        "setvalue" => lower_reflection_property_set_value(ctx, &property, args, expr),
+        _ => None,
+    }
+}
+
+/// Lowers `ReflectionProperty::getValue($object)` to a direct property read.
+fn lower_reflection_property_get_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    property: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let object_arg = reflection_property_get_value_arg(args)?;
     let object = lower_expr(ctx, &object_arg);
     Some(lower_property_get_from_value(
         ctx,
         object,
-        &property,
+        property,
         Op::PropGet,
         expr,
     ))
 }
 
+/// Lowers `ReflectionProperty::setValue($object, $value)` to a direct property write.
+fn lower_reflection_property_set_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    property: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let (object_arg, value_arg) = reflection_property_set_value_args(args)?;
+    let target = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(object_arg),
+            property: property.to_string(),
+        },
+        expr.span,
+    );
+    lower_non_local_assignment_write(ctx, &target, &value_arg, expr.span);
+    Some(lower_null(ctx, expr))
+}
+
 /// Returns the explicit object argument passed to `ReflectionProperty::getValue()`.
-fn reflection_property_get_value_object_arg(args: &[Expr]) -> Option<Expr> {
-    match args {
-        [arg] => Some(arg.clone()),
-        _ => None,
+fn reflection_property_get_value_arg(args: &[Expr]) -> Option<Expr> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
     }
+    let (object, _) = reflection_class_static_property_regular_args(&args, "object", None)?;
+    object
+}
+
+/// Returns the explicit object and value arguments passed to `ReflectionProperty::setValue()`.
+fn reflection_property_set_value_args(args: &[Expr]) -> Option<(Expr, Expr)> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    let (object, value) =
+        reflection_class_static_property_regular_args(&args, "object", Some("value"))?;
+    Some((object?, value?))
 }
 
 /// Resolves an inline `new ReflectionProperty(Known::class, "prop")` instance property target.
