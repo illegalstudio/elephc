@@ -1434,6 +1434,36 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionProperty reports asymmetric set visibility on eval interface contracts.
+#[test]
+fn execute_program_reflects_eval_interface_asymmetric_property_set_visibility() {
+    let program = parse_fragment(
+        br#"interface EvalReflectAsymmetricIfaceProperty {
+    public protected(set) string $name { get; set; }
+    private(set) int $id { get; set; }
+}
+$protected = new ReflectionProperty("EvalReflectAsymmetricIfaceProperty", "name");
+echo $protected->isProtectedSet() ? "T" : "t";
+echo $protected->isPrivateSet() ? "P" : "p";
+echo $protected->isFinal() ? "F" : "f";
+echo $protected->getModifiers(); echo ":";
+$private = new ReflectionProperty("EvalReflectAsymmetricIfaceProperty", "id");
+echo $private->isProtectedSet() ? "T" : "t";
+echo $private->isPrivateSet() ? "P" : "p";
+echo $private->isFinal() ? "F" : "f";
+echo $private->getModifiers();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Tpf2625:tPF4705");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionProperty reports eval constructor-promotion metadata.
 #[test]
 fn execute_program_reflection_property_reports_eval_promoted_metadata() {

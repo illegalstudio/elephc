@@ -433,6 +433,77 @@ class EvalAsymAbstractSetBox extends EvalAsymAbstractSetBase {
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies eval interface protected(set) property contracts accept compatible implementations.
+#[test]
+fn execute_program_allows_interface_protected_set_property_contract() {
+    let program = parse_fragment(
+        br#"interface EvalAsymProtectedSetContract {
+    public protected(set) string $name { get; set; }
+}
+class EvalAsymProtectedSetBase implements EvalAsymProtectedSetContract {
+    public protected(set) string $name = "base";
+}
+class EvalAsymProtectedSetChild extends EvalAsymProtectedSetBase {
+    public function rename($name) { $this->name = $name; }
+}
+$box = new EvalAsymProtectedSetChild();
+echo $box->name; echo ":";
+$box->rename("child");
+echo $box->name;
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "base:child");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies private(set) interface contracts are final and cannot be implemented by a class.
+#[test]
+fn execute_program_rejects_private_set_interface_property_contract_implementation() {
+    let program = parse_fragment(
+        br#"interface EvalAsymPrivateSetInterfaceContract {
+    public private(set) int $value { get; set; }
+}
+class EvalAsymPrivateSetInterfaceBox implements EvalAsymPrivateSetInterfaceContract {
+    public private(set) int $value = 1;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("private(set) interface contract should be final");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies private(set) abstract properties behave as final contracts.
+#[test]
+fn execute_program_rejects_private_set_abstract_property_redeclaration() {
+    let program = parse_fragment(
+        br#"abstract class EvalAsymPrivateSetAbstractBase {
+    abstract public private(set) int $value { get; set; }
+}
+class EvalAsymPrivateSetAbstractBox extends EvalAsymPrivateSetAbstractBase {
+    public private(set) int $value = 1;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("private(set) abstract property should be final");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies readonly class inheritance requires matching readonly status.
 #[test]
 fn execute_program_rejects_readonly_class_extending_non_readonly_parent() {

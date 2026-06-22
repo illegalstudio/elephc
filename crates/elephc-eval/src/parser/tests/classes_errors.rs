@@ -356,6 +356,43 @@ fn parse_fragment_accepts_interface_property_hook_contracts() {
     );
 }
 
+/// Verifies interface property contracts retain asymmetric set visibility.
+#[test]
+fn parse_fragment_accepts_interface_asymmetric_property_contracts() {
+    let program = parse_fragment(
+        br#"interface DynEvalAsymmetricIface {
+    public protected(set) string $name { get; set; }
+    private(set) int $id { get; set; }
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::InterfaceDecl(
+            EvalInterface::with_constants_and_properties(
+                "DynEvalAsymmetricIface",
+                Vec::new(),
+                Vec::new(),
+                vec![
+                    EvalInterfaceProperty::new("name", true, true)
+                        .with_type(Some(EvalParameterType::new(
+                            vec![EvalParameterTypeVariant::String],
+                            false
+                        )))
+                        .with_set_visibility(Some(EvalVisibility::Protected)),
+                    EvalInterfaceProperty::new("id", true, true)
+                        .with_type(Some(EvalParameterType::new(
+                            vec![EvalParameterTypeVariant::Int],
+                            false
+                        )))
+                        .with_set_visibility(Some(EvalVisibility::Private)),
+                ],
+                Vec::new(),
+            )
+        )]
+    );
+}
+
 /// Verifies public property and method class members lower into dynamic class metadata.
 #[test]
 fn parse_fragment_accepts_public_class_members() {
@@ -832,6 +869,14 @@ fn parse_fragment_rejects_invalid_interface_property_hooks() {
         .expect_err("interface property hooks require at least one contract");
     parse_fragment(b"interface DynEvalIfaceHookDefault { public int $id = 1 { get; } }")
         .expect_err("interface property hook contracts cannot have defaults");
+    parse_fragment(
+        b"interface DynEvalIfaceAsymReadOnly { public protected(set) int $id { get; } }",
+    )
+    .expect_err("readonly virtual property cannot have asymmetric visibility");
+    parse_fragment(
+        b"interface DynEvalIfaceAsymUntyped { public protected(set) $id { get; set; } }",
+    )
+    .expect_err("asymmetric interface property must be typed");
 }
 
 /// Verifies abstract and final class modifiers lower into dynamic class metadata.

@@ -266,6 +266,7 @@ Rules:
 - The write visibility must not be weaker than the read visibility (`private public(set)` is rejected).
 - The property must be typed, and the modifier is not allowed on static properties.
 - Indirect writes through an array element (`$obj->items[] = x`, `$obj->items['k'] = x`) are writes too, so they honor the `set` visibility — not the (wider) read visibility.
+- Abstract and interface property hook contracts may carry asymmetric write visibility on writable (`{ set; }`) contracts. `private(set)` contracts are final and cannot be implemented or redeclared by a concrete child property.
 
 ### Property redeclaration
 

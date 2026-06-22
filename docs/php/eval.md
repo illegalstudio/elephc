@@ -140,8 +140,9 @@ Eval-declared classes support inheritance, public/protected/private properties
 and methods, asymmetric property write visibility (`private(set)` /
 `protected(set)`), constructor property promotion including by-reference promotion
 for variable, array-element, object-property, and default-value targets,
-concrete property `get` / `set` hooks, interface property hook contract checks,
-abstract property hook contracts, property-level `readonly`, `readonly class`,
+concrete property `get` / `set` hooks, interface property hook contract checks
+including asymmetric write visibility, abstract property hook contracts
+including asymmetric write visibility, property-level `readonly`, `readonly class`,
 `__construct()`, abstract classes and methods, final classes, methods, and
 properties, trait composition with `insteadof` conflict resolution and `as`
 aliases/visibility adaptations, interface implementation checks, static
@@ -379,8 +380,9 @@ when the variadic container itself is not rebound, and are reported through
 metadata with PHP-compatible `ReflectionProperty::IS_*` constants for the
 bitmask. `isPromoted()` reports generated/AOT and eval-declared
 promoted-property metadata. `isProtectedSet()` and `isPrivateSet()` derive from
-the retained modifier bitmask, including eval-declared and generated/AOT
-asymmetric visibility plus public readonly property metadata. `isDynamic()` reports `false` for supported
+the retained modifier bitmask, including eval-declared class, abstract-property,
+interface-property, and generated/AOT asymmetric visibility plus public readonly
+property metadata. `isDynamic()` reports `false` for supported
 declared properties and `true` for public dynamic object properties
 materialized with `new ReflectionProperty($object, $property_name)`.
 `ReflectionProperty::isDefault()` is the inverse for those supported dynamic

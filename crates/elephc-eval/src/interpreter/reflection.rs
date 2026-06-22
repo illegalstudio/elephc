@@ -3486,6 +3486,14 @@ fn eval_reflection_member_object_result(
     if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY && (member.modifiers & 512) != 0 {
         flags |= EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL;
     }
+    if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY && (member.modifiers & 4096) != 0 {
+        flags |= EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET | EVAL_REFLECTION_MEMBER_FLAG_FINAL;
+    } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY
+        && (member.modifiers & 2048) != 0
+        && !member.is_readonly
+    {
+        flags |= EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET;
+    }
     if member.is_dynamic {
         flags |= EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC;
     }
@@ -4556,7 +4564,7 @@ fn eval_reflection_property_metadata(
                 is_dynamic: false,
                 modifiers: eval_reflection_property_modifiers(
                     EvalVisibility::Public,
-                    None,
+                    property.set_visibility(),
                     false,
                     false,
                     true,

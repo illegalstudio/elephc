@@ -1221,7 +1221,9 @@ fn validate_property_parent_redeclaration(
     if parent_property.visibility() == EvalVisibility::Private {
         return Ok(());
     }
-    if parent_property.is_final() {
+    if parent_property.is_final()
+        || parent_property.set_visibility() == Some(EvalVisibility::Private)
+    {
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(())
@@ -1524,7 +1526,8 @@ fn class_property_satisfies_abstract_contract(
         return false;
     }
     if requirement.requires_set_hook() {
-        return property_contract_write_visibility_allows(requirement, property)
+        return requirement.set_visibility() != Some(EvalVisibility::Private)
+            && property_contract_write_visibility_allows(requirement, property)
             && (property.has_set_hook() || (!property.has_get_hook() && !property.is_readonly()));
     }
     requirement.requires_get_hook()
@@ -1775,7 +1778,9 @@ fn class_has_interface_property(
             return false;
         }
         if requirement.requires_set() {
-            return property.write_visibility() == EvalVisibility::Public
+            return requirement.set_visibility() != Some(EvalVisibility::Private)
+                && property_visibility_rank(property.write_visibility())
+                    >= property_visibility_rank(requirement.write_visibility())
                 && (property.has_set_hook()
                     || (!property.has_get_hook() && !property.is_readonly()));
         }

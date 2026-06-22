@@ -652,6 +652,7 @@ pub struct EvalInterfaceProperty {
     name: String,
     attributes: Vec<EvalAttribute>,
     property_type: Option<EvalParameterType>,
+    set_visibility: Option<EvalVisibility>,
     requires_get: bool,
     requires_set: bool,
 }
@@ -663,6 +664,7 @@ impl EvalInterfaceProperty {
             name: name.into(),
             attributes: Vec::new(),
             property_type: None,
+            set_visibility: None,
             requires_get,
             requires_set,
         }
@@ -671,6 +673,12 @@ impl EvalInterfaceProperty {
     /// Returns a copy of this interface property with retained type metadata.
     pub fn with_type(mut self, property_type: Option<EvalParameterType>) -> Self {
         self.property_type = property_type;
+        self
+    }
+
+    /// Returns a copy of this interface property with PHP asymmetric write visibility metadata.
+    pub const fn with_set_visibility(mut self, set_visibility: Option<EvalVisibility>) -> Self {
+        self.set_visibility = set_visibility;
         self
     }
 
@@ -695,6 +703,19 @@ impl EvalInterfaceProperty {
         self.property_type.as_ref()
     }
 
+    /// Returns the PHP asymmetric write visibility declared by this contract, if any.
+    pub const fn set_visibility(&self) -> Option<EvalVisibility> {
+        self.set_visibility
+    }
+
+    /// Returns the visibility required for writes by this property contract.
+    pub const fn write_visibility(&self) -> EvalVisibility {
+        match self.set_visibility {
+            Some(visibility) => visibility,
+            None => EvalVisibility::Public,
+        }
+    }
+
     /// Returns whether the interface requires the property to be readable.
     pub const fn requires_get(&self) -> bool {
         self.requires_get
@@ -714,9 +735,46 @@ impl EvalInterfaceProperty {
                 .property_type
                 .clone()
                 .or_else(|| other.property_type.clone()),
+            set_visibility: merge_eval_property_set_visibility(
+                self.set_visibility,
+                other.set_visibility,
+            ),
             requires_get: self.requires_get || other.requires_get,
             requires_set: self.requires_set || other.requires_set,
         }
+    }
+}
+
+/// Merges interface property set-visibility contracts by keeping the stricter write requirement.
+const fn merge_eval_property_set_visibility(
+    left: Option<EvalVisibility>,
+    right: Option<EvalVisibility>,
+) -> Option<EvalVisibility> {
+    let left = match left {
+        Some(visibility) => visibility,
+        None => EvalVisibility::Public,
+    };
+    let right = match right {
+        Some(visibility) => visibility,
+        None => EvalVisibility::Public,
+    };
+    let merged = if eval_visibility_rank(left) < eval_visibility_rank(right) {
+        left
+    } else {
+        right
+    };
+    match merged {
+        EvalVisibility::Public => None,
+        visibility => Some(visibility),
+    }
+}
+
+/// Returns a comparable visibility rank where smaller means more restrictive.
+const fn eval_visibility_rank(visibility: EvalVisibility) -> u8 {
+    match visibility {
+        EvalVisibility::Private => 1,
+        EvalVisibility::Protected => 2,
+        EvalVisibility::Public => 3,
     }
 }
 

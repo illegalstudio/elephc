@@ -1407,14 +1407,35 @@ impl Parser {
         let mut is_static = false;
         let mut is_final = false;
         let mut saw_public = false;
+        let mut set_visibility = None;
         loop {
             match self.current() {
                 TokenKind::Ident(name) if ident_eq(name, "public") => {
-                    if saw_public {
+                    self.advance();
+                    if self.consume_set_marker()? {
+                        if set_visibility.is_some() {
+                            return Err(EvalParseError::UnsupportedConstruct);
+                        }
+                        set_visibility = Some(EvalVisibility::Public);
+                    } else if saw_public {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    } else {
+                        saw_public = true;
+                    }
+                }
+                TokenKind::Ident(name) if ident_eq(name, "protected") => {
+                    self.advance();
+                    if !self.consume_set_marker()? || set_visibility.is_some() {
                         return Err(EvalParseError::UnsupportedConstruct);
                     }
-                    saw_public = true;
+                    set_visibility = Some(EvalVisibility::Protected);
+                }
+                TokenKind::Ident(name) if ident_eq(name, "private") => {
                     self.advance();
+                    if !self.consume_set_marker()? || set_visibility.is_some() {
+                        return Err(EvalParseError::UnsupportedConstruct);
+                    }
+                    set_visibility = Some(EvalVisibility::Private);
                 }
                 TokenKind::Ident(name) if ident_eq(name, "static") => {
                     if is_static {
@@ -1437,7 +1458,7 @@ impl Parser {
             }
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
-            if is_static {
+            if is_static || set_visibility.is_some() {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
             constants.push(
@@ -1447,7 +1468,7 @@ impl Parser {
             return Ok(());
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
-            if is_final {
+            if is_final || set_visibility.is_some() {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
             methods.push(
@@ -1460,7 +1481,7 @@ impl Parser {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         properties.push(
-            self.parse_interface_property_decl()?
+            self.parse_interface_property_decl(set_visibility)?
                 .with_attributes(attributes),
         );
         Ok(())
@@ -1506,8 +1527,12 @@ impl Parser {
     /// Parses one interface property hook contract.
     pub(super) fn parse_interface_property_decl(
         &mut self,
+        set_visibility: Option<EvalVisibility>,
     ) -> Result<EvalInterfaceProperty, EvalParseError> {
         let property_type = self.parse_optional_property_type()?;
+        if set_visibility.is_some() && property_type.is_none() {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
         let TokenKind::DollarIdent(name) = self.current() else {
             return Err(EvalParseError::ExpectedVariable);
         };
@@ -1517,7 +1542,12 @@ impl Parser {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         let (requires_get, requires_set) = self.parse_interface_property_hook_contracts()?;
-        Ok(EvalInterfaceProperty::new(name, requires_get, requires_set).with_type(property_type))
+        if set_visibility.is_some() && !requires_set {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        Ok(EvalInterfaceProperty::new(name, requires_get, requires_set)
+            .with_type(property_type)
+            .with_set_visibility(set_visibility))
     }
 
     /// Parses `{ get; set; }` hook contracts for an abstract or interface property.

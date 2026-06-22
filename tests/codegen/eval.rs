@@ -7541,6 +7541,32 @@ echo $protected->getModifiers();');
     assert_eq!(out, "1:base:7:owner:child:Pt4129:pT2049");
 }
 
+/// Verifies eval-declared interface asymmetric property contracts are enforced and reflected.
+#[test]
+fn test_eval_declared_interface_asymmetric_property_contract() {
+    let out = compile_and_run(
+        r#"<?php
+eval('interface EvalIfaceAsymContract {
+    public protected(set) string $name { get; set; }
+}
+class EvalIfaceAsymBase implements EvalIfaceAsymContract {
+    public protected(set) string $name = "base";
+}
+class EvalIfaceAsymChild extends EvalIfaceAsymBase {
+    public function rename($name) { $this->name = $name; }
+}
+$box = new EvalIfaceAsymChild();
+echo $box->name . ":";
+$box->rename("child");
+echo $box->name . ":";
+$ref = new ReflectionProperty("EvalIfaceAsymContract", "name");
+echo ($ref->isProtectedSet() ? "T" : "t") . ($ref->isPrivateSet() ? "P" : "p");
+echo $ref->getModifiers();');
+"#,
+    );
+    assert_eq!(out, "base:child:Tp2625");
+}
+
 /// Verifies eval can observe AOT constructor-promotion metadata through
 /// `ReflectionProperty::isPromoted()`.
 #[test]
