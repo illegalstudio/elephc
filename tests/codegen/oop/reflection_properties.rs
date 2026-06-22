@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Covers explicit object arguments for public instance properties.
+//! - Covers runtime-held public instance property reflectors.
 //! - Covers static properties where PHP permits no object argument.
 //! - Visibility-bypassing reflection access remains a separate surface.
 
@@ -66,4 +67,31 @@ echo ":" . ReflectStaticValueAccessTarget::$count;
 "#,
     );
     assert_eq!(out, "2:17:19:old:new:23");
+}
+
+/// Verifies runtime-held `ReflectionProperty` objects can read and write public
+/// instance properties through their retained property names.
+#[test]
+fn test_reflection_property_value_accessors_for_runtime_instance_reflectors() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectRuntimeValueAccessTarget {
+    public int $count = 4;
+    public string $label = "old";
+}
+
+$target = new ReflectRuntimeValueAccessTarget();
+$count = new ReflectionProperty(ReflectRuntimeValueAccessTarget::class, "count");
+echo $count->getValue($target);
+$count->setValue($target, 8);
+echo ":" . $target->count;
+
+$listed = (new ReflectionClass(ReflectRuntimeValueAccessTarget::class))->getProperties()[1];
+echo ":" . $listed->getName();
+echo ":" . $listed->getValue($target);
+$listed->setValue($target, "new");
+echo ":" . $target->label;
+"#,
+    );
+    assert_eq!(out, "4:8:label:old:new");
 }

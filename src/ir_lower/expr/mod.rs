@@ -9773,6 +9773,9 @@ fn dynamic_property_get_result_type(
         return property_get_result_type(ctx, object, name, Op::DynamicPropGet, expr);
     }
     let object_ty = ctx.builder.value_php_type(object);
+    if matches!(object_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return PhpType::Mixed;
+    }
     let Some((class_name, nullable)) = singular_object_class(&object_ty) else {
         return fallback_expr_type(expr);
     };
