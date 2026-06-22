@@ -13,6 +13,38 @@
 
 use super::*;
 
+/// Verifies `ReflectionMethod` exposes declared AOT return type metadata.
+#[test]
+fn test_reflection_method_reports_aot_return_type_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectMethodReturnDep {}
+class ReflectMethodReturnTarget {
+    public function named(string $value): ?string { return $value; }
+    public static function factory(): ReflectMethodReturnDep { return new ReflectMethodReturnDep(); }
+    public function plain() {}
+}
+
+$namedRef = new ReflectionMethod(ReflectMethodReturnTarget::class, "named");
+$named = $namedRef->getReturnType();
+echo ($namedRef->hasReturnType() ? "T" : "t") . ":";
+echo $named->getName() . ":";
+echo ($named->allowsNull() ? "N" : "n") . ":";
+echo ($named->isBuiltin() ? "B" : "b") . ":";
+$declaring = $namedRef->getParameters()[0]->getDeclaringFunction()->getReturnType();
+echo $declaring->getName() . ":";
+$static = (new ReflectionClass(ReflectMethodReturnTarget::class))->getMethod("factory")->getReturnType();
+echo $static->getName() . ":";
+echo ($static->allowsNull() ? "N" : "n") . ":";
+echo ($static->isBuiltin() ? "B" : "b") . ":";
+$plain = new ReflectionMethod(ReflectMethodReturnTarget::class, "plain");
+echo ($plain->hasReturnType() ? "P" : "p") . ":";
+echo $plain->getReturnType() === null ? "Q" : "q";
+"#,
+    );
+    assert_eq!(out, "T:string:N:B:string:ReflectMethodReturnDep:n:b:p:Q");
+}
+
 /// Verifies `ReflectionMethod::isVariadic()` reports the method-level variadic flag.
 #[test]
 fn test_reflection_method_reports_aot_variadic_flag() {

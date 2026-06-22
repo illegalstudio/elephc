@@ -134,6 +134,7 @@ enum ReflectionDeclaringFunctionMember {
         attr_names: Vec<String>,
         attr_args: Vec<Option<Vec<AttrArgEntry>>>,
         required_parameter_count: i64,
+        type_metadata: Option<ReflectionParameterTypeMetadata>,
     },
     Method {
         name: String,
@@ -142,6 +143,7 @@ enum ReflectionDeclaringFunctionMember {
         attr_args: Vec<Option<Vec<AttrArgEntry>>>,
         flags: ReflectionMemberFlags,
         required_parameter_count: i64,
+        type_metadata: Option<ReflectionParameterTypeMetadata>,
     },
 }
 
@@ -463,6 +465,13 @@ fn emit_reflection_owner_object(
             "__required_parameter_count",
             metadata.required_parameter_count,
         )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__has_return_type",
+            metadata.type_metadata.is_some(),
+        )?;
+        emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
     }
     if matches!(
         class_name,
@@ -876,11 +885,13 @@ fn reflection_function_metadata(
     };
     let reflected_name = function.name.trim_start_matches('\\').to_string();
     let required_parameter_count = reflection_required_parameter_count(signature);
+    let type_metadata = reflection_return_type_metadata(signature);
     let declaring_function = ReflectionDeclaringFunctionMember::Function {
         name: reflected_name.clone(),
         attr_names: function.attribute_names.clone(),
         attr_args: function.attribute_args.clone(),
         required_parameter_count,
+        type_metadata: type_metadata.clone(),
     };
     let mut metadata = empty_reflection_metadata();
     metadata.reflected_name = Some(reflected_name);
@@ -896,6 +907,7 @@ fn reflection_function_metadata(
         &[],
     )?;
     metadata.required_parameter_count = required_parameter_count;
+    metadata.type_metadata = type_metadata;
     Ok(metadata)
 }
 
@@ -969,7 +981,7 @@ fn reflection_method_owner_metadata(
         backing_value: None,
         is_enum_case: member.is_enum_case,
         parameter_members: member.parameters,
-        type_metadata: None,
+        type_metadata: member.type_metadata,
         property_default_value: None,
         required_parameter_count: member.required_parameter_count,
         is_final: false,
@@ -1107,11 +1119,13 @@ fn reflection_function_parameter_metadata(
         return Ok(empty_reflection_metadata());
     };
     let reflected_name = function.name.trim_start_matches('\\').to_string();
+    let type_metadata = reflection_return_type_metadata(signature);
     let declaring_function = ReflectionDeclaringFunctionMember::Function {
         name: reflected_name,
         attr_names: function.attribute_names.clone(),
         attr_args: function.attribute_args.clone(),
         required_parameter_count: reflection_required_parameter_count(signature),
+        type_metadata,
     };
     let parameters = reflection_parameter_members_with_declaring_function(
         ctx,
@@ -2392,6 +2406,7 @@ fn reflection_class_method_member(
         return Ok(None);
     };
     let required_parameter_count = reflection_required_parameter_count(sig);
+    let type_metadata = reflection_return_type_metadata(sig);
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: method_key.clone(),
         declaring_class_name: declaring_class_name.clone(),
@@ -2399,6 +2414,7 @@ fn reflection_class_method_member(
         attr_args: attr_args.clone(),
         flags,
         required_parameter_count,
+        type_metadata: type_metadata.clone(),
     };
     let parameters = reflection_parameter_members_with_declaring_class(
         ctx,
@@ -2418,7 +2434,7 @@ fn reflection_class_method_member(
         is_enum_case: false,
         flags,
         modifiers: reflection_method_modifiers_from_flags(flags),
-        type_metadata: None,
+        type_metadata,
         default_value: None,
         required_parameter_count,
         parameters,
@@ -2467,6 +2483,7 @@ fn reflection_interface_method_member(
         .unwrap_or_else(|| interface_name.to_string());
     let required_parameter_count = reflection_required_parameter_count(sig);
     let flags = reflection_member_flags(is_static, &Visibility::Public, false, true, false, false);
+    let type_metadata = reflection_return_type_metadata(sig);
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: method_key.clone(),
         declaring_class_name: Some(declaring_class_name.clone()),
@@ -2474,6 +2491,7 @@ fn reflection_interface_method_member(
         attr_args: Vec::new(),
         flags,
         required_parameter_count,
+        type_metadata: type_metadata.clone(),
     };
     let parameters = reflection_parameter_members_with_declaring_class(
         ctx,
@@ -2493,7 +2511,7 @@ fn reflection_interface_method_member(
         is_enum_case: false,
         flags,
         modifiers: reflection_method_modifiers_from_flags(flags),
-        type_metadata: None,
+        type_metadata,
         default_value: None,
         required_parameter_count,
         parameters,
@@ -2537,6 +2555,7 @@ fn reflection_trait_method_member(
         false,
     );
     let required_parameter_count = reflection_required_parameter_count(&info.signature);
+    let type_metadata = reflection_return_type_metadata(&info.signature);
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: method_key.clone(),
         declaring_class_name: Some(trait_name.to_string()),
@@ -2544,6 +2563,7 @@ fn reflection_trait_method_member(
         attr_args: Vec::new(),
         flags,
         required_parameter_count,
+        type_metadata: type_metadata.clone(),
     };
     let parameters = reflection_parameter_members_with_declaring_class(
         ctx,
@@ -2563,7 +2583,7 @@ fn reflection_trait_method_member(
         is_enum_case: false,
         flags,
         modifiers: reflection_method_modifiers_from_flags(flags),
-        type_metadata: None,
+        type_metadata,
         default_value: None,
         required_parameter_count,
         parameters,
@@ -3051,6 +3071,23 @@ fn reflection_parameter_type_metadata(
     match ty {
         PhpType::Union(members) => reflection_union_or_nullable_type_metadata(members),
         _ => reflection_named_type_metadata(ty).map(ReflectionParameterTypeMetadata::Named),
+    }
+}
+
+/// Converts a declared return type into the supported `ReflectionType` subset.
+fn reflection_return_type_metadata(sig: &FunctionSig) -> Option<ReflectionParameterTypeMetadata> {
+    if !sig.declared_return {
+        return None;
+    }
+    match &sig.return_type {
+        PhpType::Void => Some(ReflectionParameterTypeMetadata::Named(
+            reflection_builtin_named_type("void", false),
+        )),
+        PhpType::Never => Some(ReflectionParameterTypeMetadata::Named(
+            reflection_builtin_named_type("never", false),
+        )),
+        PhpType::Union(members) => reflection_union_or_nullable_type_metadata(members),
+        ty => reflection_named_type_metadata(ty).map(ReflectionParameterTypeMetadata::Named),
     }
 }
 
@@ -4788,6 +4825,13 @@ fn emit_reflection_member_object(
             "__required_parameter_count",
             member.required_parameter_count,
         )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            member_class_name,
+            "__has_return_type",
+            member.type_metadata.is_some(),
+        )?;
+        emit_reflection_owner_type_property(ctx, member_class_name, member.type_metadata.as_ref())?;
         emit_reflection_owner_int_property(
             ctx,
             member_class_name,
@@ -5007,12 +5051,14 @@ fn emit_reflection_parameter_declaring_function_property(
             attr_names,
             attr_args,
             required_parameter_count,
+            type_metadata,
         }) => {
             let mut metadata = empty_reflection_metadata();
             metadata.reflected_name = Some(name.clone());
             metadata.attr_names = attr_names.clone();
             metadata.attr_args = attr_args.clone();
             metadata.required_parameter_count = *required_parameter_count;
+            metadata.type_metadata = type_metadata.clone();
             emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
             emit_box_current_value_as_mixed(
                 ctx.emitter,
@@ -5026,6 +5072,7 @@ fn emit_reflection_parameter_declaring_function_property(
             attr_args,
             flags,
             required_parameter_count,
+            type_metadata,
         }) => {
             let mut metadata = empty_reflection_metadata();
             metadata.reflected_name = Some(name.clone());
@@ -5034,6 +5081,8 @@ fn emit_reflection_parameter_declaring_function_property(
             metadata.attr_args = attr_args.clone();
             metadata.member_flags = *flags;
             metadata.required_parameter_count = *required_parameter_count;
+            metadata.type_metadata = type_metadata.clone();
+            metadata.modifiers = reflection_method_modifiers_from_flags(*flags);
             emit_reflection_owner_object(ctx, "ReflectionMethod", &metadata)?;
             emit_box_current_value_as_mixed(
                 ctx.emitter,
