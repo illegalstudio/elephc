@@ -483,6 +483,34 @@ fn builtin_reflection_class_new_instance_method() -> ClassMethod {
     }
 }
 
+/// Returns a public variadic `ReflectionMethod::invoke()` method shell.
+///
+/// Direct AOT calls are lowered specially so the first argument becomes the
+/// invocation receiver and the remaining source arguments are normalized
+/// against the reflected method's own signature.
+fn builtin_reflection_method_invoke_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "invoke".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(mixed_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: Some("args".to_string()),
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public `ReflectionClass::newInstanceArgs()` method.
 ///
 /// Direct calls are lowered specially so the provided argument array becomes
@@ -3096,6 +3124,9 @@ fn builtin_reflection_owner_class(
             "__required_parameter_count",
         ));
     }
+    if name == "ReflectionMethod" {
+        methods.push(builtin_reflection_method_invoke_method());
+    }
     properties.push(builtin_property(
         "__attrs",
         Visibility::Private,
@@ -3781,6 +3812,10 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
                     sig.return_type = PhpType::Int;
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("invoke")) {
+                    sig.return_type = PhpType::Mixed;
+                    sig.variadic = Some("args".to_string());
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getParameters")) {
                     sig.return_type = PhpType::Array(Box::new(PhpType::Object(
