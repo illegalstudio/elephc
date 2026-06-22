@@ -1584,7 +1584,7 @@ fn builtin_reflection_class_array_method(
         param_attributes: Vec::new(),
         variadic: None,
         variadic_type: None,
-        return_type: Some(return_type),
+        return_type: Some(return_type.clone()),
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::PropertyAccess {
@@ -1600,7 +1600,7 @@ fn builtin_reflection_class_array_method(
     }
 }
 
-/// Returns a public `ReflectionClass` array method with a fail-closed optional filter.
+/// Returns a public `ReflectionClass` array method with an optional modifier filter.
 fn builtin_reflection_class_filtered_array_method(
     method_name: &str,
     property: &str,
@@ -1608,6 +1608,7 @@ fn builtin_reflection_class_filtered_array_method(
 ) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     let filter = variable_expr("filter", dummy_span);
+    let member = variable_expr("member", dummy_span);
     let source = reflection_this_property(property, dummy_span);
     let filter_is_null = binary_expr(
         filter.clone(),
@@ -1616,12 +1617,23 @@ fn builtin_reflection_class_filtered_array_method(
         dummy_span,
     );
     let filter_is_zero = binary_expr(
-        filter,
+        filter.clone(),
         BinOp::StrictEq,
         Expr::new(ExprKind::IntLiteral(0), dummy_span),
         dummy_span,
     );
     let empty_result = Expr::new(ExprKind::ArrayLiteral(Vec::new()), dummy_span);
+    let modifier_match = binary_expr(
+        binary_expr(
+            method_call_expr(member.clone(), "getModifiers", Vec::new(), dummy_span),
+            BinOp::BitAnd,
+            filter,
+            dummy_span,
+        ),
+        BinOp::StrictNotEq,
+        Expr::new(ExprKind::IntLiteral(0), dummy_span),
+        dummy_span,
+    );
     ClassMethod {
         name: method_name.to_string(),
         visibility: Visibility::Public,
@@ -1638,7 +1650,7 @@ fn builtin_reflection_class_filtered_array_method(
         param_attributes: Vec::new(),
         variadic: None,
         variadic_type: None,
-        return_type: Some(return_type),
+        return_type: Some(return_type.clone()),
         body: vec![
             Stmt::new(
                 StmtKind::If {
@@ -1664,17 +1676,42 @@ fn builtin_reflection_class_filtered_array_method(
                 },
                 dummy_span,
             ),
-            throw_new_reflection_exception(
-                string_lit(
-                    &format!(
-                        "ReflectionClass::{}() dynamic filters are not supported",
-                        method_name
-                    ),
-                    dummy_span,
-                ),
+            Stmt::new(
+                StmtKind::TypedAssign {
+                    type_expr: return_type.clone(),
+                    name: "result".to_string(),
+                    value: empty_result,
+                },
                 dummy_span,
             ),
-            Stmt::new(StmtKind::Return(Some(empty_result)), dummy_span),
+            Stmt::new(
+                StmtKind::Foreach {
+                    array: source,
+                    key_var: None,
+                    value_var: "member".to_string(),
+                    value_by_ref: false,
+                    body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: modifier_match,
+                            then_body: vec![Stmt::new(
+                                StmtKind::ArrayPush {
+                                    array: "result".to_string(),
+                                    value: member,
+                                },
+                                dummy_span,
+                            )],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(variable_expr("result", dummy_span))),
+                dummy_span,
+            ),
         ],
         span: dummy_span,
         attributes: Vec::new(),

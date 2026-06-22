@@ -170,6 +170,40 @@ echo ":" . count($staticMethods) . ":" . count($privateMethods) . ":" . count($n
     assert_eq!(out, "2:count:4:8:label:old:new:1:instance:0:3:1:0");
 }
 
+/// Verifies runtime-held `ReflectionClass` objects apply dynamic member filters
+/// without degrading returned reflector elements to unusable mixed payloads.
+#[test]
+fn test_reflection_class_runtime_member_filters_return_usable_reflectors() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectRuntimeFilteredMemberTarget {
+    public int $instance = 1;
+    private static int $count = 4;
+    protected static string $label = "old";
+
+    public function touch(): void {}
+    private function secret(): void {}
+    protected static function helper(): void {}
+}
+
+function inspect_members(ReflectionClass $ref, int $propertyFilter, int $methodFilter): void {
+    $props = $ref->getProperties($propertyFilter);
+    echo count($props) . ":" . $props[0]->getName() . ":" . $props[1]->getName();
+
+    $methods = $ref->getMethods($methodFilter);
+    echo ":" . count($methods) . ":" . $methods[0]->getName() . ":" . $methods[0]->isPrivate();
+}
+
+inspect_members(
+    new ReflectionClass(ReflectRuntimeFilteredMemberTarget::class),
+    ReflectionProperty::IS_STATIC,
+    ReflectionMethod::IS_PRIVATE
+);
+"#,
+    );
+    assert_eq!(out, "2:count:label:1:secret:1");
+}
+
 /// Verifies ReflectionClass static property value helpers bypass visibility and
 /// operate on the same live static storage as direct class methods.
 #[test]
