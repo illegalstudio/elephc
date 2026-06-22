@@ -828,6 +828,7 @@ fn builtin_reflection_parameter() -> FlattenedClass {
                 bool_lit(false),
             ),
             builtin_property("__type", Visibility::Private, Some(mixed_type()), null_lit()),
+            builtin_property("__class", Visibility::Private, Some(mixed_type()), null_lit()),
             builtin_property(
                 "__has_default_value",
                 Visibility::Private,
@@ -892,6 +893,7 @@ fn builtin_reflection_parameter() -> FlattenedClass {
             builtin_reflection_slot_getter("isArray", "__is_array_type", TypeExpr::Bool),
             builtin_reflection_slot_getter("isCallable", "__is_callable_type", TypeExpr::Bool),
             builtin_reflection_slot_getter("getType", "__type", mixed_type()),
+            builtin_reflection_slot_getter("getClass", "__class", mixed_type()),
             builtin_reflection_owner_get_attributes_method(),
             builtin_reflection_slot_getter(
                 "isDefaultValueAvailable",

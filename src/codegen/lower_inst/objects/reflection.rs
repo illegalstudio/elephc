@@ -5912,6 +5912,7 @@ fn emit_reflection_parameter_properties(
         parameter.is_callable_type,
     )?;
     emit_reflection_parameter_type_property(ctx, parameter)?;
+    emit_reflection_parameter_class_property(ctx, parameter)?;
     emit_reflection_owner_bool_property(
         ctx,
         "ReflectionParameter",
@@ -6081,6 +6082,49 @@ fn emit_reflection_parameter_type_property(
         "ReflectionParameter",
         parameter.type_metadata.as_ref(),
     )
+}
+
+/// Writes one ReflectionParameter object's legacy nullable class-type slot.
+fn emit_reflection_parameter_class_property(
+    ctx: &mut FunctionContext<'_>,
+    parameter: &ReflectionParameterMember,
+) -> Result<()> {
+    let class_offset = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get("ReflectionParameter")
+            .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+        reflection_property_offset(class_info, "__class")?
+    };
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    if let Some(class_name) = reflection_parameter_class_name(parameter) {
+        let class_metadata = reflection_shallow_class_metadata_for_name(ctx, class_name)?;
+        emit_reflection_owner_object(ctx, "ReflectionClass", &class_metadata)?;
+        emit_box_current_value_as_mixed(
+            ctx.emitter,
+            &PhpType::Object("ReflectionClass".to_string()),
+        );
+    } else {
+        emit_boxed_null_literal_to_result(ctx);
+    }
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, class_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, class_offset + 8);
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    Ok(())
+}
+
+/// Returns the retained object class name for ReflectionParameter::getClass().
+fn reflection_parameter_class_name(parameter: &ReflectionParameterMember) -> Option<&str> {
+    match parameter.type_metadata.as_ref()? {
+        ReflectionParameterTypeMetadata::Named(metadata) if !metadata.is_builtin => {
+            Some(metadata.name.as_str())
+        }
+        _ => None,
+    }
 }
 
 /// Writes one reflection owner's nullable type slot.
