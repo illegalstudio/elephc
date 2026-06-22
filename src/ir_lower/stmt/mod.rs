@@ -19,8 +19,9 @@ use crate::ir_lower::context::{FinallyFrame, LoopFrame, LoweredValue, LoweringCo
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
     coerce_to_int_at_span, lower_callable_array_for_assignment, lower_closure_for_assignment,
-    lower_expr, reflection_class_binding_for_expr, reflection_property_binding_for_expr,
-    static_callable_binding_for_expr, string_op_uses_scratch_storage,
+    lower_expr, reflection_class_binding_for_expr, reflection_method_binding_for_expr,
+    reflection_property_binding_for_expr, static_callable_binding_for_expr,
+    string_op_uses_scratch_storage,
     type_satisfies_array_access_for_ir,
 };
 use crate::names::{php_symbol_key, property_hook_set_method};
@@ -259,6 +260,9 @@ fn lower_block(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
 /// Emits EIR for `echo`.
 fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span) {
     let value = lower_expr(ctx, expr);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     ctx.emit_void(
         Op::EchoValue,
         vec![value.value],
@@ -278,6 +282,7 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     let static_callable = static_callable_binding_for_expr(ctx, value);
     let reflected_class = reflection_class_binding_for_expr(ctx, value);
     let reflected_property = reflection_property_binding_for_expr(ctx, value);
+    let reflected_method = reflection_method_binding_for_expr(ctx, value);
     let fiber_start_sig = crate::ir_lower::fibers::start_sig_for_expr(ctx, value);
     let callable_array = lower_callable_array_for_assignment(ctx, value, static_callable.as_ref());
     let lowered = callable_array
@@ -305,6 +310,9 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     }
     if let Some((reflected_class, reflected_property)) = reflected_property {
         ctx.bind_reflection_property_local(name, reflected_class, reflected_property);
+    }
+    if let Some((reflected_class, reflected_method)) = reflected_method {
+        ctx.bind_reflection_method_local(name, reflected_class, reflected_method);
     }
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(name, sig);

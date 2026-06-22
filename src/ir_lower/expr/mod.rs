@@ -1488,6 +1488,8 @@ fn lower_assignment_expr(
     let reflected_class = assigned_name.and_then(|_| reflection_class_binding_for_expr(ctx, value));
     let reflected_property =
         assigned_name.and_then(|_| reflection_property_binding_for_expr(ctx, value));
+    let reflected_method =
+        assigned_name.and_then(|_| reflection_method_binding_for_expr(ctx, value));
     let fiber_start_sig =
         assigned_name.and_then(|_| crate::ir_lower::fibers::start_sig_for_expr(ctx, value));
     let callable_array = assigned_name
@@ -1511,6 +1513,9 @@ fn lower_assignment_expr(
         }
         if let Some((reflected_class, reflected_property)) = reflected_property {
             ctx.bind_reflection_property_local(name, reflected_class, reflected_property);
+        }
+        if let Some((reflected_class, reflected_method)) = reflected_method {
+            ctx.bind_reflection_method_local(name, reflected_class, reflected_method);
         }
         if let Some(sig) = fiber_start_sig {
             ctx.bind_fiber_start_sig(name, sig);
@@ -3252,6 +3257,14 @@ pub(crate) fn reflection_property_binding_for_expr(
     expr: &Expr,
 ) -> Option<(String, String)> {
     reflection_property_reflected_target(ctx, expr)
+}
+
+/// Returns the reflected method captured by a statically-known `ReflectionMethod` expression.
+pub(crate) fn reflection_method_binding_for_expr(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> Option<(String, String)> {
+    reflection_method_reflected_target(ctx, expr)
 }
 
 /// EIR value and callable binding produced by a callable-array assignment.
@@ -8945,6 +8958,17 @@ fn lower_method_call(
         }
     }
     if op == Op::MethodCall {
+        if let Some(value) = lower_reflection_method_invoke_call(
+            ctx,
+            Some(object_expr),
+            method,
+            args,
+            expr,
+        ) {
+            return value;
+        }
+    }
+    if op == Op::MethodCall {
         if let Some(value) =
             lower_reflection_property_value_call(ctx, Some(object_expr), method, args, expr)
         {
@@ -9270,6 +9294,201 @@ fn reflection_member_constructor_expr(
         },
         span,
     )
+}
+
+/// Lowers `ReflectionMethod::invoke()` for statically-known reflected methods.
+fn lower_reflection_method_invoke_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(method) != "invoke" {
+        return None;
+    }
+    let object_expr = object_expr?;
+    let (class_name, reflected_method) = reflection_method_reflected_target(ctx, object_expr)?;
+    let Some((object_arg, forwarded_args)) = reflection_method_invoke_args(args) else {
+        return Some(lower_reflection_method_invoke_unsupported(ctx, expr));
+    };
+    let Some(target_kind) = reflection_method_target_kind(ctx, &class_name, &reflected_method)
+    else {
+        return Some(lower_reflection_method_invoke_unsupported(ctx, expr));
+    };
+    if !reflection_method_target_has_declared_params(
+        ctx,
+        &class_name,
+        &reflected_method,
+        target_kind,
+    )
+    {
+        return Some(lower_reflection_method_invoke_unsupported(ctx, expr));
+    }
+    match target_kind {
+        ReflectionMethodTargetKind::Static => Some(lower_reflection_static_method_invoke(
+            ctx,
+            &class_name,
+            &reflected_method,
+            &object_arg,
+            &forwarded_args,
+            expr,
+        )),
+        ReflectionMethodTargetKind::Instance => Some(lower_reflection_instance_method_invoke(
+            ctx,
+            &reflected_method,
+            &object_arg,
+            &forwarded_args,
+            expr,
+        )),
+    }
+}
+
+/// Lowers a static reflected-method invocation after evaluating the ignored object slot.
+fn lower_reflection_static_method_invoke(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    reflected_method: &str,
+    object_arg: &Expr,
+    forwarded_args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let ignored_object = lower_expr(ctx, object_arg);
+    if ctx.value_is_owning_temporary(ignored_object) {
+        crate::ir_lower::ownership::release_if_owned(
+            ctx,
+            ignored_object,
+            Some(object_arg.span),
+        );
+    }
+    let receiver = StaticReceiver::Named(Name::from(class_name.to_string()));
+    lower_static_method_call(ctx, &receiver, reflected_method, forwarded_args, expr)
+}
+
+/// Lowers an instance reflected-method invocation using the first invoke argument as receiver.
+fn lower_reflection_instance_method_invoke(
+    ctx: &mut LoweringContext<'_, '_>,
+    reflected_method: &str,
+    object_arg: &Expr,
+    forwarded_args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let object = lower_expr(ctx, object_arg);
+    if value_is_definitely_null(ctx, object.value) {
+        let null_value = lower_null(ctx, expr);
+        terminate_method_call_on_null(ctx, reflected_method);
+        return null_value;
+    }
+    if value_is_nullable(ctx, object.value) {
+        return lower_nullable_regular_method_call(ctx, object, reflected_method, forwarded_args, expr);
+    }
+    lower_method_call_with_receiver(
+        ctx,
+        object,
+        reflected_method,
+        forwarded_args,
+        Op::MethodCall,
+        expr,
+    )
+}
+
+/// Splits `ReflectionMethod::invoke($object, ...$args)` into receiver and method args.
+fn reflection_method_invoke_args(args: &[Expr]) -> Option<(Expr, Vec<Expr>)> {
+    let args = reflection_class_new_instance_args(args);
+    if !crate::types::call_args::has_named_args(&args) {
+        return match args.as_slice() {
+            [object, forwarded @ ..] => Some((object.clone(), forwarded.to_vec())),
+            _ => None,
+        };
+    }
+    let mut object = None;
+    let mut forwarded = Vec::new();
+    let mut args = args.into_iter();
+    if let Some(first) = args.next() {
+        match first.kind {
+            ExprKind::NamedArg { ref name, ref value } if php_symbol_key(name) == "object" => {
+                object = Some((**value).clone());
+            }
+            ExprKind::NamedArg { .. } => forwarded.push(first),
+            _ => object = Some(first),
+        }
+    }
+    for arg in args {
+        match arg.kind {
+            ExprKind::NamedArg { ref name, ref value } if php_symbol_key(name) == "object" => {
+                if object.replace((**value).clone()).is_some() {
+                    return None;
+                }
+            }
+            _ => forwarded.push(arg),
+        }
+    }
+    object.map(|object| (object, forwarded))
+}
+
+/// Classifies whether a known reflected method is static or instance-dispatched.
+fn reflection_method_target_kind(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    method: &str,
+) -> Option<ReflectionMethodTargetKind> {
+    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    let method_key = php_symbol_key(method);
+    if class_info.static_methods.contains_key(&method_key) {
+        return Some(ReflectionMethodTargetKind::Static);
+    }
+    if class_info.methods.contains_key(&method_key) {
+        return Some(ReflectionMethodTargetKind::Instance);
+    }
+    None
+}
+
+/// Returns true when reflected invocation can trust the target method's parameter types.
+fn reflection_method_target_has_declared_params(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    method: &str,
+    target_kind: ReflectionMethodTargetKind,
+) -> bool {
+    let signature = match target_kind {
+        ReflectionMethodTargetKind::Instance => {
+            class_method_signature(
+                ctx,
+                class_name.trim_start_matches('\\'),
+                &php_symbol_key(method),
+            )
+        }
+        ReflectionMethodTargetKind::Static => {
+            let receiver = StaticReceiver::Named(Name::from(class_name.to_string()));
+            static_method_implementation_signature(ctx, &receiver, method)
+        }
+    };
+    signature.is_some_and(|signature| {
+        signature
+            .declared_params
+            .iter()
+            .all(|is_declared| *is_declared)
+    })
+}
+
+/// Dispatch kind for a statically-known reflected method.
+#[derive(Clone, Copy)]
+enum ReflectionMethodTargetKind {
+    Instance,
+    Static,
+}
+
+/// Emits a runtime fatal for ReflectionMethod invocation forms not yet lowered.
+fn lower_reflection_method_invoke_unsupported(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> LoweredValue {
+    let result = lower_boxed_null(ctx, expr);
+    let message = ctx.intern_string(
+        "Fatal error: unsupported ReflectionMethod::invoke() target or argument forwarding\n",
+    );
+    ctx.builder.terminate(Terminator::Fatal { message });
+    result
 }
 
 /// Lowers `ReflectionProperty::getValue($object)` when the reflected property is known.
@@ -9608,6 +9827,66 @@ fn reflection_property_reflected_target(
             };
             ctx.reflection_property_local(name)
         })
+}
+
+/// Extracts the known class and method name from a supported ReflectionMethod source.
+fn reflection_method_reflected_target(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<(String, String)> {
+    reflection_method_constructor_target(ctx, object_expr)
+        .or_else(|| reflection_method_class_get_method_target(ctx, object_expr))
+        .or_else(|| reflection_method_class_get_methods_index_target(ctx, object_expr))
+        .or_else(|| {
+            let ExprKind::Variable(name) = &object_expr.kind else {
+                return None;
+            };
+            ctx.reflection_method_local(name)
+        })
+}
+
+/// Extracts a known ReflectionMethod from `ReflectionClass::getMethods()[N]`.
+fn reflection_method_class_get_methods_index_target(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<(String, String)> {
+    let ExprKind::ArrayAccess { array, index } = &object_expr.kind else {
+        return None;
+    };
+    let ExprKind::IntLiteral(raw_index) = &index.kind else {
+        return None;
+    };
+    if *raw_index < 0 {
+        return None;
+    }
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+    } = &array.kind
+    else {
+        return None;
+    };
+    if php_symbol_key(method) != "getmethods" {
+        return None;
+    }
+    let filter = reflection_class_get_methods_filter_arg(ctx, args)?;
+    let class_name = reflection_class_reflected_class(ctx, object)?;
+    let method =
+        reflection_class_method_name_at_index(ctx, &class_name, *raw_index as usize, filter)?;
+    Some((class_name, method))
+}
+
+/// Returns the `ReflectionClass::getMethods()` method name at a known index.
+fn reflection_class_method_name_at_index(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    index: usize,
+    filter: Option<i64>,
+) -> Option<String> {
+    reflection_class_method_names_for_filter(ctx, class_name, filter)?
+        .into_iter()
+        .nth(index)
 }
 
 /// Extracts a known ReflectionProperty from `ReflectionClass::getProperties()[N]`.
@@ -9979,6 +10258,31 @@ fn reflection_property_constructor_target(
     Some((class_name, property))
 }
 
+/// Extracts the known class and method name from an inline ReflectionMethod constructor.
+fn reflection_method_constructor_target(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<(String, String)> {
+    let ExprKind::NewObject { class_name, args } = &object_expr.kind else {
+        return None;
+    };
+    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) != "reflectionmethod" {
+        return None;
+    }
+    let (class_arg, method_arg) = reflection_method_constructor_regular_args(ctx, args)?;
+    let raw_class_name = match &class_arg.kind {
+        ExprKind::StringLiteral(value) => value.clone(),
+        ExprKind::ClassConstant { receiver } => static_receiver_class_name(ctx, receiver)?,
+        _ => return None,
+    };
+    let class_name = resolve_known_class_name(ctx, &raw_class_name)?;
+    let ExprKind::StringLiteral(method) = method_arg.kind else {
+        return None;
+    };
+    let method = resolve_known_class_method_name(ctx, &class_name, &method)?;
+    Some((class_name, method))
+}
+
 /// Extracts the property target from inline `ReflectionClass::getProperty()` calls.
 fn reflection_property_class_get_property_target(
     ctx: &LoweringContext<'_, '_>,
@@ -9998,6 +10302,28 @@ fn reflection_property_class_get_property_target(
     let class_name = reflection_class_reflected_class(ctx, object)?;
     let property = reflection_class_member_name_arg(args)?;
     Some((class_name, property))
+}
+
+/// Extracts the method target from inline `ReflectionClass::getMethod()` calls.
+fn reflection_method_class_get_method_target(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<(String, String)> {
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+    } = &object_expr.kind
+    else {
+        return None;
+    };
+    if php_symbol_key(method) != "getmethod" {
+        return None;
+    }
+    let class_name = reflection_class_reflected_class(ctx, object)?;
+    let method = reflection_class_member_name_arg(args)?;
+    let method = resolve_known_class_method_name(ctx, &class_name, &method)?;
+    Some((class_name, method))
 }
 
 /// Returns the literal name argument passed to a ReflectionClass member lookup.
@@ -10049,6 +10375,47 @@ fn reflection_property_constructor_regular_args(
     let class_arg = planned_regular_arg_expr(plan.regular_args.first()?)?.clone();
     let property_arg = planned_regular_arg_expr(plan.regular_args.get(1)?)?.clone();
     Some((class_arg, property_arg))
+}
+
+/// Returns normalized constructor args for `ReflectionMethod($class, $method)`.
+fn reflection_method_constructor_regular_args(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<(Expr, Expr)> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    if !crate::types::call_args::has_named_args(&args) {
+        return match args.as_slice() {
+            [class_arg, method_arg] => Some((class_arg.clone(), method_arg.clone())),
+            _ => None,
+        };
+    }
+    let sig = ctx
+        .classes
+        .get("ReflectionMethod")
+        .and_then(|class_info| class_info.methods.get("__construct"))?;
+    let call_span = args
+        .first()
+        .map(|arg| arg.span)
+        .unwrap_or_else(crate::span::Span::dummy);
+    let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+        sig,
+        &args,
+        call_span,
+        crate::types::call_args::regular_param_count(sig),
+        false,
+        true,
+        &assoc_spread_sources(ctx, &args),
+    )
+    .ok()?;
+    if plan.has_spread_args() {
+        return None;
+    }
+    let class_arg = planned_regular_arg_expr(plan.regular_args.first()?)?.clone();
+    let method_arg = planned_regular_arg_expr(plan.regular_args.get(1)?)?.clone();
+    Some((class_arg, method_arg))
 }
 
 /// Lowers `ReflectionClass::getStaticProperties()` to a live static-property map.
@@ -10544,6 +10911,22 @@ fn resolve_known_class_name(ctx: &LoweringContext<'_, '_>, class_name: &str) -> 
     ctx.classes
         .keys()
         .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .cloned()
+}
+
+/// Resolves a PHP method name case-insensitively against known class metadata.
+fn resolve_known_class_method_name(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    method: &str,
+) -> Option<String> {
+    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    let key = php_symbol_key(method);
+    class_info
+        .methods
+        .keys()
+        .chain(class_info.static_methods.keys())
+        .find(|candidate| php_symbol_key(candidate) == key)
         .cloned()
 }
 

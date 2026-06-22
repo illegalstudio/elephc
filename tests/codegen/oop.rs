@@ -43,3 +43,5 @@ mod abstract_properties;
 mod property_hooks;
 #[path = "oop/reflection_properties.rs"]
 mod reflection_properties;
+#[path = "oop/reflection_methods.rs"]
+mod reflection_methods;
