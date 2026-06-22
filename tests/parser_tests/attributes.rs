@@ -128,11 +128,19 @@ fn test_qualified_attribute_name_parses() {
 /// Verifies attribute on function parameter.
 #[test]
 fn test_attribute_on_function_parameter() {
-    // PHP 8 allows `#[Sensitive]` immediately before a function parameter.
-    // The attribute parses without error and does not alter the AST.
     let with_attr = parse_source("<?php function f(#[Sensitive] string $s): void {}");
-    let without = parse_source("<?php function f(string $s): void {}");
-    assert_eq!(with_attr, without);
+    match &with_attr[0].kind {
+        StmtKind::FunctionDecl {
+            param_attributes, ..
+        } => {
+            assert_eq!(param_attributes.len(), 1);
+            assert_eq!(
+                param_attributes[0][0].attributes[0].name.as_str(),
+                "Sensitive"
+            );
+        }
+        other => panic!("expected FunctionDecl, got {:?}", other),
+    }
 }
 
 /// Verifies attribute on method parameter.

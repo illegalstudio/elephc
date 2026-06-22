@@ -189,6 +189,8 @@ pub(crate) struct Checker {
 pub(crate) struct FnDecl {
     pub params: Vec<String>,
     pub param_types: Vec<Option<TypeExpr>>,
+    /// Attribute groups aligned with the declared parameters plus the variadic parameter, if any.
+    pub param_attributes: Vec<Vec<crate::parser::ast::AttributeGroup>>,
     pub defaults: Vec<Option<Expr>>,
     pub ref_params: Vec<bool>,
     pub variadic: Option<String>,

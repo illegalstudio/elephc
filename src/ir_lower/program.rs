@@ -697,6 +697,7 @@ fn lower_function_declarations(
                 variadic_type: _,
                 return_type,
                 body,
+                ..
             } => function::lower_user_function(
                 name,
                 params,

@@ -175,6 +175,9 @@ pub enum StmtKind {
     FunctionDecl {
         name: String,
         params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
+        /// PHP 8 attribute groups attached to each function parameter, aligned with `params`
+        /// plus the variadic parameter when present.
+        param_attributes: Vec<Vec<AttributeGroup>>,
         variadic: Option<String>,
         /// Declared element type hint on the variadic parameter (`int ...$xs`), if any. Each
         /// argument collected into the variadic is checked against this type.
