@@ -4,6 +4,8 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Image support (EIR backend), pure-Rust with no runtime dependency (`elephc-image` crate): GD raster I/O (PNG/JPEG/GIF/BMP/WebP/TGA), drawing primitives, bitmap text, transforms/filters/copy, and color handling; Exif and IPTC metadata; Imagick and Gmagick OOP with the full method surface callable (operations with no pure-Rust equivalent throw `*Exception("... is not supported in elephc")` at runtime, matching PHP); and a Cairo (tiny-skia) procedural + OOP subset.
+- Loose equality (`==`/`!=`) and `switch` compare a float against an int numerically (`1.5 == 1` is `false`, `1.0 == 1` is `true`, `switch (1.5)` matches `case 1.5`) instead of failing to compile or truncating the float subject to int.
 - EIR dead store elimination over PHP local slots: a CFG-liveness pass that drops `store_local` writes to scalar locals that are never read before being overwritten or the function exits, gated by `--ir-opt`. Refcounted and by-reference-aliased slots are left untouched to preserve ownership and aliasing semantics.
 - EIR branch simplification: folds constant-condition `cond_br`/`switch` terminators to unconditional branches (e.g. `while (true)` loops), threads predecessors through empty forwarding blocks, and neutralizes unreachable blocks, gated by `--ir-opt`.
 

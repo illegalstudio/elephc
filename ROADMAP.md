@@ -807,6 +807,129 @@ and runtime foundation.
 - [ ] WASI support for I/O
 - [ ] NPM package generation
 
+## v0.30.x — Image support (GD, Exif/IPTC, Imagick, Gmagick, Cairo)
+
+Complete PHP image surface on a pure-Rust bridge (`crates/elephc-image`,
+`image`/`imageproc`/`ab_glyph`/`tiny-skia`/`kamadak-exif`). Delivered through a
+PHP prelude (`src/image_prelude.rs`) + `extern` calls, like PDO/Phar, so binaries
+stay standalone (no system GD/libpng/libjpeg/ImageMagick). Imagick/Gmagick/Cairo
+are semantic reimplementations of their PHP APIs, not byte-identical to the
+original C/C++ libraries; operations with no pure-Rust path are documented,
+tested, diagnostic-emitting gaps.
+
+- [x] Foundation: `elephc-image` bridge + handle table, prelude
+  injection/detection, `IMAGETYPE_*` constants, the always-available core
+  (`getimagesize`, `image_type_to_mime_type`, `image_type_to_extension`), and a
+  GD raster round-trip (`imagecreatetruecolor`/`imagecreate`,
+  `imagecolorallocate(alpha)`, `imagesetpixel`, `imagesx`/`imagesy`, `imagepng`
+  to file, `imagedestroy`)
+- [x] GD raster I/O: `imagecreatefrom{png,jpeg,gif,bmp,webp}` +
+  `imagecreatefromstring`, output `image{png,jpeg,gif,bmp,webp}` (file or
+  in-memory/stdout) with a binary blob ABI (staging buffer + encode cell via
+  `ptr_write_string`/`ptr_read_string`), `imageistruecolor`, `imageresolution`,
+  `imagetypes`, `gd_info`. WBMP/XBM/XPM/GD/GD2/AVIF are documented gaps (no
+  pure-Rust path). imagecreatefrom* throw `ImageException` on failure instead of
+  returning `false` (elephc cannot pass/narrow a `GdImage|false` result)
+- [x] GD color handling: `imagecolorat`, `imagecolorsforindex`,
+  `imagecolorexact`/`closest`/`closesthwb`/`resolve` (+alpha) reduced to packed
+  true-color values, `imagecolordeallocate`, `imagecolorstotal`,
+  `imagecolortransparent`, `imagealphablending` (blend vs replace in setpixel),
+  `imagesavealpha` (alpha flattened on encode unless on), `imagelayereffect`,
+  `imagepalettetotruecolor`/`imagetruecolortopalette` (flag flip, no requantize)
+- [x] GD drawing & fill: `imageline`/`imagedashedline`,
+  `imagerectangle`/`imagefilledrectangle`, `imagepolygon`/`imageopenpolygon`/
+  `imagefilledpolygon`, `imageellipse`/`imagefilledellipse`, `imagearc`/
+  `imagefilledarc` (pie), `imagefill`/`imagefilltoborder`, `imagesetthickness`
+  (hand-rolled Bresenham/parametric/scanline/flood-fill, alpha-blending-aware).
+  Deferred: brush/style/tile drawing modes, clipping, antialias, built-in-font
+  chars (imagechar handled by the text surface)
+- [x] GD text & fonts (built-in): `imagestring`/`imagestringup`,
+  `imagechar`/`imagecharup`, `imagefontwidth`/`imagefontheight`, via the
+  public-domain `font8x8` glyph set (uniform 8×8 cell for every font number).
+  Deferred: TTF/FreeType (`imagettftext`/`imagettfbbox`/`imagefttext`/
+  `imageftbbox`, via `ab_glyph`) — needs a bundled cross-platform test font;
+  `imageloadfont` (.gdf)
+- [x] GD transform/copy/filter: `imagecopy`/`imagecopymerge`/
+  `imagecopymergegray`/`imagecopyresized`/`imagecopyresampled`, `imagescale`,
+  `imagecrop`/`imagecropauto`, `imageflip`, `imagerotate` (CCW, enlarged canvas),
+  `imageaffine`/`imageaffinematrixconcat`, `imagefilter` (all `IMG_FILTER_*`),
+  `imageconvolution`, `imagegammacorrect`, `imagesetinterpolation`/
+  `imagegetinterpolation`, `imageinterlace`, `imageantialias` (no-op). New-image
+  results throw `ImageException` on failure (same union-value limit as
+  `imagecreatefrom*`). Deferred/gaps: `imageaffinematrixget` (`array|float` param
+  unrepresentable), `imageaffine` `$clip`, antialiased drawing, scatter colors
+  array; deprecated `image2wbmp`/`jpeg2wbmp`/`png2wbmp` and Windows-only
+  `imagegrabscreen`/`imagegrabwindow` not provided
+- [x] Exif + IPTC: `exif_imagetype`, `exif_read_data`/`read_exif_data`
+  (flat tag array via the pure-Rust `kamadak-exif` parser), `exif_tagname`
+  (TIFF/EXIF/GPS/Interop dictionary), `exif_thumbnail` (IFD1 JPEG thumbnail with
+  by-ref `width`/`height`/`image_type`), `iptcparse` (IIM block → `record#dataset`
+  arrays) and `iptcembed` (Photoshop `APP13` insertion, replacing any existing
+  one). Documented simplifications: EXIF values rendered as strings (not typed
+  scalars/arrays); no synthetic `FILE`/`COMPUTED`/`SectionsFound` sections;
+  `exif_tagname`/`exif_thumbnail` return `""` (not `false`) on the not-found path
+  (`string|false` collapse); only JPEG-compressed thumbnails extracted
+- [x] Imagick (Imagick, ImagickDraw, ImagickPixel, ImagickPixelIterator,
+  ImagickKernel): wand = a sequence of frames (each a GD image handle), so every
+  per-image op reuses the GD bridge. `Imagick` implements `Iterator` + `Countable`
+  and covers read/readImageBlob/newImage/addImage, write/writeImage/getImageBlob,
+  set/getImageFormat + compression quality, geometry, resize/scale/thumbnail/crop/
+  rotate/flip/flop, blur/gaussianBlur/sharpen/negate/modulate, compositeImage
+  (`OVER`/`COPY`), drawImage, convolveImage (3×3 `ImagickKernel::fromMatrix`),
+  getImagePixelColor, and multi-frame iteration. `ImagickDraw` buffers
+  fill/stroke + line/rectangle/circle/ellipse/point/polygon and replays them via
+  the GD rasterizers. `ImagickPixel` parses CSS name/`#hex`/`rgb()` colors;
+  `ImagickPixelIterator` walks rows of pixels. Documented gaps throw the matching
+  `*Exception`: unsupported composite operators, non-3×3 kernels / `fromBuiltIn`,
+  `distortImage`/`liquidRescaleImage`/`fxImage`/`waveImage`/`swirlImage`, and
+  `annotateImage` (FreeType text). Two general elephc bugs found here (string
+  `switch` first-case-only; int→float parameter coercion) are now **fixed** in the
+  EIR lowering, not just worked around
+- [x] Gmagick (Gmagick, GmagickDraw, GmagickPixel): GraphicsMagick-style
+  API over the same wand bridge and color helpers as Imagick. Gmagick methods are
+  fluent (`return $this`) and cover read/readImageBlob/newImage/addImage,
+  writeImage/getImageBlob, set/getImageFormat + compression quality, geometry,
+  resize/scale/thumbnail/crop/rotate/flip/flop, blur/gaussianBlur/modulate,
+  compositeImage (`OVER`/`COPY`), drawImage, multi-frame navigation
+  (getNumberImages/getImageIndex/nextImage/previousImage/hasNext/hasPrevious), and
+  version/package info. `GmagickDraw` buffers fill/stroke + line/rectangle/ellipse/
+  point/polygon; `GmagickPixel` parses CSS name/`#hex`/`rgb()` colors with
+  get/setColorValue + getColorAsString. Documented gaps throw the matching
+  `*Exception`: unsupported composite operators, `swirlImage`/`charcoalImage`/
+  `oilPaintImage`/`embossImage`, and `annotateImage`/`GmagickDraw::annotate`
+  (FreeType text). A general `return $this` use-after-free + chained owning-receiver
+  leak surfaced here and was fixed in the EIR method-call ownership lowering
+- [x] Cairo (CairoContext, CairoImageSurface, CairoMatrix, patterns,
+  gradients): cairo-style 2D vector drawing on the pure-Rust `tiny-skia` rasterizer
+  (new `cairo.rs` bridge module + `tiny-skia` dep). CairoImageSurface (PNG) is fully
+  supported: paths (moveTo/lineTo/curveTo/arc/arcNegative/rectangle/closePath),
+  fill/stroke/paint with solid colors, linear and radial gradients
+  (`CairoLinearGradient`/`CairoRadialGradient`/`CairoSolidPattern`), the transform
+  stack (save/restore, translate/scale/rotate/transform/setMatrix), line cap/join/
+  width and fill rule, and `CairoMatrix` value-object transforms. Paths are built in
+  device space (the CTM maps each point as it is added). Documented gaps throw
+  `CairoException`: PDF/PS/SVG surfaces, FreeType text (showText/textExtents/
+  CairoToyFontFace/CairoScaledFont), and surface patterns. Geometry crosses the
+  bridge as fixed-point milli-units packed into i64 pairs; colors as packed RGBA8.
+  Surfaced a pre-existing general bug — mixed int/float positional args to an
+  untyped *method* param misplace the float (free functions and typed params are
+  unaffected); worked around by typing the Cairo numeric method params `float`
+- [x] Cairo procedural API (common subset): the PECL-style free-function
+  layer (`cairo_image_surface_create`/`_from_png`, `cairo_create`, the
+  `cairo_set_source_*`/path/render/transform ops, `cairo_pattern_create_*`,
+  `cairo_matrix_*`, `cairo_get_current_point`) wrapping the `Cairo*`
+  classes. `cairo_image_surface_create_from_png` adds a bridge primitive that decodes
+  a PNG via the `image` crate and premultiplies alpha into the tiny-skia pixmap.
+  `cairo_get_current_point`/`cairo_matrix_transform_point` return `["x"=>…,"y"=>…]`
+  assoc arrays and inline the OOP body (the prelude-internal call carries the
+  declared `array` type, which would force an unsupported AssocArray→Array(Mixed)
+  conversion if it delegated). The obscure PECL tail (font options, scaled fonts,
+  PDF/PS/SVG surface constructors, ~40 rarely-used helpers) is omitted — omitted
+  functions are genuinely undefined (compile-time `Undefined function:`), not stubs.
+  Bridge externs renamed `cairo_*` → `elephc_cairo_*` to free the `cairo_` namespace
+  for the procedural PHP layer, and `program_uses_image` now detects the `cairo_`
+  prefix so pure-procedural programs pull in the prelude
+
 ## Deferred ideas
 
 Features that are feasible but intentionally not on the active 0.x path. They are

@@ -1085,7 +1085,6 @@ fn lower_switch(
     default: Option<&[Stmt]>,
 ) {
     let subject = lower_expr(ctx, subject);
-    let subject = coerce_to_int(ctx, subject, None);
     let exit = ctx.builder.create_named_block("switch.exit", Vec::new());
     let default_block = ctx.builder.create_named_block("switch.default", Vec::new());
     let blocks = cases
@@ -1093,7 +1092,12 @@ fn lower_switch(
         .map(|_| ctx.builder.create_named_block("switch.case", Vec::new()))
         .collect::<Vec<_>>();
 
-    if can_lower_static_switch(cases) {
+    // The compact integer jump table is valid only for an integer scrutinee with
+    // integer case labels. Any other subject (string, float, mixed) takes the
+    // source-ordered dynamic path — see `lower_dynamic_switch_dispatch` for how it
+    // picks PHP loose-equality vs the integer fast path per subject/case pair.
+    if subject.ir_type == IrType::I64 && can_lower_static_switch(cases) {
+        let subject = coerce_to_int(ctx, subject, None);
         lower_static_switch_dispatch(ctx, subject, cases, &blocks, default_block);
     } else {
         lower_dynamic_switch_dispatch(ctx, subject, cases, &blocks, default_block);
@@ -1137,6 +1141,12 @@ fn lower_static_switch_dispatch(
 }
 
 /// Emits source-ordered dynamic switch pattern checks for non-literal case expressions.
+///
+/// PHP `switch` compares the subject against each case with loose equality (`==`).
+/// String subjects/labels and float/numeric pairs are dispatched through `Op::LooseEq`
+/// so the comparison honors PHP string/numeric coercion rules (`switch (1.5)` matching
+/// `case 1.5`, not `case 1`); purely integer-like subject-and-case pairs keep the
+/// cheaper `coerce_to_int` + `ICmp` fast path.
 fn lower_dynamic_switch_dispatch(
     ctx: &mut LoweringContext<'_, '_>,
     subject: LoweredValue,
@@ -1144,18 +1154,42 @@ fn lower_dynamic_switch_dispatch(
     blocks: &[BlockId],
     default_block: BlockId,
 ) {
+    let subject_is_str = subject.ir_type == IrType::Str;
+    // Non-string subjects are coerced to an integer once and reused by the ICmp path.
+    let int_subject =
+        if subject_is_str { None } else { Some(coerce_to_int(ctx, subject, None)) };
     for ((case_exprs, _), case_block) in cases.iter().zip(blocks) {
         for case_expr in case_exprs {
             let case_value = lower_expr(ctx, case_expr);
-            let case_value = coerce_to_int(ctx, case_value, Some(case_expr.span));
-            let matched = ctx.emit_value(
-                Op::ICmp,
-                vec![subject.value, case_value.value],
-                Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
-                PhpType::Bool,
-                Op::ICmp.default_effects(),
-                Some(case_expr.span),
-            );
+            // Strings and floats must use loose equality: coercing a string to int
+            // collapses every case to `0 == 0`, and coercing a float to int would
+            // truncate the subject (so `switch (1.5) { case 1.5; }` would wrongly
+            // match `case 1`). The cheap ICmp fast path stays for integer-like pairs.
+            let use_loose_eq = subject_is_str
+                || case_value.ir_type == IrType::Str
+                || float_loose_eq_pair(subject.ir_type, case_value.ir_type);
+            let matched = if use_loose_eq {
+                // Loose equality handles string/string, string/scalar, float/numeric,
+                // and mixed cases exactly as PHP's `==` would inside an if/elseif chain.
+                ctx.emit_value(
+                    Op::LooseEq,
+                    vec![subject.value, case_value.value],
+                    None,
+                    PhpType::Bool,
+                    Op::LooseEq.default_effects(),
+                    Some(case_expr.span),
+                )
+            } else {
+                let case_value = coerce_to_int(ctx, case_value, Some(case_expr.span));
+                ctx.emit_value(
+                    Op::ICmp,
+                    vec![int_subject.expect("non-string subject is pre-coerced").value, case_value.value],
+                    Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
+                    PhpType::Bool,
+                    Op::ICmp.default_effects(),
+                    Some(case_expr.span),
+                )
+            };
             let miss_block = ctx.builder.create_named_block("switch.next", Vec::new());
             ctx.builder.terminate(Terminator::CondBr {
                 cond: matched.value,
@@ -1169,6 +1203,19 @@ fn lower_dynamic_switch_dispatch(
     }
     branch_to(ctx, default_block);
     ctx.clear_static_callable_locals();
+}
+
+/// Returns true when a switch subject/case pair must compare via float loose equality:
+/// at least one side is a statically-typed float and both are numeric (`int`/`float`).
+/// These pairs route through `Op::LooseEq`, which promotes both operands to float, so the
+/// subject is not truncated to int (the backend supports float-vs-int loose equality).
+///
+/// An untyped (`Mixed`) subject holding a float is not covered here: it still takes the
+/// integer fast path and truncates, a separate pre-existing loose-equality limitation that
+/// needs a tag-aware runtime comparison helper (tracked in issue #397).
+fn float_loose_eq_pair(subject_ty: IrType, case_ty: IrType) -> bool {
+    let numeric = |ty: IrType| matches!(ty, IrType::I64 | IrType::F64);
+    (subject_ty == IrType::F64 || case_ty == IrType::F64) && numeric(subject_ty) && numeric(case_ty)
 }
 
 /// Lowers switch case/default bodies and preserves PHP fallthrough between adjacent bodies.
@@ -1554,36 +1601,44 @@ fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
 }
 
 /// Lowers a return statement using the current function return contract.
-fn lower_return(ctx: &mut LoweringContext<'_, '_>, value: Option<&Expr>, span: Span) {
+fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, span: Span) {
     if ctx.return_type == IrType::Void {
-        if let Some(value) = value {
-            lower_expr(ctx, value);
+        if let Some(value_expr) = value_expr {
+            lower_expr(ctx, value_expr);
         }
         terminate_return(ctx, None);
         return;
     }
-    let returns_this = matches!(value.map(|expr| &expr.kind), Some(ExprKind::This));
-    let value = if let Some(value) = value {
-        lower_expr(ctx, value)
+    let value = if let Some(value_expr) = value_expr {
+        lower_expr(ctx, value_expr)
     } else {
         emit_null_value(ctx, Some(span))
     };
     let value = coerce_to_return_type(ctx, value, Some(span));
     let value = acquire_borrowed_return_value(ctx, value, span);
-    // A method returning its borrowed receiver (`$this`) hands the caller an owned
-    // reference, so acquire it. Unlike an owned local (which is moved on return and
-    // skipped by local cleanup), `$this` is a borrowed parameter the callee never
-    // releases; without this acquire the caller's matching release — e.g. the
-    // discarded result of a fluent `$obj->mutate();` — drops the object's last
-    // reference and frees a still-live object. Acquire is a no-op for receivers whose
-    // class is not refcounted.
-    let value = if returns_this {
-        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
-    } else {
-        value
-    };
+    let value = acquire_returned_this(ctx, value_expr, value, span);
     let value = persist_scratch_return_string(ctx, value, span);
     terminate_return(ctx, Some(value.value));
+}
+
+/// Acquires the receiver when a method does `return $this`.
+///
+/// `$this` is a borrowed reference to the receiver the caller still owns. A return
+/// value is handed to the caller as owned, so without an extra reference the
+/// caller's release of the (often discarded, as in fluent `$obj->setX(...)->setY()`)
+/// result drops the object's refcount to zero and runs its destructor while the
+/// original binding is still live — a use-after-free for any class with a
+/// destructor. Incrementing the refcount here balances that release.
+fn acquire_returned_this(
+    ctx: &mut LoweringContext<'_, '_>,
+    value_expr: Option<&Expr>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if !matches!(value_expr.map(|expr| &expr.kind), Some(ExprKind::This)) {
+        return value;
+    }
+    crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
 }
 
 /// Copies scratch-backed string results before they cross a function boundary.
