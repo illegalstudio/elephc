@@ -3679,6 +3679,7 @@ fn lower_value_sort_comparator_closure(
         body,
         captures,
         capture_refs,
+        is_static,
         ..
     } = &callback.kind
     else {
@@ -3695,6 +3696,7 @@ fn lower_value_sort_comparator_closure(
         callback,
         &[elem_ty.clone(), elem_ty],
         None,
+        *is_static,
     )
     .value
 }

@@ -309,6 +309,7 @@ fn builtin_reflection_slot_getter(
         has_body: true,
         params: Vec::new(),
         variadic: None,
+        variadic_type: None,
         return_type: Some(return_type),
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
@@ -339,6 +340,7 @@ fn builtin_reflection_function_constructor_method() -> ClassMethod {
         has_body: true,
         params: vec![("name".to_string(), Some(TypeExpr::Str), None, false)],
         variadic: None,
+        variadic_type: None,
         return_type: None,
         body: Vec::new(),
         span: dummy_span,
