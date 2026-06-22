@@ -2484,6 +2484,31 @@ echo $implicit . ":" . $explicitNull . ":" . $typed . ":" . count($defaults);
     assert_eq!(out.stdout, "7:bs:5:9:1:p:S2:2:8:i:2:S:four:I:E:t:11");
 }
 
+/// Verifies `ReflectionClass::getStaticPropertyValue()` and
+/// `setStaticPropertyValue()` use live static-property storage for known classes.
+#[test]
+fn test_reflection_class_static_property_value_accesses_live_storage() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReflectStaticValueTarget {
+    public static int $count = 7;
+}
+echo (new ReflectionClass(ReflectStaticValueTarget::class))->getStaticPropertyValue("count");
+ReflectStaticValueTarget::$count = 9;
+echo ":" . (new ReflectionClass(ReflectStaticValueTarget::class))->getStaticPropertyValue("count");
+(new ReflectionClass(ReflectStaticValueTarget::class))->setStaticPropertyValue("count", 11);
+echo ":" . ReflectStaticValueTarget::$count;
+echo ":" . (new ReflectionClass(ReflectStaticValueTarget::class))->getStaticPropertyValue("missing", "fallback");
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "7:9:11:fallback");
+}
+
 /// Verifies `ReflectionParameter::getAttributes()` exposes parameter attributes.
 #[test]
 fn test_reflection_parameter_get_attributes_returns_parameter_metadata() {
