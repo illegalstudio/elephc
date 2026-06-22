@@ -993,7 +993,13 @@ fn referenced_static_property_class_names(module: &Module) -> HashSet<String> {
         .chain(module.runtime_callable_invokers.iter())
     {
         for inst in &function.instructions {
-            if !matches!(inst.op, Op::LoadStaticProperty | Op::StoreStaticProperty) {
+            if !matches!(
+                inst.op,
+                Op::LoadStaticProperty
+                    | Op::StoreStaticProperty
+                    | Op::LoadReflectionStaticProperty
+                    | Op::StoreReflectionStaticProperty
+            ) {
                 continue;
             }
             let Some(Immediate::Data(data)) = inst.immediate else {

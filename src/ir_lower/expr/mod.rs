@@ -1512,6 +1512,8 @@ fn lower_assignment_expr(
     }
     let static_callable = assigned_name.and_then(|_| static_callable_binding_for_expr(ctx, value));
     let reflected_class = assigned_name.and_then(|_| reflection_class_binding_for_expr(ctx, value));
+    let reflected_property =
+        assigned_name.and_then(|_| reflection_property_binding_for_expr(ctx, value));
     let fiber_start_sig =
         assigned_name.and_then(|_| crate::ir_lower::fibers::start_sig_for_expr(ctx, value));
     let callable_array = assigned_name
@@ -1548,6 +1550,9 @@ fn lower_assignment_expr(
         }
         if let Some(reflected_class) = reflected_class {
             ctx.bind_reflection_class_local(name, reflected_class);
+        }
+        if let Some((reflected_class, reflected_property)) = reflected_property {
+            ctx.bind_reflection_property_local(name, reflected_class, reflected_property);
         }
         if let Some(sig) = fiber_start_sig {
             ctx.bind_fiber_start_sig(name, sig);
@@ -3594,6 +3599,14 @@ pub(crate) fn reflection_class_binding_for_expr(
     expr: &Expr,
 ) -> Option<String> {
     reflection_class_new_instance_reflected_class(ctx, expr)
+}
+
+/// Returns the reflected property captured by a statically-known `ReflectionProperty` expression.
+pub(crate) fn reflection_property_binding_for_expr(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> Option<(String, String)> {
+    reflection_property_reflected_target(ctx, expr)
 }
 
 /// EIR value and callable binding produced by a callable-array assignment.
@@ -10324,7 +10337,7 @@ fn lower_reflection_property_set_value(
     Some(lower_null(ctx, expr))
 }
 
-/// Lowers static `ReflectionProperty::getValue()` to a direct static-property read.
+/// Lowers static `ReflectionProperty::getValue()` to a reflection static-property read.
 fn lower_reflection_property_get_static_value(
     ctx: &mut LoweringContext<'_, '_>,
     declaring_class: &str,
@@ -10336,7 +10349,7 @@ fn lower_reflection_property_get_static_value(
     if let Some(ignored_object) = reflection_property_static_get_value_ignored_arg(args)? {
         lower_ignored_reflection_argument(ctx, &ignored_object);
     }
-    Some(lower_static_property_get_by_class_name(
+    Some(lower_reflection_static_property_get_by_class_name(
         ctx,
         declaring_class,
         property,
@@ -10345,7 +10358,7 @@ fn lower_reflection_property_get_static_value(
     ))
 }
 
-/// Lowers static `ReflectionProperty::setValue(null, $value)` to a static-property write.
+/// Lowers static `ReflectionProperty::setValue(null, $value)` to a reflection static-property write.
 fn lower_reflection_property_set_static_value(
     ctx: &mut LoweringContext<'_, '_>,
     declaring_class: &str,
@@ -10356,7 +10369,13 @@ fn lower_reflection_property_set_static_value(
     let (ignored_object, value_arg) = reflection_property_static_set_value_args(args)?;
     lower_ignored_reflection_argument(ctx, &ignored_object);
     let value = lower_expr(ctx, &value_arg);
-    store_static_property_by_class_name(ctx, declaring_class, property, value.value, expr.span);
+    store_reflection_static_property_by_class_name(
+        ctx,
+        declaring_class,
+        property,
+        value.value,
+        expr.span,
+    );
     Some(lower_null(ctx, expr))
 }
 
@@ -10471,16 +10490,12 @@ fn reflection_property_instance_target(
     ))
 }
 
-/// Resolves an inline `ReflectionProperty` target for a public static property.
+/// Resolves an inline `ReflectionProperty` target for a static property.
 fn reflection_property_static_target(
     ctx: &LoweringContext<'_, '_>,
     object_expr: &Expr,
 ) -> Option<(String, String, PhpType)> {
     let (class_name, property) = reflection_property_reflected_target(ctx, object_expr)?;
-    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
-    if class_info.static_property_visibilities.get(&property) != Some(&Visibility::Public) {
-        return None;
-    }
     let (declaring_class, property_ty) =
         reflection_class_static_property_target(ctx, &class_name, &property)?;
     Some((declaring_class, property, property_ty))
@@ -10493,6 +10508,12 @@ fn reflection_property_reflected_target(
 ) -> Option<(String, String)> {
     reflection_property_constructor_target(ctx, object_expr)
         .or_else(|| reflection_property_class_get_property_target(ctx, object_expr))
+        .or_else(|| {
+            let ExprKind::Variable(name) = &object_expr.kind else {
+                return None;
+            };
+            ctx.reflection_property_local(name)
+        })
 }
 
 /// Extracts the known class and property name from an inline ReflectionProperty constructor.
@@ -10617,7 +10638,7 @@ fn lower_reflection_class_get_static_properties(
     for (property, declaring_class, property_ty) in properties {
         let key_expr = Expr::new(ExprKind::StringLiteral(property.clone()), expr.span);
         let key = lower_string_literal(ctx, &property, &key_expr);
-        let value = lower_static_property_get_by_class_name(
+        let value = lower_reflection_static_property_get_by_class_name(
             ctx,
             &declaring_class,
             &property,
@@ -10648,7 +10669,7 @@ fn lower_reflection_class_get_static_property_value(
         reflection_class_static_property_target(ctx, class_name, &property)
     {
         if default.is_none() {
-            return Some(lower_static_property_get_by_class_name(
+            return Some(lower_reflection_static_property_get_by_class_name(
                 ctx,
                 &declaring_class,
                 &property,
@@ -10671,7 +10692,7 @@ fn lower_reflection_class_set_static_property_value(
     let (property, value) = reflection_class_set_static_property_value_args(args)?;
     let (declaring_class, _) = reflection_class_static_property_target(ctx, class_name, &property)?;
     let value = lower_expr(ctx, &value);
-    store_static_property_by_class_name(ctx, &declaring_class, &property, value.value, expr.span);
+    store_reflection_static_property_by_class_name(ctx, &declaring_class, &property, value.value, expr.span);
     Some(lower_null(ctx, expr))
 }
 
@@ -10804,39 +10825,77 @@ fn reflection_class_static_property_target(
     Some((declaring_class, property_ty))
 }
 
-/// Emits a live static-property read from a known reflected class and property name.
-fn lower_static_property_get_by_class_name(
+/// Emits a visibility-bypassing reflection static-property read.
+fn lower_reflection_static_property_get_by_class_name(
     ctx: &mut LoweringContext<'_, '_>,
     class_name: &str,
     property: &str,
     result_type: PhpType,
     expr: &Expr,
 ) -> LoweredValue {
+    lower_static_property_get_by_class_name_with_op(
+        ctx,
+        class_name,
+        property,
+        result_type,
+        expr,
+        Op::LoadReflectionStaticProperty,
+    )
+}
+
+/// Emits a static-property read using the requested static-property opcode.
+fn lower_static_property_get_by_class_name_with_op(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+    result_type: PhpType,
+    expr: &Expr,
+    op: Op,
+) -> LoweredValue {
     let data = ctx.intern_string(&format!("{}::{}", class_name, property));
     ctx.emit_value(
-        Op::LoadStaticProperty,
+        op,
         Vec::new(),
         Some(Immediate::Data(data)),
         result_type,
-        Op::LoadStaticProperty.default_effects(),
+        op.default_effects(),
         Some(expr.span),
     )
 }
 
-/// Emits a live static-property write for a known reflected class and property name.
-fn store_static_property_by_class_name(
+/// Emits a visibility-bypassing reflection static-property write.
+fn store_reflection_static_property_by_class_name(
     ctx: &mut LoweringContext<'_, '_>,
     class_name: &str,
     property: &str,
     value: ValueId,
     span: Span,
 ) {
+    store_static_property_by_class_name_with_op(
+        ctx,
+        class_name,
+        property,
+        value,
+        span,
+        Op::StoreReflectionStaticProperty,
+    );
+}
+
+/// Emits a static-property write using the requested static-property opcode.
+fn store_static_property_by_class_name_with_op(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+    value: ValueId,
+    span: Span,
+    op: Op,
+) {
     let data = ctx.intern_string(&format!("{}::{}", class_name, property));
     ctx.emit_void(
-        Op::StoreStaticProperty,
+        op,
         vec![value],
         Some(Immediate::Data(data)),
-        Op::StoreStaticProperty.default_effects(),
+        op.default_effects(),
         Some(span),
     );
 }

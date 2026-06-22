@@ -394,16 +394,18 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
         }
         BufferNew => check_unary(function, inst_id, inst, IrType::I64, "I64"),
-        LoadLocal | LoadRefCell | LoadGlobal | LoadStaticLocal | LoadStaticProperty | ExternGlobalLoad => {
+        LoadLocal | LoadRefCell | LoadGlobal | LoadStaticLocal | LoadStaticProperty
+        | LoadReflectionStaticProperty | ExternGlobalLoad => {
             check_count(inst_id, inst, 0, "0")
         }
         UnsetLocal | PromoteLocalRefCell | AliasLocalRefCell | ReleaseLocalRefCell => {
             check_count(inst_id, inst, 0, "0")
         }
-        StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty | ExternGlobalStore
-        | StoreRefCell | BindRefCellPtr | Acquire | Release | Move | Borrow | EnsureOwned
-        | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR
-        | ThrowException | GeneratorReturn | PtrCheckNonnull => {
+        StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty
+        | StoreReflectionStaticProperty | ExternGlobalStore | StoreRefCell | BindRefCellPtr
+        | Acquire | Release | Move | Borrow | EnsureOwned | EchoValue | PrintValue | WriteStdout
+        | WriteStrStdout | VarDump | PrintR | ThrowException | GeneratorReturn
+        | PtrCheckNonnull => {
             check_count(inst_id, inst, 1, "1")
         }
         MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat

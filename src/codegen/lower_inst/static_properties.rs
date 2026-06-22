@@ -46,7 +46,7 @@ struct StaticPropertyBranch {
 
 /// Lowers a direct static property read into the current result register(s).
 pub(super) fn lower_load_static_property(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let slot = resolve_static_property_slot(ctx, inst)?;
+    let slot = resolve_static_property_slot(ctx, inst, true)?;
     ensure_static_property_type_supported(&slot.php_type, inst)?;
     if slot.late_bound && !slot.branches.is_empty() {
         let class_id_reg = class_id_work_reg(ctx.emitter);
@@ -62,7 +62,7 @@ pub(super) fn lower_load_static_property(ctx: &mut FunctionContext<'_>, inst: &I
 /// Lowers a direct static property write from one SSA operand into symbol-backed storage.
 pub(super) fn lower_store_static_property(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    let slot = resolve_static_property_slot(ctx, inst)?;
+    let slot = resolve_static_property_slot(ctx, inst, true)?;
     ensure_static_property_type_supported(&slot.php_type, inst)?;
     let value_ty = ctx.value_php_type(value)?;
     ensure_static_property_value_supported(&slot, &value_ty, inst)?;
@@ -75,6 +75,33 @@ pub(super) fn lower_store_static_property(ctx: &mut FunctionContext<'_>, inst: &
             return Ok(());
         }
     }
+    emit_direct_store_static_property_result(ctx, &slot, release_previous);
+    Ok(())
+}
+
+/// Lowers a Reflection static property read, bypassing PHP member visibility.
+pub(super) fn lower_load_reflection_static_property(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = resolve_static_property_slot(ctx, inst, false)?;
+    ensure_static_property_type_supported(&slot.php_type, inst)?;
+    emit_direct_load_static_property_result(ctx, &slot);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a Reflection static property write, bypassing PHP member visibility.
+pub(super) fn lower_store_reflection_static_property(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let slot = resolve_static_property_slot(ctx, inst, false)?;
+    ensure_static_property_type_supported(&slot.php_type, inst)?;
+    let value_ty = ctx.value_php_type(value)?;
+    ensure_static_property_value_supported(&slot, &value_ty, inst)?;
+    load_static_property_store_value_to_result(ctx, value, &slot.php_type)?;
+    let release_previous = !value_is_same_static_property_load(ctx, value, &slot)?;
     emit_direct_store_static_property_result(ctx, &slot, release_previous);
     Ok(())
 }
@@ -94,16 +121,21 @@ fn value_is_same_static_property_load(
     let Some(inst_ref) = ctx.function.instruction(inst) else {
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
-    if inst_ref.op != crate::ir::Op::LoadStaticProperty {
+    if !matches!(
+        inst_ref.op,
+        crate::ir::Op::LoadStaticProperty | crate::ir::Op::LoadReflectionStaticProperty
+    ) {
         return Ok(false);
     }
-    Ok(resolve_static_property_slot(ctx, inst_ref)?.symbol == slot.symbol)
+    let enforce_visibility = inst_ref.op == crate::ir::Op::LoadStaticProperty;
+    Ok(resolve_static_property_slot(ctx, inst_ref, enforce_visibility)?.symbol == slot.symbol)
 }
 
 /// Resolves a static property immediate into declaring-class symbol metadata.
 fn resolve_static_property_slot(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
+    enforce_visibility: bool,
 ) -> Result<StaticPropertySlot> {
     let label = static_property_label(ctx, inst)?;
     let (receiver, property) = parse_static_property_label(label)?;
@@ -135,7 +167,9 @@ fn resolve_static_property_slot(
         .class_infos
         .get(declaring_class)
         .ok_or_else(|| CodegenIrError::unsupported(format!("unknown static property declaring class {}", declaring_class)))?;
-    ensure_static_property_visibility(ctx, declaring_class, property, declaring_info, inst)?;
+    if enforce_visibility {
+        ensure_static_property_visibility(ctx, declaring_class, property, declaring_info, inst)?;
+    }
     let (raw_receiver, _) = parse_static_property_label(label)?;
     let late_bound = raw_receiver.trim_start_matches('\\') == "static";
     let branches = dynamic_static_property_branches(ctx, late_bound, property, declaring_class);
