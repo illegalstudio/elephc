@@ -226,13 +226,14 @@ pub(in crate::interpreter) fn eval_builtin_type_predicate(
         return Err(EvalStatus::RuntimeFatal);
     };
     let value = eval_expr(value, context, scope, values)?;
-    eval_type_predicate_result(name, value, values)
+    eval_type_predicate_result(name, value, context, values)
 }
 
 /// Converts a concrete runtime tag into a PHP `is_*` predicate result.
 pub(in crate::interpreter) fn eval_type_predicate_result(
     name: &str,
     value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let tag = values.type_tag(value)?;
@@ -242,7 +243,8 @@ pub(in crate::interpreter) fn eval_type_predicate_result(
         "is_string" => tag == EVAL_TAG_STRING,
         "is_bool" => tag == EVAL_TAG_BOOL,
         "is_null" => tag == EVAL_TAG_NULL,
-        "is_array" | "is_iterable" => matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC),
+        "is_array" => matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC),
+        "is_iterable" => eval_is_iterable_value(tag, value, context, values)?,
         "is_object" => tag == EVAL_TAG_OBJECT,
         "is_resource" => tag == EVAL_TAG_RESOURCE,
         "is_nan" => eval_float_value(value, values)?.is_nan(),
@@ -256,6 +258,29 @@ pub(in crate::interpreter) fn eval_type_predicate_result(
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
     values.bool_value(result)
+}
+
+/// Returns PHP's `is_iterable()` result for arrays and Traversable-compatible objects.
+fn eval_is_iterable_value(
+    tag: u64,
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Ok(true);
+    }
+    if tag != EVAL_TAG_OBJECT {
+        return Ok(false);
+    }
+    for target in ["Traversable", "Iterator", "IteratorAggregate"] {
+        if dynamic_object_is_a(value, target, false, context, values)?
+            .map_or_else(|| values.object_is_a(value, target, false), Ok)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Matches the static backend's legacy ASCII numeric-string scan.

@@ -3168,11 +3168,21 @@ fn test_eval_dispatches_type_predicate_builtin_calls() {
     let out = compile_and_run(
         r#"<?php
 $h = fopen("php://memory", "r+");
+class EvalAotPredicateIterator implements Iterator {
+    private int $i = 0;
+    public function current(): int { return $this->i; }
+    public function key(): int { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+    public function valid(): bool { return $this->i < 0; }
+    public function rewind(): void { $this->i = 0; }
+}
+$iterator = new EvalAotPredicateIterator();
 eval('echo is_int(1); echo is_integer(1); echo is_long(1);
 echo is_float(1.5); echo is_double(1.5); echo is_real(1.5);
 echo is_string("x"); echo is_bool(false); echo is_null(null);
 echo is_array([1]); echo is_array(["a" => 1]);
 echo is_iterable([1]); echo is_iterable(["a" => 1]);
+echo is_iterable($iterator) ? "I" : "bad";
 echo is_iterable(1) ? "bad" : "T";
 echo is_array(1) ? "bad" : "ok";
 echo is_numeric(42); echo is_numeric(3.14); echo is_numeric("42");
@@ -3194,6 +3204,8 @@ echo call_user_func("is_string", "x");
 echo call_user_func_array("is_array", [[1]]);
 echo call_user_func("is_numeric", "12");
 echo call_user_func("is_iterable", [1]);
+echo call_user_func("is_iterable", $iterator) ? "C" : "bad";
+echo call_user_func_array("is_iterable", ["value" => $iterator]) ? "D" : "bad";
 echo call_user_func_array("is_iterable", ["value" => 1]) ? "bad" : "t";
 echo call_user_func("is_resource", $h);
 echo call_user_func_array("is_resource", [$h]);
@@ -3205,7 +3217,10 @@ echo function_exists("is_double"); echo function_exists("is_numeric"); echo func
 echo function_exists("is_nan"); echo function_exists("is_finite"); echo function_exists("is_iterable"); echo function_exists("is_infinite");');
 "#,
     );
-    assert_eq!(out, "1111111111111Tok11111NBROoNIiFfH:1111t11OoNF11111111");
+    assert_eq!(
+        out,
+        "1111111111111ITok11111NBROoNIiFfH:1111CDt11OoNF11111111"
+    );
 }
 
 /// Verifies eval resource introspection builtins inspect boxed runtime resources.

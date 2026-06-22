@@ -14,11 +14,21 @@ use super::support::*;
 #[test]
 fn execute_program_dispatches_type_predicate_builtins() {
     let program = parse_fragment(
-            br#"echo is_int(1); echo is_integer(1); echo is_long(1);
+            br#"class EvalPredicateIterator implements Iterator {
+    public function current() { return null; }
+    public function key() { return null; }
+    public function next() {}
+    public function valid() { return false; }
+    public function rewind() {}
+}
+$iterator = new EvalPredicateIterator();
+echo is_int(1); echo is_integer(1); echo is_long(1);
 echo is_float(1.5); echo is_double(1.5); echo is_real(1.5);
 echo is_string("x"); echo is_bool(false); echo is_null(null);
 echo is_array([1]); echo is_array(["a" => 1]);
 echo is_iterable([1]); echo is_iterable(["a" => 1]);
+echo is_iterable($iterator) ? "I" : "bad";
+echo is_iterable($object) ? "bad" : "s";
 echo is_iterable(1) ? "bad" : "T";
 echo is_array(1) ? "bad" : "ok";
 echo is_numeric(42); echo is_numeric(3.14); echo is_numeric("42");
@@ -37,6 +47,8 @@ echo ":"; echo call_user_func("is_string", "x");
 echo call_user_func_array("is_array", [[1]]);
 echo call_user_func("is_numeric", "12");
 echo call_user_func("is_iterable", [1]);
+echo call_user_func("is_iterable", $iterator) ? "C" : "bad";
+echo call_user_func_array("is_iterable", ["value" => $iterator]) ? "D" : "bad";
 echo call_user_func_array("is_iterable", ["value" => 1]) ? "bad" : "t";
 echo call_user_func("is_object", $object) ? "O" : "bad";
 echo call_user_func_array("is_object", ["value" => 1]) ? "bad" : "o";
@@ -55,7 +67,7 @@ return function_exists("is_infinite");"#,
 
     assert_eq!(
         values.output,
-        "1111111111111Tok11111NBROoNIiFf:1111tOo1111111"
+        "1111111111111IsTok11111NBROoNIiFf:1111CDtOo1111111"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

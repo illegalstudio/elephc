@@ -103,7 +103,7 @@ pub(in crate::interpreter) fn eval_scalars_builtin_with_values(
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_type_predicate_result(name, *value, values)?
+            eval_type_predicate_result(name, *value, context, values)?
         }
         _ => return Ok(None),
     };
