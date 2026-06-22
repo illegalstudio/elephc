@@ -2587,14 +2587,19 @@ fn builtin_reflection_property_get_value_method() -> ClassMethod {
         is_abstract: false,
         is_final: false,
         has_body: true,
-        params: vec![("object".to_string(), Some(mixed_type()), None, false)],
+        params: vec![(
+            "object".to_string(),
+            Some(mixed_type()),
+            null_expr(),
+            false,
+        )],
         param_attributes: Vec::new(),
         variadic: None,
         variadic_type: None,
         return_type: Some(mixed_type()),
         body: vec![throw_new_reflection_exception(
             string_lit(
-                "ReflectionProperty::getValue() requires an inline known public instance property",
+                "ReflectionProperty::getValue() requires an inline known public instance or static property",
                 dummy_span,
             ),
             dummy_span,
@@ -2624,7 +2629,7 @@ fn builtin_reflection_property_set_value_method() -> ClassMethod {
         return_type: Some(TypeExpr::Void),
         body: vec![throw_new_reflection_exception(
             string_lit(
-                "ReflectionProperty::setValue() requires an inline known public instance property",
+                "ReflectionProperty::setValue() requires an inline known public instance or static property",
                 dummy_span,
             ),
             dummy_span,
