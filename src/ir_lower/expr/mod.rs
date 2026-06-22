@@ -9414,12 +9414,59 @@ fn reflection_property_reflected_target(
 ) -> Option<(String, String)> {
     reflection_property_constructor_target(ctx, object_expr)
         .or_else(|| reflection_property_class_get_property_target(ctx, object_expr))
+        .or_else(|| reflection_property_class_get_properties_index_target(ctx, object_expr))
         .or_else(|| {
             let ExprKind::Variable(name) = &object_expr.kind else {
                 return None;
             };
             ctx.reflection_property_local(name)
         })
+}
+
+/// Extracts a known ReflectionProperty from `ReflectionClass::getProperties()[N]`.
+fn reflection_property_class_get_properties_index_target(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<(String, String)> {
+    let ExprKind::ArrayAccess { array, index } = &object_expr.kind else {
+        return None;
+    };
+    let ExprKind::IntLiteral(raw_index) = &index.kind else {
+        return None;
+    };
+    if *raw_index < 0 {
+        return None;
+    }
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+    } = &array.kind
+    else {
+        return None;
+    };
+    if php_symbol_key(method) != "getproperties" || !args.is_empty() {
+        return None;
+    }
+    let class_name = reflection_class_reflected_class(ctx, object)?;
+    let property = reflection_class_property_name_at_index(ctx, &class_name, *raw_index as usize)?;
+    Some((class_name, property))
+}
+
+/// Returns the `ReflectionClass::getProperties()` property name at a known index.
+fn reflection_class_property_name_at_index(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    index: usize,
+) -> Option<String> {
+    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    class_info
+        .properties
+        .iter()
+        .chain(class_info.static_properties.iter())
+        .map(|(name, _)| name)
+        .nth(index)
+        .cloned()
 }
 
 /// Extracts the known class and property name from an inline ReflectionProperty constructor.
