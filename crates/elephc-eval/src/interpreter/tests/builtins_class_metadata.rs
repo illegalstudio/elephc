@@ -1762,6 +1762,37 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionProperty formats retained property metadata through `__toString()`.
+#[test]
+fn execute_program_reflection_property_to_string() {
+    let program = parse_fragment(
+        br#"class EvalReflectPropertyStringTarget {
+    public int $id = 7;
+    protected static string $label = "ok";
+    private $implicit;
+    public $virtual {
+        get => 1;
+    }
+}
+foreach (["id", "label", "implicit", "virtual"] as $name) {
+    echo (new ReflectionProperty("EvalReflectPropertyStringTarget", $name))->__toString();
+    echo "|";
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Property [ public int $id = 7 ]|Property [ protected static string $label = 'ok' ]|Property [ private $implicit = NULL ]|Property [ public $virtual ]|"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionParameter reports eval constant-default metadata.
 #[test]
 fn execute_program_reflection_parameter_reports_default_constant_metadata() {
