@@ -3154,6 +3154,16 @@ fn add_reflection_member_flag_methods(
             "isDynamic",
             "__is_dynamic",
         ));
+        properties.push(builtin_property(
+            "__string",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        methods.push(builtin_reflection_class_string_method(
+            "__toString",
+            "__string",
+        ));
         methods.push(builtin_reflection_property_is_lazy_method());
         methods.push(builtin_reflection_property_skip_lazy_initialization_method());
         methods.push(builtin_reflection_property_get_value_method());
@@ -4111,6 +4121,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
                     sig.return_type = PhpType::Int;
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
                 }
             }
             if class_name == "ReflectionMethod" {
