@@ -1982,7 +1982,7 @@ fn eval_reflection_method_new(
         &[String::from("class_name"), String::from("method_name")],
         evaluated_args,
     )?;
-    let class_name = eval_reflection_string_arg(args[0], values)?;
+    let class_name = eval_reflection_class_target_name(args[0], context, values)?;
     if !eval_reflection_class_like_exists(&class_name, context) {
         let method_name = eval_reflection_string_arg(args[1], values)?;
         if let Some(method) = eval_reflection_aot_method_metadata_with_signature_if_exists(
