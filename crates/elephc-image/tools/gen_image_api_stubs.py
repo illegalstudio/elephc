@@ -2,11 +2,18 @@
 """Generate throwing-stub declarations + a coverage test for the PHP image OOP
 API surface (Imagick / Gmagick families).
 
-Reads the cached php.net class-synopsis HTML under `scripts/image_synopsis/`,
-extracts the implemented-method set per class from `src/image_prelude.rs`, and
-emits one stub block per class (to splice into the prelude) plus a coverage test
-that calls every stub with type-default args and asserts each throws its
+Reads the compact method spec `crates/elephc-image/tools/api_spec.json` (one
+entry per class: name / static / params / return, extracted from the php.net
+manual — see `crates/elephc-image/tools/README.md` for provenance and
+licensing), extracts
+the implemented-method set per class from `src/image_prelude.rs`, and emits one
+stub block per class (spliced into the prelude) plus a coverage test that calls
+every stub with type-default args and asserts each throws its
 `*Exception("... not supported in elephc")`.
+
+To refresh the spec when php.net adds methods, update `api_spec.json` directly
+(it is the pinned, human-reviewable input); the rendered HTML pages are no
+longer vendored.
 
 Signature transcription rules (verified against the elephc type checker):
 
@@ -24,39 +31,58 @@ Signature transcription rules (verified against the elephc type checker):
 * Capitalized param names (`$Imagick`, `$COLORSPACE`) -> lowercased.
 """
 
-import html as ihtml
+import json
 import os
 import re
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
-PRELUDE = os.path.join(ROOT, "src", "image_prelude.rs")
-SYN_DIR = os.path.join(HERE, "image_synopsis")
+def _find_repo_root(start):
+    """Walk up from `start` to the workspace root (the dir whose `Cargo.toml`
+    declares `[workspace]`). The generator lives inside the elephc-image crate
+    but edits files in the top-level compiler crate (`src/image_prelude.rs`,
+    `tests/codegen/image/`), so it must locate the repo root regardless of how
+    deeply the script is nested."""
+    d = start
+    while True:
+        cargo = os.path.join(d, "Cargo.toml")
+        if os.path.isfile(cargo):
+            try:
+                if "[workspace]" in open(cargo, encoding="utf-8").read():
+                    return d
+            except OSError:
+                pass
+        parent = os.path.dirname(d)
+        if parent == d:
+            raise SystemExit("could not locate workspace root (Cargo.toml with [workspace])")
+        d = parent
 
-# Each class: (class_name, synopsis html file, exception class, instance-ctor
-# php expr used by the coverage test).
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = _find_repo_root(HERE)
+PRELUDE = os.path.join(ROOT, "src", "image_prelude.rs")
+SPEC_FILE = os.path.join(HERE, "api_spec.json")
+
+# Each class: (class_name, exception class, instance-ctor php expr used by the
+# coverage test). The method list comes from `api_spec.json`, keyed by name.
 IMAGICK_FAMILY = [
-    ("Imagick", "imagick.html", "ImagickException", "new Imagick()"),
-    ("ImagickDraw", "imagickdraw.html", "ImagickDrawException", "new ImagickDraw()"),
-    ("ImagickPixel", "imagickpixel.html", "ImagickPixelException", 'new ImagickPixel()'),
-    ("ImagickPixelIterator", "imagickpixeliterator.html", "ImagickPixelIteratorException", "new ImagickPixelIterator(new Imagick())"),
-    ("ImagickKernel", "imagickkernel.html", "ImagickKernelException", "new ImagickKernel()"),
+    ("Imagick", "ImagickException", "new Imagick()"),
+    ("ImagickDraw", "ImagickDrawException", "new ImagickDraw()"),
+    ("ImagickPixel", "ImagickPixelException", 'new ImagickPixel()'),
+    ("ImagickPixelIterator", "ImagickPixelIteratorException", "new ImagickPixelIterator(new Imagick())"),
+    ("ImagickKernel", "ImagickKernelException", "new ImagickKernel()"),
 ]
 GMAGICK_FAMILY = [
-    ("Gmagick", "gmagick.html", "GmagickException", "new Gmagick()"),
-    ("GmagickDraw", "gmagickdraw.html", "GmagickDrawException", "new GmagickDraw()"),
-    ("GmagickPixel", "gmagickpixel.html", "GmagickPixelException", 'new GmagickPixel()'),
+    ("Gmagick", "GmagickException", "new Gmagick()"),
+    ("GmagickDraw", "GmagickDrawException", "new GmagickDraw()"),
+    ("GmagickPixel", "GmagickPixelException", 'new GmagickPixel()'),
 ]
 
 # A family bundles its classes with the coverage-test file/test-name it emits.
 FAMILIES = [
     {"classes": IMAGICK_FAMILY, "test_file": "imagick_api_surface.rs",
-     "test_name": "test_imagick_api_surface_all_stubs_throw",
-     "stub_file": "imagick_family_stubs.php"},
+     "test_name": "test_imagick_api_surface_all_stubs_throw"},
     {"classes": GMAGICK_FAMILY, "test_file": "gmagick_api_surface.rs",
-     "test_name": "test_gmagick_api_surface_all_stubs_throw",
-     "stub_file": "gmagick_family_stubs.php"},
+     "test_name": "test_gmagick_api_surface_all_stubs_throw"},
 ]
 
 # All classes across families (for the prelude splice pass).
@@ -68,7 +94,7 @@ SKIP_MAGIC = {"__call", "__callStatic"}
 
 # Marker comments bracketing each auto-generated stub block so re-runs are
 # idempotent (the splicer replaces the bracketed region instead of appending).
-MARK_BEGIN = "// --- begin auto-generated API-surface throwing stubs (do not edit; regen via scripts/gen_image_api_stubs.py) ---"
+MARK_BEGIN = "// --- begin auto-generated API-surface throwing stubs (do not edit; regen via crates/elephc-image/tools/gen_image_api_stubs.py) ---"
 MARK_END = "// --- end auto-generated API-surface stubs ---"
 
 # Canonical casing for image OOP class names; php.net synopses sometimes
@@ -80,61 +106,15 @@ CANON_CLASS = {
 }
 
 
-def clean_block(b: str) -> str:
-    b = b.replace("<br>", " ")
-    b = re.sub(r"<[^>]+>", "", b)
-    b = ihtml.unescape(b)
-    b = re.sub(r"\s+", " ", b).strip()
-    return b
+def load_spec():
+    """Load the compact per-class method spec from `api_spec.json`.
 
-
-def parse_methods(html_path: str):
-    raw = open(html_path, encoding="utf-8").read()
-    blocks = re.findall(
-        r'<div class="(?:classsynopsisinfo|methodsynopsis dc-description)">(.*?)</div>',
-        raw,
-        re.S,
-    )
-    out = []
-    for b in blocks:
-        line = clean_block(b)
-        if not line.startswith("public"):
-            continue  # class header line
-        m = re.match(r"^public (static )?function (\w+)\((.*)\)(?:: (.*))?$", line)
-        if not m:
-            continue
-        is_static = bool(m.group(1))
-        name = m.group(2)
-        params_str = m.group(3).strip()
-        ret = (m.group(4) or "").strip()
-        params = parse_params(params_str)
-        out.append({"name": name, "static": is_static, "params": params, "ret": ret})
-    return out
-
-
-def parse_params(s: str):
-    if not s:
-        return []
-    # split on top-level commas (defaults here never contain commas)
-    parts = [p.strip() for p in s.split(",")]
-    params = []
-    for p in parts:
-        if not p:
-            continue
-        default = None
-        if "=" in p:
-            p, default = p.split("=", 1)
-            p = p.strip()
-            default = default.strip()
-        # p is now "[TYPE] [&] $name" (type may precede the &, e.g. `array &$x`)
-        m = re.match(r"^(?:(.*?)\s+)?(&\s*)?\$(\w+)$", p)
-        if not m:
-            continue
-        ptype = (m.group(1) or "").strip() or None
-        byref = bool(m.group(2))
-        pname = m.group(3)
-        params.append({"type": ptype, "name": pname, "byref": byref, "default": default})
-    return params
+    Returns `{class_name: [method, ...]}` where each method is a dict with
+    `name` / `static` / `params` (type/name/byref/default) / `ret`, matching the
+    shape the prelude splicer and coverage emitter consume.
+    """
+    with open(SPEC_FILE, encoding="utf-8") as f:
+        return json.load(f)
 
 
 def map_param_type(t, cls):
@@ -357,6 +337,7 @@ def cov_arg(ptype, cls, helpers, byref=False):
 
 
 def main():
+    spec = load_spec()
     prelude_src = open(PRELUDE, encoding="utf-8").read()
     implemented = implemented_methods_per_class(prelude_src)
 
@@ -364,12 +345,11 @@ def main():
     coverage = {}         # cls -> list of (name, static, call, helpers)
     stats = {}
 
-    for cls, htmlf, exc, _ctor in CLASSES:
-        html_path = os.path.join(SYN_DIR, htmlf)
-        if not os.path.exists(html_path):
-            print("MISSING synopsis:", html_path, file=sys.stderr)
+    for cls, exc, _ctor in CLASSES:
+        methods = spec.get(cls)
+        if methods is None:
+            print("MISSING spec entry:", cls, file=sys.stderr)
             continue
-        methods = parse_methods(html_path)
         impl = implemented.get(cls, set())
         stubs = []
         cov = []
@@ -397,18 +377,8 @@ def main():
         coverage[cls] = cov
         stats[cls] = (len(stubs), len(methods), len(impl))
 
-    # per family: write the standalone stub block + a coverage test file
+    # per family: write a coverage test file
     for fam in FAMILIES:
-        stub_path = os.path.join(SYN_DIR, fam["stub_file"])
-        chunks = []
-        for cls, _, _, _ in fam["classes"]:
-            stubs = stub_blocks.get(cls, [])
-            if not stubs:
-                continue
-            chunks.append("// ===== %s throwing stubs (%d) =====\n%s" % (cls, len(stubs), "\n".join(stubs)))
-        with open(stub_path, "w", encoding="utf-8") as f:
-            f.write("\n\n".join(chunks) + "\n")
-        print("wrote stub block:", stub_path)
         write_coverage_test(fam, coverage)
         print("wrote coverage test:", os.path.join(ROOT, "tests", "codegen", "image", fam["test_file"]))
 
@@ -422,7 +392,7 @@ def main():
 
     print("\nstats (stubs / synopsis / implemented):")
     total = 0
-    for cls, _, _, _ in CLASSES:
+    for cls, _, _ in CLASSES:
         s, ms, im = stats.get(cls, (0, 0, 0))
         total += s
         print("  %-22s %4d / %4d / %4d" % (cls, s, ms, im))
@@ -436,7 +406,7 @@ def splice_into_prelude(src, stub_blocks):
     Returns the modified source, or None if every class was already spliced.
     """
     changed = False
-    for cls, _, _, _ in CLASSES:
+    for cls, _, _ in CLASSES:
         stubs = stub_blocks.get(cls, [])
         if not stubs:
             continue
@@ -503,7 +473,7 @@ def write_coverage_test(fam, coverage):
     calls = []
     expected = 0
     idx = 0
-    for cls, _, _, _ in classes:
+    for cls, _, _ in classes:
         cov = coverage.get(cls, [])
         if not cov:
             continue

@@ -1550,7 +1550,7 @@ class ImagickPixel {
     public function destroy(): bool {
         return true;
     }
-    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via scripts/gen_image_api_stubs.py) ---
+    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via crates/elephc-image/tools/gen_image_api_stubs.py) ---
     public function getColorCount(): int {
         throw new ImagickPixelException("ImagickPixel::getColorCount() is not supported in elephc");
     }
@@ -1646,7 +1646,7 @@ class ImagickKernel {
     public function _divisor(): float {
         return $this->divisor;
     }
-    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via scripts/gen_image_api_stubs.py) ---
+    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via crates/elephc-image/tools/gen_image_api_stubs.py) ---
     public function addKernel(ImagickKernel $imagickKernel): void {
         $_u_imagickKernel = $imagickKernel;
         throw new ImagickKernelException("ImagickKernel::addKernel() is not supported in elephc");
@@ -1753,7 +1753,7 @@ class ImagickDraw {
     public function __destruct() {
         elephc_idraw_destroy($this->draw);
     }
-    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via scripts/gen_image_api_stubs.py) ---
+    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via crates/elephc-image/tools/gen_image_api_stubs.py) ---
     public function affine(array $affine): bool {
         $_u_affine = $affine;
         throw new ImagickDrawException("ImagickDraw::affine() is not supported in elephc");
@@ -2720,7 +2720,7 @@ class Imagick implements Iterator, Countable {
         $_u_d = $degrees;
         throw new ImagickException("Imagick::swirlImage() is not supported in elephc");
     }
-    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via scripts/gen_image_api_stubs.py) ---
+    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via crates/elephc-image/tools/gen_image_api_stubs.py) ---
     public function adaptiveBlurImage(float $radius, float $sigma, int $channel = 0): bool {
         $_u_radius = $radius;
         $_u_sigma = $sigma;
@@ -4107,7 +4107,7 @@ class ImagickPixelIterator implements Iterator {
     public function destroy(): bool {
         return true;
     }
-    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via scripts/gen_image_api_stubs.py) ---
+    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via crates/elephc-image/tools/gen_image_api_stubs.py) ---
     public function getIteratorRow(): int {
         throw new ImagickPixelIteratorException("ImagickPixelIterator::getIteratorRow() is not supported in elephc");
     }
@@ -4265,7 +4265,7 @@ class GmagickPixel {
     public function destroy(): bool {
         return true;
     }
-    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via scripts/gen_image_api_stubs.py) ---
+    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via crates/elephc-image/tools/gen_image_api_stubs.py) ---
     public function getcolorcount(): int {
         throw new GmagickPixelException("GmagickPixel::getcolorcount() is not supported in elephc");
     }
@@ -4357,7 +4357,7 @@ class GmagickDraw {
     public function __destruct() {
         elephc_idraw_destroy($this->draw);
     }
-    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via scripts/gen_image_api_stubs.py) ---
+    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via crates/elephc-image/tools/gen_image_api_stubs.py) ---
     public function arc(float $sx, float $sy, float $ex, float $ey, float $sd, float $ed): GmagickDraw {
         $_u_sx = $sx;
         $_u_sy = $sy;
@@ -4825,7 +4825,7 @@ class Gmagick {
         $_u_s = $sigma;
         throw new GmagickException("Gmagick::embossimage() is not supported in elephc");
     }
-    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via scripts/gen_image_api_stubs.py) ---
+    // --- begin auto-generated API-surface throwing stubs (do not edit; regen via crates/elephc-image/tools/gen_image_api_stubs.py) ---
     public function addnoiseimage(int $noise_type): Gmagick {
         $_u_noise_type = $noise_type;
         throw new GmagickException("Gmagick::addnoiseimage() is not supported in elephc");
