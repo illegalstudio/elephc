@@ -6,7 +6,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Covers explicit object arguments for public instance properties.
+//! - Covers explicit object arguments for public and non-public instance properties.
 //! - Covers runtime-held public instance property reflectors.
 //! - Covers static properties where PHP permits no object argument.
 //! - Visibility-bypassing reflection access remains a separate surface.
@@ -94,4 +94,30 @@ echo ":" . $target->label;
 "#,
     );
     assert_eq!(out, "4:8:label:old:new");
+}
+
+/// Verifies ReflectionProperty value access bypasses visibility for private
+/// and protected instance properties, matching PHP's Reflection behavior.
+#[test]
+fn test_reflection_property_value_accessors_bypass_instance_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectHiddenValueAccessTarget {
+    private int $count = 4;
+    protected string $label = "old";
+}
+
+$target = new ReflectHiddenValueAccessTarget();
+$count = new ReflectionProperty(ReflectHiddenValueAccessTarget::class, "count");
+echo $count->getValue($target);
+$count->setValue($target, 8);
+echo ":" . $count->getValue($target);
+
+$label = (new ReflectionClass(ReflectHiddenValueAccessTarget::class))->getProperty("label");
+echo ":" . $label->getValue($target);
+$label->setValue($target, "new");
+echo ":" . $label->getValue($target);
+"#,
+    );
+    assert_eq!(out, "4:8:old:new");
 }
