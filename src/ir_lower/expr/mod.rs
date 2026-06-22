@@ -9391,7 +9391,16 @@ fn lower_reflection_function_invoke_call(
             expr,
         ));
     };
-    if !reflection_function_target_has_declared_params(ctx, &function_name) {
+    if let Some(signature) = first_class_builtin_signature(&function_name) {
+        return Some(lower_reflection_builtin_function_call(
+            ctx,
+            &function_name,
+            &signature,
+            &forwarded_args,
+            expr,
+        ));
+    }
+    if !reflection_user_function_target_has_declared_params(ctx, &function_name) {
         return Some(lower_reflection_function_invoke_unsupported(
             ctx,
             &method_key,
@@ -9400,6 +9409,28 @@ fn lower_reflection_function_invoke_call(
     }
     let name = Name::from(function_name);
     Some(lower_function_call(ctx, &name, &forwarded_args, expr))
+}
+
+/// Lowers reflected invocation of a supported callable builtin.
+fn lower_reflection_builtin_function_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    function_name: &str,
+    signature: &FunctionSig,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let operands = lower_builtin_call_args(ctx, function_name, Some(signature), args);
+    let php_type = call_return_type_for_args(ctx, function_name, args, &operands)
+        .unwrap_or_else(|| call_return_type(ctx, function_name, &operands));
+    let data = ctx.intern_function_name(function_name);
+    ctx.emit_value(
+        Op::BuiltinCall,
+        operands,
+        Some(Immediate::Data(data)),
+        php_type,
+        effects_lookup::builtin_effects(function_name),
+        Some(expr.span),
+    )
 }
 
 /// Returns direct `ReflectionFunction::invoke(...$args)` arguments after static spread expansion.
@@ -9447,8 +9478,8 @@ fn reflection_function_invoke_args_array(
     reflection_class_new_instance_args_value(ctx, forwarded_arg)
 }
 
-/// Returns true when reflected invocation can trust the target function's parameter types.
-fn reflection_function_target_has_declared_params(
+/// Returns true when reflected invocation can trust a user function's parameter types.
+fn reflection_user_function_target_has_declared_params(
     ctx: &LoweringContext<'_, '_>,
     function_name: &str,
 ) -> bool {
@@ -10501,7 +10532,22 @@ fn reflection_function_constructor_target(
     let ExprKind::StringLiteral(function_name) = function_arg.kind else {
         return None;
     };
-    resolve_known_function_name(ctx, &function_name)
+    resolve_known_reflection_function_name(ctx, &function_name)
+}
+
+/// Resolves function names accepted by static `ReflectionFunction` metadata.
+fn resolve_known_reflection_function_name(
+    ctx: &LoweringContext<'_, '_>,
+    function_name: &str,
+) -> Option<String> {
+    resolve_known_function_name(ctx, function_name)
+        .or_else(|| resolve_known_reflection_builtin_name(function_name))
+}
+
+/// Resolves a supported callable builtin name for `ReflectionFunction`.
+fn resolve_known_reflection_builtin_name(function_name: &str) -> Option<String> {
+    let canonical = canonical_builtin_function_name(function_name.trim_start_matches('\\'))?;
+    first_class_builtin_signature(&canonical).map(|_| canonical)
 }
 
 /// Extracts the known class and property name from an inline ReflectionProperty constructor.

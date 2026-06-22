@@ -145,6 +145,24 @@ echo (new ReflectionParameter("strlen", "string"))->getDeclaringFunction()->getN
     assert_eq!(out, "strlen:strlen:I:u:T:int:1:string:P:string:D:strlen");
 }
 
+/// Verifies `ReflectionFunction::invoke()` and `invokeArgs()` call supported builtins.
+#[test]
+fn test_reflection_function_invoke_calls_builtin_functions() {
+    let out = compile_and_run(
+        r#"<?php
+echo (new ReflectionFunction("STRLEN"))->invoke("abc");
+echo ":";
+echo (new ReflectionFunction("strlen"))->invoke(string: "abcd");
+echo ":";
+$ref = new ReflectionFunction("strlen");
+echo $ref->invokeArgs(["abcde"]);
+echo ":";
+echo $ref->invokeArgs(args: ["string" => "abcdef"]);
+"#,
+    );
+    assert_eq!(out, "3:4:5:6");
+}
+
 /// Verifies `ReflectionFunction::invoke()` calls declared AOT functions.
 #[test]
 fn test_reflection_function_invoke_calls_declared_aot_functions() {
