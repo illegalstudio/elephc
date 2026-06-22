@@ -164,7 +164,9 @@ fn test_reflection_parameter_is_promoted() {
     let out = compile_and_run(
         r#"<?php
 class ReflectPromotedParamUser {
-    public function __construct(public int $id, string $name = "Ada") {}
+    public function __construct(public int $id, string $name = "Ada") {
+        echo "C";
+    }
     public function run(int $id) {}
 }
 $ctor = new ReflectionMethod(ReflectPromotedParamUser::class, "__construct");
@@ -175,7 +177,9 @@ $direct = new ReflectionParameter([ReflectPromotedParamUser::class, "__construct
 echo $direct->isPromoted() ? "D" : "d";
 $run = new ReflectionParameter([ReflectPromotedParamUser::class, "run"], "id");
 echo $run->isPromoted() ? "R" : "r";
+$inline = new ReflectionParameter([new ReflectPromotedParamUser(1), "run"], 0);
+echo ":" . $inline->getName();
 "#,
     );
-    assert_eq!(out, "InDr");
+    assert_eq!(out, "InDrC:id");
 }

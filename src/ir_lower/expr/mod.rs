@@ -8242,7 +8242,15 @@ fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> 
 /// Metadata operand source for direct `ReflectionParameter` constructor lowering.
 enum ReflectionParameterConstructorOperand {
     Expr(Expr),
-    ClassName { name: String, span: Span },
+    ClassName {
+        name: String,
+        span: Span,
+    },
+    ObjectExprClassName {
+        expr: Expr,
+        name: String,
+        span: Span,
+    },
 }
 
 /// Lowers validated `ReflectionParameter` constructor arguments into metadata operands.
@@ -8269,19 +8277,35 @@ fn lower_reflection_parameter_constructor_operand(
 ) -> ValueId {
     match operand {
         ReflectionParameterConstructorOperand::Expr(expr) => lower_expr(ctx, expr).value,
+        ReflectionParameterConstructorOperand::ObjectExprClassName { expr, name, span } => {
+            let object = lower_expr(ctx, expr);
+            if ctx.value_is_owning_temporary(object) {
+                crate::ir_lower::ownership::release_if_owned(ctx, object, Some(*span));
+            }
+            emit_reflection_parameter_class_name_operand(ctx, name, *span)
+        }
         ReflectionParameterConstructorOperand::ClassName { name, span } => {
-            let data = ctx.intern_class_name(name);
-            ctx.emit_value(
-                Op::ConstClassName,
-                Vec::new(),
-                Some(Immediate::Data(data)),
-                PhpType::Str,
-                Op::ConstClassName.default_effects(),
-                Some(*span),
-            )
-            .value
+            emit_reflection_parameter_class_name_operand(ctx, name, *span)
         }
     }
+}
+
+/// Emits one class-name operand for direct `ReflectionParameter` metadata.
+fn emit_reflection_parameter_class_name_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    span: Span,
+) -> ValueId {
+    let data = ctx.intern_class_name(name);
+    ctx.emit_value(
+        Op::ConstClassName,
+        Vec::new(),
+        Some(Immediate::Data(data)),
+        PhpType::Str,
+        Op::ConstClassName.default_effects(),
+        Some(span),
+    )
+    .value
 }
 
 /// Returns metadata operand expressions from a normalized static `ReflectionParameter` call.
@@ -8346,6 +8370,18 @@ fn reflection_parameter_method_owner_operand(
     owner: &Expr,
 ) -> Option<ReflectionParameterConstructorOperand> {
     match &owner.kind {
+        ExprKind::StringLiteral(name) => Some(ReflectionParameterConstructorOperand::ClassName {
+            name: name.clone(),
+            span: owner.span,
+        }),
+        ExprKind::ClassConstant { receiver } => {
+            static_receiver_class_name(ctx, receiver).map(|name| {
+                ReflectionParameterConstructorOperand::ClassName {
+                    name,
+                    span: owner.span,
+                }
+            })
+        }
         ExprKind::Variable(name) => {
             let PhpType::Object(class_name) = ctx.local_type(name).codegen_repr() else {
                 return None;
@@ -8366,8 +8402,28 @@ fn reflection_parameter_method_owner_operand(
                     span: owner.span,
                 })
         }
-        _ => Some(ReflectionParameterConstructorOperand::Expr(owner.clone())),
+        _ => reflection_parameter_object_expr_class_name(ctx, owner).map(|name| {
+            ReflectionParameterConstructorOperand::ObjectExprClassName {
+                expr: owner.clone(),
+                name,
+                span: owner.span,
+            }
+        }),
     }
+}
+
+/// Returns the concrete class name for an object expression usable as reflection metadata.
+fn reflection_parameter_object_expr_class_name(
+    ctx: &LoweringContext<'_, '_>,
+    owner: &Expr,
+) -> Option<String> {
+    let PhpType::Object(class_name) = fallback_expr_type(owner).codegen_repr() else {
+        return None;
+    };
+    if class_name.is_empty() || !ctx.classes.contains_key(class_name.as_str()) {
+        return None;
+    }
+    Some(class_name)
 }
 
 /// Lowers PHP `new $class(...)` into the generic dynamic-new EIR opcode.

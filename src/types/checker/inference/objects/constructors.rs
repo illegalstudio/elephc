@@ -459,27 +459,36 @@ impl Checker {
             ExprKind::StringLiteral(_) | ExprKind::ClassConstant { .. } => {
                 self.reflection_class_literal_arg("ReflectionParameter", arg, env)
             }
-            ExprKind::Variable(_) | ExprKind::This => {
-                let target_ty = self.infer_type(arg, env)?.codegen_repr();
-                let PhpType::Object(class_name) = target_ty else {
-                    return Err(CompileError::new(
-                        arg.span,
-                        "ReflectionParameter::__construct() object target must have a concrete class type",
-                    ));
-                };
-                if class_name.is_empty() || !self.classes.contains_key(class_name.as_str()) {
-                    return Err(CompileError::new(
-                        arg.span,
-                        "ReflectionParameter::__construct() object target must have a concrete class type",
-                    ));
-                }
-                Ok(class_name)
+            ExprKind::Variable(_) | ExprKind::This | ExprKind::NewObject { .. } => {
+                self.reflection_parameter_concrete_object_class_name(arg, env)
             }
             _ => Err(CompileError::new(
                 arg.span,
                 "ReflectionParameter::__construct() requires a literal class name or statically typed object target",
             )),
         }
+    }
+
+    /// Resolves a statically known object expression to the reflected class name.
+    fn reflection_parameter_concrete_object_class_name(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<String, CompileError> {
+        let target_ty = self.infer_type(arg, env)?.codegen_repr();
+        let PhpType::Object(class_name) = target_ty else {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() object target must have a concrete class type",
+            ));
+        };
+        if class_name.is_empty() || !self.classes.contains_key(class_name.as_str()) {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionParameter::__construct() object target must have a concrete class type",
+            ));
+        }
+        Ok(class_name)
     }
 
     /// Returns the reflected signature for a statically declared user function.
