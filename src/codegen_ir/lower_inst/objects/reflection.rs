@@ -15,7 +15,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen::{
     abi, emit_array_value_type_stamp, emit_box_current_owned_value_as_mixed,
     emit_box_current_value_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
-    runtime_value_tag,
+    runtime_value_tag, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
 };
 use crate::codegen_ir::literal_defaults::{
     emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
@@ -27,6 +27,7 @@ use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, Op, TraitMethodInfo, ValueDef, ValueId};
 use crate::names::{
     enum_case_symbol, php_symbol_key, property_hook_get_method, property_hook_set_method,
+    static_property_symbol,
 };
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
 use crate::types::{
@@ -50,6 +51,7 @@ struct ReflectionOwnerMetadata {
     constant_names: Vec<String>,
     constant_members: Vec<ReflectionConstantMember>,
     default_property_members: Vec<ReflectionDefaultPropertyMember>,
+    static_property_members: Vec<ReflectionStaticPropertyMember>,
     constant_reflection_members: Vec<ReflectionListedMember>,
     method_members: Vec<ReflectionListedMember>,
     property_members: Vec<ReflectionListedMember>,
@@ -216,6 +218,14 @@ struct ReflectionDefaultPropertyMember {
     value: ReflectionParameterDefaultValue,
 }
 
+/// Metadata for one live static-property value exposed by ReflectionClass.
+struct ReflectionStaticPropertyMember {
+    name: String,
+    declaring_class_name: String,
+    php_type: PhpType,
+    is_declared: bool,
+}
+
 /// Compile-time value forms supported by Reflection constant metadata emission.
 #[derive(Clone)]
 enum ReflectionConstantValue {
@@ -357,6 +367,11 @@ fn emit_reflection_owner_object(
                 ctx,
                 "__default_properties",
                 &metadata.default_property_members,
+            )?;
+            emit_reflection_static_property_array_property_by_name(
+                ctx,
+                "__static_properties",
+                &metadata.static_property_members,
             )?;
             emit_reflection_member_array_property_by_name(
                 ctx,
@@ -553,6 +568,7 @@ fn reflection_class_metadata_for_name(
         let constant_members = reflection_class_constant_members(ctx, class_name, info)?;
         let default_property_members =
             reflection_class_default_property_members(info, &property_names);
+        let static_property_members = reflection_class_static_property_members(class_name, info);
         let constant_reflection_members =
             reflection_class_constant_reflection_members(ctx, class_name, info)?;
         let method_members = reflection_class_method_members(ctx, class_name, info, &method_names)?;
@@ -576,6 +592,7 @@ fn reflection_class_metadata_for_name(
             constant_names,
             constant_members,
             default_property_members,
+            static_property_members,
             constant_reflection_members,
             method_members,
             property_members,
@@ -638,6 +655,7 @@ fn reflection_class_metadata_for_name(
             constant_names,
             constant_members,
             default_property_members: Vec::new(),
+            static_property_members: Vec::new(),
             constant_reflection_members,
             method_members,
             property_members,
@@ -706,6 +724,7 @@ fn reflection_class_metadata_for_name(
             constant_names,
             constant_members,
             default_property_members: Vec::new(),
+            static_property_members: Vec::new(),
             constant_reflection_members,
             method_members,
             property_members,
@@ -860,6 +879,7 @@ fn reflection_method_owner_metadata(
         constant_names: Vec::new(),
         constant_members: Vec::new(),
         default_property_members: Vec::new(),
+        static_property_members: Vec::new(),
         constant_reflection_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
@@ -925,6 +945,7 @@ fn reflection_property_metadata(
                 constant_names: Vec::new(),
                 constant_members: Vec::new(),
                 default_property_members: Vec::new(),
+                static_property_members: Vec::new(),
                 constant_reflection_members: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
@@ -1117,6 +1138,7 @@ fn reflection_class_constant_metadata(
             constant_names: Vec::new(),
             constant_members: Vec::new(),
             default_property_members: Vec::new(),
+            static_property_members: Vec::new(),
             constant_reflection_members: Vec::new(),
             method_members: Vec::new(),
             property_members: Vec::new(),
@@ -1189,6 +1211,7 @@ fn reflection_enum_case_metadata(
                 constant_names: Vec::new(),
                 constant_members: Vec::new(),
                 default_property_members: Vec::new(),
+                static_property_members: Vec::new(),
                 constant_reflection_members: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
@@ -1243,6 +1266,7 @@ fn reflection_class_constant_owner_metadata(
         constant_names: Vec::new(),
         constant_members: Vec::new(),
         default_property_members: Vec::new(),
+        static_property_members: Vec::new(),
         constant_reflection_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
@@ -1834,6 +1858,29 @@ fn reflection_class_default_property_members(
                     value,
                 }
             })
+        })
+        .collect()
+}
+
+/// Returns static-property storage slots for `ReflectionClass::getStaticProperties()`.
+fn reflection_class_static_property_members(
+    class_name: &str,
+    info: &crate::types::ClassInfo,
+) -> Vec<ReflectionStaticPropertyMember> {
+    info.static_properties
+        .iter()
+        .map(|(property_name, php_type)| {
+            let declaring_class_name = info
+                .static_property_declaring_classes
+                .get(property_name)
+                .cloned()
+                .unwrap_or_else(|| class_name.to_string());
+            ReflectionStaticPropertyMember {
+                name: property_name.clone(),
+                declaring_class_name,
+                php_type: php_type.clone(),
+                is_declared: info.declared_static_properties.contains(property_name),
+            }
         })
         .collect()
 }
@@ -3460,6 +3507,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         constant_names: Vec::new(),
         constant_members: Vec::new(),
         default_property_members: Vec::new(),
+        static_property_members: Vec::new(),
         constant_reflection_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
@@ -3826,6 +3874,39 @@ fn emit_reflection_default_property_array_property_by_name(
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_default_property_array(ctx, members);
+    let assoc_type = PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Mixed),
+    };
+    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    Ok(())
+}
+
+/// Replaces a ReflectionClass private slot with current static-property values.
+fn emit_reflection_static_property_array_property_by_name(
+    ctx: &mut FunctionContext<'_>,
+    property_name: &str,
+    members: &[ReflectionStaticPropertyMember],
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get("ReflectionClass")
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, property_name)?;
+    let high_offset = low_offset + 8;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    emit_reflection_static_property_array(ctx, members);
     let assoc_type = PhpType::AssocArray {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
@@ -4214,6 +4295,57 @@ fn emit_reflection_default_property_array(
     }
 }
 
+/// Allocates and populates current static-property values for ReflectionClass.
+fn emit_reflection_static_property_array(
+    ctx: &mut FunctionContext<'_>,
+    members: &[ReflectionStaticPropertyMember],
+) {
+    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Mixed);
+    for member in members {
+        let skip_label = emit_skip_if_static_property_uninitialized(ctx, member);
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        let symbol = static_property_symbol(&member.declaring_class_name, &member.name);
+        abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &member.php_type);
+        emit_box_current_value_as_mixed(ctx.emitter, &member.php_type.codegen_repr());
+        emit_reflection_static_property_hash_insert(ctx, &member.name);
+        if let Some(skip_label) = skip_label {
+            ctx.emitter.label(&skip_label);
+        }
+    }
+}
+
+/// Emits a branch over uninitialized typed static properties, matching PHP reflection.
+#[rustfmt::skip]
+fn emit_skip_if_static_property_uninitialized(
+    ctx: &mut FunctionContext<'_>,
+    member: &ReflectionStaticPropertyMember,
+) -> Option<String> {
+    if !member.is_declared {
+        return None;
+    }
+    let skip_label = ctx.next_label("reflection_static_uninitialized");
+    let symbol = static_property_symbol(&member.declaring_class_name, &member.name);
+    let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, marker_reg, &symbol, 8);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        sentinel_reg,
+        UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the static property marker against the uninitialized sentinel
+            ctx.emitter.instruction(&format!("b.eq {}", skip_label));           // omit uninitialized typed static properties from the reflection map
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the static property marker against the uninitialized sentinel
+            ctx.emitter.instruction(&format!("je {}", skip_label));             // omit uninitialized typed static properties from the reflection map
+        }
+    }
+    Some(skip_label)
+}
+
 /// Materializes one Reflection constant value as a boxed Mixed cell.
 fn emit_reflection_constant_value_as_mixed(
     ctx: &mut FunctionContext<'_>,
@@ -4458,6 +4590,40 @@ fn emit_reflection_constant_hash_insert(ctx: &mut FunctionContext<'_>, key: &str
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rcx, rax");                            // pass the boxed Reflection constant value as the hash payload
+            ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash payloads do not use the high word
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "r9",
+                runtime_value_tag(&PhpType::Mixed) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        }
+    }
+}
+
+/// Inserts the current boxed Mixed static-property value into the stacked associative array.
+#[rustfmt::skip]
+fn emit_reflection_static_property_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
+    let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x0");                              // pass the boxed Reflection static value as the hash payload
+            ctx.emitter.instruction("mov x4, xzr");                             // boxed Mixed hash payloads do not use the high word
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x5",
+                runtime_value_tag(&PhpType::Mixed) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the boxed Reflection static value as the hash payload
             ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "rdi");
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);

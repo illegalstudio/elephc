@@ -234,6 +234,39 @@ echo ":" . $props["label"];
     assert_eq!(out, "5:9:old:new:9:new");
 }
 
+/// Verifies runtime-held `ReflectionClass` objects expose materialized AOT
+/// static-property values and omit uninitialized typed static properties.
+#[test]
+fn test_reflection_class_runtime_static_properties_materialize_aot_values() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectRuntimeStaticPropertiesTarget {
+    public static int $count = 2;
+    private static string $label = "old";
+    public static int $unset;
+
+    public static function rename(string $value): void {
+        self::$label = $value;
+    }
+}
+
+function inspect_static_props(ReflectionClass $ref): void {
+    $props = $ref->getStaticProperties();
+    echo count($props);
+    echo ":" . $props["count"];
+    echo ":" . $props["label"];
+    echo ":" . ($props["unset"] ?? "missing");
+    echo ":" . $ref->getStaticPropertyValue("count", "fallback");
+}
+
+ReflectRuntimeStaticPropertiesTarget::$count = 5;
+ReflectRuntimeStaticPropertiesTarget::rename("new");
+inspect_static_props(new ReflectionClass(ReflectRuntimeStaticPropertiesTarget::class));
+"#,
+    );
+    assert_eq!(out, "2:5:new:missing:5");
+}
+
 /// Verifies runtime-held `ReflectionProperty` objects can read and write public
 /// instance properties through their retained property names.
 #[test]
