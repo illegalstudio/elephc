@@ -2666,7 +2666,7 @@ fn store_mixed_scope_cell_to_local(
             };
             let result_reg = abi::int_result_reg(ctx.emitter);
             ctx.emitter
-                .instruction(&format!("mov {}, {}", result_reg, object_reg)); // move unboxed object pointer into the local-store result register
+                .instruction(&format!("mov {}, {}", result_reg, object_reg));   // move unboxed object pointer into the local-store result register
             ctx.store_current_result_to_local(local.slot)?;
         }
         other => {
@@ -2716,7 +2716,7 @@ fn store_mixed_scope_cell_to_global(
             };
             let result_reg = abi::int_result_reg(ctx.emitter);
             ctx.emitter
-                .instruction(&format!("mov {}, {}", result_reg, payload_reg)); // move the unboxed array payload into the ABI result register
+                .instruction(&format!("mov {}, {}", result_reg, payload_reg));  // move the unboxed array payload into the ABI result register
             abi::emit_incref_if_refcounted(ctx.emitter, &ty);
             abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &ty, false);
         }
@@ -2864,12 +2864,12 @@ fn emit_branch_if_eval_status(ctx: &mut FunctionContext<'_>, status: i64, label:
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("cmp {}, #{}", result_reg, status)); // compare the eval bridge status against the handled code
+                .instruction(&format!("cmp {}, #{}", result_reg, status));      // compare the eval bridge status against the handled code
             ctx.emitter.instruction(&format!("b.eq {}", label));                // branch to the matching eval status handler
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("cmp {}, {}", result_reg, status)); // compare the eval bridge status against the handled code
+                .instruction(&format!("cmp {}, {}", result_reg, status));       // compare the eval bridge status against the handled code
             ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching eval status handler
         }
     }
@@ -2902,7 +2902,7 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the eval runtime diagnostic byte length
+                .instruction(&format!("mov x2, #{}", message_len));             // pass the eval runtime diagnostic byte length
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);
         }
@@ -2910,7 +2910,7 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
             ctx.emitter.instruction("mov edi, 2");                              // write the eval runtime diagnostic to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
-                .instruction(&format!("mov edx, {}", message_len)); // pass the eval runtime diagnostic byte length
+                .instruction(&format!("mov edx, {}", message_len));             // pass the eval runtime diagnostic byte length
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the eval runtime diagnostic before exiting
             abi::emit_exit(ctx.emitter, 1);

@@ -845,7 +845,7 @@ fn emit_alloc_reflection_owner_object_x86_64(
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
         (X86_64_HEAP_MAGIC_HI32 << 32) | 4
-    )); // materialize the x86_64 object heap kind word
+    ));                                                                         // materialize the x86_64 object heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the object heap header before the payload
     emitter.instruction(&format!("mov r10, {}", layout.class_id));              // materialize the Reflection owner class id
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at object payload offset zero

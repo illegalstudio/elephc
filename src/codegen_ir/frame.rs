@@ -411,7 +411,7 @@ fn emit_eval_scope_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     if arg_reg != result_reg {
         ctx.emitter
-            .instruction(&format!("mov {}, {}", arg_reg, result_reg)); // pass the persistent eval scope handle to the free helper
+            .instruction(&format!("mov {}, {}", arg_reg, result_reg));          // pass the persistent eval scope handle to the free helper
     }
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_free");
     abi::emit_call_label(ctx.emitter, &symbol);
@@ -428,7 +428,7 @@ fn emit_eval_context_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     if arg_reg != result_reg {
         ctx.emitter
-            .instruction(&format!("mov {}, {}", arg_reg, result_reg)); // pass the persistent eval context handle to the free helper
+            .instruction(&format!("mov {}, {}", arg_reg, result_reg));          // pass the persistent eval context handle to the free helper
     }
     let symbol = ctx
         .emitter
@@ -529,18 +529,18 @@ fn emit_main_string_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("cbz {}, {}", len_reg, done)); // skip empty or uninitialized string locals
+                .instruction(&format!("cbz {}, {}", len_reg, done));            // skip empty or uninitialized string locals
             ctx.emitter
-                .instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the owned string pointer to the heap-free helper
+                .instruction(&format!("mov {}, {}", result_reg, ptr_reg));      // pass the owned string pointer to the heap-free helper
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("test {}, {}", len_reg, len_reg)); // check whether this string local has owned bytes
+                .instruction(&format!("test {}, {}", len_reg, len_reg));        // check whether this string local has owned bytes
             ctx.emitter.instruction(&format!("je {}", done));                   // skip empty or uninitialized string locals
             if ptr_reg != result_reg {
                 ctx.emitter
-                    .instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the owned string pointer to the heap-free helper
+                    .instruction(&format!("mov {}, {}", result_reg, ptr_reg));  // pass the owned string pointer to the heap-free helper
             }
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
@@ -556,11 +556,11 @@ fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("cbz {}, {}", result_reg, done)); // skip uninitialized refcounted locals
+                .instruction(&format!("cbz {}, {}", result_reg, done));         // skip uninitialized refcounted locals
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("test {}, {}", result_reg, result_reg)); // check whether the refcounted local is initialized
+                .instruction(&format!("test {}, {}", result_reg, result_reg));  // check whether the refcounted local is initialized
             ctx.emitter.instruction(&format!("je {}", done));                   // skip uninitialized refcounted locals
         }
     }

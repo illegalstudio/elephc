@@ -591,7 +591,7 @@ fn emit_duplicate_define_warning(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!(
                 "mov x2, #{}",
                 DEFINE_ALREADY_DEFINED_WARNING.len()
-            )); // pass the duplicate-define warning byte length
+            ));                                                                 // pass the duplicate-define warning byte length
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -599,7 +599,7 @@ fn emit_duplicate_define_warning(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!(
                 "mov esi, {}",
                 DEFINE_ALREADY_DEFINED_WARNING.len()
-            )); // pass the duplicate-define warning byte length
+            ));                                                                 // pass the duplicate-define warning byte length
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
@@ -616,8 +616,7 @@ fn lower_pi(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("movsd xmm0, QWORD PTR [rip + {}]", label));
-            // load the M_PI floating constant into the floating result register
+                .instruction(&format!("movsd xmm0, QWORD PTR [rip + {}]", label)); // load the M_PI floating constant into the floating result register
         }
     }
     store_if_result(ctx, inst)
@@ -1029,7 +1028,7 @@ fn emit_variant_function_exists(ctx: &mut FunctionContext<'_>, function_name: &s
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("test {}, {}", result_reg, result_reg)); // test whether an include has activated this function variant
+                .instruction(&format!("test {}, {}", result_reg, result_reg));  // test whether an include has activated this function variant
             ctx.emitter.instruction("setne al");                                // return true only when a function variant is active
             ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }
@@ -1092,11 +1091,11 @@ fn lower_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()>
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("mov {}, {}", result_reg, len_reg)); // return the byte length of the loaded PHP string
+                .instruction(&format!("mov {}, {}", result_reg, len_reg));      // return the byte length of the loaded PHP string
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("mov {}, {}", result_reg, len_reg)); // return the byte length of the loaded PHP string
+                .instruction(&format!("mov {}, {}", result_reg, len_reg));      // return the byte length of the loaded PHP string
         }
     }
     store_if_result(ctx, inst)

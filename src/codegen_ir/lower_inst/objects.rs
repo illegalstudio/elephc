@@ -784,7 +784,7 @@ fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut FunctionConte
             ctx.emitter.instruction(&format!(
                 "mov x9, #{}",
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()
-            )); // load static exception message length
+            ));                                                                 // load static exception message length
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store static exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
@@ -808,10 +808,10 @@ fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut FunctionConte
             ctx.emitter.instruction(&format!(
                 "mov QWORD PTR [rax + 16], {}",
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()
-            )); // store static exception message length
+            ));                                                                 // store static exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
             ctx.emitter
-                .instruction("mov QWORD PTR [rip + _exc_value], rax"); // publish the active exception object
+                .instruction("mov QWORD PTR [rip + _exc_value], rax");          // publish the active exception object
             ctx.emitter.instruction("mov rsp, rbp");                            // release helper frame before throwing
             ctx.emitter.instruction("pop rbp");                                 // restore caller frame pointer before throwing
             ctx.emitter.instruction("jmp __rt_throw_current");                  // enter the standard exception unwinder
@@ -984,7 +984,7 @@ fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id: u64) {
             ctx.emitter.instruction(&format!(
                 "mov r10, 0x{:x}",
                 (X86_64_HEAP_MAGIC_HI32 << 32) | 6
-            )); // materialize the x86_64 Throwable heap kind word
+            ));                                                                 // materialize the x86_64 Throwable heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the Throwable payload
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the Throwable runtime class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at payload offset zero
@@ -1156,7 +1156,7 @@ fn move_fiber_callable_result_to_arg(ctx: &mut FunctionContext<'_>, callable_arg
         return;
     }
     ctx.emitter
-        .instruction(&format!("mov {}, {}", callable_arg, result_reg)); // pass selected callable descriptor to Fiber constructor
+        .instruction(&format!("mov {}, {}", callable_arg, result_reg));         // pass selected callable descriptor to Fiber constructor
 }
 
 /// Lowers constrained runtime class-string object construction.
@@ -1343,12 +1343,12 @@ fn emit_generic_dynamic_new_class_string(
                 Arch::AArch64 => {
                     ctx.emitter.instruction("cmp x0, #1");                      // require a boxed string class name for dynamic construction
                     ctx.emitter
-                        .instruction(&format!("b.ne {}", non_string_label)); // non-string class names produce the runtime null fallback
+                        .instruction(&format!("b.ne {}", non_string_label));    // non-string class names produce the runtime null fallback
                 }
                 Arch::X86_64 => {
                     ctx.emitter.instruction("cmp rax, 1");                      // require a boxed string class name for dynamic construction
                     ctx.emitter
-                        .instruction(&format!("jne {}", non_string_label)); // non-string class names produce the runtime null fallback
+                        .instruction(&format!("jne {}", non_string_label));     // non-string class names produce the runtime null fallback
                     ctx.emitter.instruction("mov rax, rdi");                    // move the unboxed string pointer into the string result register
                 }
             }
@@ -2032,12 +2032,12 @@ fn emit_compare_dynamic_new_class_id(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("cmp {}, #{}", scratch, class_id)); // compare the requested factory class with this candidate class id
+                .instruction(&format!("cmp {}, #{}", scratch, class_id));       // compare the requested factory class with this candidate class id
             ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // branch when the runtime class-string selected this constructor
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("cmp {}, {}", scratch, class_id)); // compare the requested factory class with this candidate class id
+                .instruction(&format!("cmp {}, {}", scratch, class_id));        // compare the requested factory class with this candidate class id
             ctx.emitter.instruction(&format!("je {}", matched_label));          // branch when the runtime class-string selected this constructor
         }
     }
@@ -2144,13 +2144,13 @@ fn emit_fatal_message(ctx: &mut FunctionContext<'_>, message: &[u8]) {
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the fatal diagnostic byte length to write()
+                .instruction(&format!("mov x2, #{}", message_len));             // pass the fatal diagnostic byte length to write()
             ctx.emitter.syscall(4);
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
-                .instruction(&format!("mov edx, {}", message_len)); // pass the fatal diagnostic byte length to write()
+                .instruction(&format!("mov edx, {}", message_len));             // pass the fatal diagnostic byte length to write()
             ctx.emitter.instruction("mov edi, 2");                              // select stderr for the fatal diagnostic
             ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall
             ctx.emitter.instruction("syscall");                                 // write the fatal diagnostic bytes
@@ -2224,13 +2224,11 @@ fn emit_property_default(
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
                     ctx.emitter
-                        .instruction(&format!("ldr {}, [{}]", float_reg, scratch));
-                    // load the property default float literal through the symbol scratch register
+                        .instruction(&format!("ldr {}, [{}]", float_reg, scratch)); // load the property default float literal through the symbol scratch register
                 }
                 Arch::X86_64 => {
                     ctx.emitter
-                        .instruction(&format!("movsd {}, QWORD PTR [{}]", float_reg, scratch));
-                    // load the property default float literal through the symbol scratch register
+                        .instruction(&format!("movsd {}, QWORD PTR [{}]", float_reg, scratch)); // load the property default float literal through the symbol scratch register
                 }
             }
             abi::emit_store_to_address(ctx.emitter, float_reg, object_reg, default.offset);
@@ -2573,7 +2571,7 @@ fn lower_allow_dynamic_prop_get(
             ctx.emitter.instruction(&format!(
                 "mov rdi, QWORD PTR [{} + {}]",
                 object_reg, hash_offset
-            )); // load the dynamic-property hash pointer from the receiver
+            ));                                                                 // load the dynamic-property hash pointer from the receiver
             abi::emit_symbol_address(ctx.emitter, "rsi", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
@@ -2905,12 +2903,12 @@ fn emit_property_on_null_warning(ctx: &mut FunctionContext<'_>, property: &str) 
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the property-on-null warning byte length
+                .instruction(&format!("mov x2, #{}", message_len));             // pass the property-on-null warning byte length
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(ctx.emitter, "rdi", &message_label);
             ctx.emitter
-                .instruction(&format!("mov esi, {}", message_len)); // pass the property-on-null warning byte length
+                .instruction(&format!("mov esi, {}", message_len));             // pass the property-on-null warning byte length
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
@@ -3318,7 +3316,7 @@ fn emit_branch_if_dynamic_name_matches(
             abi::emit_load_int_immediate(ctx.emitter, "x4", len as i64);
             ctx.emitter.instruction("bl __rt_str_eq");                          // compare the runtime property name against this declared property
             ctx.emitter
-                .instruction(&format!("cbnz x0, {}", target_label)); // dispatch to the declared property slot when the names match
+                .instruction(&format!("cbnz x0, {}", target_label));            // dispatch to the declared property slot when the names match
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
@@ -3849,7 +3847,7 @@ fn lower_allow_dynamic_prop_set(
             ctx.emitter.instruction(&format!(
                 "mov rdi, QWORD PTR [{} + {}]",
                 object_reg, hash_offset
-            )); // load the dynamic-property hash pointer from the receiver
+            ));                                                                 // load the dynamic-property hash pointer from the receiver
             abi::emit_push_reg(ctx.emitter, object_reg);
             abi::emit_symbol_address(ctx.emitter, "rsi", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
@@ -3924,7 +3922,7 @@ fn emit_property_assign_on_null_fatal(ctx: &mut FunctionContext<'_>, property: &
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the property-assign-on-null fatal byte length
+                .instruction(&format!("mov x2, #{}", message_len));             // pass the property-assign-on-null fatal byte length
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);
         }
@@ -3932,7 +3930,7 @@ fn emit_property_assign_on_null_fatal(ctx: &mut FunctionContext<'_>, property: &
             ctx.emitter.instruction("mov edi, 2");                              // write the property-assign-on-null fatal to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
-                .instruction(&format!("mov edx, {}", message_len)); // pass the property-assign-on-null fatal byte length
+                .instruction(&format!("mov edx, {}", message_len));             // pass the property-assign-on-null fatal byte length
             ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
             ctx.emitter.instruction("syscall");                                 // emit the property-assign-on-null fatal before exiting
             abi::emit_exit(ctx.emitter, 1);
@@ -4007,7 +4005,7 @@ fn emit_object_allocation(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("mov x0, #{}", payload_size)); // request object payload storage for the class id and property slots
+                .instruction(&format!("mov x0, #{}", payload_size));            // request object payload storage for the class id and property slots
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks object instances for ownership helpers
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the object payload
@@ -4016,12 +4014,12 @@ fn emit_object_allocation(
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("mov rax, {}", payload_size)); // request object payload storage for the class id and property slots
+                .instruction(&format!("mov rax, {}", payload_size));            // request object payload storage for the class id and property slots
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction(&format!(
                 "mov r10, 0x{:x}",
                 (X86_64_HEAP_MAGIC_HI32 << 32) | 4
-            )); // materialize the x86_64 object heap kind word
+            ));                                                                 // materialize the x86_64 object heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the object payload
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the compile-time class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object payload offset zero
@@ -4139,11 +4137,11 @@ fn emit_clone_dynamic_property_hash(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("cbz {}, {}", result_reg, null_label)); // missing dynamic-property hash clones as a null hash pointer
+                .instruction(&format!("cbz {}, {}", result_reg, null_label));   // missing dynamic-property hash clones as a null hash pointer
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("test {}, {}", result_reg, result_reg)); // check whether the source dynamic-property hash exists
+                .instruction(&format!("test {}, {}", result_reg, result_reg));  // check whether the source dynamic-property hash exists
             ctx.emitter.instruction(&format!("jz {}", null_label));             // missing dynamic-property hash clones as a null hash pointer
         }
     }
@@ -4985,20 +4983,20 @@ fn emit_packed_field_load(
             let int_reg = abi::int_result_reg(ctx.emitter);
             if slot.offset == 0 {
                 ctx.emitter
-                    .instruction(&format!("mov {}, {}", int_reg, base_reg)); // return the nested packed field address directly
+                    .instruction(&format!("mov {}, {}", int_reg, base_reg));    // return the nested packed field address directly
             } else {
                 match ctx.emitter.target.arch {
                     Arch::AArch64 => {
                         ctx.emitter.instruction(&format!(
                             "add {}, {}, #{}",
                             int_reg, base_reg, slot.offset
-                        )); // compute the nested packed field address
+                        ));                                                     // compute the nested packed field address
                     }
                     Arch::X86_64 => {
                         ctx.emitter.instruction(&format!(
                             "lea {}, [{} + {}]",
                             int_reg, base_reg, slot.offset
-                        )); // compute the nested packed field address
+                        ));                                                     // compute the nested packed field address
                     }
                 }
             }
@@ -5478,13 +5476,13 @@ fn emit_uninitialized_typed_property_guard(
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the property marker against the uninitialized sentinel
             ctx.emitter
-                .instruction(&format!("b.ne {}", initialized_label)); // continue the property read once the slot has been initialized
+                .instruction(&format!("b.ne {}", initialized_label));           // continue the property read once the slot has been initialized
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the property marker against the uninitialized sentinel
             ctx.emitter
-                .instruction(&format!("jne {}", initialized_label)); // continue the property read once the slot has been initialized
+                .instruction(&format!("jne {}", initialized_label));            // continue the property read once the slot has been initialized
         }
     }
     emit_uninitialized_typed_property_fatal(ctx, slot);
@@ -5531,13 +5529,13 @@ fn emit_uninitialized_typed_property_fatal(ctx: &mut FunctionContext<'_>, slot: 
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len)); // pass the fatal diagnostic byte length to write()
+                .instruction(&format!("mov x2, #{}", message_len));             // pass the fatal diagnostic byte length to write()
             ctx.emitter.syscall(4);
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
-                .instruction(&format!("mov edx, {}", message_len)); // pass the fatal diagnostic byte length to write()
+                .instruction(&format!("mov edx, {}", message_len));             // pass the fatal diagnostic byte length to write()
             ctx.emitter.instruction("mov edi, 2");                              // select stderr for the uninitialized typed-property fatal
             ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall
             ctx.emitter.instruction("syscall");                                 // write the uninitialized typed-property fatal diagnostic
