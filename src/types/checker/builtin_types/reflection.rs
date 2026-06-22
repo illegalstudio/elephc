@@ -2520,6 +2520,18 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
             true_bool(),
         ),
         builtin_property(
+            "__is_array_type",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ),
+        builtin_property(
+            "__is_callable_type",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ),
+        builtin_property(
             "__has_default_value",
             Visibility::Private,
             Some(bool_type()),
@@ -2570,6 +2582,8 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
         builtin_reflection_class_bool_method("isPromoted", "__is_promoted"),
         builtin_reflection_class_bool_method("hasType", "__has_type"),
         builtin_reflection_class_bool_method("allowsNull", "__allows_null"),
+        builtin_reflection_class_bool_method("isArray", "__is_array_type"),
+        builtin_reflection_class_bool_method("isCallable", "__is_callable_type"),
         builtin_reflection_class_mixed_method("getType", "__type"),
         builtin_reflection_owner_get_attributes_method(),
         builtin_reflection_class_bool_method("isDefaultValueAvailable", "__has_default_value"),
@@ -3229,6 +3243,8 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "canbepassedbyvalue",
                     "hastype",
                     "allowsnull",
+                    "isarray",
+                    "iscallable",
                     "isdefaultvalueavailable",
                     "isdefaultvalueconstant",
                 ] {

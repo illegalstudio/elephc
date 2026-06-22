@@ -111,6 +111,8 @@ struct ReflectionParameterMember {
     is_promoted: bool,
     has_type: bool,
     allows_null: bool,
+    is_array_type: bool,
+    is_callable_type: bool,
     type_metadata: Option<ReflectionParameterTypeMetadata>,
     default_value: Option<ReflectionParameterDefaultValue>,
     default_value_constant_name: Option<String>,
@@ -2654,6 +2656,9 @@ fn reflection_parameter_members_with_declaring_function(
             .flatten();
         let default_value_constant_name =
             default_expr.and_then(reflection_parameter_default_constant_name);
+        let is_array_type = reflection_parameter_has_named_type(type_metadata.as_ref(), "array");
+        let is_callable_type =
+            reflection_parameter_has_named_type(type_metadata.as_ref(), "callable");
         parameters.push(ReflectionParameterMember {
             name: name.clone(),
             declaring_class_name: declaring_class_name.map(str::to_string),
@@ -2686,12 +2691,26 @@ fn reflection_parameter_members_with_declaring_function(
                 type_metadata.as_ref(),
                 default_value.as_ref(),
             ),
+            is_array_type,
+            is_callable_type,
             type_metadata,
             default_value,
             default_value_constant_name,
         });
     }
     Ok(parameters)
+}
+
+/// Returns whether retained parameter metadata is one named type with the requested name.
+fn reflection_parameter_has_named_type(
+    type_metadata: Option<&ReflectionParameterTypeMetadata>,
+    expected_name: &str,
+) -> bool {
+    matches!(
+        type_metadata,
+        Some(ReflectionParameterTypeMetadata::Named(named))
+            if named.name.eq_ignore_ascii_case(expected_name)
+    )
 }
 
 /// Returns PHP's `ReflectionParameter::allowsNull()` value for static metadata.
@@ -3953,10 +3972,7 @@ fn emit_reflection_constant_array(
 
 /// Allocates and populates a name-keyed map of full ReflectionClass objects.
 fn emit_reflection_class_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
-    emit_empty_assoc_array_literal_to_result(
-        ctx,
-        &PhpType::Object("ReflectionClass".to_string()),
-    );
+    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Object("ReflectionClass".to_string()));
     for name in names {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         let metadata = reflection_class_metadata_for_name(ctx, name)?;
@@ -3971,8 +3987,8 @@ fn emit_reflection_class_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
     let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x3, x0");                              // pass the ReflectionClass object as the hash payload
-            ctx.emitter.instruction("mov x4, xzr");                             // object hash payloads do not use the high word
+            ctx.emitter.instruction("mov x3, x0"); // pass the ReflectionClass object as the hash payload
+            ctx.emitter.instruction("mov x4, xzr"); // object hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
@@ -3984,8 +4000,8 @@ fn emit_reflection_class_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
             abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rcx, rax");                            // pass the ReflectionClass object as the hash payload
-            ctx.emitter.instruction("xor r8, r8");                              // object hash payloads do not use the high word
+            ctx.emitter.instruction("mov rcx, rax"); // pass the ReflectionClass object as the hash payload
+            ctx.emitter.instruction("xor r8, r8"); // object hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "rdi");
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
@@ -4292,6 +4308,18 @@ fn emit_reflection_parameter_properties(
         "ReflectionParameter",
         "__allows_null",
         parameter.allows_null,
+    )?;
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionParameter",
+        "__is_array_type",
+        parameter.is_array_type,
+    )?;
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionParameter",
+        "__is_callable_type",
+        parameter.is_callable_type,
     )?;
     emit_reflection_parameter_type_property(ctx, parameter)?;
     emit_reflection_owner_bool_property(

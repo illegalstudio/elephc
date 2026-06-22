@@ -3179,6 +3179,14 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
             return values.bool_value(attribute_metadata.is_repeated());
         }
     }
+    if let Some(result) = eval_reflection_parameter_legacy_type_predicate_result(
+        object,
+        method_name,
+        evaluated_args.clone(),
+        values,
+    )? {
+        return Ok(result);
+    }
     if let Some(result) = eval_reflection_class_implements_interface_result(
         identity,
         method_name,

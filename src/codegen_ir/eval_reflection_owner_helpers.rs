@@ -120,6 +120,10 @@ struct ReflectionOwnerLayout {
     declaring_function_hi: Option<usize>,
     allows_null_lo: Option<usize>,
     allows_null_hi: Option<usize>,
+    is_array_type_lo: Option<usize>,
+    is_array_type_hi: Option<usize>,
+    is_callable_type_lo: Option<usize>,
+    is_callable_type_hi: Option<usize>,
     is_builtin_lo: Option<usize>,
     is_builtin_hi: Option<usize>,
 }
@@ -272,6 +276,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         reflection_property_offset(info, "__default_value_constant_name");
     let declaring_function_lo = reflection_property_offset(info, "__declaring_function");
     let allows_null_lo = reflection_property_offset(info, "__allows_null");
+    let is_array_type_lo = reflection_property_offset(info, "__is_array_type");
+    let is_callable_type_lo = reflection_property_offset(info, "__is_callable_type");
     let is_builtin_lo = reflection_property_offset(info, "__is_builtin");
     Some(ReflectionOwnerLayout {
         class_id: info.class_id,
@@ -372,6 +378,10 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         declaring_function_hi: declaring_function_lo.map(|offset| offset + 8),
         allows_null_lo,
         allows_null_hi: allows_null_lo.map(|offset| offset + 8),
+        is_array_type_lo,
+        is_array_type_hi: is_array_type_lo.map(|offset| offset + 8),
+        is_callable_type_lo,
+        is_callable_type_hi: is_callable_type_lo.map(|offset| offset + 8),
         is_builtin_lo,
         is_builtin_hi: is_builtin_lo.map(|offset| offset + 8),
     })
@@ -1322,8 +1332,8 @@ fn emit_set_owner_member_flags_property_aarch64(
     }
     if let (Some(is_virtual_lo), Some(is_virtual_hi)) = (layout.is_virtual_lo, layout.is_virtual_hi)
     {
-        emitter.instruction("lsr x10, x11, #10");                               // move the virtual-property bit into position
-        emitter.instruction("and x10, x10, #1");                                // extract the virtual-property flag as a boolean
+        emitter.instruction("lsr x10, x11, #10"); // move the virtual-property bit into position
+        emitter.instruction("and x10, x10, #1"); // extract the virtual-property flag as a boolean
         abi::emit_store_to_address(emitter, "x10", "x9", is_virtual_lo);
         abi::emit_store_zero_to_address(emitter, "x9", is_virtual_hi);
     }
@@ -1452,9 +1462,9 @@ fn emit_set_owner_member_flags_property_x86_64(
     }
     if let (Some(is_virtual_lo), Some(is_virtual_hi)) = (layout.is_virtual_lo, layout.is_virtual_hi)
     {
-        emitter.instruction("mov rax, r11");                                    // copy flags before extracting the virtual-property bit
-        emitter.instruction("shr rax, 10");                                     // move the virtual-property bit into position
-        emitter.instruction("and rax, 1");                                      // extract the virtual-property flag as a boolean
+        emitter.instruction("mov rax, r11"); // copy flags before extracting the virtual-property bit
+        emitter.instruction("shr rax, 10"); // move the virtual-property bit into position
+        emitter.instruction("and rax, 1"); // extract the virtual-property flag as a boolean
         abi::emit_store_to_address(emitter, "rax", "r10", is_virtual_lo);
         abi::emit_store_zero_to_address(emitter, "r10", is_virtual_hi);
     }
@@ -1559,6 +1569,10 @@ fn emit_set_owner_parameter_property_aarch64(
         Some(is_promoted_hi),
         Some(allows_null_lo),
         Some(allows_null_hi),
+        Some(is_array_type_lo),
+        Some(is_array_type_hi),
+        Some(is_callable_type_lo),
+        Some(is_callable_type_hi),
     ) = (
         layout.position_lo,
         layout.position_hi,
@@ -1578,6 +1592,10 @@ fn emit_set_owner_parameter_property_aarch64(
         layout.is_promoted_hi,
         layout.allows_null_lo,
         layout.allows_null_hi,
+        layout.is_array_type_lo,
+        layout.is_array_type_hi,
+        layout.is_callable_type_lo,
+        layout.is_callable_type_hi,
     )
     else {
         return;
@@ -1618,6 +1636,14 @@ fn emit_set_owner_parameter_property_aarch64(
     emitter.instruction("and x10, x10, #1"); // extract the default-constant flag as a boolean
     abi::emit_store_to_address(emitter, "x10", "x9", is_default_value_constant_lo);
     abi::emit_store_zero_to_address(emitter, "x9", is_default_value_constant_hi);
+    emitter.instruction("lsr x10, x11, #8"); // move the array-type bit into position
+    emitter.instruction("and x10, x10, #1"); // extract the array-type flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", is_array_type_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", is_array_type_hi);
+    emitter.instruction("lsr x10, x11, #9"); // move the callable-type bit into position
+    emitter.instruction("and x10, x10, #1"); // extract the callable-type flag as a boolean
+    abi::emit_store_to_address(emitter, "x10", "x9", is_callable_type_lo);
+    abi::emit_store_zero_to_address(emitter, "x9", is_callable_type_hi);
 }
 
 /// Stores incoming ARM64 ReflectionParameter type metadata.
@@ -1735,6 +1761,10 @@ fn emit_set_owner_parameter_property_x86_64(emitter: &mut Emitter, layout: &Refl
         Some(is_promoted_hi),
         Some(allows_null_lo),
         Some(allows_null_hi),
+        Some(is_array_type_lo),
+        Some(is_array_type_hi),
+        Some(is_callable_type_lo),
+        Some(is_callable_type_hi),
     ) = (
         layout.position_lo,
         layout.position_hi,
@@ -1754,6 +1784,10 @@ fn emit_set_owner_parameter_property_x86_64(emitter: &mut Emitter, layout: &Refl
         layout.is_promoted_hi,
         layout.allows_null_lo,
         layout.allows_null_hi,
+        layout.is_array_type_lo,
+        layout.is_array_type_hi,
+        layout.is_callable_type_lo,
+        layout.is_callable_type_hi,
     )
     else {
         return;
@@ -1802,6 +1836,16 @@ fn emit_set_owner_parameter_property_x86_64(emitter: &mut Emitter, layout: &Refl
     emitter.instruction("and rax, 1"); // extract the default-constant flag as a boolean
     abi::emit_store_to_address(emitter, "rax", "r10", is_default_value_constant_lo);
     abi::emit_store_zero_to_address(emitter, "r10", is_default_value_constant_hi);
+    emitter.instruction("mov rax, r11"); // copy flags before extracting the array-type bit
+    emitter.instruction("shr rax, 8"); // move the array-type bit into position
+    emitter.instruction("and rax, 1"); // extract the array-type flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", is_array_type_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", is_array_type_hi);
+    emitter.instruction("mov rax, r11"); // copy flags before extracting the callable-type bit
+    emitter.instruction("shr rax, 9"); // move the callable-type bit into position
+    emitter.instruction("and rax, 1"); // extract the callable-type flag as a boolean
+    abi::emit_store_to_address(emitter, "rax", "r10", is_callable_type_lo);
+    abi::emit_store_zero_to_address(emitter, "r10", is_callable_type_hi);
 }
 
 /// Stores incoming x86_64 ReflectionParameter type metadata.
