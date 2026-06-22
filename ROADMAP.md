@@ -776,7 +776,7 @@ and 0.x validation rather than by speculative pass work.
 These are valuable product directions that build on the stabilized 0.x compiler
 and runtime foundation.
 
-## Web server (`--web`) — product track
+### Web server (`--web`) — product track
 
 `elephc --web app.php` compiles a standard PHP file into a standalone prefork
 HTTP server binary. The produced binary uses `SO_REUSEPORT` prefork workers; each

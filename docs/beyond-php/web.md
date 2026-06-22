@@ -39,7 +39,8 @@ The produced binary accepts these arguments at runtime:
 The request model follows PHP-FPM / `php -S`: each incoming HTTP request
 re-runs the program's top-level code from a completely fresh state. Whatever
 the script writes via `echo` or `print` becomes the HTTP response body, returned
-as `200 OK` with `Content-Type: text/html` headers.
+as `200 OK` with no `Content-Type` or other custom headers set. Custom status
+codes and response headers (`header()`, `http_response_code()`) arrive in Phase 3.
 
 ```php
 <?php

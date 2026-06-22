@@ -42,7 +42,7 @@ runtime arguments (not elephc compiler flags):
 
 | Argument | Required | Default | Description |
 |---|---|---|---|
-| `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` exits non-zero. |
+| `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of prefork worker processes. Minimum 1. |
 
 ```bash
