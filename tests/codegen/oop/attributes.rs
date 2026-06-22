@@ -3012,6 +3012,42 @@ echo $second->label();
     assert_eq!(out, "AB:CD");
 }
 
+/// Verifies that `ReflectionClass::newInstanceArgs()` constructs reflected
+/// classes from static positional and named argument arrays.
+#[test]
+fn test_reflection_class_new_instance_args_constructs_reflected_class() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectNewArgsTarget {
+    private string $label = "";
+    public function __construct(string $left, string $right = "B") {
+        $this->label = $left . $right;
+    }
+    public function label(): string {
+        return $this->label;
+    }
+}
+class ReflectEmptyNewArgsTarget {
+    public function label(): string {
+        return "empty";
+    }
+}
+$ref = new ReflectionClass(ReflectNewArgsTarget::class);
+$first = (new ReflectionClass(ReflectNewArgsTarget::class))->newInstanceArgs(["right" => "Y", "left" => "X"]);
+echo $first->label() . ":";
+$second = $ref->newInstanceArgs(["Q", "R"]);
+echo $second->label() . ":";
+$third = (new ReflectionClass(ReflectNewArgsTarget::class))->newInstanceArgs(args: ["left" => "L"]);
+echo $third->label() . ":";
+$fourth = (new ReflectionClass(ReflectNewArgsTarget::class))->newInstanceArgs(...[["left" => "M", "right" => "N"]]);
+echo $fourth->label() . ":";
+$empty = (new ReflectionClass(ReflectEmptyNewArgsTarget::class))->newInstanceArgs();
+echo $empty->label();
+"#,
+    );
+    assert_eq!(out, "XY:QR:LB:MN:empty");
+}
+
 /// Verifies that `ReflectionClass::newInstance()` accepts zero constructor
 /// arguments for classes with no-argument or absent constructors.
 #[test]
