@@ -545,6 +545,18 @@ fn emit_reflection_owner_object(
             class_name,
             metadata.property_default_value.as_ref(),
         )?;
+        let property_string = reflection_property_to_string(
+            metadata.reflected_name.as_deref().unwrap_or(""),
+            metadata.member_flags,
+            metadata.type_metadata.as_ref(),
+            metadata.property_default_value.as_ref(),
+        );
+        emit_reflection_owner_string_property_by_name(
+            ctx,
+            class_name,
+            "__string",
+            &property_string,
+        )?;
     }
     if class_name == "ReflectionParameter" {
         if let Some(parameter) = metadata.parameter_members.first() {
@@ -2875,10 +2887,17 @@ fn reflection_property_type_metadata(
     info: &crate::types::ClassInfo,
     property_name: &str,
 ) -> Option<ReflectionParameterTypeMetadata> {
-    if !info.visible_property_is_declared(property_name) {
+    if info.visible_property_is_declared(property_name) {
+        let (_, (_, property_type)) = info.visible_property(property_name)?;
+        return reflection_parameter_type_metadata(None, property_type);
+    }
+    if !info.declared_static_properties.contains(property_name) {
         return None;
     }
-    let (_, (_, property_type)) = info.visible_property(property_name)?;
+    let (_, property_type) = info
+        .static_properties
+        .iter()
+        .find(|(name, _)| name == property_name)?;
     reflection_parameter_type_metadata(None, property_type)
 }
 
@@ -2913,6 +2932,100 @@ fn reflection_property_slot_default_value(
         Some(default) => reflection_literal_parameter_default_value(default),
         None if !is_declared => Some(ReflectionParameterDefaultValue::Null),
         None => None,
+    }
+}
+
+/// Formats retained generated property metadata for `ReflectionProperty::__toString()`.
+fn reflection_property_to_string(
+    property_name: &str,
+    flags: ReflectionMemberFlags,
+    type_metadata: Option<&ReflectionParameterTypeMetadata>,
+    default_value: Option<&ReflectionParameterDefaultValue>,
+) -> String {
+    let mut parts = Vec::new();
+    if flags.is_abstract {
+        parts.push(String::from("abstract"));
+    }
+    if flags.is_final {
+        parts.push(String::from("final"));
+    }
+    parts.push(reflection_property_visibility_label(flags).to_string());
+    if flags.is_static {
+        parts.push(String::from("static"));
+    }
+    if flags.is_readonly {
+        parts.push(String::from("readonly"));
+    }
+    if let Some(type_name) = type_metadata.map(reflection_type_metadata_to_string) {
+        parts.push(type_name);
+    }
+    parts.push(format!("${property_name}"));
+
+    let default = if flags.is_virtual {
+        String::new()
+    } else {
+        default_value
+            .and_then(reflection_default_value_to_string)
+            .map(|value| format!(" = {value}"))
+            .unwrap_or_default()
+    };
+    format!("Property [ {}{} ]", parts.join(" "), default)
+}
+
+/// Returns PHP's lowercase visibility label for one reflected property.
+fn reflection_property_visibility_label(flags: ReflectionMemberFlags) -> &'static str {
+    if flags.is_private {
+        "private"
+    } else if flags.is_protected {
+        "protected"
+    } else {
+        "public"
+    }
+}
+
+/// Formats retained ReflectionType metadata for property string output.
+fn reflection_type_metadata_to_string(type_metadata: &ReflectionParameterTypeMetadata) -> String {
+    match type_metadata {
+        ReflectionParameterTypeMetadata::Named(named) => {
+            if named.allows_null && named.name != "mixed" {
+                format!("?{}", named.name)
+            } else {
+                named.name.clone()
+            }
+        }
+        ReflectionParameterTypeMetadata::Union(union) => {
+            let mut names = union
+                .types
+                .iter()
+                .map(|type_metadata| type_metadata.name.clone())
+                .collect::<Vec<_>>();
+            if union.allows_null && names.iter().all(|name| name != "null") {
+                names.push(String::from("null"));
+            }
+            names.join("|")
+        }
+        ReflectionParameterTypeMetadata::Intersection(intersection) => intersection
+            .types
+            .iter()
+            .map(|type_metadata| type_metadata.name.clone())
+            .collect::<Vec<_>>()
+            .join("&"),
+    }
+}
+
+/// Formats retained scalar defaults for property string output.
+fn reflection_default_value_to_string(
+    default: &ReflectionParameterDefaultValue,
+) -> Option<String> {
+    match default {
+        ReflectionParameterDefaultValue::Int(value) => Some(value.to_string()),
+        ReflectionParameterDefaultValue::Bool(value) => Some(value.to_string()),
+        ReflectionParameterDefaultValue::Float(value) => Some(value.to_string()),
+        ReflectionParameterDefaultValue::Str(value) => Some(format!("'{value}'")),
+        ReflectionParameterDefaultValue::Null => Some(String::from("NULL")),
+        ReflectionParameterDefaultValue::Object { .. }
+        | ReflectionParameterDefaultValue::Array(_)
+        | ReflectionParameterDefaultValue::AssocArray(_) => None,
     }
 }
 
@@ -5138,6 +5251,18 @@ fn emit_reflection_member_object(
             ctx,
             member_class_name,
             member.default_value.as_ref(),
+        )?;
+        let property_string = reflection_property_to_string(
+            &member.name,
+            member.flags,
+            member.type_metadata.as_ref(),
+            member.default_value.as_ref(),
+        );
+        emit_reflection_owner_string_property_by_name(
+            ctx,
+            member_class_name,
+            "__string",
+            &property_string,
         )?;
     }
     if member_class_name == "ReflectionClassConstant" {

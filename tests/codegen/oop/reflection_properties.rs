@@ -408,3 +408,33 @@ echo ":" . $label->getValue($target);
     );
     assert_eq!(out, "P:4:9:L:old");
 }
+
+/// Verifies AOT `ReflectionProperty::__toString()` formats retained generated
+/// property metadata.
+#[test]
+fn test_reflection_property_to_string_formats_aot_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectPropertyStringTarget {
+    public int $id = 7;
+    protected static string $label = "ok";
+    private $implicit;
+    public int|string $union;
+}
+
+echo (new ReflectionProperty(ReflectPropertyStringTarget::class, "id"))->__toString();
+echo "|";
+echo (new ReflectionProperty(ReflectPropertyStringTarget::class, "label"))->__toString();
+echo "|";
+echo (new ReflectionProperty(ReflectPropertyStringTarget::class, "implicit"))->__toString();
+echo "|";
+echo (new ReflectionProperty(ReflectPropertyStringTarget::class, "union"))->__toString();
+echo "|";
+echo (new ReflectionClass(ReflectPropertyStringTarget::class))->getProperty("label")->__toString();
+"#,
+    );
+    assert_eq!(
+        out,
+        "Property [ public int $id = 7 ]|Property [ protected static string $label = 'ok' ]|Property [ private $implicit = NULL ]|Property [ public int|string $union ]|Property [ protected static string $label = 'ok' ]"
+    );
+}
