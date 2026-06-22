@@ -35,51 +35,11 @@ pub(in crate::interpreter) fn execute_stmt(
 ) -> Result<EvalControl, EvalStatus> {
     match stmt {
         EvalStmt::ArrayAppendVar { name, value } => {
-            let mut ownership = ScopeCellOwnership::Owned;
-            let array = if let Some(existing) =
-                scope_entry(context, scope, name).filter(|entry| entry.flags().is_visible())
-            {
-                if values.is_array_like(existing.cell())? {
-                    let tag = values.type_tag(existing.cell())?;
-                    if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-                        return Err(EvalStatus::UnsupportedConstruct);
-                    }
-                    ownership = existing.flags().ownership;
-                    existing.cell()
-                } else {
-                    values.array_new(1)?
-                }
-            } else {
-                values.array_new(1)?
-            };
-            let index = eval_array_append_key(array, values)?;
-            let value = eval_expr(value, context, scope, values)?;
-            let array = values.array_set(array, index, value)?;
-            for replaced in set_scope_cell(context, scope, name.clone(), array, ownership)? {
-                values.release(replaced)?;
-            }
+            eval_array_append_var_stmt(name, value, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::ArraySetVar { name, index, value } => {
-            let mut ownership = ScopeCellOwnership::Owned;
-            let array = if let Some(existing) =
-                scope_entry(context, scope, name).filter(|entry| entry.flags().is_visible())
-            {
-                if values.is_array_like(existing.cell())? {
-                    ownership = existing.flags().ownership;
-                    existing.cell()
-                } else {
-                    values.array_new(1)?
-                }
-            } else {
-                values.array_new(1)?
-            };
-            let index = eval_expr(index, context, scope, values)?;
-            let value = eval_expr(value, context, scope, values)?;
-            let array = values.array_set(array, index, value)?;
-            for replaced in set_scope_cell(context, scope, name.clone(), array, ownership)? {
-                values.release(replaced)?;
-            }
+            eval_array_set_var_stmt(name, index, value, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::Break => Ok(EvalControl::Break),
@@ -282,6 +242,132 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
     }
+}
+
+/// Executes `$var[] = value` and dispatches object writes through `ArrayAccess::offsetSet()`.
+fn eval_array_append_var_stmt(
+    name: &str,
+    value: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let existing = scope_entry(context, scope, name)
+        .filter(|entry| entry.flags().is_visible())
+        .map(|entry| (entry.cell(), entry.flags().ownership));
+    if let Some((object, _)) = existing {
+        if values.type_tag(object)? != EVAL_TAG_OBJECT {
+            return eval_non_object_array_append_var_stmt(
+                name, value, existing, context, scope, values,
+            );
+        }
+        let offset = values.null()?;
+        let value = eval_expr(value, context, scope, values)?;
+        if !eval_array_access_object_matches(object, context, values)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let result =
+            eval_method_call_result(object, "offsetSet", vec![offset, value], context, values)?;
+        values.release(result)?;
+        return Ok(());
+    }
+
+    eval_non_object_array_append_var_stmt(name, value, existing, context, scope, values)
+}
+
+/// Executes the non-object `$var[] = value` path with the existing array semantics.
+fn eval_non_object_array_append_var_stmt(
+    name: &str,
+    value: &EvalExpr,
+    existing: Option<(RuntimeCellHandle, ScopeCellOwnership)>,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut ownership = ScopeCellOwnership::Owned;
+    let array = if let Some((cell, flags_ownership)) = existing {
+        if values.is_array_like(cell)? {
+            let tag = values.type_tag(cell)?;
+            if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+                return Err(EvalStatus::UnsupportedConstruct);
+            }
+            ownership = flags_ownership;
+            cell
+        } else {
+            values.array_new(1)?
+        }
+    } else {
+        values.array_new(1)?
+    };
+    let index = eval_array_append_key(array, values)?;
+    let value = eval_expr(value, context, scope, values)?;
+    let array = values.array_set(array, index, value)?;
+    for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership)? {
+        values.release(replaced)?;
+    }
+    Ok(())
+}
+
+/// Executes `$var[index] = value` and dispatches object writes through `ArrayAccess::offsetSet()`.
+fn eval_array_set_var_stmt(
+    name: &str,
+    index: &EvalExpr,
+    value: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let existing = scope_entry(context, scope, name)
+        .filter(|entry| entry.flags().is_visible())
+        .map(|entry| (entry.cell(), entry.flags().ownership));
+    if let Some((object, _)) = existing {
+        if values.type_tag(object)? != EVAL_TAG_OBJECT {
+            return eval_non_object_array_set_var_stmt(
+                name, index, value, existing, context, scope, values,
+            );
+        }
+        let index = eval_expr(index, context, scope, values)?;
+        let value = eval_expr(value, context, scope, values)?;
+        if !eval_array_access_object_matches(object, context, values)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let result =
+            eval_method_call_result(object, "offsetSet", vec![index, value], context, values)?;
+        values.release(result)?;
+        return Ok(());
+    }
+
+    eval_non_object_array_set_var_stmt(name, index, value, existing, context, scope, values)
+}
+
+/// Executes the non-object `$var[index] = value` path with the existing array semantics.
+fn eval_non_object_array_set_var_stmt(
+    name: &str,
+    index: &EvalExpr,
+    value: &EvalExpr,
+    existing: Option<(RuntimeCellHandle, ScopeCellOwnership)>,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut ownership = ScopeCellOwnership::Owned;
+    let array = if let Some((cell, flags_ownership)) = existing {
+        if values.is_array_like(cell)? {
+            ownership = flags_ownership;
+            cell
+        } else {
+            values.array_new(1)?
+        }
+    } else {
+        values.array_new(1)?
+    };
+    let index = eval_expr(index, context, scope, values)?;
+    let value = eval_expr(value, context, scope, values)?;
+    let array = values.array_set(array, index, value)?;
+    for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership)? {
+        values.release(replaced)?;
+    }
+    Ok(())
 }
 
 /// Executes an eval `try` body and handles supported `catch` clauses.
@@ -3228,12 +3314,9 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     )? {
         return Ok(result);
     }
-    if let Some(result) = eval_reflection_type_to_string_result(
-        object,
-        method_name,
-        evaluated_args.clone(),
-        values,
-    )? {
+    if let Some(result) =
+        eval_reflection_type_to_string_result(object, method_name, evaluated_args.clone(), values)?
+    {
         return Ok(result);
     }
     if let Some(result) = eval_reflection_class_implements_interface_result(

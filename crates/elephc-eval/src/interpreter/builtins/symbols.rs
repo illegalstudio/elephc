@@ -648,6 +648,15 @@ pub(in crate::interpreter) fn eval_empty_arg(
         let value = eval_property_get_result(object, property, context, values)?;
         return Ok(!values.truthy(value)?);
     }
+    if let EvalExpr::ArrayGet { array, index } = arg {
+        let array = eval_expr(array, context, scope, values)?;
+        let index = eval_expr(index, context, scope, values)?;
+        if values.type_tag(array)? == EVAL_TAG_OBJECT {
+            return eval_array_access_empty_result(array, index, context, values);
+        }
+        let value = values.array_get(array, index)?;
+        return Ok(!values.truthy(value)?);
+    }
     let value = eval_expr(arg, context, scope, values)?;
     Ok(!values.truthy(value)?)
 }
@@ -669,8 +678,47 @@ pub(in crate::interpreter) fn eval_isset_arg(
         let object = eval_expr(object, context, scope, values)?;
         return eval_property_isset_result(object, property, context, values);
     }
+    if let EvalExpr::ArrayGet { array, index } = arg {
+        let array = eval_expr(array, context, scope, values)?;
+        let index = eval_expr(index, context, scope, values)?;
+        if values.type_tag(array)? == EVAL_TAG_OBJECT {
+            return eval_array_access_isset_result(array, index, context, values);
+        }
+        let value = values.array_get(array, index)?;
+        return Ok(!values.is_null(value)?);
+    }
     let value = eval_expr(arg, context, scope, values)?;
     Ok(!values.is_null(value)?)
+}
+
+/// Evaluates `empty($object[$key])` through `ArrayAccess::offsetExists()` and `offsetGet()`.
+fn eval_array_access_empty_result(
+    object: RuntimeCellHandle,
+    index: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if !eval_array_access_isset_result(object, index, context, values)? {
+        return Ok(true);
+    }
+    let value = eval_array_get_result(object, index, context, values)?;
+    Ok(!values.truthy(value)?)
+}
+
+/// Evaluates `isset($object[$key])` through `ArrayAccess::offsetExists()`.
+fn eval_array_access_isset_result(
+    object: RuntimeCellHandle,
+    index: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if !eval_array_access_object_matches(object, context, values)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let result = eval_method_call_result(object, "offsetExists", vec![index], context, values)?;
+    let exists = values.truthy(result)?;
+    values.release(result)?;
+    Ok(exists)
 }
 
 /// Returns true when a PHP function name is visible to eval builtin probes.

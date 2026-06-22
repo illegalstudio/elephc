@@ -264,7 +264,7 @@ pub(in crate::interpreter) fn eval_array_get_result(
 }
 
 /// Returns whether an object value satisfies PHP's `ArrayAccess` interface.
-fn eval_array_access_object_matches(
+pub(in crate::interpreter) fn eval_array_access_object_matches(
     value: RuntimeCellHandle,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

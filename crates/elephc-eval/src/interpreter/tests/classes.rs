@@ -73,21 +73,41 @@ return $self instanceof EvalRelativeFactoryBase
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies array reads on eval-declared `ArrayAccess` objects dispatch `offsetGet()`.
+/// Verifies eval-declared `ArrayAccess` objects dispatch reads, writes, append, and probes.
 #[test]
-fn execute_program_reads_eval_array_access_objects() {
+fn execute_program_dispatches_eval_array_access_objects() {
     let program = parse_fragment(
         br#"class EvalArrayAccessBox implements ArrayAccess {
-    public function offsetExists(mixed $offset): bool { return true; }
+    public function offsetExists(mixed $offset): bool {
+        echo "exists:" . $offset . ":";
+        if ($offset === "missing") {
+            return false;
+        }
+        return true;
+    }
     public function offsetGet(mixed $offset): mixed {
         echo "get:" . $offset . ":";
+        if ($offset === "empty") {
+            return "";
+        }
         return "v" . $offset;
     }
-    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetSet(mixed $offset, mixed $value): void {
+        if ($offset === null) {
+            echo "set:null:" . $value . ":";
+        } else {
+            echo "set:" . $offset . ":" . $value . ":";
+        }
+    }
     public function offsetUnset(mixed $offset): void {}
 }
 $box = new EvalArrayAccessBox();
-echo $box["x"];
+$box["x"] = "1";
+$box[] = "tail";
+if (isset($box["x"])) { echo "I:"; } else { echo "i:"; }
+if (isset($box["missing"])) { echo "M:"; } else { echo "m:"; }
+if (empty($box["empty"])) { echo "E:"; } else { echo "e:"; }
+if (empty($box["missing"])) { echo "N:"; } else { echo "n:"; }
 return $box["y"];"#,
     )
     .expect("parse eval fragment");
@@ -96,7 +116,10 @@ return $box["y"];"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "get:x:vxget:y:");
+    assert_eq!(
+        values.output,
+        "set:x:1:set:null:tail:exists:x:I:exists:missing:m:exists:empty:get:empty:E:exists:missing:N:get:y:"
+    );
     assert_eq!(values.get(result), FakeValue::String("vy".to_string()));
 }
 

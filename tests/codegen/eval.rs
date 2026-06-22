@@ -846,25 +846,49 @@ eval('echo count($bag); echo ":"; echo count($bag, COUNT_RECURSIVE); echo ":"; e
     assert_eq!(out, "count:5:count:5:count:5");
 }
 
-/// Verifies eval array reads dispatch through `ArrayAccess::offsetGet()` on AOT objects.
+/// Verifies eval dispatches `ArrayAccess` reads, writes, append, and probes on AOT objects.
 #[test]
-fn test_eval_reads_aot_array_access_objects() {
+fn test_eval_dispatches_aot_array_access_objects() {
     let out = compile_and_run(
         r#"<?php
 class EvalAotArrayAccessBox implements ArrayAccess {
-    public function offsetExists(mixed $offset): bool { return true; }
+    public function offsetExists(mixed $offset): bool {
+        echo "exists:" . $offset . ":";
+        if ($offset === "missing") {
+            return false;
+        }
+        return true;
+    }
     public function offsetGet(mixed $offset): mixed {
         echo "get:" . $offset . ":";
+        if ($offset === "empty") {
+            return "";
+        }
         return "v" . $offset;
     }
-    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetSet(mixed $offset, mixed $value): void {
+        if ($offset === null) {
+            echo "set:null:" . $value . ":";
+        } else {
+            echo "set:" . $offset . ":" . $value . ":";
+        }
+    }
     public function offsetUnset(mixed $offset): void {}
 }
 $box = new EvalAotArrayAccessBox();
-eval('echo $box["x"];');
+eval('$box["x"] = "1";
+$box[] = "tail";
+if (isset($box["x"])) { echo "I:"; } else { echo "i:"; }
+if (isset($box["missing"])) { echo "M:"; } else { echo "m:"; }
+if (empty($box["empty"])) { echo "E:"; } else { echo "e:"; }
+if (empty($box["missing"])) { echo "N:"; } else { echo "n:"; }
+echo $box["y"];');
 "#,
     );
-    assert_eq!(out, "get:x:vx");
+    assert_eq!(
+        out,
+        "set:x:1:set:null:tail:exists:x:I:exists:missing:m:exists:empty:get:empty:E:exists:missing:N:get:y:vy"
+    );
 }
 
 /// Verifies eval `json_encode()` serializes scalar, indexed, and associative values.
