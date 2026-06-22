@@ -455,12 +455,13 @@ fn emit_reflection_owner_object(
         )?;
     }
     if matches!(class_name, "ReflectionFunction" | "ReflectionMethod") {
-        emit_reflection_owner_bool_property(ctx, class_name, "__is_internal", false)?;
+        let is_internal = reflection_function_or_method_is_internal(class_name, &metadata);
+        emit_reflection_owner_bool_property(ctx, class_name, "__is_internal", is_internal)?;
         emit_reflection_owner_bool_property(
             ctx,
             class_name,
             "__is_user_defined",
-            metadata.reflected_name.is_some(),
+            metadata.reflected_name.is_some() && !is_internal,
         )?;
         emit_reflection_parameter_array_property_by_name(
             ctx,
@@ -927,6 +928,11 @@ fn reflection_function_metadata(
     };
     let function_name = const_required_string_operand(ctx, function_operand, "ReflectionFunction")?;
     let Some(function) = ctx.function_by_name(&function_name) else {
+        if let Some((builtin_name, signature)) =
+            reflection_builtin_function_signature(&function_name)
+        {
+            return reflection_builtin_function_metadata(ctx, &builtin_name, &signature);
+        }
         return Ok(empty_reflection_metadata());
     };
     let Some(signature) = function.signature.as_ref() else {
@@ -962,6 +968,64 @@ fn reflection_function_metadata(
     metadata.is_deprecated = signature.deprecation.is_some();
     metadata.is_generator = function.flags.is_generator;
     Ok(metadata)
+}
+
+/// Builds metadata for a supported builtin `ReflectionFunction`.
+fn reflection_builtin_function_metadata(
+    ctx: &FunctionContext<'_>,
+    function_name: &str,
+    signature: &FunctionSig,
+) -> Result<ReflectionOwnerMetadata> {
+    let required_parameter_count = reflection_required_parameter_count(signature);
+    let type_metadata = reflection_return_type_metadata(signature);
+    let declaring_function = ReflectionDeclaringFunctionMember::Function {
+        name: function_name.to_string(),
+        attr_names: Vec::new(),
+        attr_args: Vec::new(),
+        required_parameter_count,
+        type_metadata: type_metadata.clone(),
+        is_deprecated: false,
+        is_generator: false,
+    };
+    let mut metadata = empty_reflection_metadata();
+    metadata.reflected_name = Some(function_name.to_string());
+    metadata.parameter_members = reflection_parameter_members_with_declaring_function(
+        ctx,
+        signature,
+        "",
+        None,
+        None,
+        Some(declaring_function),
+        &[],
+    )?;
+    metadata.required_parameter_count = required_parameter_count;
+    metadata.type_metadata = type_metadata;
+    Ok(metadata)
+}
+
+/// Returns the canonical callable-builtin name and signature for ReflectionFunction.
+fn reflection_builtin_function_signature(function_name: &str) -> Option<(String, FunctionSig)> {
+    let builtin_key = php_symbol_key(function_name.trim_start_matches('\\'));
+    crate::types::first_class_callable_builtin_sig(&builtin_key)
+        .map(|signature| (builtin_key, signature))
+}
+
+/// Returns whether a reflected function or method represents compiler builtin metadata.
+fn reflection_function_or_method_is_internal(
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+) -> bool {
+    if class_name == "ReflectionFunction" {
+        return metadata
+            .reflected_name
+            .as_deref()
+            .and_then(reflection_builtin_function_signature)
+            .is_some();
+    }
+    metadata
+        .parent_class_name
+        .as_deref()
+        .is_some_and(reflection_class_like_is_internal)
 }
 
 /// Resolves `ReflectionMethod(class, method)` metadata.
@@ -1183,6 +1247,17 @@ fn reflection_function_parameter_metadata(
         const_required_string_operand(ctx, function_operand, "ReflectionParameter")?;
     let selector = const_parameter_selector_operand(ctx, parameter_operand)?;
     let Some(function) = ctx.function_by_name(&function_name) else {
+        if let Some((builtin_name, signature)) =
+            reflection_builtin_function_signature(&function_name)
+        {
+            let metadata = reflection_builtin_function_metadata(ctx, &builtin_name, &signature)?;
+            let Some(parameter) =
+                reflection_parameter_member_for_selector(&metadata.parameter_members, selector)
+            else {
+                return Ok(empty_reflection_metadata());
+            };
+            return Ok(reflection_parameter_owner_metadata(parameter));
+        }
         return Ok(empty_reflection_metadata());
     };
     let Some(signature) = function.signature.as_ref() else {

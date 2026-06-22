@@ -121,6 +121,30 @@ echo $ref->isUserDefined() ? "U" : "u";
     assert_eq!(out, "ReflectFunctionMetaNs\\sample:sample:ReflectFunctionMetaNs:Y:i:U");
 }
 
+/// Verifies `ReflectionFunction` exposes supported callable-builtin metadata.
+#[test]
+fn test_reflection_function_reports_builtin_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+$ref = new ReflectionFunction("STRLEN");
+echo $ref->getName() . ":";
+echo $ref->getShortName() . ":";
+echo ($ref->isInternal() ? "I" : "i") . ":";
+echo ($ref->isUserDefined() ? "U" : "u") . ":";
+echo ($ref->hasReturnType() ? "T" : "t") . ":";
+echo $ref->getReturnType()->getName() . ":";
+$params = $ref->getParameters();
+echo count($params) . ":";
+echo $params[0]->getName() . ":";
+echo ($params[0]->hasType() ? "P" : "p") . ":";
+echo $params[0]->getType()->getName() . ":";
+echo ($params[0]->getDeclaringFunction()->isInternal() ? "D" : "d") . ":";
+echo (new ReflectionParameter("strlen", "string"))->getDeclaringFunction()->getName();
+"#,
+    );
+    assert_eq!(out, "strlen:strlen:I:u:T:int:1:string:P:string:D:strlen");
+}
+
 /// Verifies `ReflectionFunction::invoke()` calls declared AOT functions.
 #[test]
 fn test_reflection_function_invoke_calls_declared_aot_functions() {

@@ -21,9 +21,9 @@ type ReflectionAttributeArgs = Vec<Option<Vec<crate::types::AttrArgValue>>>;
 impl Checker {
     /// Validates function-level attributes for `ReflectionFunction`.
     ///
-    /// The reflected function must be a statically declared user function; when
-    /// it has attributes, their captured argument metadata must be materializable
-    /// by `ReflectionAttribute::getArguments()`.
+    /// The reflected function must be a statically declared user function or a
+    /// supported callable builtin; user-function attributes must have
+    /// materializable `ReflectionAttribute::getArguments()` metadata.
     pub(super) fn validate_reflection_function_attrs(
         &self,
         function_name: &str,
@@ -32,6 +32,10 @@ impl Checker {
         let Some(canonical) =
             self.canonical_function_name_folded(function_name.trim_start_matches('\\'))
         else {
+            let builtin_key = php_symbol_key(function_name.trim_start_matches('\\'));
+            if crate::types::first_class_callable_builtin_sig(&builtin_key).is_some() {
+                return Ok(());
+            }
             return Err(CompileError::new(
                 expr.span,
                 &format!(
