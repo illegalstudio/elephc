@@ -11212,7 +11212,10 @@ fn lower_reflection_class_get_static_property_value(
         }
         return None;
     }
-    default.map(|default| lower_expr(ctx, &default))
+    Some(match default {
+        Some(default) => lower_expr(ctx, &default),
+        None => lower_reflection_class_missing_static_property(ctx, class_name, &property, expr),
+    })
 }
 
 /// Lowers `ReflectionClass::setStaticPropertyValue()` to a live static-property write.
@@ -11233,6 +11236,33 @@ fn lower_reflection_class_set_static_property_value(
         expr.span,
     );
     Some(lower_null(ctx, expr))
+}
+
+/// Lowers a missing static-property lookup to PHP's catchable ReflectionException.
+fn lower_reflection_class_missing_static_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let message = format!(
+        "Property {}::${} does not exist",
+        class_name.trim_start_matches('\\'),
+        property
+    );
+    let exception = Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::unqualified("ReflectionException"),
+            args: vec![Expr::new(ExprKind::StringLiteral(message), expr.span)],
+        },
+        expr.span,
+    );
+    let placeholder = lower_null(ctx, expr);
+    let exception = lower_expr(ctx, &exception);
+    ctx.builder.terminate(Terminator::Throw {
+        value: exception.value,
+    });
+    placeholder
 }
 
 /// Returns synthetic array entries for current static-property values on a reflected class.
