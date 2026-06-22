@@ -318,7 +318,8 @@ and throw catchable `ReflectionException` values when an instance receiver is
 not compatible with the reflected declaring class. For generated/AOT classes,
 `ReflectionMethod::invoke()` and `invokeArgs()` are also lowered for inline or straight-line
 tracked reflectors when the reflected method has declared parameter types;
-the lowered call supports instance and static methods, method-name
+the lowered call supports instance and static methods, constructors returned by
+`ReflectionClass::getConstructor()`, method-name
 case-insensitivity, defaults, and named arguments. Generated/AOT
 invoke targets whose parameter types only come from call-site inference and
 runtime-only argument arrays still require richer runtime/typechecker support.

@@ -65,6 +65,33 @@ echo $method->invokeArgs(...[$object, ["A", "C"]]);
     assert_eq!(out, "XY:QB:MN:LB:AC");
 }
 
+/// Verifies constructors returned by `ReflectionClass::getConstructor()` can be invoked.
+#[test]
+fn test_reflection_method_invoke_calls_aot_constructor_from_reflection_class() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectInvokeCtorTarget {
+    public string $label = "";
+    public function __construct(string $left, string $right = "B") {
+        $this->label = $left . $right;
+    }
+    public function label(): string {
+        return $this->label;
+    }
+}
+
+$object = new ReflectInvokeCtorTarget("A", "A");
+$result = (new ReflectionClass(ReflectInvokeCtorTarget::class))->getConstructor()->invoke($object, "X", "Y");
+echo ($result === null ? "null" : "value") . ":" . $object->label();
+echo ":";
+$ctor = (new ReflectionClass(ReflectInvokeCtorTarget::class))->getConstructor();
+$ctor->invokeArgs($object, ["right" => "N", "left" => "M"]);
+echo $object->label();
+"#,
+    );
+    assert_eq!(out, "null:XY:MN");
+}
+
 /// Verifies inferred AOT method signatures are rejected instead of miscompiled.
 #[test]
 fn test_reflection_method_invoke_rejects_inferred_aot_signature() {

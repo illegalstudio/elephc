@@ -9946,6 +9946,17 @@ fn lower_method_call(
         terminate_method_call_on_null(ctx, method);
         return null_value;
     }
+    if op == Op::MethodCall {
+        if let Some(value) = lower_reflection_method_invoke_call(
+            ctx,
+            Some(object_expr),
+            method,
+            args,
+            expr,
+        ) {
+            return value;
+        }
+    }
     if op == Op::MethodCall && value_is_nullable(ctx, object.value) {
         return lower_nullable_regular_method_call(ctx, object, method, args, expr);
     }
@@ -9982,17 +9993,6 @@ fn lower_method_call(
         if let Some(value) =
             lower_reflection_class_member_list_call(ctx, Some(object_expr), method, args, expr)
         {
-            return value;
-        }
-    }
-    if op == Op::MethodCall {
-        if let Some(value) = lower_reflection_method_invoke_call(
-            ctx,
-            Some(object_expr),
-            method,
-            args,
-            expr,
-        ) {
             return value;
         }
     }
@@ -10983,6 +10983,7 @@ fn reflection_method_reflected_target(
     object_expr: &Expr,
 ) -> Option<(String, String)> {
     reflection_method_constructor_target(ctx, object_expr)
+        .or_else(|| reflection_method_class_get_constructor_target(ctx, object_expr))
         .or_else(|| reflection_method_class_get_method_target(ctx, object_expr))
         .or_else(|| reflection_method_class_get_methods_index_target(ctx, object_expr))
         .or_else(|| {
@@ -11428,6 +11429,30 @@ fn reflection_method_constructor_target(
         return None;
     };
     let method = resolve_known_class_method_name(ctx, &class_name, &method)?;
+    Some((class_name, method))
+}
+
+/// Extracts the constructor target from inline `ReflectionClass::getConstructor()` calls.
+fn reflection_method_class_get_constructor_target(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<(String, String)> {
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+    } = &object_expr.kind
+    else {
+        return None;
+    };
+    if php_symbol_key(method) != "getconstructor" {
+        return None;
+    }
+    if !reflection_class_new_instance_args(args).is_empty() {
+        return None;
+    }
+    let class_name = reflection_class_reflected_class(ctx, object)?;
+    let method = resolve_known_class_method_name(ctx, &class_name, "__construct")?;
     Some((class_name, method))
 }
 
