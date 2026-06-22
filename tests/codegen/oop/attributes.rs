@@ -2568,6 +2568,12 @@ $obj = $ref->newInstance(id: 5, name: "Ada");
 echo ":" . $obj->id . ":" . $obj->name;
 $obj2 = $ref->newInstanceArgs(["name" => "Bob", "id" => 6]);
 echo ":" . $obj2->id . ":" . $obj2->name;
+try {
+    $ref->getStaticPropertyValue("missing");
+    echo ":bad";
+} catch (ReflectionException $e) {
+    echo ":" . get_class($e) . ":" . $e->getMessage();
+}
 "#,
     );
     assert!(
@@ -2575,7 +2581,10 @@ echo ":" . $obj2->id . ":" . $obj2->name;
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "7:9:11:fallback:5:Ada:6:Bob");
+    assert_eq!(
+        out.stdout,
+        "7:9:11:fallback:5:Ada:6:Bob:ReflectionException:Property ReflectTrackedClassTarget::$missing does not exist"
+    );
 }
 
 /// Verifies `ReflectionClass::getStaticProperties()` reads current AOT static values.

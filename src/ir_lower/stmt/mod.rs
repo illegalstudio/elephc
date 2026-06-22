@@ -1321,7 +1321,6 @@ fn lower_try_catch(
     let after_block = ctx.builder.create_named_block("try.after", Vec::new());
     let handler_token = handler_block.as_raw() as i64;
 
-    ctx.clear_static_callable_locals();
     ctx.emit_void(
         Op::TryPushHandler,
         Vec::new(),
@@ -1336,6 +1335,7 @@ fn lower_try_catch(
     }
 
     ctx.builder.position_at_end(handler_block);
+    ctx.clear_static_callable_locals();
     emit_try_pop_handler(ctx, handler_token, span);
     lower_catch_dispatch(ctx, catches, after_block, span);
     ctx.builder.position_at_end(after_block);
@@ -1383,7 +1383,6 @@ fn lower_try_catch_finally(
     let after_block = ctx.builder.create_named_block("try.after", Vec::new());
     let handler_token = handler_block.as_raw() as i64;
 
-    ctx.clear_static_callable_locals();
     ctx.emit_void(
         Op::TryPushHandler,
         Vec::new(),
@@ -1401,6 +1400,7 @@ fn lower_try_catch_finally(
     }
 
     ctx.builder.position_at_end(handler_block);
+    ctx.clear_static_callable_locals();
     emit_try_pop_handler(ctx, handler_token, span);
     lower_catch_dispatch_with_finally(ctx, catches, after_block, finally_body, span);
     ctx.builder.position_at_end(after_block);
