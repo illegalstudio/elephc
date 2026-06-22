@@ -125,6 +125,51 @@ echo ":" . ReflectListedStaticValueAccessTarget::label();
     assert_eq!(out, "count:4:8:label:old:new");
 }
 
+/// Verifies `ReflectionClass::getProperties()` applies modifier filters and
+/// that filtered static property entries retain direct value accessor support.
+#[test]
+fn test_reflection_property_value_accessors_for_filtered_static_property_lists() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectFilteredStaticValueAccessTarget {
+    public int $instance = 1;
+    private static int $count = 4;
+    protected static string $label = "old";
+
+    public static function count(): int { return self::$count; }
+    public static function label(): string { return self::$label; }
+    public function touch(): void {}
+    private function secret(): void {}
+    protected static function helper(): void {}
+}
+
+$ref = new ReflectionClass(ReflectFilteredStaticValueAccessTarget::class);
+$static = $ref->getProperties(ReflectionProperty::IS_STATIC);
+echo count($static) . ":" . $static[0]->getName();
+
+$count = $ref->getProperties(ReflectionProperty::IS_STATIC)[0];
+echo ":" . $count->getValue();
+$count->setValue(null, 8);
+echo ":" . ReflectFilteredStaticValueAccessTarget::count();
+
+$label = $ref->getProperties(filter: ReflectionProperty::IS_PROTECTED)[0];
+echo ":" . $label->getName() . ":" . $label->getValue(null);
+$label->setValue(null, "new");
+echo ":" . ReflectFilteredStaticValueAccessTarget::label();
+
+$public = $ref->getProperties(...["filter" => ReflectionProperty::IS_PUBLIC]);
+$none = $ref->getProperties(0);
+echo ":" . count($public) . ":" . $public[0]->getName() . ":" . count($none);
+
+$staticMethods = $ref->getMethods(ReflectionMethod::IS_STATIC);
+$privateMethods = $ref->getMethods(filter: ReflectionMethod::IS_PRIVATE);
+$noMethods = $ref->getMethods(0);
+echo ":" . count($staticMethods) . ":" . count($privateMethods) . ":" . count($noMethods);
+"#,
+    );
+    assert_eq!(out, "2:count:4:8:label:old:new:1:instance:0:3:1:0");
+}
+
 /// Verifies ReflectionClass static property value helpers bypass visibility and
 /// operate on the same live static storage as direct class methods.
 #[test]
