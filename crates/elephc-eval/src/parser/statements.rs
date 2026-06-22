@@ -2504,7 +2504,7 @@ impl Parser {
         Ok(body)
     }
 
-    /// Parses `unset($name[, ...]);` with variable and object-property operands.
+    /// Parses `unset($name[, ...]);` with variable, array-access, and property operands.
     pub(super) fn parse_unset_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         self.expect(TokenKind::LParen)?;
@@ -2512,6 +2512,10 @@ impl Parser {
         loop {
             let target = self.parse_expr()?;
             let stmt = match target {
+                EvalExpr::ArrayGet { array, index } => EvalStmt::UnsetArrayElement {
+                    array: *array,
+                    index: *index,
+                },
                 EvalExpr::LoadVar(name) => EvalStmt::UnsetVar { name },
                 EvalExpr::PropertyGet { object, property } => EvalStmt::UnsetProperty {
                     object: *object,
@@ -2718,6 +2722,10 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
         | EvalStmt::ReferenceAssign { .. }
         | EvalStmt::TraitDecl(_)
         | EvalStmt::UnsetVar { .. } => false,
+        EvalStmt::UnsetArrayElement { array, index } => {
+            eval_expr_uses_this_property(array, property_name)
+                || eval_expr_uses_this_property(index, property_name)
+        }
         EvalStmt::DoWhile { body, condition } | EvalStmt::While { condition, body } => {
             eval_expr_uses_this_property(condition, property_name)
                 || eval_stmt_list_uses_this_property(body, property_name)

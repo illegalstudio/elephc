@@ -73,7 +73,7 @@ return $self instanceof EvalRelativeFactoryBase
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies eval-declared `ArrayAccess` objects dispatch reads, writes, append, and probes.
+/// Verifies eval-declared `ArrayAccess` objects dispatch reads, writes, append, probes, and unset.
 #[test]
 fn execute_program_dispatches_eval_array_access_objects() {
     let program = parse_fragment(
@@ -99,11 +99,14 @@ fn execute_program_dispatches_eval_array_access_objects() {
             echo "set:" . $offset . ":" . $value . ":";
         }
     }
-    public function offsetUnset(mixed $offset): void {}
+    public function offsetUnset(mixed $offset): void {
+        echo "unset:" . $offset . ":";
+    }
 }
 $box = new EvalArrayAccessBox();
 $box["x"] = "1";
 $box[] = "tail";
+unset($box["drop"]);
 if (isset($box["x"])) { echo "I:"; } else { echo "i:"; }
 if (isset($box["missing"])) { echo "M:"; } else { echo "m:"; }
 if (empty($box["empty"])) { echo "E:"; } else { echo "e:"; }
@@ -118,7 +121,7 @@ return $box["y"];"#,
 
     assert_eq!(
         values.output,
-        "set:x:1:set:null:tail:exists:x:I:exists:missing:m:exists:empty:get:empty:E:exists:missing:N:get:y:"
+        "set:x:1:set:null:tail:unset:drop:exists:x:I:exists:missing:m:exists:empty:get:empty:E:exists:missing:N:get:y:"
     );
     assert_eq!(values.get(result), FakeValue::String("vy".to_string()));
 }

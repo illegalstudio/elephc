@@ -211,6 +211,10 @@ pub(in crate::interpreter) fn execute_stmt(
             catches,
             finally_body,
         } => execute_try_stmt(body, catches, finally_body, context, scope, values),
+        EvalStmt::UnsetArrayElement { array, index } => {
+            eval_array_unset_element_stmt(array, index, context, scope, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::UnsetProperty { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
             eval_property_unset_result(object, property, context, values)?;
@@ -242,6 +246,27 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
     }
+}
+
+/// Executes `unset($object[$key])` through `ArrayAccess::offsetUnset()`.
+fn eval_array_unset_element_stmt(
+    array: &EvalExpr,
+    index: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let array = eval_expr(array, context, scope, values)?;
+    let index = eval_expr(index, context, scope, values)?;
+    if values.type_tag(array)? != EVAL_TAG_OBJECT {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    if !eval_array_access_object_matches(array, context, values)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let result = eval_method_call_result(array, "offsetUnset", vec![index], context, values)?;
+    values.release(result)?;
+    Ok(())
 }
 
 /// Executes `$var[] = value` and dispatches object writes through `ArrayAccess::offsetSet()`.

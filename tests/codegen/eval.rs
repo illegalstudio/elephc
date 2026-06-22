@@ -846,7 +846,7 @@ eval('echo count($bag); echo ":"; echo count($bag, COUNT_RECURSIVE); echo ":"; e
     assert_eq!(out, "count:5:count:5:count:5");
 }
 
-/// Verifies eval dispatches `ArrayAccess` reads, writes, append, and probes on AOT objects.
+/// Verifies eval dispatches `ArrayAccess` reads, writes, append, probes, and unset on AOT objects.
 #[test]
 fn test_eval_dispatches_aot_array_access_objects() {
     let out = compile_and_run(
@@ -873,11 +873,14 @@ class EvalAotArrayAccessBox implements ArrayAccess {
             echo "set:" . $offset . ":" . $value . ":";
         }
     }
-    public function offsetUnset(mixed $offset): void {}
+    public function offsetUnset(mixed $offset): void {
+        echo "unset:" . $offset . ":";
+    }
 }
 $box = new EvalAotArrayAccessBox();
 eval('$box["x"] = "1";
 $box[] = "tail";
+unset($box["drop"]);
 if (isset($box["x"])) { echo "I:"; } else { echo "i:"; }
 if (isset($box["missing"])) { echo "M:"; } else { echo "m:"; }
 if (empty($box["empty"])) { echo "E:"; } else { echo "e:"; }
@@ -887,7 +890,7 @@ echo $box["y"];');
     );
     assert_eq!(
         out,
-        "set:x:1:set:null:tail:exists:x:I:exists:missing:m:exists:empty:get:empty:E:exists:missing:N:get:y:vy"
+        "set:x:1:set:null:tail:unset:drop:exists:x:I:exists:missing:m:exists:empty:get:empty:E:exists:missing:N:get:y:vy"
     );
 }
 

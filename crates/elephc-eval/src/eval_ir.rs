@@ -136,6 +136,10 @@ pub enum EvalStmt {
         catches: Vec<EvalCatch>,
         finally_body: Vec<EvalStmt>,
     },
+    UnsetArrayElement {
+        array: EvalExpr,
+        index: EvalExpr,
+    },
     UnsetProperty {
         object: EvalExpr,
         property: String,
