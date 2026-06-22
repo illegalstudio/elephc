@@ -1234,7 +1234,11 @@ fn lower_foreach(
 /// Returns the by-value foreach local type when Phase 04 can keep a concrete element.
 fn foreach_value_type(source_ty: &PhpType) -> PhpType {
     match source_ty.codegen_repr() {
-        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Callable => PhpType::Callable,
+        PhpType::Array(elem) => match elem.codegen_repr() {
+            PhpType::Callable => PhpType::Callable,
+            PhpType::Object(class_name) => PhpType::Object(class_name),
+            _ => PhpType::Mixed,
+        },
         PhpType::Object(class_name) if class_name == "Phar" || class_name == "PharData" => {
             PhpType::Object("PharFileInfo".to_string())
         }

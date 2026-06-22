@@ -278,9 +278,10 @@ visible member metadata, including supported member attributes and predicate
 flags. For generated/AOT classes, `ReflectionClass::getMethod()` /
 `getProperty()` and `getMethods()` / `getProperties()` materialize reflection
 objects from emitted member-name and predicate metadata. Optional modifier
-filters are lowered for inline or tracked `ReflectionClass` receivers when the
-filter is a known integer or `ReflectionMethod::IS_*` /
-`ReflectionProperty::IS_*` constant. AOT method reflection also exposes registered parameter
+filters are supported for materialized `ReflectionClass` member lists; inline
+or tracked receivers with known integer or `ReflectionMethod::IS_*` /
+`ReflectionProperty::IS_*` constants can also be statically narrowed before
+materialization. AOT method reflection also exposes registered parameter
 names, declared parameter types, declared return types, required/optional
 counts, and registered scalar or null default values for generated
 constructor, instance-method, and static-method signatures. AOT property
