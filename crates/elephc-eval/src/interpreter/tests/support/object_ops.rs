@@ -380,6 +380,10 @@ impl FakeOps {
             (FakeValue::Object(properties), "gettype" | "getsettabletype") if args.is_empty() => {
                 Self::object_property(&properties, "__type").map_or_else(|| self.null(), Ok)
             }
+            (FakeValue::Object(properties), "isdynamic") if args.is_empty() => {
+                Self::object_property(&properties, "__is_dynamic")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
             (FakeValue::Object(properties), "gettypes") if args.is_empty() => {
                 Self::object_property(&properties, "__types")
                     .map_or_else(|| self.runtime_array_new(0), Ok)

@@ -1380,6 +1380,8 @@ echo $classReadonlyProp->isReadOnly() ? "C" : "c";
 echo $classReadonlyProp->isProtectedSet() ? "T" : "t";
 echo $classReadonlyProp->isPrivateSet() ? "D" : "d";
 echo $classReadonlyProp->getModifiers();
+echo ":";
+echo $visibleProp->isDynamic() ? "D" : "d";
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -1390,7 +1392,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "SPurfa:APs:FUs:SRpfartd20:sPufartd2:RUTd2177:FU33:FS49:Af577:CTd2177"
+        "SPurfa:APs:FUs:SRpfartd20:sPufartd2:RUTd2177:FU33:FS49:Af577:CTd2177:d"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
