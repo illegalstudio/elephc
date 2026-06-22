@@ -917,6 +917,7 @@ fn builtin_reflection_parameter() -> FlattenedClass {
 /// Builds `ReflectionParameter::getDefaultValue()` over the retained default slot.
 fn builtin_reflection_parameter_get_default_value_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
+    let object_default_body = reflection_parameter_get_default_object_body(dummy_span);
     ClassMethod {
         name: "getDefaultValue".to_string(),
         visibility: Visibility::Public,
@@ -931,27 +932,7 @@ fn builtin_reflection_parameter_get_default_value_method() -> ClassMethod {
         return_type: Some(mixed_type()),
         by_ref_return: false,
         body: vec![
-            Stmt::new(
-                StmtKind::If {
-                    condition: Expr::new(
-                        ExprKind::Not(Box::new(reflection_this_property(
-                            "__has_default_value",
-                            dummy_span,
-                        ))),
-                        dummy_span,
-                    ),
-                    then_body: vec![throw_new_reflection_exception(
-                        string_lit(
-                            "Internal error: Failed to retrieve the default value",
-                            dummy_span,
-                        ),
-                        dummy_span,
-                    )],
-                    elseif_clauses: Vec::new(),
-                    else_body: None,
-                },
-                dummy_span,
-            ),
+            reflection_parameter_throw_if_default_missing(dummy_span),
             Stmt::new(
                 StmtKind::If {
                     condition: binary_expr(
@@ -960,19 +941,7 @@ fn builtin_reflection_parameter_get_default_value_method() -> ClassMethod {
                         string_lit("", dummy_span),
                         dummy_span,
                     ),
-                    then_body: vec![Stmt::new(
-                        StmtKind::Return(Some(Expr::new(
-                            ExprKind::NewDynamic {
-                                name_expr: Box::new(reflection_this_property(
-                                    "__default_value_object_class",
-                                    dummy_span,
-                                )),
-                                args: Vec::new(),
-                            },
-                            dummy_span,
-                        ))),
-                        dummy_span,
-                    )],
+                    then_body: object_default_body,
                     elseif_clauses: Vec::new(),
                     else_body: None,
                 },
@@ -989,6 +958,109 @@ fn builtin_reflection_parameter_get_default_value_method() -> ClassMethod {
         span: dummy_span,
         attributes: Vec::new(),
     }
+}
+
+/// Builds the object-default branch for `ReflectionParameter::getDefaultValue()`.
+fn reflection_parameter_get_default_object_body(span: crate::span::Span) -> Vec<Stmt> {
+    let arg_count_var = "__default_value_arg_count";
+    let mut body = vec![
+        Stmt::new(
+            StmtKind::If {
+                condition: binary_expr(
+                    reflection_this_property("__default_value", span),
+                    BinOp::StrictEq,
+                    null_value(span),
+                    span,
+                ),
+                then_body: vec![reflection_parameter_return_dynamic_default_object(
+                    Vec::new(),
+                    span,
+                )],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            span,
+        ),
+        Stmt::new(
+            StmtKind::Assign {
+                name: arg_count_var.to_string(),
+                value: function_call(
+                    "count",
+                    vec![reflection_this_property("__default_value", span)],
+                    span,
+                ),
+            },
+            span,
+        ),
+    ];
+    for arg_count in 1..=3 {
+        body.push(reflection_parameter_default_object_arg_count_branch(
+            arg_count,
+            arg_count_var,
+            span,
+        ));
+    }
+    body.push(throw_new_reflection_exception(
+        string_lit("Internal error: Failed to retrieve the default value", span),
+        span,
+    ));
+    body
+}
+
+/// Builds one constructor-argument-count branch for object defaults.
+fn reflection_parameter_default_object_arg_count_branch(
+    arg_count: usize,
+    arg_count_var: &str,
+    span: crate::span::Span,
+) -> Stmt {
+    let args = (0..arg_count)
+        .map(|index| reflection_parameter_default_object_arg(index, span))
+        .collect();
+    Stmt::new(
+        StmtKind::If {
+            condition: binary_expr(
+                variable_expr(arg_count_var, span),
+                BinOp::StrictEq,
+                Expr::new(ExprKind::IntLiteral(arg_count as i64), span),
+                span,
+            ),
+            then_body: vec![reflection_parameter_return_dynamic_default_object(args, span)],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+/// Builds a return statement that constructs the retained object default class.
+fn reflection_parameter_return_dynamic_default_object(
+    args: Vec<Expr>,
+    span: crate::span::Span,
+) -> Stmt {
+    Stmt::new(
+        StmtKind::Return(Some(Expr::new(
+            ExprKind::NewDynamic {
+                name_expr: Box::new(reflection_this_property(
+                    "__default_value_object_class",
+                    span,
+                )),
+                args,
+            },
+            span,
+        ))),
+        span,
+    )
+}
+
+/// Builds `$this->__default_value[$index]` for retained object-default args.
+fn reflection_parameter_default_object_arg(index: usize, span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(reflection_this_property("__default_value", span)),
+            index: Box::new(Expr::new(ExprKind::IntLiteral(index as i64), span)),
+        },
+        span,
+    )
 }
 
 /// Returns a public `ReflectionClass::newInstanceWithoutConstructor()` method.

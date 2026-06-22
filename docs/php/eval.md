@@ -629,8 +629,8 @@ ReflectionClass/Function/Method/Parameter/Property/NamedType/UnionType/Intersect
 and attribute slice, Reflection type APIs beyond retained parameter, generated
 property, and function/method return metadata, broader
 parameter and generated property default-value materialization beyond the
-eval-supported constant-expression subset, object-valued defaults in generated
-metadata, and broader generated/AOT method bridge signatures beyond the current public
+eval-supported constant-expression subset, object-valued generated defaults
+beyond the supported parameter `new C(<explicit literal args>)` slice, and broader generated/AOT method bridge signatures beyond the current public
 non-by-reference fixed scalar/Mixed/object slice plus visibility-checked
 `__clone()` hooks. Generated/AOT method type
 metadata and generated/AOT method/property attributes are exposed for registered
