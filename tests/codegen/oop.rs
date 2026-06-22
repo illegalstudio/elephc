@@ -45,5 +45,7 @@ mod property_hooks;
 mod datetime;
 #[path = "oop/reflection_properties.rs"]
 mod reflection_properties;
+#[path = "oop/reflection_functions.rs"]
+mod reflection_functions;
 #[path = "oop/reflection_methods.rs"]
 mod reflection_methods;

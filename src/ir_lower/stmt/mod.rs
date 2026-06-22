@@ -21,7 +21,8 @@ use crate::ir_lower::expr::{
     array_access_element_result_type, coerce_to_int_at_span, lower_callable_array_for_assignment,
     lower_array_literal_with_expected_type, lower_closure_for_assignment, lower_expr,
     reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
-    reflection_method_binding_for_expr, reflection_property_binding_for_expr,
+    reflection_function_binding_for_expr, reflection_method_binding_for_expr,
+    reflection_property_binding_for_expr,
     static_callable_binding_for_expr,
     string_op_uses_scratch_storage,
     type_satisfies_array_access_for_ir,
@@ -241,6 +242,7 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     ctx.clear_pending_static_callable_result();
     let static_callable = static_callable_binding_for_expr(ctx, value);
     let reflected_class = reflection_class_binding_for_expr(ctx, value);
+    let reflected_function = reflection_function_binding_for_expr(ctx, value);
     let reflected_property = reflection_property_binding_for_expr(ctx, value);
     let reflected_method = reflection_method_binding_for_expr(ctx, value);
     let reflected_args = reflection_arg_array_binding_for_expr(value);
@@ -275,6 +277,9 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     }
     if let Some(reflected_class) = reflected_class {
         ctx.bind_reflection_class_local(name, reflected_class);
+    }
+    if let Some(reflected_function) = reflected_function {
+        ctx.bind_reflection_function_local(name, reflected_function);
     }
     if let Some((reflected_class, reflected_property)) = reflected_property {
         ctx.bind_reflection_property_local(name, reflected_class, reflected_property);

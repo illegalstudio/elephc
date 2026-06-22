@@ -541,6 +541,60 @@ fn builtin_reflection_method_invoke_args_method() -> ClassMethod {
     }
 }
 
+/// Returns a public variadic `ReflectionFunction::invoke()` method shell.
+///
+/// Direct generated/AOT calls are lowered specially so the variadic source
+/// arguments are normalized against the reflected function's own signature.
+fn builtin_reflection_function_invoke_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "invoke".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: Some("args".to_string()),
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionFunction::invokeArgs()` method shell.
+///
+/// Direct generated/AOT calls are lowered specially so the provided argument
+/// array becomes the reflected function's source argument list.
+fn builtin_reflection_function_invoke_args_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "invokeArgs".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("args".to_string(), Some(array_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public `ReflectionClass::newInstanceArgs()` method.
 ///
 /// Direct calls are lowered specially so the provided argument array becomes
@@ -3158,6 +3212,10 @@ fn builtin_reflection_owner_class(
         methods.push(builtin_reflection_method_invoke_method());
         methods.push(builtin_reflection_method_invoke_args_method());
     }
+    if name == "ReflectionFunction" {
+        methods.push(builtin_reflection_function_invoke_method());
+        methods.push(builtin_reflection_function_invoke_args_method());
+    }
     properties.push(builtin_property(
         "__attrs",
         Visibility::Private,
@@ -3572,6 +3630,15 @@ fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
     }
 }
 
+/// Marks a synthesized variadic method signature as callable with no variadic arguments.
+fn make_reflection_variadic_optional(sig: &mut crate::types::FunctionSig) {
+    if sig.variadic.is_some() {
+        if let Some(default) = sig.defaults.last_mut() {
+            *default = empty_array();
+        }
+    }
+}
+
 /// Overrides the return types on the synthesized reflection class methods inside
 /// `checker` to match PHP's actual signatures:
 /// - `__construct` → `void`
@@ -3847,6 +3914,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("invoke")) {
                     sig.return_type = PhpType::Mixed;
                     sig.variadic = Some("args".to_string());
+                    make_reflection_variadic_optional(sig);
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("invokeArgs")) {
                     sig.return_type = PhpType::Mixed;
@@ -3863,6 +3931,14 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
             }
             if class_name == "ReflectionFunction" {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("invoke")) {
+                    sig.return_type = PhpType::Mixed;
+                    sig.variadic = Some("args".to_string());
+                    make_reflection_variadic_optional(sig);
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("invokeArgs")) {
+                    sig.return_type = PhpType::Mixed;
+                }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getParameters")) {
                     sig.return_type = PhpType::Array(Box::new(PhpType::Object(
                         "ReflectionParameter".to_string(),

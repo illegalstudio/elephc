@@ -20,7 +20,9 @@ fn test_reflection_method_invoke_calls_declared_aot_methods() {
         r#"<?php
 class ReflectInvokeTarget {
     public function join(string $a, string $b = "B"): string { return $a . $b; }
+    public function zero(): string { return "Z"; }
     public static function make(string $left, string $right = "S"): string { return $left . $right; }
+    public static function staticZero(): string { return "T"; }
 }
 
 $object = new ReflectInvokeTarget();
@@ -34,9 +36,13 @@ echo (new ReflectionMethod(ReflectInvokeTarget::class, "make"))->invoke(null, ri
 echo ":";
 $method = new ReflectionMethod(ReflectInvokeTarget::class, "join");
 echo $method->invoke($object, "L", "M");
+echo ":";
+echo (new ReflectionMethod(ReflectInvokeTarget::class, "zero"))->invoke($object);
+echo ":";
+echo (new ReflectionMethod(ReflectInvokeTarget::class, "staticZero"))->invoke(null);
 "#,
     );
-    assert_eq!(out, "AC:DB:EF:XY:LM");
+    assert_eq!(out, "AC:DB:EF:XY:LM:Z:T");
 }
 
 /// Verifies `ReflectionMethod::invokeArgs()` forwards static argument arrays.
