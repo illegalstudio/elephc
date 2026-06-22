@@ -32,7 +32,8 @@ use super::fibers;
 use super::frame;
 use super::function_variants;
 use super::literal_defaults::{
-    emit_array_literal_default_to_result, emit_assoc_array_literal_default_to_result,
+    emit_array_literal_default_to_result, emit_assoc_array_entries_literal_default_to_result,
+    emit_assoc_array_literal_default_to_result,
     emit_boxed_null_literal_to_result,
     emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
     emit_boxed_int_literal_to_result, emit_boxed_string_literal_default_to_result,
@@ -646,6 +647,12 @@ fn emit_static_property_default_value(
             elements,
         } => {
             emit_assoc_array_literal_default_to_result(ctx, value_type, elements)?;
+        }
+        LiteralDefaultValue::AssocArrayEntries {
+            value_type,
+            entries,
+        } => {
+            emit_assoc_array_entries_literal_default_to_result(ctx, value_type, entries)?;
         }
         LiteralDefaultValue::EmptyAssocArray { value_type } => {
             emit_empty_assoc_array_literal_to_result(ctx, value_type);

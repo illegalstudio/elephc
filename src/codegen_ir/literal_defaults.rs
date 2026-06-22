@@ -9,16 +9,16 @@
 //! Key details:
 //! - This is intentionally narrower than full PHP expression lowering: only
 //!   scalar, string, null, indexed-array literals with scalar/string/null
-//!   elements, empty object-typed indexed arrays, and empty associative arrays
-//!   land here.
+//!   elements, keyed associative arrays with supported literal keys and values,
+//!   empty object-typed indexed arrays, and empty associative arrays land here.
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{
     abi, emit_box_current_value_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
     runtime_value_tag,
 };
-use crate::parser::ast::ExprKind;
-use crate::types::PhpType;
+use crate::parser::ast::{Expr, ExprKind};
+use crate::types::{is_php_integer_array_key, PhpType};
 
 use super::context::FunctionContext;
 use super::{CodegenIrError, Result};
@@ -45,6 +45,10 @@ pub(crate) enum LiteralDefaultValue {
         value_type: PhpType,
         elements: Vec<LiteralArrayElement>,
     },
+    AssocArrayEntries {
+        value_type: PhpType,
+        entries: Vec<LiteralAssocArrayElement>,
+    },
     EmptyAssocArray {
         value_type: PhpType,
     },
@@ -57,6 +61,18 @@ pub(crate) enum LiteralArrayElement {
     Float(f64),
     Str(String),
     Null,
+}
+
+/// Literal associative-array element with a normalized PHP array key.
+pub(crate) struct LiteralAssocArrayElement {
+    key: LiteralArrayKey,
+    value: LiteralArrayElement,
+}
+
+/// Literal array key shape accepted by `__rt_hash_set`.
+enum LiteralArrayKey {
+    Int(i64),
+    Str(String),
 }
 
 /// Converts a supported default expression into a direct storage value.
@@ -116,6 +132,14 @@ pub(crate) fn literal_default_value(
         (php_type, ExprKind::Null) if php_type.codegen_repr().is_refcounted() => {
             Ok(LiteralDefaultValue::Null)
         }
+        (PhpType::AssocArray { value, .. }, ExprKind::ArrayLiteralAssoc(entries)) => {
+            let value_type = value.as_ref().codegen_repr();
+            let entries = literal_assoc_array_entries(context, &value_type, entries, op_name)?;
+            Ok(LiteralDefaultValue::AssocArrayEntries {
+                value_type,
+                entries,
+            })
+        }
         (PhpType::AssocArray { value, .. }, ExprKind::ArrayLiteral(items)) => {
             let value_type = value.as_ref().codegen_repr();
             if items.is_empty() {
@@ -142,6 +166,55 @@ pub(crate) fn literal_default_value(
             })
         }
         _ => Err(unsupported_literal_default(context, php_type, op_name)),
+    }
+}
+
+/// Converts explicit-key associative array entries into literal default metadata.
+fn literal_assoc_array_entries(
+    context: &str,
+    value_type: &PhpType,
+    entries: &[(Expr, Expr)],
+    op_name: &str,
+) -> Result<Vec<LiteralAssocArrayElement>> {
+    entries
+        .iter()
+        .map(|(key, value)| {
+            let key = literal_assoc_array_key(context, key, op_name)?;
+            let value = literal_array_element(context, value_type, &value.kind, op_name)?;
+            Ok(LiteralAssocArrayElement { key, value })
+        })
+        .collect()
+}
+
+/// Converts a supported literal array key into PHP-normalized hash metadata.
+fn literal_assoc_array_key(context: &str, key: &Expr, op_name: &str) -> Result<LiteralArrayKey> {
+    match &key.kind {
+        ExprKind::IntLiteral(value) => Ok(LiteralArrayKey::Int(*value)),
+        ExprKind::BoolLiteral(value) => Ok(LiteralArrayKey::Int(i64::from(*value))),
+        ExprKind::FloatLiteral(value) => Ok(LiteralArrayKey::Int(*value as i64)),
+        ExprKind::StringLiteral(value) => Ok(literal_string_array_key(value)),
+        ExprKind::Null => Ok(LiteralArrayKey::Str(String::new())),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => value
+                .checked_neg()
+                .map(LiteralArrayKey::Int)
+                .ok_or_else(|| unsupported_literal_default(context, &PhpType::Mixed, op_name)),
+            ExprKind::FloatLiteral(value) => Ok(LiteralArrayKey::Int((-*value) as i64)),
+            _ => Err(unsupported_literal_default(context, &PhpType::Mixed, op_name)),
+        },
+        _ => Err(unsupported_literal_default(context, &PhpType::Mixed, op_name)),
+    }
+}
+
+/// Normalizes a string literal array key using PHP integer-string key rules.
+fn literal_string_array_key(value: &str) -> LiteralArrayKey {
+    if is_php_integer_array_key(value) {
+        value
+            .parse::<i64>()
+            .map(LiteralArrayKey::Int)
+            .unwrap_or_else(|_| LiteralArrayKey::Str(value.to_string()))
+    } else {
+        LiteralArrayKey::Str(value.to_string())
     }
 }
 
@@ -282,6 +355,72 @@ pub(crate) fn emit_assoc_array_literal_default_to_result(
         abi::emit_call_label(ctx.emitter, "__rt_hash_set");
     }
     Ok(())
+}
+
+/// Emits an explicit-key associative-array literal default into the result register.
+pub(crate) fn emit_assoc_array_entries_literal_default_to_result(
+    ctx: &mut FunctionContext<'_>,
+    value_type: &PhpType,
+    entries: &[LiteralAssocArrayElement],
+) -> Result<()> {
+    emit_empty_assoc_array_literal_to_result(ctx, value_type);
+    for entry in entries {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        let actual_value_type = emit_array_element_value(ctx, &entry.value);
+        materialize_assoc_literal_value(ctx, value_type, &actual_value_type)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_pop_reg(ctx.emitter, "x0");
+                emit_assoc_literal_key_aarch64(ctx, &entry.key);
+                abi::emit_load_int_immediate(
+                    ctx.emitter,
+                    "x5",
+                    assoc_literal_value_tag(value_type, &actual_value_type),
+                );
+            }
+            Arch::X86_64 => {
+                abi::emit_pop_reg(ctx.emitter, "rdi");
+                emit_assoc_literal_key_x86_64(ctx, &entry.key);
+                abi::emit_load_int_immediate(
+                    ctx.emitter,
+                    "r9",
+                    assoc_literal_value_tag(value_type, &actual_value_type),
+                );
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    }
+    Ok(())
+}
+
+/// Materializes a literal associative-array key in AArch64 hash-key registers.
+fn emit_assoc_literal_key_aarch64(ctx: &mut FunctionContext<'_>, key: &LiteralArrayKey) {
+    match key {
+        LiteralArrayKey::Int(value) => {
+            abi::emit_load_int_immediate(ctx.emitter, "x1", *value);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
+        }
+        LiteralArrayKey::Str(value) => {
+            let (key_label, key_len) = ctx.data.add_string(value.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
+        }
+    }
+}
+
+/// Materializes a literal associative-array key in x86_64 SysV hash-key registers.
+fn emit_assoc_literal_key_x86_64(ctx: &mut FunctionContext<'_>, key: &LiteralArrayKey) {
+    match key {
+        LiteralArrayKey::Int(value) => {
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", *value);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+        }
+        LiteralArrayKey::Str(value) => {
+            let (key_label, key_len) = ctx.data.add_string(value.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
+        }
+    }
 }
 
 /// Converts one supported literal expression into an indexed-array element payload.
