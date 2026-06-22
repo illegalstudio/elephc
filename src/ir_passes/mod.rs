@@ -16,6 +16,7 @@ mod allocation;
 mod branch_simplify;
 mod cfg;
 mod clobber;
+mod const_fold;
 mod dead_inst;
 mod dead_store;
 mod driver;

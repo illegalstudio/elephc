@@ -80,8 +80,8 @@ behind a flag.
   [The EIR Design](../internals/the-ir.md).
 - **ir-opt** — the [EIR optimization passes](optimization.md#eir-optimization-passes)
   run a fixed-point driver over each function: identity arithmetic folding,
-  local peephole rewrites, CFG-aware dead-instruction elimination, dead-store
-  elimination, and branch simplification. In
+  local peephole rewrites, constant folding, CFG-aware dead-instruction
+  elimination, dead-store elimination, and branch simplification. In
   debug/test builds the function is re-validated after every pass. This phase
   can be turned off with [`--no-ir-opt`](optimization.md#eir-optimization-passes).
 - **ir-print** — only present with [`--emit-ir`](output-and-diagnostics.md#--emit-ir);

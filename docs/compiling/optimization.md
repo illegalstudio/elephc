@@ -99,9 +99,33 @@ You can see the effect with [`--emit-ir`](output-and-diagnostics.md#--emit-ir):
 `$x = $argc; echo $x;` forwards the load so the `echo` reads the stored value and
 the `load_local` becomes a `nop`.
 
+### Constant folding
+
+The third registered pass folds operations whose operands are all compile-time
+constants into a single constant, in place. It covers integer arithmetic
+(`iadd`, `isub`, `imul`), bitwise ops, in-range shifts, unary `ineg`/`ibit_not`,
+float `fadd`/`fsub`/`fmul`/`fneg`, signed integer comparisons (`icmp`), and the
+`is_null`/`is_truthy` predicates. A constant value in EIR is the same constant at
+every use, so a single forward scan discovers constant operands and collapses
+chains like `(2 + 3) * 4` in one sweep.
+
+Each fold reproduces exactly what the op's lowering computes at runtime, so the
+compiled result never changes: integers wrap at 64 bits (matching the native
+`add`/`sub`/`mul`), shifts fold only for counts in `0..=63`, and the trapping
+integer division/modulo and `NaN`-sensitive float division are left untouched.
+
+Together with the peephole's scalar load/store forwarding — which moves a
+constant assigned to a local onto its later uses — this realizes per-block
+constant propagation over EIR value ids *and* local slots: the peephole carries
+the constant through the slot, and this pass folds the constant-operand
+operation built on it. Constants surfaced by identity arithmetic feed it too:
+`($argc * 0 + 5) * ($argc * 0 + 5)` reduces to `$argc * 0` → `const_i64 0`
+(identity), then `0 + 5` → `5`, then `5 * 5` → `const_i64 25` (this pass), with
+the three `imul`s eliminated.
+
 ### Dead instruction elimination
 
-The third registered pass computes CFG liveness and neutralizes unused
+The fourth registered pass computes CFG liveness and neutralizes unused
 result-producing instructions whose effect metadata says they are pure. This
 cleans up dead values exposed by earlier EIR rewrites. For example, identity
 folding can turn `$argc + 0` into `$argc`; dead-instruction elimination then
@@ -122,7 +146,7 @@ elephc --emit-ir --no-ir-opt app.php
 
 ### Dead store elimination
 
-The fourth registered pass removes `store_local` writes whose value is never read
+The fifth registered pass removes `store_local` writes whose value is never read
 before the slot is overwritten or the function exits. It computes backward,
 CFG-aware liveness over local slots (a `load_local` makes a slot live, a
 `store_local` kills it) so a dead store is dropped even when the overwrite is in a
@@ -138,7 +162,7 @@ left untouched to keep reference counting and aliasing semantics intact.
 
 ### Branch simplification
 
-The fifth registered pass prunes the control-flow graph three ways:
+The sixth registered pass prunes the control-flow graph three ways:
 
 - **Constant-condition folding** — a `cond_br` whose condition is a constant
   (`const_bool`, non-zero `const_i64`, or `const_null`) becomes an unconditional
