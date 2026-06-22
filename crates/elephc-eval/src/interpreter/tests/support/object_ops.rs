@@ -139,6 +139,10 @@ impl FakeOps {
                 self.null()
             }
             (FakeValue::Object(_), "answer") if args.is_empty() => self.int(42),
+            (FakeValue::Object(properties), "__tostring") if args.is_empty() => {
+                let class_name = self.object_classes.get(&(object.as_ptr() as usize)).cloned();
+                self.reflection_type_to_string(class_name.as_deref(), &properties)
+            }
             (FakeValue::Object(properties), "getname") if args.is_empty() => {
                 Self::object_property(&properties, "__name").map_or_else(|| self.string(""), Ok)
             }
@@ -942,6 +946,81 @@ impl FakeOps {
         self.object_classes
             .insert(object.as_ptr() as usize, "ReflectionClass".to_string());
         Ok(object)
+    }
+
+    /// Formats fake ReflectionType objects through their synthetic `__toString()` method.
+    fn reflection_type_to_string(
+        &mut self,
+        class_name: Option<&str>,
+        properties: &[(String, RuntimeCellHandle)],
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        match class_name {
+            Some("ReflectionNamedType") => self.reflection_named_type_to_string(properties),
+            Some("ReflectionUnionType") => self.reflection_composite_type_to_string(
+                properties,
+                "|",
+                true,
+            ),
+            Some("ReflectionIntersectionType") => self.reflection_composite_type_to_string(
+                properties,
+                "&",
+                false,
+            ),
+            _ => Err(EvalStatus::UnsupportedConstruct),
+        }
+    }
+
+    /// Formats one fake ReflectionNamedType object using retained name/nullability slots.
+    fn reflection_named_type_to_string(
+        &mut self,
+        properties: &[(String, RuntimeCellHandle)],
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let Some(name) = Self::object_property(properties, "__name") else {
+            return self.string("");
+        };
+        let FakeValue::String(name) = self.get(name) else {
+            return Err(EvalStatus::UnsupportedConstruct);
+        };
+        let allows_null = Self::object_property(properties, "__allows_null")
+            .is_some_and(|value| matches!(self.get(value), FakeValue::Bool(true)));
+        if allows_null && name != "mixed" {
+            self.string(&format!("?{name}"))
+        } else {
+            self.string(&name)
+        }
+    }
+
+    /// Formats one fake ReflectionUnionType or ReflectionIntersectionType object.
+    fn reflection_composite_type_to_string(
+        &mut self,
+        properties: &[(String, RuntimeCellHandle)],
+        separator: &str,
+        append_null: bool,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let mut names = Vec::new();
+        if let Some(types) = Self::object_property(properties, "__types") {
+            let FakeValue::Array(elements) = self.get(types) else {
+                return Err(EvalStatus::UnsupportedConstruct);
+            };
+            for element in elements {
+                let FakeValue::Object(type_properties) = self.get(element) else {
+                    return Err(EvalStatus::UnsupportedConstruct);
+                };
+                let Some(name) = Self::object_property(&type_properties, "__name") else {
+                    return Err(EvalStatus::UnsupportedConstruct);
+                };
+                let FakeValue::String(name) = self.get(name) else {
+                    return Err(EvalStatus::UnsupportedConstruct);
+                };
+                names.push(name);
+            }
+        }
+        let allows_null = Self::object_property(properties, "__allows_null")
+            .is_some_and(|value| matches!(self.get(value), FakeValue::Bool(true)));
+        if append_null && allows_null {
+            names.push("null".to_string());
+        }
+        self.string(&names.join(separator))
     }
 
     /// Finds one fake ReflectionMethod/ReflectionProperty object by its private name slot.

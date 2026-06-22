@@ -916,6 +916,94 @@ pub(in crate::interpreter) fn eval_reflection_parameter_legacy_type_predicate_re
         .map(Some)
 }
 
+/// Handles eval-backed `ReflectionType::__toString()` calls.
+pub(in crate::interpreter) fn eval_reflection_type_to_string_result(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("__toString") {
+        return Ok(None);
+    }
+    let type_kind = if eval_reflection_object_has_class(object, "ReflectionNamedType", values)? {
+        Some(("ReflectionNamedType", ""))
+    } else if eval_reflection_object_has_class(object, "ReflectionUnionType", values)? {
+        Some(("ReflectionUnionType", "|"))
+    } else if eval_reflection_object_has_class(object, "ReflectionIntersectionType", values)? {
+        Some(("ReflectionIntersectionType", "&"))
+    } else {
+        None
+    };
+    let Some((class_name, separator)) = type_kind else {
+        return Ok(None);
+    };
+    eval_reflection_bind_no_args(evaluated_args)?;
+    let rendered = if class_name == "ReflectionNamedType" {
+        eval_reflection_named_type_to_string(object, values)?
+    } else {
+        eval_reflection_composite_type_to_string(object, separator, values)?
+    };
+    values.string(&rendered).map(Some)
+}
+
+/// Formats one eval-visible ReflectionNamedType object from its public methods.
+fn eval_reflection_named_type_to_string(
+    object: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let name = eval_reflection_type_method_string(object, "getName", values)?;
+    let allows_null = eval_reflection_type_method_bool(object, "allowsNull", values)?;
+    if allows_null && name != "mixed" {
+        Ok(format!("?{name}"))
+    } else {
+        Ok(name)
+    }
+}
+
+/// Formats one eval-visible ReflectionUnionType or ReflectionIntersectionType object.
+fn eval_reflection_composite_type_to_string(
+    object: RuntimeCellHandle,
+    separator: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let types = values.method_call(object, "getTypes", Vec::new())?;
+    let mut names = Vec::new();
+    for position in 0..values.array_len(types)? {
+        let key = values.array_iter_key(types, position)?;
+        let member = values.array_get(types, key)?;
+        names.push(eval_reflection_type_method_string(member, "getName", values)?);
+    }
+    if separator == "|" && eval_reflection_type_method_bool(object, "allowsNull", values)? {
+        names.push(String::from("null"));
+    }
+    Ok(names.join(separator))
+}
+
+/// Calls one no-arg ReflectionType method and returns its string result.
+fn eval_reflection_type_method_string(
+    object: RuntimeCellHandle,
+    method: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let value = values.method_call(object, method, Vec::new())?;
+    let bytes = values.string_bytes(value)?;
+    String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
+}
+
+/// Calls one no-arg ReflectionType method and returns its bool result.
+fn eval_reflection_type_method_bool(
+    object: RuntimeCellHandle,
+    method: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let value = values.method_call(object, method, Vec::new())?;
+    if values.type_tag(value)? != EVAL_TAG_BOOL {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    values.truthy(value)
+}
+
 /// Maps a legacy ReflectionParameter predicate method to its target named type.
 fn eval_reflection_parameter_legacy_type_name(method_name: &str) -> Option<&'static str> {
     if method_name.eq_ignore_ascii_case("isArray") {

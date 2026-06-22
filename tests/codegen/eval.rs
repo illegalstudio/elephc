@@ -8540,6 +8540,37 @@ foreach ($params as $param) {
     );
 }
 
+/// Verifies eval ReflectionType objects stringify retained parameter metadata.
+#[test]
+fn test_eval_reflection_type_to_string_formats_retained_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectTypeStringDep {}
+interface EvalReflectTypeStringLeft {}
+interface EvalReflectTypeStringRight {}
+class EvalReflectTypeStringTarget {
+    public function run(?EvalReflectTypeStringDep $dep, int|string|null $union, EvalReflectTypeStringLeft&EvalReflectTypeStringRight $both, mixed $mixed, ?array $items) {}
+}
+$params = (new ReflectionMethod("EvalReflectTypeStringTarget", "run"))->getParameters();
+foreach ($params as $param) {
+    $type = $param->getType();
+    echo $param->getName() . ":";
+    echo $type->__toString() . "|";
+}
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "dep:?EvalReflectTypeStringDep|union:int|string|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|"
+    );
+}
+
 /// Verifies eval ReflectionParameter::getClass() reports retained object type metadata.
 #[test]
 fn test_eval_reflection_parameter_get_class_reports_named_object_type() {

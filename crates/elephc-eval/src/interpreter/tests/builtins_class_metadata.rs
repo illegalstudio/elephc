@@ -1704,6 +1704,37 @@ return true;"##,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionType objects stringify retained eval parameter metadata.
+#[test]
+fn execute_program_reflection_type_to_string() {
+    let program = parse_fragment(
+br##"class EvalReflectTypeStringDep {}
+interface EvalReflectTypeStringLeft {}
+interface EvalReflectTypeStringRight {}
+class EvalReflectTypeStringTarget {
+    public function run(?EvalReflectTypeStringDep $dep, int|string|null $union, EvalReflectTypeStringLeft&EvalReflectTypeStringRight $both, mixed $mixed, ?array $items) {}
+}
+$params = (new ReflectionMethod("EvalReflectTypeStringTarget", "run"))->getParameters();
+foreach ($params as $param) {
+    $type = $param->getType();
+    echo $param->getName(); echo ":";
+    echo $type->__toString(); echo "|";
+}
+return true;"##,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "dep:?EvalReflectTypeStringDep|union:int|string|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionMethod exposes eval-declared return type metadata.
 #[test]
 fn execute_program_reflection_method_reports_return_type_metadata() {

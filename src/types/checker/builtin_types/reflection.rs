@@ -3897,6 +3897,7 @@ fn builtin_reflection_named_type_class() -> FlattenedClass {
     let methods = vec![
         builtin_reflection_private_constructor_method(),
         builtin_reflection_class_string_method("getName", "__name"),
+        builtin_reflection_named_type_to_string_method(),
         builtin_reflection_class_bool_method("allowsNull", "__allows_null"),
         builtin_reflection_class_bool_method("isBuiltin", "__is_builtin"),
     ];
@@ -3945,6 +3946,7 @@ fn builtin_reflection_union_type_class() -> FlattenedClass {
             "__types",
             object_array_type("ReflectionNamedType"),
         ),
+        builtin_reflection_composite_type_to_string_method("|", true),
         builtin_reflection_class_bool_method("allowsNull", "__allows_null"),
     ];
     FlattenedClass {
@@ -3992,6 +3994,7 @@ fn builtin_reflection_intersection_type_class() -> FlattenedClass {
             "__types",
             object_array_type("ReflectionNamedType"),
         ),
+        builtin_reflection_composite_type_to_string_method("&", false),
         builtin_reflection_class_bool_method("allowsNull", "__allows_null"),
     ];
     FlattenedClass {
@@ -4008,6 +4011,170 @@ fn builtin_reflection_intersection_type_class() -> FlattenedClass {
         used_traits: Vec::new(),
         trait_aliases: Vec::new(),
     }
+}
+
+/// Builds `ReflectionNamedType::__toString()` from retained name/nullability slots.
+fn builtin_reflection_named_type_to_string_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let name = reflection_this_property("__name", dummy_span);
+    let nullable_named_type = binary_expr(
+        reflection_this_property("__allows_null", dummy_span),
+        BinOp::And,
+        binary_expr(
+            name.clone(),
+            BinOp::StrictNotEq,
+            string_lit("mixed", dummy_span),
+            dummy_span,
+        ),
+        dummy_span,
+    );
+    ClassMethod {
+        name: "__toString".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Str),
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: nullable_named_type,
+                    then_body: vec![Stmt::new(
+                        StmtKind::Return(Some(concat_expr(
+                            string_lit("?", dummy_span),
+                            name.clone(),
+                            dummy_span,
+                        ))),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(Some(name)), dummy_span),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `ReflectionUnionType::__toString()` or `ReflectionIntersectionType::__toString()`.
+fn builtin_reflection_composite_type_to_string_method(
+    separator: &'static str,
+    append_null: bool,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let mut body = vec![
+        Stmt::new(
+            StmtKind::TypedAssign {
+                type_expr: TypeExpr::Str,
+                name: "result".to_string(),
+                value: string_lit("", dummy_span),
+            },
+            dummy_span,
+        ),
+        Stmt::new(
+            StmtKind::Foreach {
+                array: reflection_this_property("__types", dummy_span),
+                key_var: None,
+                value_var: "type".to_string(),
+                value_by_ref: false,
+                body: reflection_composite_type_append_body(
+                    method_call_expr(
+                        variable_expr("type", dummy_span),
+                        "getName",
+                        Vec::new(),
+                        dummy_span,
+                    ),
+                    separator,
+                    dummy_span,
+                ),
+            },
+            dummy_span,
+        ),
+    ];
+    if append_null {
+        body.push(Stmt::new(
+            StmtKind::If {
+                condition: reflection_this_property("__allows_null", dummy_span),
+                then_body: reflection_composite_type_append_body(
+                    string_lit("null", dummy_span),
+                    separator,
+                    dummy_span,
+                ),
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            dummy_span,
+        ));
+    }
+    body.push(Stmt::new(
+        StmtKind::Return(Some(variable_expr("result", dummy_span))),
+        dummy_span,
+    ));
+    ClassMethod {
+        name: "__toString".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Str),
+        body,
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds the statements that append one rendered type segment to `$result`.
+fn reflection_composite_type_append_body(
+    value: Expr,
+    separator: &'static str,
+    span: crate::span::Span,
+) -> Vec<Stmt> {
+    vec![
+        Stmt::new(
+            StmtKind::If {
+                condition: binary_expr(
+                    variable_expr("result", span),
+                    BinOp::StrictNotEq,
+                    string_lit("", span),
+                    span,
+                ),
+                then_body: vec![Stmt::new(
+                    StmtKind::Assign {
+                        name: "result".to_string(),
+                        value: concat_expr(
+                            variable_expr("result", span),
+                            string_lit(separator, span),
+                            span,
+                        ),
+                    },
+                    span,
+                )],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            span,
+        ),
+        Stmt::new(
+            StmtKind::Assign {
+                name: "result".to_string(),
+                value: concat_expr(variable_expr("result", span), value, span),
+            },
+            span,
+        ),
+    ]
 }
 
 /// Builds a public `__construct` method for a reflection owner class using the
@@ -4497,6 +4664,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                         sig.return_type = PhpType::Bool;
                     }
                 }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
+                }
             }
             if class_name == "ReflectionUnionType" {
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getTypes")) {
@@ -4507,6 +4677,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 if let Some(sig) = class_info.methods.get_mut("allowsnull") {
                     sig.return_type = PhpType::Bool;
                 }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
+                }
             }
             if class_name == "ReflectionIntersectionType" {
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getTypes")) {
@@ -4516,6 +4689,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
                 if let Some(sig) = class_info.methods.get_mut("allowsnull") {
                     sig.return_type = PhpType::Bool;
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
                 }
             }
             if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getAttributes")) {

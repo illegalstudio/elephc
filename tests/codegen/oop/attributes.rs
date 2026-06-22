@@ -2302,6 +2302,36 @@ if ($directType instanceof ReflectionNamedType) {
     );
 }
 
+/// Verifies `ReflectionType::__toString()` formats retained type metadata.
+#[test]
+fn test_reflection_type_to_string_formats_retained_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReflectTypeStringDep {}
+interface ReflectTypeStringLeft {}
+interface ReflectTypeStringRight {}
+class ReflectTypeStringTarget {
+    public function run(?ReflectTypeStringDep $dep, int|string|null $union, ReflectTypeStringLeft&ReflectTypeStringRight $both, mixed $mixed, ?array $items) {}
+}
+$params = (new ReflectionMethod(ReflectTypeStringTarget::class, "run"))->getParameters();
+foreach ($params as $param) {
+    $type = $param->getType();
+    echo $param->getName() . ":";
+    echo $type->__toString() . "|";
+}
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "dep:?ReflectTypeStringDep|union:int|string|null|both:ReflectTypeStringLeft&ReflectTypeStringRight|mixed:mixed|items:?array|"
+    );
+}
+
 /// Verifies that `ReflectionParameter::getClass()` exposes legacy object-type metadata.
 #[test]
 fn test_reflection_parameter_get_class_returns_named_object_type() {

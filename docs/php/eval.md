@@ -354,9 +354,11 @@ and `callable` parameter types. `ReflectionParameter::getClass()` returns a
 `ReflectionClass` object for retained nullable or non-nullable named object
 parameter types and `null` for builtin, union, intersection, or untyped
 parameters. Multi-member union metadata is exposed through
-`ReflectionUnionType::getTypes()` and `allowsNull()`. Intersection parameter
+`ReflectionUnionType::getTypes()`, `allowsNull()`, and `__toString()`. Intersection parameter
 metadata is exposed through `ReflectionIntersectionType::getTypes()` and
-`allowsNull()`. Function, method, and parameter attributes are exposed through
+`allowsNull()` / `__toString()`. Named, nullable named, union, and intersection
+`ReflectionType` objects stringify using the retained eval type metadata.
+Function, method, and parameter attributes are exposed through
 `getAttributes()` using materialized `ReflectionAttribute` objects. Parameter
 default values, optionality, nullability, variadic flags, and by-reference
 flags are retained for eval-declared functions and methods, including
