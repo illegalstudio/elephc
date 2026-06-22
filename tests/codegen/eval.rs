@@ -7506,6 +7506,41 @@ echo $protected->getModifiers();');
     assert_eq!(out, "Pt4129:pT2049");
 }
 
+/// Verifies eval-declared asymmetric property visibility enforces writes and reflects metadata.
+#[test]
+fn test_eval_declared_asymmetric_property_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalDeclaredAsymBase {
+    public private(set) int $privateValue = 1;
+    public protected(set) string $protectedName = "base";
+    public function ownerWrite($value, $name) {
+        $this->privateValue = $value;
+        $this->protectedName = $name;
+    }
+}
+class EvalDeclaredAsymChild extends EvalDeclaredAsymBase {
+    public function childWrite($name) {
+        $this->protectedName = $name;
+    }
+}
+$box = new EvalDeclaredAsymChild();
+echo $box->privateValue . ":" . $box->protectedName . ":";
+$box->ownerWrite(7, "owner");
+echo $box->privateValue . ":" . $box->protectedName . ":";
+$box->childWrite("child");
+echo $box->protectedName . ":";
+$private = new ReflectionProperty("EvalDeclaredAsymBase", "privateValue");
+echo ($private->isPrivateSet() ? "P" : "p") . ($private->isProtectedSet() ? "T" : "t");
+echo $private->getModifiers() . ":";
+$protected = new ReflectionProperty("EvalDeclaredAsymBase", "protectedName");
+echo ($protected->isPrivateSet() ? "P" : "p") . ($protected->isProtectedSet() ? "T" : "t");
+echo $protected->getModifiers();');
+"#,
+    );
+    assert_eq!(out, "1:base:7:owner:child:Pt4129:pT2049");
+}
+
 /// Verifies eval can observe AOT constructor-promotion metadata through
 /// `ReflectionProperty::isPromoted()`.
 #[test]

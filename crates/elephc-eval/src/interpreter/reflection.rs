@@ -2152,6 +2152,7 @@ fn eval_reflection_dynamic_property_metadata(class_name: &str) -> EvalReflection
         is_dynamic: true,
         modifiers: eval_reflection_property_modifiers(
             EvalVisibility::Public,
+            None,
             false,
             false,
             false,
@@ -2501,6 +2502,7 @@ fn eval_reflection_aot_property_metadata(
     let is_virtual = flags & EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL != 0;
     let mut modifiers = eval_reflection_property_modifiers(
         visibility,
+        None,
         is_static,
         is_final,
         is_abstract,
@@ -3995,6 +3997,7 @@ fn eval_reflection_method_modifiers(
 /// Computes PHP's `ReflectionProperty::getModifiers()` bitmask for eval metadata.
 fn eval_reflection_property_modifiers(
     visibility: EvalVisibility,
+    set_visibility: Option<EvalVisibility>,
     is_static: bool,
     is_final: bool,
     is_abstract: bool,
@@ -4021,8 +4024,11 @@ fn eval_reflection_property_modifiers(
     if is_virtual {
         modifiers |= 512;
     }
-    if is_readonly && visibility == EvalVisibility::Public {
-        modifiers |= 2048;
+    match set_visibility {
+        Some(EvalVisibility::Private) => modifiers |= 32 | 4096,
+        Some(EvalVisibility::Protected) => modifiers |= 2048,
+        _ if is_readonly && visibility == EvalVisibility::Public => modifiers |= 2048,
+        _ => {}
     }
     modifiers
 }
@@ -4515,6 +4521,7 @@ fn eval_reflection_property_metadata(
                     is_dynamic: false,
                     modifiers: eval_reflection_property_modifiers(
                         property.visibility(),
+                        property.set_visibility(),
                         property.is_static(),
                         property.is_final(),
                         property.is_abstract(),
@@ -4549,6 +4556,7 @@ fn eval_reflection_property_metadata(
                 is_dynamic: false,
                 modifiers: eval_reflection_property_modifiers(
                     EvalVisibility::Public,
+                    None,
                     false,
                     false,
                     true,
@@ -4583,6 +4591,7 @@ fn eval_reflection_property_metadata(
                     is_dynamic: false,
                     modifiers: eval_reflection_property_modifiers(
                         property.visibility(),
+                        property.set_visibility(),
                         property.is_static(),
                         property.is_final(),
                         property.is_abstract(),

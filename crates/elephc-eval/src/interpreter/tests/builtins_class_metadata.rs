@@ -1401,6 +1401,39 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionProperty reports eval-declared asymmetric set visibility.
+#[test]
+fn execute_program_reflects_eval_asymmetric_property_set_visibility() {
+    let program = parse_fragment(
+        br#"class EvalReflectAsymmetricProperty {
+    public private(set) int $privateSet = 1;
+    public protected(set) int $protectedSet = 2;
+    protected private(set) int $protectedPrivateSet = 3;
+}
+$private = new ReflectionProperty("EvalReflectAsymmetricProperty", "privateSet");
+echo $private->isPrivateSet() ? "P" : "p";
+echo $private->isProtectedSet() ? "T" : "t";
+echo $private->getModifiers(); echo ":";
+$protected = new ReflectionProperty("EvalReflectAsymmetricProperty", "protectedSet");
+echo $protected->isPrivateSet() ? "P" : "p";
+echo $protected->isProtectedSet() ? "T" : "t";
+echo $protected->getModifiers(); echo ":";
+$protectedPrivate = new ReflectionProperty("EvalReflectAsymmetricProperty", "protectedPrivateSet");
+echo $protectedPrivate->isPrivateSet() ? "P" : "p";
+echo $protectedPrivate->isProtectedSet() ? "T" : "t";
+echo $protectedPrivate->getModifiers();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Pt4129:pT2049:Pt4130");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionProperty reports eval constructor-promotion metadata.
 #[test]
 fn execute_program_reflection_property_reports_eval_promoted_metadata() {

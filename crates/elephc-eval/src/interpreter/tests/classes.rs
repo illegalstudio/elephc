@@ -312,6 +312,127 @@ return $box->id();"#,
     assert_eq!(values.get(result), FakeValue::Int(13));
 }
 
+/// Verifies eval-declared asymmetric properties allow owner and subclass writes as PHP does.
+#[test]
+fn execute_program_allows_asymmetric_property_writes_from_allowed_scopes() {
+    let program = parse_fragment(
+        br#"class EvalAsymWriteBase {
+    public private(set) int $privateValue = 1;
+    public protected(set) string $protectedName = "base";
+    public function ownerWrite($value, $name) {
+        $this->privateValue = $value;
+        $this->protectedName = $name;
+    }
+}
+class EvalAsymWriteChild extends EvalAsymWriteBase {
+    public function childWrite($name) {
+        $this->protectedName = $name;
+    }
+}
+$box = new EvalAsymWriteChild();
+echo $box->privateValue; echo ":"; echo $box->protectedName; echo ":";
+$box->ownerWrite(7, "owner");
+echo $box->privateValue; echo ":"; echo $box->protectedName; echo ":";
+$box->childWrite("child");
+echo $box->protectedName;
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "1:base:7:owner:child");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval-declared `private(set)` rejects global writes without dispatching `__set`.
+#[test]
+fn execute_program_rejects_private_set_property_write_outside_declaring_class() {
+    let program = parse_fragment(
+        br#"class EvalAsymPrivateSetBox {
+    public private(set) int $value = 1;
+    public function __set($name, $value) {
+        echo "bad";
+    }
+}
+$box = new EvalAsymPrivateSetBox();
+$box->value = 2;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("global private(set) property write should fail");
+
+    assert_eq!(values.output, "");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies eval-declared `protected(set)` rejects global writes.
+#[test]
+fn execute_program_rejects_protected_set_property_write_outside_hierarchy() {
+    let program = parse_fragment(
+        br#"class EvalAsymProtectedSetBox {
+    public protected(set) int $value = 1;
+}
+$box = new EvalAsymProtectedSetBox();
+$box->value = 2;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("global protected(set) property write should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies asymmetric write restrictions cannot satisfy a public interface set contract.
+#[test]
+fn execute_program_rejects_private_set_property_for_interface_set_contract() {
+    let program = parse_fragment(
+        br#"interface EvalAsymSetContract {
+    public int $value { get; set; }
+}
+class EvalAsymSetContractBox implements EvalAsymSetContract {
+    public private(set) int $value = 1;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("private(set) property should fail public interface set contract");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies asymmetric write restrictions cannot satisfy a public abstract set contract.
+#[test]
+fn execute_program_rejects_private_set_property_for_abstract_set_contract() {
+    let program = parse_fragment(
+        br#"abstract class EvalAsymAbstractSetBase {
+    abstract public int $value { get; set; }
+}
+class EvalAsymAbstractSetBox extends EvalAsymAbstractSetBase {
+    public private(set) int $value = 1;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("private(set) property should fail public abstract set contract");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies readonly class inheritance requires matching readonly status.
 #[test]
 fn execute_program_rejects_readonly_class_extending_non_readonly_parent() {
