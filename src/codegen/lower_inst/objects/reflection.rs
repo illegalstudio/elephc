@@ -3469,7 +3469,7 @@ fn reflection_parameter_default_value(
     current_info: Option<&crate::types::ClassInfo>,
     default: &Expr,
 ) -> Result<Option<ReflectionParameterDefaultValue>> {
-    if let Some(value) = reflection_object_parameter_default_value(default) {
+    if let Some(value) = reflection_object_parameter_default_value(ctx, default) {
         return Ok(Some(value));
     }
     if let Some(value) = reflection_literal_parameter_default_value(default) {
@@ -3486,22 +3486,54 @@ fn reflection_parameter_default_value(
 
 /// Converts a top-level object parameter default into Reflection metadata.
 fn reflection_object_parameter_default_value(
+    ctx: &FunctionContext<'_>,
     default: &Expr,
 ) -> Option<ReflectionParameterDefaultValue> {
     let ExprKind::NewObject { class_name, args } = &default.kind else {
         return None;
     };
-    if args.len() > 3 {
-        return None;
-    }
-    let args = args
-        .iter()
-        .map(reflection_literal_parameter_default_non_object_value)
-        .collect::<Option<Vec<_>>>()?;
+    let args = reflection_object_parameter_default_args(ctx, class_name.as_str(), args)?;
     Some(ReflectionParameterDefaultValue::Object {
         class_name: class_name.as_str().to_string(),
         args,
     })
+}
+
+/// Returns constructor args for an object default, including supported omitted defaults.
+fn reflection_object_parameter_default_args(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    args: &[Expr],
+) -> Option<Vec<ReflectionParameterDefaultValue>> {
+    if args.len() > 3 {
+        return None;
+    }
+    let mut values = args
+        .iter()
+        .map(reflection_literal_parameter_default_non_object_value)
+        .collect::<Option<Vec<_>>>()?;
+    let Some((_, class_info)) = resolve_reflection_class(ctx, class_name) else {
+        return Some(values);
+    };
+    let constructor = class_info.methods.get(&php_symbol_key("__construct"));
+    let Some(constructor) = constructor else {
+        return if values.is_empty() { Some(values) } else { None };
+    };
+    if constructor.variadic.is_some()
+        || values.len() > constructor.params.len()
+        || constructor.params.len() > 3
+    {
+        return None;
+    }
+    for default in constructor.defaults.iter().skip(values.len()) {
+        let default = default.as_ref()?;
+        values.push(reflection_literal_parameter_default_non_object_value(default)?);
+    }
+    if values.len() == constructor.params.len() {
+        Some(values)
+    } else {
+        None
+    }
 }
 
 /// Converts constructor arguments for object defaults, rejecting nested objects.
