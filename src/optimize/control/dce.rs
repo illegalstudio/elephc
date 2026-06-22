@@ -407,6 +407,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
         StmtKind::FunctionDecl {
             name,
             params,
+            param_attributes,
             variadic,
             variadic_type,
             return_type,
@@ -415,6 +416,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             kind: StmtKind::FunctionDecl {
                 name,
                 params,
+                param_attributes,
                 variadic,
                 variadic_type,
                 return_type,

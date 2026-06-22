@@ -240,6 +240,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         StmtKind::FunctionDecl {
             name,
             params,
+            param_attributes,
             variadic,
             variadic_type,
             return_type,
@@ -257,6 +258,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             StmtKind::FunctionDecl {
                 name,
                 params: new_params,
+                param_attributes,
                 variadic,
                 variadic_type,
                 return_type,

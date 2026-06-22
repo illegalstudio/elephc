@@ -2522,6 +2522,47 @@ echo "direct:" . count($directAttrs) . ":" . $directAttrs[0]->getName() . ":" . 
     );
 }
 
+/// Verifies `ReflectionFunction` and direct `ReflectionParameter` expose attributes on
+/// top-level function parameters.
+#[test]
+fn test_reflection_function_parameter_get_attributes_returns_parameter_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+#[Attribute]
+class ReflectFunctionParamTag {
+    public function __construct(public string $name = "") {}
+}
+function reflect_function_param_attrs(
+    #[ReflectFunctionParamTag("id")] int $id,
+    #[ReflectFunctionParamTag("name")] string $name,
+    $plain
+) {}
+$params = (new ReflectionFunction("reflect_function_param_attrs"))->getParameters();
+foreach ($params as $param) {
+    $attrs = $param->getAttributes();
+    echo $param->getName() . ":" . count($attrs);
+    if (count($attrs) > 0) {
+        echo ":" . $attrs[0]->getName();
+        echo ":" . $attrs[0]->getArguments()[0];
+    }
+    echo "|";
+}
+$direct = new ReflectionParameter("reflect_function_param_attrs", "name");
+$directAttrs = $direct->getAttributes();
+echo "direct:" . count($directAttrs) . ":" . $directAttrs[0]->getName() . ":" . $directAttrs[0]->getArguments()[0];
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "id:1:ReflectFunctionParamTag:id|name:1:ReflectFunctionParamTag:name|plain:0|direct:1:ReflectFunctionParamTag:name"
+    );
+}
+
 /// Verifies that `ReflectionParameter` exposes supported scalar/null/array defaults.
 #[test]
 fn test_reflection_parameter_exposes_default_values() {

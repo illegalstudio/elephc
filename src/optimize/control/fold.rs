@@ -172,6 +172,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         StmtKind::FunctionDecl {
             name,
             params,
+            param_attributes,
             variadic,
             variadic_type,
             return_type,
@@ -179,6 +180,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         } => StmtKind::FunctionDecl {
             name,
             params: fold_params(params),
+            param_attributes,
             variadic,
             variadic_type,
             return_type,

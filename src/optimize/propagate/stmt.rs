@@ -233,6 +233,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
         StmtKind::FunctionDecl {
             name,
             params,
+            param_attributes,
             variadic,
             variadic_type,
             return_type,
@@ -242,6 +243,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                 StmtKind::FunctionDecl {
                     name,
                     params: propagate_params(params),
+                    param_attributes,
                     variadic,
                     variadic_type,
                     return_type,

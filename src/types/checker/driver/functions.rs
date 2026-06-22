@@ -53,6 +53,7 @@ impl Checker {
             if let StmtKind::FunctionDecl {
                 name,
                 params,
+                param_attributes,
                 variadic,
                 variadic_type,
                 return_type,
@@ -88,6 +89,7 @@ impl Checker {
                     FnDecl {
                         params: param_names,
                         param_types: param_type_anns,
+                        param_attributes: param_attributes.clone(),
                         defaults,
                         ref_params: ref_flags,
                         variadic: variadic.clone(),
@@ -274,7 +276,7 @@ impl Checker {
                 .cloned()
                 .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
                 .collect(),
-            param_attributes: Vec::new(),
+            param_attributes: decl.param_attributes.clone(),
             defaults: decl.defaults,
             return_type: crate::types::PhpType::Int,
             declared_return: decl.return_type.is_some(),

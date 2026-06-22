@@ -169,7 +169,7 @@ impl Checker {
                 .cloned()
                 .chain(decl.variadic.iter().map(|_| decl.variadic_type.clone()))
                 .collect(),
-            param_attributes: Vec::new(),
+            param_attributes: decl.param_attributes.clone(),
             defaults: decl.defaults.clone(),
             return_type: PhpType::Int,
             declared_return: decl.return_type.is_some(),

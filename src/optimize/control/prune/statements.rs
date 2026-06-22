@@ -243,6 +243,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
         StmtKind::FunctionDecl {
             name,
             params,
+            param_attributes,
             variadic,
             variadic_type,
             return_type,
@@ -251,6 +252,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             kind: StmtKind::FunctionDecl {
                 name,
                 params,
+                param_attributes,
                 variadic,
                 variadic_type,
                 return_type,
