@@ -14,6 +14,27 @@
 
 use super::*;
 
+/// Verifies `ReflectionFunction` exposes AOT function name and origin metadata.
+#[test]
+fn test_reflection_function_reports_aot_name_origin_predicates() {
+    let out = compile_and_run(
+        r#"<?php
+namespace ReflectFunctionMetaNs;
+
+function sample(): void {}
+
+$ref = new \ReflectionFunction("ReflectFunctionMetaNs\\sample");
+echo $ref->getName() . ":";
+echo $ref->getShortName() . ":";
+echo $ref->getNamespaceName() . ":";
+echo ($ref->inNamespace() ? "Y" : "N") . ":";
+echo ($ref->isInternal() ? "I" : "i") . ":";
+echo $ref->isUserDefined() ? "U" : "u";
+"#,
+    );
+    assert_eq!(out, "ReflectFunctionMetaNs\\sample:sample:ReflectFunctionMetaNs:Y:i:U");
+}
+
 /// Verifies `ReflectionFunction::invoke()` calls declared AOT functions.
 #[test]
 fn test_reflection_function_invoke_calls_declared_aot_functions() {

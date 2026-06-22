@@ -13,6 +13,29 @@
 
 use super::*;
 
+/// Verifies `ReflectionMethod` exposes AOT method name and origin metadata.
+#[test]
+fn test_reflection_method_reports_aot_name_origin_predicates() {
+    let out = compile_and_run(
+        r#"<?php
+namespace ReflectMethodMetaNs;
+
+class Target {
+    public function run(): void {}
+}
+
+$method = new \ReflectionMethod(Target::class, "run");
+echo $method->getName() . ":";
+echo $method->getShortName() . ":";
+echo $method->getNamespaceName() . ":";
+echo ($method->inNamespace() ? "Y" : "N") . ":";
+echo ($method->isInternal() ? "I" : "i") . ":";
+echo $method->isUserDefined() ? "U" : "u";
+"#,
+    );
+    assert_eq!(out, "run:run::N:i:U");
+}
+
 /// Verifies `ReflectionMethod::invoke()` calls declared AOT instance and static methods.
 #[test]
 fn test_reflection_method_invoke_calls_declared_aot_methods() {

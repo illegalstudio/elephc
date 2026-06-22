@@ -2586,6 +2586,7 @@ fn builtin_reflection_owner_class(
             "getExtension",
         ));
     }
+    add_reflection_function_method_origin_methods(name, &mut properties, &mut methods);
     add_reflection_member_flag_methods(name, &mut properties, &mut methods);
     if matches!(
         name,
@@ -2754,6 +2755,67 @@ fn builtin_reflection_parameter_count_method() -> ClassMethod {
         span: dummy_span,
         attributes: Vec::new(),
     }
+}
+
+/// Adds namespace/name-origin accessors shared by ReflectionFunction and ReflectionMethod.
+fn add_reflection_function_method_origin_methods(
+    class_name: &str,
+    properties: &mut Vec<ClassProperty>,
+    methods: &mut Vec<ClassMethod>,
+) {
+    if !matches!(class_name, "ReflectionFunction" | "ReflectionMethod") {
+        return;
+    }
+    properties.push(builtin_property(
+        "__short_name",
+        Visibility::Private,
+        Some(TypeExpr::Str),
+        empty_string(),
+    ));
+    properties.push(builtin_property(
+        "__namespace_name",
+        Visibility::Private,
+        Some(TypeExpr::Str),
+        empty_string(),
+    ));
+    properties.push(builtin_property(
+        "__in_namespace",
+        Visibility::Private,
+        Some(bool_type()),
+        false_bool(),
+    ));
+    properties.push(builtin_property(
+        "__is_internal",
+        Visibility::Private,
+        Some(bool_type()),
+        false_bool(),
+    ));
+    properties.push(builtin_property(
+        "__is_user_defined",
+        Visibility::Private,
+        Some(bool_type()),
+        false_bool(),
+    ));
+    methods.push(builtin_reflection_class_string_method(
+        "getShortName",
+        "__short_name",
+    ));
+    methods.push(builtin_reflection_class_string_method(
+        "getNamespaceName",
+        "__namespace_name",
+    ));
+    methods.push(builtin_reflection_class_bool_method(
+        "inNamespace",
+        "__in_namespace",
+    ));
+    methods.push(builtin_reflection_class_bool_method(
+        "isInternal",
+        "__is_internal",
+    ));
+    methods.push(builtin_reflection_class_bool_method(
+        "isUserDefined",
+        "__is_user_defined",
+    ));
 }
 
 /// Adds member visibility/staticity predicates for method and property reflection owners.
@@ -3773,6 +3835,18 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("setAccessible")) {
                     sig.return_type = PhpType::Void;
+                }
+            }
+            if matches!(class_name, "ReflectionFunction" | "ReflectionMethod") {
+                for method_name in ["getShortName", "getNamespaceName"] {
+                    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
+                        sig.return_type = PhpType::Str;
+                    }
+                }
+                for method_name in ["inNamespace", "isInternal", "isUserDefined"] {
+                    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
+                        sig.return_type = PhpType::Bool;
+                    }
                 }
             }
             if class_name == "ReflectionProperty" {
