@@ -377,7 +377,7 @@ impl FakeOps {
             (FakeValue::Object(properties), "getposition") if args.is_empty() => {
                 Self::object_property(&properties, "__position").map_or_else(|| self.int(0), Ok)
             }
-            (FakeValue::Object(properties), "gettype") if args.is_empty() => {
+            (FakeValue::Object(properties), "gettype" | "getsettabletype") if args.is_empty() => {
                 Self::object_property(&properties, "__type").map_or_else(|| self.null(), Ok)
             }
             (FakeValue::Object(properties), "gettypes") if args.is_empty() => {

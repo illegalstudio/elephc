@@ -1660,7 +1660,7 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies ReflectionProperty exposes eval property type metadata.
+/// Verifies ReflectionProperty exposes eval property get/set type metadata.
 #[test]
 fn execute_program_reflection_property_get_type_metadata() {
     let program = parse_fragment(
@@ -1697,6 +1697,12 @@ $direct = new ReflectionProperty("EvalReflectPropertyTypeTarget", "dep");
 $directType = $direct->getType();
 echo "direct:"; echo $direct->hasType() ? "T:" : "t:";
 echo $directType->getName();
+$directSettableType = $direct->getSettableType();
+echo ":set:"; echo $directSettableType->getName();
+$plain = new ReflectionProperty("EvalReflectPropertyTypeTarget", "plain");
+echo ":plainSet:"; echo $plain->getSettableType() === null ? "N" : "n";
+$directUnion = new ReflectionProperty("EvalReflectPropertyTypeTarget", "union");
+echo ":unionSet:"; echo count($directUnion->getSettableType()->getTypes());
 return true;"##,
     )
     .expect("parse eval fragment");
@@ -1707,7 +1713,7 @@ return true;"##,
 
     assert_eq!(
         values.output,
-        "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:T:EvalReflectPropertyTypeDep"
+        "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:T:EvalReflectPropertyTypeDep:set:EvalReflectPropertyTypeDep:plainSet:N:unionSet:2"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

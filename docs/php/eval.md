@@ -375,9 +375,12 @@ the retained modifier bitmask, including generated/AOT asymmetric visibility and
 public readonly property metadata. `isInitialized()` tracks eval-backed instance
 and static property storage, including typed properties without defaults, unset
 properties, and virtual property hooks.
-`ReflectionProperty::hasType()` and `getType()` expose retained property type
-metadata through `ReflectionNamedType`, `ReflectionUnionType`, and
-`ReflectionIntersectionType` where eval has retained a supported declared type.
+`ReflectionProperty::hasType()`, `getType()`, and `getSettableType()` expose
+retained property type metadata through `ReflectionNamedType`,
+`ReflectionUnionType`, and `ReflectionIntersectionType` where eval has retained
+a supported declared type. For the supported property surface,
+`getSettableType()` currently returns the same retained type metadata as
+`getType()`.
 `ReflectionProperty::hasDefaultValue()` and `getDefaultValue()` expose
 materialized property default metadata, including PHP's implicit `null` default
 for untyped concrete properties without an explicit initializer.

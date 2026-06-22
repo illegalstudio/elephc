@@ -2235,6 +2235,10 @@ fn add_reflection_member_flag_methods(
         ));
         methods.push(builtin_reflection_property_has_type_method());
         methods.push(builtin_reflection_class_mixed_method("getType", "__type"));
+        methods.push(builtin_reflection_class_mixed_method(
+            "getSettableType",
+            "__type",
+        ));
         methods.push(builtin_reflection_class_bool_method(
             "hasDefaultValue",
             "__has_default_value",
@@ -3075,6 +3079,11 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     .get_mut(&php_symbol_key("getDefaultValue"))
                 {
                     sig.return_type = PhpType::Mixed;
+                }
+                for method_name in ["getType", "getSettableType"] {
+                    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
+                        sig.return_type = PhpType::Mixed;
+                    }
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
                     sig.return_type = PhpType::Int;
