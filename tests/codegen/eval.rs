@@ -846,6 +846,27 @@ eval('echo count($bag); echo ":"; echo count($bag, COUNT_RECURSIVE); echo ":"; e
     assert_eq!(out, "count:5:count:5:count:5");
 }
 
+/// Verifies eval array reads dispatch through `ArrayAccess::offsetGet()` on AOT objects.
+#[test]
+fn test_eval_reads_aot_array_access_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotArrayAccessBox implements ArrayAccess {
+    public function offsetExists(mixed $offset): bool { return true; }
+    public function offsetGet(mixed $offset): mixed {
+        echo "get:" . $offset . ":";
+        return "v" . $offset;
+    }
+    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetUnset(mixed $offset): void {}
+}
+$box = new EvalAotArrayAccessBox();
+eval('echo $box["x"];');
+"#,
+    );
+    assert_eq!(out, "get:x:vx");
+}
+
 /// Verifies eval `json_encode()` serializes scalar, indexed, and associative values.
 #[test]
 fn test_eval_dispatches_json_encode_builtin_call() {

@@ -32,7 +32,7 @@ pub(in crate::interpreter) fn eval_expr(
         EvalExpr::ArrayGet { array, index } => {
             let array = eval_expr(array, context, scope, values)?;
             let index = eval_expr(index, context, scope, values)?;
-            values.array_get(array, index)
+            eval_array_get_result(array, index, context, values)
         }
         EvalExpr::Call { name, args } => eval_call(name, args, context, scope, values),
         EvalExpr::Cast { target, expr } => eval_cast_expr(target, expr, context, scope, values),
@@ -245,6 +245,32 @@ pub(in crate::interpreter) fn eval_expr(
             }
         }
     }
+}
+
+/// Reads an array element or dispatches `ArrayAccess::offsetGet()` for objects.
+pub(in crate::interpreter) fn eval_array_get_result(
+    array: RuntimeCellHandle,
+    index: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if values.type_tag(array)? != EVAL_TAG_OBJECT {
+        return values.array_get(array, index);
+    }
+    if !eval_array_access_object_matches(array, context, values)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_method_call_result(array, "offsetGet", vec![index], context, values)
+}
+
+/// Returns whether an object value satisfies PHP's `ArrayAccess` interface.
+fn eval_array_access_object_matches(
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    dynamic_object_is_a(value, "ArrayAccess", false, context, values)?
+        .map_or_else(|| values.object_is_a(value, "ArrayAccess", false), Ok)
 }
 
 /// Evaluates one PHP scalar cast expression through the runtime conversion hooks.
