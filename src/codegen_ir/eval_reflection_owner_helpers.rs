@@ -889,33 +889,45 @@ fn emit_set_owner_name_property_aarch64(emitter: &mut Emitter, layout: &Reflecti
         emit_set_owner_low_bit_final_property_aarch64(emitter, layout);
         return;
     };
-    let scan_loop_label = "__elephc_eval_reflection_owner_name_scan_loop";
-    let found_label = "__elephc_eval_reflection_owner_name_scan_found";
-    let no_namespace_label = "__elephc_eval_reflection_owner_name_scan_none";
-    let store_parts_label = "__elephc_eval_reflection_owner_name_store_parts";
+    let scan_loop_label = format!(
+        "__elephc_eval_reflection_owner_name_scan_loop_{}",
+        layout.class_id
+    );
+    let found_label = format!(
+        "__elephc_eval_reflection_owner_name_scan_found_{}",
+        layout.class_id
+    );
+    let no_namespace_label = format!(
+        "__elephc_eval_reflection_owner_name_scan_none_{}",
+        layout.class_id
+    );
+    let store_parts_label = format!(
+        "__elephc_eval_reflection_owner_name_store_parts_{}",
+        layout.class_id
+    );
     emitter.instruction("ldr x3, [sp, #8]");                                    // reload the original reflected-name pointer for splitting
     emitter.instruction("ldr x4, [sp, #16]");                                   // reload the original reflected-name length for splitting
     emitter.instruction("mov x5, x4");                                          // start scanning from one byte past the final name byte
     emitter.instruction(&format!("cbz x5, {}", no_namespace_label));            // empty names have no namespace component
-    emitter.label(scan_loop_label);
+    emitter.label(&scan_loop_label);
     emitter.instruction("sub x5, x5, #1");                                      // move the scan cursor to the previous byte
     emitter.instruction("ldrb w6, [x3, x5]");                                   // read one reflected-name byte from the scan cursor
     emitter.instruction("cmp w6, #92");                                         // compare against PHP namespace separator '\\'
     emitter.instruction(&format!("b.eq {}", found_label));                      // split at the final namespace separator
     emitter.instruction(&format!("cbnz x5, {}", scan_loop_label));              // keep scanning until the first byte has been checked
-    emitter.label(no_namespace_label);
+    emitter.label(&no_namespace_label);
     emitter.instruction("str x3, [sp, #56]");                                   // short-name pointer is the original name pointer
     emitter.instruction("str x4, [sp, #64]");                                   // short-name length is the full name length
     emitter.instruction("str xzr, [sp, #72]");                                  // namespace length is zero for global names
     emitter.instruction(&format!("b {}", store_parts_label));                   // skip the namespaced split path
-    emitter.label(found_label);
+    emitter.label(&found_label);
     emitter.instruction("add x6, x5, #1");                                      // compute the short-name byte offset after the separator
     emitter.instruction("add x7, x3, x6");                                      // compute the short-name pointer
     emitter.instruction("sub x8, x4, x6");                                      // compute the short-name length
     emitter.instruction("str x7, [sp, #56]");                                   // save the short-name pointer across persistence calls
     emitter.instruction("str x8, [sp, #64]");                                   // save the short-name length across persistence calls
     emitter.instruction("str x5, [sp, #72]");                                   // namespace length is the separator offset
-    emitter.label(store_parts_label);
+    emitter.label(&store_parts_label);
     emitter.instruction("ldr x1, [sp, #8]");                                    // use the original name pointer for namespace persistence
     emitter.instruction("ldr x2, [sp, #72]");                                   // reload the namespace byte length
     emitter.instruction("bl __rt_str_persist");                                 // copy the namespace bytes for ReflectionClass storage
@@ -966,28 +978,40 @@ fn emit_set_owner_name_property_x86_64(emitter: &mut Emitter, layout: &Reflectio
     else {
         return;
     };
-    let scan_loop_label = "__elephc_eval_reflection_owner_name_scan_loop_x";
-    let found_label = "__elephc_eval_reflection_owner_name_scan_found_x";
-    let no_namespace_label = "__elephc_eval_reflection_owner_name_scan_none_x";
-    let store_parts_label = "__elephc_eval_reflection_owner_name_store_parts_x";
+    let scan_loop_label = format!(
+        "__elephc_eval_reflection_owner_name_scan_loop_{}_x",
+        layout.class_id
+    );
+    let found_label = format!(
+        "__elephc_eval_reflection_owner_name_scan_found_{}_x",
+        layout.class_id
+    );
+    let no_namespace_label = format!(
+        "__elephc_eval_reflection_owner_name_scan_none_{}_x",
+        layout.class_id
+    );
+    let store_parts_label = format!(
+        "__elephc_eval_reflection_owner_name_store_parts_{}_x",
+        layout.class_id
+    );
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the original reflected-name pointer for splitting
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the original reflected-name length for splitting
     emitter.instruction("mov r11, r9");                                         // start scanning from one byte past the final name byte
     emitter.instruction("test r11, r11");                                       // check whether the reflected name is empty
     emitter.instruction(&format!("jz {}", no_namespace_label));                 // empty names have no namespace component
-    emitter.label(scan_loop_label);
+    emitter.label(&scan_loop_label);
     emitter.instruction("sub r11, 1");                                          // move the scan cursor to the previous byte
     emitter.instruction("movzx eax, BYTE PTR [r8 + r11]");                      // read one reflected-name byte from the scan cursor
     emitter.instruction("cmp eax, 92");                                         // compare against PHP namespace separator '\\'
     emitter.instruction(&format!("je {}", found_label));                        // split at the final namespace separator
     emitter.instruction("test r11, r11");                                       // check whether the first byte has been examined
     emitter.instruction(&format!("jnz {}", scan_loop_label));                   // keep scanning until the first byte has been checked
-    emitter.label(no_namespace_label);
+    emitter.label(&no_namespace_label);
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // short-name pointer is the original name pointer
     emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // short-name length is the full name length
     emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // namespace length is zero for global names
     emitter.instruction(&format!("jmp {}", store_parts_label));                 // skip the namespaced split path
-    emitter.label(found_label);
+    emitter.label(&found_label);
     emitter.instruction("lea rax, [r11 + 1]");                                  // compute the short-name byte offset after the separator
     emitter.instruction("lea r10, [r8 + rax]");                                 // compute the short-name pointer
     emitter.instruction("mov rcx, r9");                                         // copy the full name length before subtracting the prefix
@@ -995,7 +1019,7 @@ fn emit_set_owner_name_property_x86_64(emitter: &mut Emitter, layout: &Reflectio
     emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // save the short-name pointer across persistence calls
     emitter.instruction("mov QWORD PTR [rbp - 72], rcx");                       // save the short-name length across persistence calls
     emitter.instruction("mov QWORD PTR [rbp - 80], r11");                       // namespace length is the separator offset
-    emitter.label(store_parts_label);
+    emitter.label(&store_parts_label);
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // use the original name pointer for namespace persistence
     emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // reload the namespace byte length
     emitter.instruction("call __rt_str_persist");                               // copy the namespace bytes for ReflectionClass storage
