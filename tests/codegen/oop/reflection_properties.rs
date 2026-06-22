@@ -7,7 +7,8 @@
 //!
 //! Key details:
 //! - Covers explicit object arguments for public instance properties.
-//! - Static properties and visibility-bypassing reflection access remain separate surfaces.
+//! - Covers static properties where PHP permits no object argument.
+//! - Visibility-bypassing reflection access remains a separate surface.
 
 use super::*;
 
@@ -39,4 +40,30 @@ echo ":" . $target->count;
 "#,
     );
     assert_eq!(out, "1:7:old:new:7:11:11:13");
+}
+
+/// Verifies `ReflectionProperty::getValue()` and `setValue()` read and write
+/// public static properties for inline reflectors.
+#[test]
+fn test_reflection_property_value_accessors_for_public_static_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectStaticValueAccessTarget {
+    public static int $count = 2;
+    public static string $label = "old";
+}
+
+echo (new ReflectionProperty(ReflectStaticValueAccessTarget::class, "count"))->getValue();
+(new ReflectionProperty(ReflectStaticValueAccessTarget::class, "count"))->setValue(null, 17);
+echo ":" . ReflectStaticValueAccessTarget::$count;
+ReflectStaticValueAccessTarget::$count = 19;
+echo ":" . (new ReflectionProperty(ReflectStaticValueAccessTarget::class, "count"))->getValue(object: null);
+echo ":" . (new ReflectionClass(ReflectStaticValueAccessTarget::class))->getProperty("label")->getValue(null);
+(new ReflectionClass(ReflectStaticValueAccessTarget::class))->getProperty("label")->setValue(null, "new");
+echo ":" . ReflectStaticValueAccessTarget::$label;
+(new ReflectionClass(ReflectStaticValueAccessTarget::class))->getProperty("count")->setValue(object: null, value: 23);
+echo ":" . ReflectStaticValueAccessTarget::$count;
+"#,
+    );
+    assert_eq!(out, "2:17:19:old:new:23");
 }

@@ -9153,10 +9153,39 @@ fn lower_reflection_property_value_call(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let (_, property, _) = reflection_property_instance_target(ctx, object_expr?)?;
+    let object_expr = object_expr?;
     match php_symbol_key(method).as_str() {
-        "getvalue" => lower_reflection_property_get_value(ctx, &property, args, expr),
-        "setvalue" => lower_reflection_property_set_value(ctx, &property, args, expr),
+        "getvalue" => {
+            if let Some((declaring_class, property, property_ty)) =
+                reflection_property_static_target(ctx, object_expr)
+            {
+                return lower_reflection_property_get_static_value(
+                    ctx,
+                    &declaring_class,
+                    &property,
+                    property_ty,
+                    args,
+                    expr,
+                );
+            }
+            let (_, property, _) = reflection_property_instance_target(ctx, object_expr)?;
+            lower_reflection_property_get_value(ctx, &property, args, expr)
+        }
+        "setvalue" => {
+            if let Some((declaring_class, property, _)) =
+                reflection_property_static_target(ctx, object_expr)
+            {
+                return lower_reflection_property_set_static_value(
+                    ctx,
+                    &declaring_class,
+                    &property,
+                    args,
+                    expr,
+                );
+            }
+            let (_, property, _) = reflection_property_instance_target(ctx, object_expr)?;
+            lower_reflection_property_set_value(ctx, &property, args, expr)
+        }
         _ => None,
     }
 }
@@ -9198,14 +9227,65 @@ fn lower_reflection_property_set_value(
     Some(lower_null(ctx, expr))
 }
 
+/// Lowers static `ReflectionProperty::getValue()` to a direct static-property read.
+fn lower_reflection_property_get_static_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    declaring_class: &str,
+    property: &str,
+    property_ty: PhpType,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if let Some(ignored_object) = reflection_property_static_get_value_ignored_arg(args)? {
+        lower_ignored_reflection_argument(ctx, &ignored_object);
+    }
+    Some(lower_static_property_get_by_class_name(
+        ctx,
+        declaring_class,
+        property,
+        property_ty,
+        expr,
+    ))
+}
+
+/// Lowers static `ReflectionProperty::setValue(null, $value)` to a static-property write.
+fn lower_reflection_property_set_static_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    declaring_class: &str,
+    property: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let (ignored_object, value_arg) = reflection_property_static_set_value_args(args)?;
+    lower_ignored_reflection_argument(ctx, &ignored_object);
+    let value = lower_expr(ctx, &value_arg);
+    store_static_property_by_class_name(ctx, declaring_class, property, value.value, expr.span);
+    Some(lower_null(ctx, expr))
+}
+
+/// Evaluates an ignored Reflection argument and releases temporary objects.
+fn lower_ignored_reflection_argument(ctx: &mut LoweringContext<'_, '_>, arg: &Expr) {
+    let value = lower_expr(ctx, arg);
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(arg.span));
+    }
+}
+
 /// Returns the explicit object argument passed to `ReflectionProperty::getValue()`.
 fn reflection_property_get_value_arg(args: &[Expr]) -> Option<Expr> {
     let args = reflection_class_new_instance_args(args);
     if args.iter().any(is_spread_arg) {
         return None;
     }
-    let (object, _) = reflection_class_static_property_regular_args(&args, "object", None)?;
-    object
+    let object = if !crate::types::call_args::has_named_args(&args) {
+        match args.as_slice() {
+            [object] => object.clone(),
+            _ => return None,
+        }
+    } else {
+        reflection_property_named_object_arg(&args)?
+    };
+    (!matches!(&object.kind, ExprKind::Null)).then_some(object)
 }
 
 /// Returns the explicit object and value arguments passed to `ReflectionProperty::setValue()`.
@@ -9216,7 +9296,57 @@ fn reflection_property_set_value_args(args: &[Expr]) -> Option<(Expr, Expr)> {
     }
     let (object, value) =
         reflection_class_static_property_regular_args(&args, "object", Some("value"))?;
+    let object = object?;
+    if matches!(&object.kind, ExprKind::Null) {
+        return None;
+    }
+    Some((object, value?))
+}
+
+/// Returns the optional ignored object argument for static `ReflectionProperty::getValue()`.
+fn reflection_property_static_get_value_ignored_arg(args: &[Expr]) -> Option<Option<Expr>> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    if !crate::types::call_args::has_named_args(&args) {
+        return match args.as_slice() {
+            [] => Some(None),
+            [object] => Some(Some(object.clone())),
+            _ => None,
+        };
+    }
+    reflection_property_named_optional_object_arg(&args)
+}
+
+/// Returns the ignored object and value arguments for static `ReflectionProperty::setValue()`.
+fn reflection_property_static_set_value_args(args: &[Expr]) -> Option<(Expr, Expr)> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    let (object, value) =
+        reflection_class_static_property_regular_args(&args, "object", Some("value"))?;
     Some((object?, value?))
+}
+
+/// Returns a required named `object` argument for ReflectionProperty value access.
+fn reflection_property_named_object_arg(args: &[Expr]) -> Option<Expr> {
+    reflection_property_named_optional_object_arg(args)?
+}
+
+/// Returns an optional named `object` argument for ReflectionProperty value access.
+fn reflection_property_named_optional_object_arg(args: &[Expr]) -> Option<Option<Expr>> {
+    let mut object = None;
+    for arg in args {
+        match &arg.kind {
+            ExprKind::NamedArg { name, value } if php_symbol_key(name) == "object" => {
+                object = Some((**value).clone());
+            }
+            _ => return None,
+        }
+    }
+    Some(object)
 }
 
 /// Resolves an inline `new ReflectionProperty(Known::class, "prop")` instance property target.
@@ -9242,6 +9372,21 @@ fn reflection_property_instance_target(
         property,
         normalize_value_php_type(property_ty.codegen_repr()),
     ))
+}
+
+/// Resolves an inline `ReflectionProperty` target for a public static property.
+fn reflection_property_static_target(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<(String, String, PhpType)> {
+    let (class_name, property) = reflection_property_reflected_target(ctx, object_expr)?;
+    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    if class_info.static_property_visibilities.get(&property) != Some(&Visibility::Public) {
+        return None;
+    }
+    let (declaring_class, property_ty) =
+        reflection_class_static_property_target(ctx, &class_name, &property)?;
+    Some((declaring_class, property, property_ty))
 }
 
 /// Extracts the known class and property name from a supported ReflectionProperty source.
