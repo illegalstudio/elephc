@@ -1486,6 +1486,8 @@ fn lower_assignment_expr(
     };
     let static_callable = assigned_name.and_then(|_| static_callable_binding_for_expr(ctx, value));
     let reflected_class = assigned_name.and_then(|_| reflection_class_binding_for_expr(ctx, value));
+    let reflected_function =
+        assigned_name.and_then(|_| reflection_function_binding_for_expr(ctx, value));
     let reflected_property =
         assigned_name.and_then(|_| reflection_property_binding_for_expr(ctx, value));
     let reflected_method =
@@ -1512,6 +1514,9 @@ fn lower_assignment_expr(
         }
         if let Some(reflected_class) = reflected_class {
             ctx.bind_reflection_class_local(name, reflected_class);
+        }
+        if let Some(reflected_function) = reflected_function {
+            ctx.bind_reflection_function_local(name, reflected_function);
         }
         if let Some((reflected_class, reflected_property)) = reflected_property {
             ctx.bind_reflection_property_local(name, reflected_class, reflected_property);
@@ -3254,6 +3259,14 @@ pub(crate) fn reflection_class_binding_for_expr(
     expr: &Expr,
 ) -> Option<String> {
     reflection_class_new_instance_reflected_class(ctx, expr)
+}
+
+/// Returns the reflected function captured by a statically-known `ReflectionFunction` expression.
+pub(crate) fn reflection_function_binding_for_expr(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> Option<String> {
+    reflection_function_reflected_target(ctx, expr)
 }
 
 /// Returns the reflected property captured by a statically-known `ReflectionProperty` expression.
@@ -8970,6 +8983,15 @@ fn lower_method_call(
         return null_value;
     }
     if op == Op::MethodCall {
+        if let Some(value) = lower_reflection_function_invoke_call(
+            ctx,
+            Some(object_expr),
+            method,
+            args,
+            expr,
+        ) {
+            return value;
+        }
         if let Some(value) = lower_reflection_method_invoke_call(
             ctx,
             Some(object_expr),
@@ -9345,6 +9367,117 @@ fn reflection_member_constructor_expr(
         },
         span,
     )
+}
+
+/// Lowers reflected function invocation for statically-known `ReflectionFunction` objects.
+fn lower_reflection_function_invoke_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let method_key = php_symbol_key(method);
+    let object_expr = object_expr?;
+    let function_name = reflection_function_reflected_target(ctx, object_expr)?;
+    let Some(forwarded_args) = (match method_key.as_str() {
+        "invoke" => Some(reflection_function_invoke_args(args)),
+        "invokeargs" => reflection_function_invoke_args_array(ctx, args),
+        _ => return None,
+    }) else {
+        return Some(lower_reflection_function_invoke_unsupported(
+            ctx,
+            &method_key,
+            expr,
+        ));
+    };
+    if !reflection_function_target_has_declared_params(ctx, &function_name) {
+        return Some(lower_reflection_function_invoke_unsupported(
+            ctx,
+            &method_key,
+            expr,
+        ));
+    }
+    let name = Name::from(function_name);
+    Some(lower_function_call(ctx, &name, &forwarded_args, expr))
+}
+
+/// Returns direct `ReflectionFunction::invoke(...$args)` arguments after static spread expansion.
+fn reflection_function_invoke_args(args: &[Expr]) -> Vec<Expr> {
+    reflection_class_new_instance_args(args)
+}
+
+/// Extracts the argument list passed to `ReflectionFunction::invokeArgs($args)`.
+fn reflection_function_invoke_args_array(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Vec<Expr>> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    if !crate::types::call_args::has_named_args(&args) {
+        return match args.as_slice() {
+            [forwarded] => reflection_class_new_instance_args_value(ctx, forwarded),
+            _ => None,
+        };
+    }
+    let sig = ctx
+        .classes
+        .get("ReflectionFunction")
+        .and_then(|class_info| class_info.methods.get(&php_symbol_key("invokeArgs")))?;
+    let call_span = args
+        .first()
+        .map(|arg| arg.span)
+        .unwrap_or_else(crate::span::Span::dummy);
+    let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+        sig,
+        &args,
+        call_span,
+        crate::types::call_args::regular_param_count(sig),
+        false,
+        true,
+        &assoc_spread_sources(ctx, &args),
+    )
+    .ok()?;
+    if plan.has_spread_args() {
+        return None;
+    }
+    let forwarded_arg = planned_regular_arg_expr(plan.regular_args.first()?)?;
+    reflection_class_new_instance_args_value(ctx, forwarded_arg)
+}
+
+/// Returns true when reflected invocation can trust the target function's parameter types.
+fn reflection_function_target_has_declared_params(
+    ctx: &LoweringContext<'_, '_>,
+    function_name: &str,
+) -> bool {
+    ctx.functions.get(function_name).is_some_and(|signature| {
+        signature
+            .declared_params
+            .iter()
+            .all(|is_declared| *is_declared)
+    })
+}
+
+/// Emits a runtime fatal for ReflectionFunction invocation forms not yet lowered.
+fn lower_reflection_function_invoke_unsupported(
+    ctx: &mut LoweringContext<'_, '_>,
+    method_key: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let result = lower_boxed_null(ctx, expr);
+    let method_name = if method_key == "invokeargs" {
+        "invokeArgs"
+    } else {
+        "invoke"
+    };
+    let message = ctx.intern_string(&format!(
+        "Fatal error: unsupported ReflectionFunction::{}() target or argument forwarding\n",
+        method_name
+    ));
+    ctx.builder.terminate(Terminator::Fatal { message });
+    result
 }
 
 /// Lowers reflected method invocation for statically-known `ReflectionMethod` objects.
@@ -9951,6 +10084,19 @@ fn reflection_method_reflected_target(
         })
 }
 
+/// Extracts the known function name from a supported ReflectionFunction source.
+fn reflection_function_reflected_target(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<String> {
+    reflection_function_constructor_target(ctx, object_expr).or_else(|| {
+        let ExprKind::Variable(name) = &object_expr.kind else {
+            return None;
+        };
+        ctx.reflection_function_local(name)
+    })
+}
+
 /// Extracts a known ReflectionMethod from `ReflectionClass::getMethods()[N]`.
 fn reflection_method_class_get_methods_index_target(
     ctx: &LoweringContext<'_, '_>,
@@ -10340,6 +10486,24 @@ fn reflection_property_filter_modifier_bits(
     modifiers
 }
 
+/// Extracts the known function name from an inline ReflectionFunction constructor.
+fn reflection_function_constructor_target(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<String> {
+    let ExprKind::NewObject { class_name, args } = &object_expr.kind else {
+        return None;
+    };
+    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) != "reflectionfunction" {
+        return None;
+    }
+    let function_arg = reflection_function_constructor_regular_arg(ctx, args)?;
+    let ExprKind::StringLiteral(function_name) = function_arg.kind else {
+        return None;
+    };
+    resolve_known_function_name(ctx, &function_name)
+}
+
 /// Extracts the known class and property name from an inline ReflectionProperty constructor.
 fn reflection_property_constructor_target(
     ctx: &LoweringContext<'_, '_>,
@@ -10464,6 +10628,45 @@ fn reflection_class_member_name_arg(args: &[Expr]) -> Option<String> {
     }
     let (name, _) = reflection_class_static_property_regular_args(&args, "name", None)?;
     reflection_class_static_property_name_arg(name.as_ref()?)
+}
+
+/// Returns normalized constructor args for `ReflectionFunction($function)`.
+fn reflection_function_constructor_regular_arg(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Expr> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    if !crate::types::call_args::has_named_args(&args) {
+        return match args.as_slice() {
+            [function_arg] => Some(function_arg.clone()),
+            _ => None,
+        };
+    }
+    let sig = ctx
+        .classes
+        .get("ReflectionFunction")
+        .and_then(|class_info| class_info.methods.get("__construct"))?;
+    let call_span = args
+        .first()
+        .map(|arg| arg.span)
+        .unwrap_or_else(crate::span::Span::dummy);
+    let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+        sig,
+        &args,
+        call_span,
+        crate::types::call_args::regular_param_count(sig),
+        false,
+        true,
+        &assoc_spread_sources(ctx, &args),
+    )
+    .ok()?;
+    if plan.has_spread_args() {
+        return None;
+    }
+    planned_regular_arg_expr(plan.regular_args.first()?).cloned()
 }
 
 /// Returns normalized constructor args for `ReflectionProperty($class, $property)`.
@@ -11058,6 +11261,15 @@ fn reflection_class_constructor_class_arg(
 fn resolve_known_class_name(ctx: &LoweringContext<'_, '_>, class_name: &str) -> Option<String> {
     let key = php_symbol_key(class_name.trim_start_matches('\\'));
     ctx.classes
+        .keys()
+        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .cloned()
+}
+
+/// Resolves a PHP function name case-insensitively against known user functions.
+fn resolve_known_function_name(ctx: &LoweringContext<'_, '_>, function_name: &str) -> Option<String> {
+    let key = php_symbol_key(function_name.trim_start_matches('\\'));
+    ctx.functions
         .keys()
         .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
         .cloned()

@@ -110,6 +110,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub finally_stack: Vec<FinallyFrame>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     reflection_class_locals: HashMap<String, String>,
+    reflection_function_locals: HashMap<String, String>,
     reflection_property_locals: HashMap<String, (String, String)>,
     reflection_method_locals: HashMap<String, (String, String)>,
     reflection_arg_array_locals: HashMap<String, Vec<Expr>>,
@@ -175,6 +176,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             finally_stack: Vec::new(),
             static_callable_locals: HashMap::new(),
             reflection_class_locals: HashMap::new(),
+            reflection_function_locals: HashMap::new(),
             reflection_property_locals: HashMap::new(),
             reflection_method_locals: HashMap::new(),
             reflection_arg_array_locals: HashMap::new(),
@@ -581,6 +583,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn store_local(&mut self, name: &str, value: LoweredValue, php_type: PhpType, span: Option<Span>) -> LoweredValue {
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
+        self.clear_reflection_function_local(name);
         self.clear_reflection_property_local(name);
         self.clear_reflection_method_local(name);
         self.clear_reflection_arg_array_local(name);
@@ -720,6 +723,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ) -> LoweredValue {
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
+        self.clear_reflection_function_local(name);
         self.clear_reflection_property_local(name);
         self.clear_reflection_method_local(name);
         self.clear_reflection_arg_array_local(name);
@@ -755,6 +759,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
+        self.clear_reflection_function_local(name);
         self.clear_reflection_property_local(name);
         self.clear_reflection_method_local(name);
         self.clear_reflection_arg_array_local(name);
@@ -808,6 +813,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         self.clear_static_callable_local(target);
         self.clear_reflection_class_local(target);
+        self.clear_reflection_function_local(target);
         self.clear_reflection_property_local(target);
         self.clear_reflection_method_local(target);
         self.clear_reflection_arg_array_local(target);
@@ -988,6 +994,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reflection_class_locals.get(name).cloned()
     }
 
+    /// Records that a PHP local currently holds a statically-known `ReflectionFunction`.
+    pub(crate) fn bind_reflection_function_local(
+        &mut self,
+        name: &str,
+        reflected_function: String,
+    ) {
+        if self.can_track_static_callable_local(name) {
+            self.reflection_function_locals
+                .insert(name.to_string(), reflected_function);
+        }
+    }
+
+    /// Returns the reflected function associated with a local `ReflectionFunction`.
+    pub(crate) fn reflection_function_local(&self, name: &str) -> Option<String> {
+        self.reflection_function_locals.get(name).cloned()
+    }
+
     /// Records that a PHP local currently holds a statically-known `ReflectionProperty` object.
     pub(crate) fn bind_reflection_property_local(
         &mut self,
@@ -1070,6 +1093,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reflection_class_locals.remove(name);
     }
 
+    /// Clears the compile-time `ReflectionFunction` association for one local.
+    pub(crate) fn clear_reflection_function_local(&mut self, name: &str) {
+        self.reflection_function_locals.remove(name);
+    }
+
     /// Clears the compile-time `ReflectionProperty` association for one local.
     pub(crate) fn clear_reflection_property_local(&mut self, name: &str) {
         self.reflection_property_locals.remove(name);
@@ -1094,6 +1122,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn clear_static_callable_locals(&mut self) {
         self.static_callable_locals.clear();
         self.reflection_class_locals.clear();
+        self.reflection_function_locals.clear();
         self.reflection_property_locals.clear();
         self.reflection_method_locals.clear();
         self.reflection_arg_array_locals.clear();
