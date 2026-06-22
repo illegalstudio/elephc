@@ -1123,6 +1123,34 @@ answer `false`/`None`. The internal idom table is self-rooted at the entry so th
 intersect and dominance walks terminate without special cases. The analysis uses
 the shared `cfg::predecessors` helper.
 
+## Loop Analysis
+
+`src/ir_passes/loops.rs` is a read-only sidecar analysis that builds the
+function's natural-loop forest on top of the dominator tree, the foundation for
+loop-invariant code motion and other loop optimizations.
+
+`compute_loops(func, &dominance)` first finds **back edges** — CFG edges
+`latch -> header` whose target dominates their source — so loop detection is a
+thin layer over dominance. Back edges sharing one header form a single
+[`NaturalLoop`] with multiple latches. The loop body is the header plus every
+block that can reach a latch without passing through the header, found by a
+backward walk over reachable predecessors that stops at the header.
+
+Each `NaturalLoop` exposes its `header`, `latches`, sorted `blocks` (with a
+binary-search `contains`), `parent` and `depth` in the nesting forest, and its
+`preheader`. **Nesting** is by block-set containment: loop `A` is nested in `B`
+when `A`'s header lies in `B`'s body, and the immediate parent is the smallest
+such `B`; the lowerer emits reducible CFGs, so loops are properly nested or
+disjoint. `LoopInfo` additionally answers `innermost_loop`, `loop_depth`,
+`is_loop_header`, and `back_edges` per block/function.
+
+A **preheader** is detected as the unique reachable out-of-loop predecessor of
+the header whose only successor is the header. PHP loops lower to slot-based CFGs
+(the loop variable lives in a local slot, not a block parameter), so the init
+block that branches into the header is a natural preheader; when entry into the
+loop is shared between blocks or conditional, no preheader exists and an
+optimization that needs one inserts it.
+
 ## AST Lowering Catalogue
 
 Lowering must cover every variant in `src/parser/ast/expr.rs` and

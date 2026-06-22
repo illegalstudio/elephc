@@ -128,9 +128,9 @@ PHP source (.php)
 │             │  Fixed-point optimization pass driver (identity folding,
 │             │  peephole rewrites, constant folding, common-subexpression
 │             │  elimination, dead-instruction elimination, dead-store
-│             │  elimination, branch simplification) plus dominance analysis
-│             │  and linear-scan register allocation (liveness, intervals,
-│             │  pools) before codegen.
+│             │  elimination, branch simplification) plus dominance and loop
+│             │  analysis and linear-scan register allocation (liveness,
+│             │  intervals, pools) before codegen.
 └──────┬──────┘
        │
        ▼
@@ -187,7 +187,7 @@ src/
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
 ├── ir_lower/                  Active checked-AST to EIR lowering
-├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, constant folding, common-subexpression elimination, dead-instruction elimination, dead-store elimination, branch simplification, dominance analysis, and linear-scan register allocation
+├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, constant folding, common-subexpression elimination, dead-instruction elimination, dead-store elimination, branch simplification, dominance analysis, loop analysis, and linear-scan register allocation
 ├── codegen_ir/                Active EIR to target assembly backend
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
