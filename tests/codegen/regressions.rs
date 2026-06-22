@@ -27,3 +27,7 @@ mod concat_buffer_args;
 mod param_inference;
 #[path = "regressions/mixed_method_dispatch.rs"]
 mod mixed_method_dispatch;
+#[path = "regressions/switch_and_float_params.rs"]
+mod switch_and_float_params;
+#[path = "regressions/return_this_ownership.rs"]
+mod return_this_ownership;

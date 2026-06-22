@@ -139,12 +139,21 @@ pub(super) fn dce_try_stmt_with_tail(
     let reachability = analyze_try_tail_paths(&try_body, &catches, &finally_body);
 
     if finally_body.is_none() {
-        if matches!(reachability.try_tail_path, TailPathKind::FallsThrough)
-            || reachability
-                .catch_tail_paths
-                .iter()
-                .any(|path| matches!(path, TailPathKind::FallsThrough))
-        {
+        let try_falls_through = matches!(reachability.try_tail_path, TailPathKind::FallsThrough);
+        let catch_fallthrough_count = reachability
+            .catch_tail_paths
+            .iter()
+            .filter(|path| matches!(path, TailPathKind::FallsThrough))
+            .count();
+        let fallthrough_paths = usize::from(try_falls_through) + catch_fallthrough_count;
+        // Sink the tail into the try/catch fall-through paths only when exactly one path
+        // falls through. Sinking clones the tail into every fall-through path, so when
+        // multiple paths fall through (for example an empty catch body alongside a
+        // fall-through try body) the cloning compounds exponentially for sequential
+        // try/catches whose tails themselves contain try/catches. With multiple
+        // fall-through paths the tail is kept as a sibling after the try instead, which
+        // the EIR lowering lowers into a single shared after-block (one copy, linear).
+        if fallthrough_paths == 1 {
             let try_body = append_tail_to_fallthrough_path(try_body, tail.clone());
             let catches = catches
                 .into_iter()

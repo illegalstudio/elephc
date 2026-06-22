@@ -93,7 +93,8 @@ pub(super) fn lower_strict_eq(
             emit_intish_compare(ctx, lhs, rhs, is_equal, false)?;
         }
         PhpType::Float => {
-            emit_float_compare(ctx, lhs, rhs, is_equal)?;
+            // Reached only when both operands are float (mismatched types returned above).
+            emit_float_compare(ctx, lhs, &PhpType::Float, rhs, &PhpType::Float, is_equal)?;
         }
         PhpType::Str => {
             emit_string_eq_call(ctx, lhs, rhs, is_equal, "__rt_str_eq")?;
@@ -247,8 +248,8 @@ pub(super) fn lower_loose_eq(
         emit_null_string_loose_eq(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
     } else if string_numeric_comparable(&lhs_ty, &rhs_ty) {
         emit_numeric_string_loose_eq(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
-    } else if lhs_ty == PhpType::Float && rhs_ty == PhpType::Float {
-        emit_float_compare(ctx, lhs, rhs, is_equal)?;
+    } else if float_numeric_comparable(&lhs_ty, &rhs_ty) {
+        emit_float_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
     } else if loose_intish_comparable(&lhs_ty, &rhs_ty) {
         let compare_truthiness = lhs_ty == PhpType::Bool || rhs_ty == PhpType::Bool;
         emit_intish_compare(ctx, lhs, rhs, is_equal, compare_truthiness)?;
@@ -281,6 +282,16 @@ fn string_null_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
 fn string_numeric_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
     matches!((lhs_ty, rhs_ty), (PhpType::Int | PhpType::Float, PhpType::Str))
         || matches!((lhs_ty, rhs_ty), (PhpType::Str, PhpType::Int | PhpType::Float))
+}
+
+/// Returns true when loose equality compares two numeric operands with at least
+/// one float (`1.5 == 1`): both sides are promoted to float and compared
+/// numerically, matching PHP (`1.0 == 1` is true, `1.5 == 1` is false). Bool is
+/// excluded because PHP compares a bool operand by truthiness, and string/mixed
+/// operands are handled by their own branches above.
+fn float_numeric_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
+    let numeric = |ty: &PhpType| matches!(ty, PhpType::Int | PhpType::Float);
+    (*lhs_ty == PhpType::Float || *rhs_ty == PhpType::Float) && numeric(lhs_ty) && numeric(rhs_ty)
 }
 
 /// Emits loose equality for bool/string operands using PHP truthiness rules.
@@ -787,19 +798,23 @@ fn emit_reg_nonzero_bool(ctx: &mut FunctionContext<'_>, reg: &str) {
 }
 
 /// Emits a floating-point equality comparison into the integer result register.
+///
+/// Each operand is promoted to a float register through [`load_numeric_to_float_reg`],
+/// so a mixed int/float pair (`1.5 == 1`) compares numerically. Both operands are
+/// `int`/`float` (see [`float_numeric_comparable`]), which take no runtime call, so
+/// loading the right operand cannot clobber the left float register.
 fn emit_float_compare(
     ctx: &mut FunctionContext<'_>,
     lhs: ValueId,
+    lhs_ty: &PhpType,
     rhs: ValueId,
+    rhs_ty: &PhpType,
     is_equal: bool,
 ) -> Result<()> {
-    let lhs_reg = match ctx.emitter.target.arch {
-        Arch::AArch64 => "d1",
-        Arch::X86_64 => "xmm1",
-    };
+    let lhs_reg = secondary_float_reg(ctx.emitter.target.arch);
     let rhs_reg = abi::float_result_reg(ctx.emitter);
-    ctx.load_value_to_reg(lhs, lhs_reg)?;
-    ctx.load_value_to_reg(rhs, rhs_reg)?;
+    load_numeric_to_float_reg(ctx, lhs, lhs_ty, lhs_reg)?;
+    load_numeric_to_float_reg(ctx, rhs, rhs_ty, rhs_reg)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("fcmp d1, d0");                             // compare strict float equality operands

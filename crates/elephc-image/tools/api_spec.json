@@ -1,0 +1,10168 @@
+{
+ "Imagick": [
+  {
+   "name": "adaptiveBlurImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "adaptiveResizeImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "columns",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "rows",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "bestfit",
+     "byref": false,
+     "default": "false"
+    },
+    {
+     "type": "bool",
+     "name": "legacy",
+     "byref": false,
+     "default": "false"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "adaptiveSharpenImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "adaptiveThresholdImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "offset",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "addImage",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "source",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "addNoiseImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "noise_type",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "affineTransformImage",
+   "static": false,
+   "params": [
+    {
+     "type": "ImagickDraw",
+     "name": "matrix",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "animateImages",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "x_server",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "annotateImage",
+   "static": false,
+   "params": [
+    {
+     "type": "ImagickDraw",
+     "name": "draw_settings",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "angle",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "text",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "appendImages",
+   "static": false,
+   "params": [
+    {
+     "type": "bool",
+     "name": "stack",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Imagick"
+  },
+  {
+   "name": "autoLevelImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "averageImages",
+   "static": false,
+   "params": [],
+   "ret": "Imagick"
+  },
+  {
+   "name": "blackThresholdImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "threshold",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "blueShiftImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "factor",
+     "byref": false,
+     "default": "1.5"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "blurImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "borderImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "bordercolor",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "brightnessContrastImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "brightness",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "contrast",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "charcoalImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "chopImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "clampImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "clear",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "clipImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "clipImagePath",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "pathname",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "inside",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "void"
+  },
+  {
+   "name": "clipPathImage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "pathname",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "inside",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "clone",
+   "static": false,
+   "params": [],
+   "ret": "Imagick"
+  },
+  {
+   "name": "clutImage",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "lookup_table",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "coalesceImages",
+   "static": false,
+   "params": [],
+   "ret": "Imagick"
+  },
+  {
+   "name": "colorFloodfillImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "fill",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "fuzz",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "mixed",
+     "name": "bordercolor",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "colorizeImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "colorize",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "mixed",
+     "name": "opacity",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "legacy",
+     "byref": false,
+     "default": "false"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "colorMatrixImage",
+   "static": false,
+   "params": [
+    {
+     "type": "array",
+     "name": "color_matrix",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "combineImages",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channelType",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Imagick"
+  },
+  {
+   "name": "commentImage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "comment",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "compareImageChannels",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "image",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channelType",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "metricType",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "compareImageLayers",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "method",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Imagick"
+  },
+  {
+   "name": "compareImages",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "compare",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "metric",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "compositeImage",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "composite_object",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "composite",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "contrastImage",
+   "static": false,
+   "params": [
+    {
+     "type": "bool",
+     "name": "sharpen",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "contrastStretchImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "black_point",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "white_point",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "convolveImage",
+   "static": false,
+   "params": [
+    {
+     "type": "array",
+     "name": "kernel",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "count",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "mode",
+     "byref": false,
+     "default": "0"
+    }
+   ],
+   "ret": "int"
+  },
+  {
+   "name": "cropImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "cropThumbnailImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "legacy",
+     "byref": false,
+     "default": "false"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "current",
+   "static": false,
+   "params": [],
+   "ret": "Imagick"
+  },
+  {
+   "name": "cycleColormapImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "displace",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "decipherImage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "passphrase",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "deconstructImages",
+   "static": false,
+   "params": [],
+   "ret": "Imagick"
+  },
+  {
+   "name": "deleteImageArtifact",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "artifact",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "deleteImageProperty",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "name",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "deskewImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "threshold",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "despeckleImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "destroy",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "displayImage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "servername",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "displayImages",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "servername",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "distortImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "method",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "array",
+     "name": "arguments",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "bestfit",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "drawImage",
+   "static": false,
+   "params": [
+    {
+     "type": "ImagickDraw",
+     "name": "draw",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "edgeImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "embossImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "encipherImage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "passphrase",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "enhanceImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "equalizeImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "evaluateImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "op",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "constant",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "exportImagePixels",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "map",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "STORAGE",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "extentImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "filter",
+   "static": false,
+   "params": [
+    {
+     "type": "ImagickKernel",
+     "name": "ImagickKernel",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_UNDEFINED"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "flattenImages",
+   "static": false,
+   "params": [],
+   "ret": "Imagick"
+  },
+  {
+   "name": "flipImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "floodFillPaintImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "fill",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "fuzz",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "mixed",
+     "name": "target",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "invert",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "flopImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "forwardFourierTransformimage",
+   "static": false,
+   "params": [
+    {
+     "type": "bool",
+     "name": "magnitude",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "frameImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "matte_color",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "inner_bevel",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "outer_bevel",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "functionImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "function",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "array",
+     "name": "arguments",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "fxImage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "expression",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "Imagick"
+  },
+  {
+   "name": "gammaImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "gamma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "gaussianBlurImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "getColorspace",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getCompression",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getCompressionQuality",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getCopyright",
+   "static": true,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getFilename",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getFont",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getFormat",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getGravity",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getHomeURL",
+   "static": true,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getImage",
+   "static": false,
+   "params": [],
+   "ret": "Imagick"
+  },
+  {
+   "name": "getImageAlphaChannel",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "getImageArtifact",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "artifact",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "string"
+  },
+  {
+   "name": "getImageAttribute",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "key",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "string"
+  },
+  {
+   "name": "getImageBackgroundColor",
+   "static": false,
+   "params": [],
+   "ret": "ImagickPixel"
+  },
+  {
+   "name": "getImageBlob",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getImageBluePrimary",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getImageBorderColor",
+   "static": false,
+   "params": [],
+   "ret": "ImagickPixel"
+  },
+  {
+   "name": "getImageChannelDepth",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "int"
+  },
+  {
+   "name": "getImageChannelDistortion",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "reference",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "metric",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "float"
+  },
+  {
+   "name": "getImageChannelDistortions",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "reference",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "metric",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "float"
+  },
+  {
+   "name": "getImageChannelExtrema",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "getImageChannelKurtosis",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "getImageChannelMean",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "getImageChannelRange",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "getImageChannelStatistics",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getImageClipMask",
+   "static": false,
+   "params": [],
+   "ret": "Imagick"
+  },
+  {
+   "name": "getImageColormapColor",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "index",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "ImagickPixel"
+  },
+  {
+   "name": "getImageColors",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageColorspace",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageCompose",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageCompression",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageCompressionQuality",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageDelay",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageDepth",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageDispose",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageDistortion",
+   "static": false,
+   "params": [
+    {
+     "type": "MagickWand",
+     "name": "reference",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "metric",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "float"
+  },
+  {
+   "name": "getImageExtrema",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getImageFilename",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getImageFormat",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getImageGamma",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getImageGeometry",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getImageGravity",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageGreenPrimary",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getImageHeight",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageHistogram",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getImageIndex",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageInterlaceScheme",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageInterpolateMethod",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageIterations",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageLength",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageMatte",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "getImageMatteColor",
+   "static": false,
+   "params": [],
+   "ret": "ImagickPixel"
+  },
+  {
+   "name": "getImageMimeType",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getImageOrientation",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImagePage",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getImagePixelColor",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "ImagickPixel"
+  },
+  {
+   "name": "getImageProfile",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "name",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "string"
+  },
+  {
+   "name": "getImageProfiles",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "pattern",
+     "byref": false,
+     "default": "\"*\""
+    },
+    {
+     "type": "bool",
+     "name": "include_values",
+     "byref": false,
+     "default": "true"
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "getImageProperties",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "pattern",
+     "byref": false,
+     "default": "\"*\""
+    },
+    {
+     "type": "bool",
+     "name": "include_values",
+     "byref": false,
+     "default": "true"
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "getImageProperty",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "name",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "string"
+  },
+  {
+   "name": "getImageRedPrimary",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getImageRegion",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Imagick"
+  },
+  {
+   "name": "getImageRenderingIntent",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageResolution",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getImagesBlob",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getImageScene",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageSignature",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getImageSize",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageTicksPerSecond",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageTotalInkDensity",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getImageType",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageUnits",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageVirtualPixelMethod",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getImageWhitePoint",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getImageWidth",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getInterlaceScheme",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getIteratorIndex",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getNumberImages",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getOption",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "key",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "string"
+  },
+  {
+   "name": "getPackageName",
+   "static": true,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getPage",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getPixelIterator",
+   "static": false,
+   "params": [],
+   "ret": "ImagickPixelIterator"
+  },
+  {
+   "name": "getPixelRegionIterator",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "columns",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "rows",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "ImagickPixelIterator"
+  },
+  {
+   "name": "getPointSize",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getQuantum",
+   "static": true,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getQuantumDepth",
+   "static": true,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getQuantumRange",
+   "static": true,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getRegistry",
+   "static": true,
+   "params": [
+    {
+     "type": "string",
+     "name": "key",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "string"
+  },
+  {
+   "name": "getReleaseDate",
+   "static": true,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getResource",
+   "static": true,
+   "params": [
+    {
+     "type": "int",
+     "name": "type",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "int"
+  },
+  {
+   "name": "getResourceLimit",
+   "static": true,
+   "params": [
+    {
+     "type": "int",
+     "name": "type",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "int"
+  },
+  {
+   "name": "getSamplingFactors",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getSize",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getSizeOffset",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getVersion",
+   "static": true,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "haldClutImage",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "clut",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "hasNextImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "hasPreviousImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "identifyFormat",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "embedText",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "string|false"
+  },
+  {
+   "name": "identifyImage",
+   "static": false,
+   "params": [
+    {
+     "type": "bool",
+     "name": "appendRawOutput",
+     "byref": false,
+     "default": "false"
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "implodeImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "importImagePixels",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "map",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "storage",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "array",
+     "name": "pixels",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "inverseFourierTransformImage",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "complement",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "magnitude",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "labelImage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "label",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "levelImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "blackPoint",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "gamma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "whitePoint",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "linearStretchImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "blackPoint",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "whitePoint",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "liquidRescaleImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "delta_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "rigidity",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "listRegistry",
+   "static": true,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "magnifyImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "mapImage",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "map",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "dither",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "matteFloodfillImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "alpha",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "fuzz",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "mixed",
+     "name": "bordercolor",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "medianFilterImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "mergeImageLayers",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "layer_method",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Imagick"
+  },
+  {
+   "name": "minifyImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "modulateImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "brightness",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "saturation",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "hue",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "montageImage",
+   "static": false,
+   "params": [
+    {
+     "type": "ImagickDraw",
+     "name": "draw",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "tile_geometry",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "thumbnail_geometry",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "mode",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "frame",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Imagick"
+  },
+  {
+   "name": "morphImages",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "number_frames",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Imagick"
+  },
+  {
+   "name": "morphology",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "morphologyMethod",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "iterations",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "ImagickKernel",
+     "name": "ImagickKernel",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "mosaicImages",
+   "static": false,
+   "params": [],
+   "ret": "Imagick"
+  },
+  {
+   "name": "motionBlurImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "angle",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "negateImage",
+   "static": false,
+   "params": [
+    {
+     "type": "bool",
+     "name": "gray",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "newImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "cols",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "rows",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "mixed",
+     "name": "background",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "format",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "newPseudoImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "columns",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "rows",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "pseudoString",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "nextImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "normalizeImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "oilPaintImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "opaquePaintImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "target",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "mixed",
+     "name": "fill",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "fuzz",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "invert",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "optimizeImageLayers",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "orderedPosterizeImage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "threshold_map",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "paintFloodfillImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "fill",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "fuzz",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "mixed",
+     "name": "bordercolor",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "paintOpaqueImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "target",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "mixed",
+     "name": "fill",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "fuzz",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "paintTransparentImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "target",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "alpha",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "fuzz",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pingImage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "filename",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pingImageBlob",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "image",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pingImageFile",
+   "static": false,
+   "params": [
+    {
+     "type": "resource",
+     "name": "filehandle",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "fileName",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "polaroidImage",
+   "static": false,
+   "params": [
+    {
+     "type": "ImagickDraw",
+     "name": "properties",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "angle",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "posterizeImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "levels",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "dither",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "previewImages",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "preview",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "previousImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "profileImage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "name",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "profile",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "quantizeImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "numberColors",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "colorspace",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "treedepth",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "dither",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "measureError",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "quantizeImages",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "numberColors",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "colorspace",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "treedepth",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "dither",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "measureError",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "queryFontMetrics",
+   "static": false,
+   "params": [
+    {
+     "type": "ImagickDraw",
+     "name": "properties",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "text",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "multiline",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "queryFonts",
+   "static": true,
+   "params": [
+    {
+     "type": "string",
+     "name": "pattern",
+     "byref": false,
+     "default": "\"*\""
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "queryFormats",
+   "static": true,
+   "params": [
+    {
+     "type": "string",
+     "name": "pattern",
+     "byref": false,
+     "default": "\"*\""
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "radialBlurImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "angle",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "raiseImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "raise",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "randomThresholdImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "low",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "high",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "readImage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "filename",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "readImageBlob",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "image",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "filename",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "readImageFile",
+   "static": false,
+   "params": [
+    {
+     "type": "resource",
+     "name": "filehandle",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "fileName",
+     "byref": false,
+     "default": "null"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "readImages",
+   "static": false,
+   "params": [
+    {
+     "type": "array",
+     "name": "filenames",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "recolorImage",
+   "static": false,
+   "params": [
+    {
+     "type": "array",
+     "name": "matrix",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "reduceNoiseImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "remapImage",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "replacement",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "DITHER",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "removeImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "removeImageProfile",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "name",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "string"
+  },
+  {
+   "name": "render",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "resampleImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x_resolution",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y_resolution",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "filter",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "blur",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "resetImagePage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "page",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "resizeImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "columns",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "rows",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "filter",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "blur",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "bestfit",
+     "byref": false,
+     "default": "false"
+    },
+    {
+     "type": "bool",
+     "name": "legacy",
+     "byref": false,
+     "default": "false"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "rollImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "rotateImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "background",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "degrees",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "rotationalBlurImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "angle",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "roundCorners",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x_rounding",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y_rounding",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "stroke_width",
+     "byref": false,
+     "default": "10"
+    },
+    {
+     "type": "float",
+     "name": "displace",
+     "byref": false,
+     "default": "5"
+    },
+    {
+     "type": "float",
+     "name": "size_correction",
+     "byref": false,
+     "default": "-6"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "sampleImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "columns",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "rows",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "scaleImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "columns",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "rows",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "bestfit",
+     "byref": false,
+     "default": "false"
+    },
+    {
+     "type": "bool",
+     "name": "legacy",
+     "byref": false,
+     "default": "false"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "segmentImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "COLORSPACE",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "cluster_threshold",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "smooth_threshold",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "verbose",
+     "byref": false,
+     "default": "false"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "selectiveBlurImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "threshold",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "separateImageChannel",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "sepiaToneImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "threshold",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setBackgroundColor",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "background",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setColorspace",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "COLORSPACE",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setCompression",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "compression",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setCompressionQuality",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "quality",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setFilename",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "filename",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setFirstIterator",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "setFont",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "font",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setFormat",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "format",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setGravity",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "gravity",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImage",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "replace",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageAlphaChannel",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "mode",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageArtifact",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "artifact",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "value",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageAttribute",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "key",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "value",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageBackgroundColor",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "background",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageBias",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "bias",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageBiasQuantum",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "bias",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "void"
+  },
+  {
+   "name": "setImageBluePrimary",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageBorderColor",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "border",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageChannelDepth",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "depth",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageClipMask",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "clip_mask",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageColormapColor",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "index",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "ImagickPixel",
+     "name": "color",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageColorspace",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "colorspace",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageCompose",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "compose",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageCompression",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "compression",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageCompressionQuality",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "quality",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageDelay",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "delay",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageDepth",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "depth",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageDispose",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "dispose",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageExtent",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "columns",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "rows",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageFilename",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "filename",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageFormat",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "format",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageGamma",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "gamma",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageGravity",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "gravity",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageGreenPrimary",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageIndex",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "index",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageInterlaceScheme",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "interlace_scheme",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageInterpolateMethod",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "method",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageIterations",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "iterations",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageMatte",
+   "static": false,
+   "params": [
+    {
+     "type": "bool",
+     "name": "matte",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageMatteColor",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "matte",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageOpacity",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "opacity",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageOrientation",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "orientation",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImagePage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageProfile",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "name",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "profile",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageProperty",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "name",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "value",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageRedPrimary",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageRenderingIntent",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "rendering_intent",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageResolution",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x_resolution",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y_resolution",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageScene",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "scene",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageTicksPerSecond",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "ticks_per_second",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageType",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "image_type",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageUnits",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "units",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageVirtualPixelMethod",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "method",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setImageWhitePoint",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setInterlaceScheme",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "interlace_scheme",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setIteratorIndex",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "index",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setLastIterator",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "setOption",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "key",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "value",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setPage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setPointSize",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "point_size",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setProgressMonitor",
+   "static": false,
+   "params": [
+    {
+     "type": "callable",
+     "name": "callback",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setRegistry",
+   "static": true,
+   "params": [
+    {
+     "type": "string",
+     "name": "key",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "value",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setResolution",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x_resolution",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y_resolution",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setResourceLimit",
+   "static": true,
+   "params": [
+    {
+     "type": "int",
+     "name": "type",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "limit",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setSamplingFactors",
+   "static": false,
+   "params": [
+    {
+     "type": "array",
+     "name": "factors",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setSize",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "columns",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "rows",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setSizeOffset",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "columns",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "rows",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "offset",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setType",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "image_type",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "shadeImage",
+   "static": false,
+   "params": [
+    {
+     "type": "bool",
+     "name": "gray",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "azimuth",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "elevation",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "shadowImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "opacity",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "sharpenImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "shaveImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "columns",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "rows",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "shearImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "background",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x_shear",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y_shear",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "sigmoidalContrastImage",
+   "static": false,
+   "params": [
+    {
+     "type": "bool",
+     "name": "sharpen",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "alpha",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "beta",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "sketchImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "angle",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "smushImages",
+   "static": false,
+   "params": [
+    {
+     "type": "bool",
+     "name": "stack",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "offset",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Imagick"
+  },
+  {
+   "name": "solarizeImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "threshold",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "sparseColorImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "SPARSE_METHOD",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "array",
+     "name": "arguments",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "spliceImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "spreadImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "statisticImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "type",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "steganoImage",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "watermark_wand",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "offset",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Imagick"
+  },
+  {
+   "name": "stereoImage",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "offset_wand",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "stripImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "subImageMatch",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "Imagick",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "array",
+     "name": "offset",
+     "byref": true,
+     "default": "?"
+    },
+    {
+     "type": "float",
+     "name": "similarity",
+     "byref": true,
+     "default": "?"
+    }
+   ],
+   "ret": "Imagick"
+  },
+  {
+   "name": "thresholdImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "threshold",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "thumbnailImage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "columns",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "rows",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "bestfit",
+     "byref": false,
+     "default": "false"
+    },
+    {
+     "type": "bool",
+     "name": "fill",
+     "byref": false,
+     "default": "false"
+    },
+    {
+     "type": "bool",
+     "name": "legacy",
+     "byref": false,
+     "default": "false"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "tintImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "tint",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "mixed",
+     "name": "opacity",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "legacy",
+     "byref": false,
+     "default": "false"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "__toString",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "transformImage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "crop",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "geometry",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Imagick"
+  },
+  {
+   "name": "transformImageColorspace",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "colorspace",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "transparentPaintImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "target",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "alpha",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "fuzz",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "invert",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "transposeImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "transverseImage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "trimImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "fuzz",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "uniqueImageColors",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "unsharpMaskImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "amount",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "threshold",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Imagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "valid",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "vignetteImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "blackPoint",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "whitePoint",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "waveImage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "amplitude",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "length",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "whiteThresholdImage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "threshold",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "writeImage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "filename",
+     "byref": false,
+     "default": "NULL"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "writeImageFile",
+   "static": false,
+   "params": [
+    {
+     "type": "resource",
+     "name": "filehandle",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "format",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "writeImages",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "filename",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "adjoin",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "writeImagesFile",
+   "static": false,
+   "params": [
+    {
+     "type": "resource",
+     "name": "filehandle",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "format",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "bool"
+  }
+ ],
+ "ImagickDraw": [
+  {
+   "name": "affine",
+   "static": false,
+   "params": [
+    {
+     "type": "array",
+     "name": "affine",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "annotation",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "text",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "arc",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "start_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "start_y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "end_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "end_y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "start_angle",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "end_angle",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "bezier",
+   "static": false,
+   "params": [
+    {
+     "type": "array",
+     "name": "coordinates",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "circle",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "origin_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "origin_y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "perimeter_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "perimeter_y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "clear",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "clone",
+   "static": false,
+   "params": [],
+   "ret": "ImagickDraw"
+  },
+  {
+   "name": "color",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "paint",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "comment",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "comment",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "composite",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "composite",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "Imagick",
+     "name": "image",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "destroy",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "ellipse",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "origin_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "origin_y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "radius_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "radius_y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "angle_start",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "angle_end",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "getClipPath",
+   "static": false,
+   "params": [],
+   "ret": "false|string"
+  },
+  {
+   "name": "getClipRule",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getClipUnits",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getFillColor",
+   "static": false,
+   "params": [],
+   "ret": "ImagickPixel"
+  },
+  {
+   "name": "getFillOpacity",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getFillRule",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getFont",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getFontFamily",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getFontSize",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getFontStretch",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getFontStyle",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getFontWeight",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getGravity",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getStrokeAntialias",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "getStrokeColor",
+   "static": false,
+   "params": [],
+   "ret": "ImagickPixel"
+  },
+  {
+   "name": "getStrokeDashArray",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getStrokeDashOffset",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getStrokeLineCap",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getStrokeLineJoin",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getStrokeMiterLimit",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getStrokeOpacity",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getStrokeWidth",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getTextAlignment",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getTextAntialias",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "getTextDecoration",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getTextEncoding",
+   "static": false,
+   "params": [],
+   "ret": "false|string"
+  },
+  {
+   "name": "getTextInterlineSpacing",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getTextInterwordSpacing",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getTextKerning",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getTextUnderColor",
+   "static": false,
+   "params": [],
+   "ret": "ImagickPixel"
+  },
+  {
+   "name": "getVectorGraphics",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "line",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "start_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "start_y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "end_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "end_y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "matte",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "paint",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathClose",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "pathCurveToAbsolute",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x1",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y1",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x2",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y2",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathCurveToQuadraticBezierAbsolute",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x1",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y1",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x_end",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathCurveToQuadraticBezierRelative",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x1",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y1",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x_end",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathCurveToQuadraticBezierSmoothAbsolute",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathCurveToQuadraticBezierSmoothRelative",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathCurveToRelative",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x1",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y1",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x2",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y2",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathCurveToSmoothAbsolute",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x2",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y2",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathCurveToSmoothRelative",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x2",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y2",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathEllipticArcAbsolute",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "rx",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "ry",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x_axis_rotation",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "large_arc",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "sweep",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathEllipticArcRelative",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "rx",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "ry",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x_axis_rotation",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "large_arc",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "sweep",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathFinish",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "pathLineToAbsolute",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathLineToHorizontalAbsolute",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathLineToHorizontalRelative",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathLineToRelative",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathLineToVerticalAbsolute",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathLineToVerticalRelative",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathMoveToAbsolute",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathMoveToRelative",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pathStart",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "point",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "polygon",
+   "static": false,
+   "params": [
+    {
+     "type": "array",
+     "name": "coordinates",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "polyline",
+   "static": false,
+   "params": [
+    {
+     "type": "array",
+     "name": "coordinates",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pop",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "popClipPath",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "popDefs",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "popPattern",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "push",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "pushClipPath",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "clip_mask_id",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "pushDefs",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "pushPattern",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "pattern_id",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "height",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "rectangle",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "top_left_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "top_left_y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "bottom_right_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "bottom_right_y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "render",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "resetVectorGraphics",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "rotate",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "degrees",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "roundRectangle",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "top_left_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "top_left_y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "bottom_right_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "bottom_right_y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "rounding_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "rounding_y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "scale",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setClipPath",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "clip_mask",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setClipRule",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "fillrule",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setClipUnits",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "pathunits",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setFillAlpha",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "alpha",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setFillColor",
+   "static": false,
+   "params": [
+    {
+     "type": "ImagickPixel|string",
+     "name": "fill_color",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setFillOpacity",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "opacity",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setFillPatternURL",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "fill_url",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setFillRule",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "fillrule",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setFont",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "font_name",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setFontFamily",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "font_family",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setFontSize",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "point_size",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setFontStretch",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "stretch",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setFontStyle",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "style",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setFontWeight",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "weight",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setGravity",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "gravity",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setResolution",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "resolution_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "resolution_y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setStrokeAlpha",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "alpha",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setStrokeAntialias",
+   "static": false,
+   "params": [
+    {
+     "type": "bool",
+     "name": "enabled",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setStrokeColor",
+   "static": false,
+   "params": [
+    {
+     "type": "ImagickPixel|string",
+     "name": "color",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setStrokeDashArray",
+   "static": false,
+   "params": [
+    {
+     "type": "?array",
+     "name": "dashes",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setStrokeDashOffset",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "dash_offset",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setStrokeLineCap",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "linecap",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setStrokeLineJoin",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "linejoin",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setStrokeMiterLimit",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "miterlimit",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setStrokeOpacity",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "opacity",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setStrokePatternURL",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "stroke_url",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setStrokeWidth",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "width",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setTextAlignment",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "align",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setTextAntialias",
+   "static": false,
+   "params": [
+    {
+     "type": "bool",
+     "name": "antialias",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setTextDecoration",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "decoration",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setTextEncoding",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "encoding",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setTextInterlineSpacing",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "spacing",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setTextInterwordSpacing",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "spacing",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setTextKerning",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "kerning",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setTextUnderColor",
+   "static": false,
+   "params": [
+    {
+     "type": "ImagickPixel|string",
+     "name": "under_color",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setVectorGraphics",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "xml",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setViewbox",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "left_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "top_y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "right_x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "bottom_y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "skewX",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "degrees",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "skewY",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "degrees",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "translate",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  }
+ ],
+ "ImagickPixel": [
+  {
+   "name": "clear",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "__construct",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "color",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": ""
+  },
+  {
+   "name": "destroy",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "getColor",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "normalized",
+     "byref": false,
+     "default": "0"
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "getColorAsString",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getColorCount",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getColorQuantum",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getColorValue",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "color",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "float"
+  },
+  {
+   "name": "getColorValueQuantum",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "color",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "int|float"
+  },
+  {
+   "name": "getHSL",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getIndex",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "isPixelSimilar",
+   "static": false,
+   "params": [
+    {
+     "type": "ImagickPixel",
+     "name": "color",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "fuzz",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "isPixelSimilarQuantum",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "color",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "fuzz",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "isSimilar",
+   "static": false,
+   "params": [
+    {
+     "type": "ImagickPixel",
+     "name": "color",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "fuzz",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setColor",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "color",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setcolorcount",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "colorCount",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setColorValue",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "color",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "value",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setColorValueQuantum",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "color",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int|float",
+     "name": "value",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setHSL",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "hue",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "saturation",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "luminosity",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "setIndex",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "index",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  }
+ ],
+ "ImagickPixelIterator": [
+  {
+   "name": "clear",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "__construct",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "wand",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": ""
+  },
+  {
+   "name": "destroy",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "getCurrentIteratorRow",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getIteratorRow",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getNextIteratorRow",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getPreviousIteratorRow",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "newPixelIterator",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "wand",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "newPixelRegionIterator",
+   "static": false,
+   "params": [
+    {
+     "type": "Imagick",
+     "name": "wand",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "columns",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "rows",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "resetIterator",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "setIteratorFirstRow",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "setIteratorLastRow",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "setIteratorRow",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "row",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "bool"
+  },
+  {
+   "name": "syncIterator",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  }
+ ],
+ "ImagickKernel": [
+  {
+   "name": "addKernel",
+   "static": false,
+   "params": [
+    {
+     "type": "ImagickKernel",
+     "name": "ImagickKernel",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "void"
+  },
+  {
+   "name": "addUnityKernel",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "scale",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "void"
+  },
+  {
+   "name": "fromBuiltin",
+   "static": true,
+   "params": [
+    {
+     "type": "int",
+     "name": "kernelType",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "kernelString",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "ImagickKernel"
+  },
+  {
+   "name": "fromMatrix",
+   "static": true,
+   "params": [
+    {
+     "type": "array",
+     "name": "matrix",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "array",
+     "name": "origin",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "ImagickKernel"
+  },
+  {
+   "name": "getMatrix",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "scale",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "scale",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "normalizeFlag",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "void"
+  },
+  {
+   "name": "separate",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  }
+ ],
+ "Gmagick": [
+  {
+   "name": "addimage",
+   "static": false,
+   "params": [
+    {
+     "type": "Gmagick",
+     "name": "source",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "addnoiseimage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "noise_type",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "annotateimage",
+   "static": false,
+   "params": [
+    {
+     "type": "GmagickDraw",
+     "name": "GmagickDraw",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "angle",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "text",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "blurimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "borderimage",
+   "static": false,
+   "params": [
+    {
+     "type": "GmagickPixel",
+     "name": "color",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "charcoalimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "chopimage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "clear",
+   "static": false,
+   "params": [],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "commentimage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "comment",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "compositeimage",
+   "static": false,
+   "params": [
+    {
+     "type": "Gmagick",
+     "name": "source",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "COMPOSE",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "cropimage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "cropthumbnailimage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "current",
+   "static": false,
+   "params": [],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "cyclecolormapimage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "displace",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "deconstructimages",
+   "static": false,
+   "params": [],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "despeckleimage",
+   "static": false,
+   "params": [],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "destroy",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "drawimage",
+   "static": false,
+   "params": [
+    {
+     "type": "GmagickDraw",
+     "name": "GmagickDraw",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "edgeimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "embossimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "enhanceimage",
+   "static": false,
+   "params": [],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "equalizeimage",
+   "static": false,
+   "params": [],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "flipimage",
+   "static": false,
+   "params": [],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "flopimage",
+   "static": false,
+   "params": [],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "frameimage",
+   "static": false,
+   "params": [
+    {
+     "type": "GmagickPixel",
+     "name": "color",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "inner_bevel",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "outer_bevel",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "gammaimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "gamma",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "getcopyright",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getfilename",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getimagebackgroundcolor",
+   "static": false,
+   "params": [],
+   "ret": "GmagickPixel"
+  },
+  {
+   "name": "getimageblueprimary",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getimagebordercolor",
+   "static": false,
+   "params": [],
+   "ret": "GmagickPixel"
+  },
+  {
+   "name": "getimagechanneldepth",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channel_type",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "int"
+  },
+  {
+   "name": "getimagecolors",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimagecolorspace",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimagecompose",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimagedelay",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimagedepth",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimagedispose",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimageextrema",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getimagefilename",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getimageformat",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getimagegamma",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getimagegreenprimary",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getimageheight",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimagehistogram",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getimageindex",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimageinterlacescheme",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimageiterations",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimagematte",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimagemattecolor",
+   "static": false,
+   "params": [],
+   "ret": "GmagickPixel"
+  },
+  {
+   "name": "getimageprofile",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "name",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "string"
+  },
+  {
+   "name": "getimageredprimary",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getimagerenderingintent",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimageresolution",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getimagescene",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimagesignature",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getimagetype",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimageunits",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getimagewhitepoint",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getimagewidth",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getpackagename",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getquantumdepth",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getreleasedate",
+   "static": false,
+   "params": [],
+   "ret": "string"
+  },
+  {
+   "name": "getsamplingfactors",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getsize",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "getversion",
+   "static": false,
+   "params": [],
+   "ret": "array"
+  },
+  {
+   "name": "hasnextimage",
+   "static": false,
+   "params": [],
+   "ret": "mixed"
+  },
+  {
+   "name": "haspreviousimage",
+   "static": false,
+   "params": [],
+   "ret": "mixed"
+  },
+  {
+   "name": "implodeimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "mixed"
+  },
+  {
+   "name": "labelimage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "label",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "mixed"
+  },
+  {
+   "name": "levelimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "blackPoint",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "gamma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "whitePoint",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Gmagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "mixed"
+  },
+  {
+   "name": "magnifyimage",
+   "static": false,
+   "params": [],
+   "ret": "mixed"
+  },
+  {
+   "name": "mapimage",
+   "static": false,
+   "params": [
+    {
+     "type": "gmagick",
+     "name": "gmagick",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "dither",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "medianfilterimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "void"
+  },
+  {
+   "name": "minifyimage",
+   "static": false,
+   "params": [],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "modulateimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "brightness",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "saturation",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "hue",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "motionblurimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sigma",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "angle",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "newimage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "background",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "format",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "nextimage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "normalizeimage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "oilpaintimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "previousimage",
+   "static": false,
+   "params": [],
+   "ret": "bool"
+  },
+  {
+   "name": "profileimage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "name",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "profile",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "quantizeimage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "numColors",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "colorspace",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "treeDepth",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "dither",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "measureError",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "quantizeimages",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "numColors",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "colorspace",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "treeDepth",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "dither",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "measureError",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "queryfontmetrics",
+   "static": false,
+   "params": [
+    {
+     "type": "GmagickDraw",
+     "name": "draw",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "text",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "queryfonts",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "pattern",
+     "byref": false,
+     "default": "\"*\""
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "queryformats",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "pattern",
+     "byref": false,
+     "default": "\"*\""
+    }
+   ],
+   "ret": "array"
+  },
+  {
+   "name": "radialblurimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "angle",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": "Gmagick::CHANNEL_DEFAULT"
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "raiseimage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "raise",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "read",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "filename",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "readimage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "filename",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "readimageblob",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "imageContents",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "filename",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "readimagefile",
+   "static": false,
+   "params": [
+    {
+     "type": "resource",
+     "name": "fp",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "filename",
+     "byref": false,
+     "default": "?"
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "reducenoiseimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "removeimage",
+   "static": false,
+   "params": [],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "removeimageprofile",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "name",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "string"
+  },
+  {
+   "name": "resampleimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "xResolution",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "yResolution",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "filter",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "blur",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "resizeimage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "filter",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "blur",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "fit",
+     "byref": false,
+     "default": "false"
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "rollimage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "rotateimage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "color",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "degrees",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "scaleimage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "fit",
+     "byref": false,
+     "default": "false"
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "separateimagechannel",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setfilename",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "filename",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagebackgroundcolor",
+   "static": false,
+   "params": [
+    {
+     "type": "GmagickPixel",
+     "name": "color",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimageblueprimary",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagebordercolor",
+   "static": false,
+   "params": [
+    {
+     "type": "GmagickPixel",
+     "name": "color",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagechanneldepth",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "channel",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "depth",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagecolorspace",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "colorspace",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagecompose",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "composite",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagedelay",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "delay",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagedepth",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "depth",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagedispose",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "disposeType",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagefilename",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "filename",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimageformat",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "imageFormat",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagegamma",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "gamma",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagegreenprimary",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimageindex",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "index",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimageinterlacescheme",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "interlace",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimageiterations",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "iterations",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimageprofile",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "name",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "profile",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimageredprimary",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagerenderingintent",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "rendering_intent",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimageresolution",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "xResolution",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "yResolution",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagescene",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "scene",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagetype",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "imgType",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimageunits",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "resolution",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setimagewhitepoint",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setsamplingfactors",
+   "static": false,
+   "params": [
+    {
+     "type": "array",
+     "name": "factors",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "setsize",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "columns",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "rows",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "shearimage",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "color",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "xShear",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "yShear",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "solarizeimage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "threshold",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "spreadimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "radius",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "stripimage",
+   "static": false,
+   "params": [],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "swirlimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "degrees",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "thumbnailimage",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "width",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "int",
+     "name": "height",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "fit",
+     "byref": false,
+     "default": "false"
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "trimimage",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "fuzz",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "Gmagick"
+  },
+  {
+   "name": "writeimage",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "filename",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "bool",
+     "name": "all_frames",
+     "byref": false,
+     "default": "false"
+    }
+   ],
+   "ret": "Gmagick"
+  }
+ ],
+ "GmagickDraw": [
+  {
+   "name": "annotate",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "string",
+     "name": "text",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "arc",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "sx",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sy",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "ex",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "ey",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sd",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "ed",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "bezier",
+   "static": false,
+   "params": [
+    {
+     "type": "array",
+     "name": "coordinate_array",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "ellipse",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "ox",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "oy",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "rx",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "ry",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "start",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "end",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "getfillcolor",
+   "static": false,
+   "params": [],
+   "ret": "GmagickPixel"
+  },
+  {
+   "name": "getfillopacity",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getfont",
+   "static": false,
+   "params": [],
+   "ret": "mixed"
+  },
+  {
+   "name": "getfontsize",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getfontstyle",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getfontweight",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getstrokecolor",
+   "static": false,
+   "params": [],
+   "ret": "GmagickPixel"
+  },
+  {
+   "name": "getstrokeopacity",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "getstrokewidth",
+   "static": false,
+   "params": [],
+   "ret": "float"
+  },
+  {
+   "name": "gettextdecoration",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "gettextencoding",
+   "static": false,
+   "params": [],
+   "ret": "mixed"
+  },
+  {
+   "name": "line",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "sx",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "sy",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "ex",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "ey",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "point",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "polygon",
+   "static": false,
+   "params": [
+    {
+     "type": "array",
+     "name": "coordinates",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "polyline",
+   "static": false,
+   "params": [
+    {
+     "type": "array",
+     "name": "coordinate_array",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "rectangle",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x1",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y1",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x2",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y2",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "rotate",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "degrees",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "roundrectangle",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x1",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y1",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "x2",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y2",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "rx",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "ry",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "scale",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "x",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "y",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "setfillcolor",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "color",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "setfillopacity",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "fill_opacity",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "setfont",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "font",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "setfontsize",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "pointsize",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "setfontstyle",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "style",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "setfontweight",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "weight",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "setstrokecolor",
+   "static": false,
+   "params": [
+    {
+     "type": "mixed",
+     "name": "color",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "setstrokeopacity",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "stroke_opacity",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "setstrokewidth",
+   "static": false,
+   "params": [
+    {
+     "type": "float",
+     "name": "width",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "settextdecoration",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "decoration",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  },
+  {
+   "name": "settextencoding",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "encoding",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickDraw"
+  }
+ ],
+ "GmagickPixel": [
+  {
+   "name": "getcolor",
+   "static": false,
+   "params": [
+    {
+     "type": "bool",
+     "name": "as_array",
+     "byref": false,
+     "default": "false"
+    },
+    {
+     "type": "bool",
+     "name": "normalize_array",
+     "byref": false,
+     "default": "false"
+    }
+   ],
+   "ret": "mixed"
+  },
+  {
+   "name": "getcolorcount",
+   "static": false,
+   "params": [],
+   "ret": "int"
+  },
+  {
+   "name": "getcolorvalue",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "color",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "float"
+  },
+  {
+   "name": "setcolor",
+   "static": false,
+   "params": [
+    {
+     "type": "string",
+     "name": "color",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickPixel"
+  },
+  {
+   "name": "setcolorvalue",
+   "static": false,
+   "params": [
+    {
+     "type": "int",
+     "name": "color",
+     "byref": false,
+     "default": null
+    },
+    {
+     "type": "float",
+     "name": "value",
+     "byref": false,
+     "default": null
+    }
+   ],
+   "ret": "GmagickPixel"
+  }
+ ]
+}

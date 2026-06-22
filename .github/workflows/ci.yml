@@ -31,12 +31,13 @@ jobs:
       - name: Build bridge staticlibs
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
-        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR), and
-        # libelephc_tz.a (DateTimeZone introspection), which `cargo test` /
+        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_tz.a (DateTimeZone introspection), and libelephc_image.a
+        # (GD / Exif / Imagick / Gmagick / Cairo), which `cargo test` /
         # nextest do not produce on their own (the crates are pulled in as rlib
         # dev-dependencies, not the staticlibs the external linker needs).
         # Build them explicitly first.
-        run: cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar -p elephc-tz
+        run: cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar -p elephc-tz -p elephc-image
 
       - name: Run non-codegen tests
         run: cargo nextest run --workspace -E 'not binary(codegen_tests)' --no-fail-fast -j 8
@@ -69,15 +70,38 @@ jobs:
       - name: Build bridge staticlibs
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
-        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR), and
-        # libelephc_tz.a (DateTimeZone introspection), which `cargo test` /
+        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_tz.a (DateTimeZone introspection), and libelephc_image.a
+        # (GD / Exif / Imagick / Gmagick / Cairo), which `cargo test` /
         # nextest do not produce on their own (the crates are pulled in as rlib
         # dev-dependencies, not the staticlibs the external linker needs).
         # Build them explicitly first.
-        run: cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar -p elephc-tz
+        run: cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar -p elephc-tz -p elephc-image
 
       - name: Run codegen test shard
         run: cargo nextest run --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast -j 8
+
+  image-api-sync:
+    name: Image API stubs in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Regenerate image API stubs
+        # Re-run the generator from its pinned spec; the committed prelude stubs and
+        # coverage tests must come back byte-identical. A diff means someone edited
+        # the prelude or api_spec.json without regenerating (see
+        # crates/elephc-image/tools/README.md).
+        run: python3 crates/elephc-image/tools/gen_image_api_stubs.py
+
+      - name: Fail if regeneration changed tracked files
+        run: git diff --exit-code -- src/image_prelude.rs tests/codegen/image/
+
+      - name: Check extern/export symbol parity
+        # Every `extern "elephc_image"` declaration in the prelude must have a
+        # matching #[no_mangle] export in the staticlib, or compiled programs that
+        # use the symbol fail to link.
+        run: python3 crates/elephc-image/tools/check_extern_exports.py
 
   test:
     name: Build & Test
@@ -85,12 +109,14 @@ jobs:
     needs:
       - non-codegen-tests
       - codegen-tests
+      - image-api-sync
     if: always()
     steps:
       - name: Verify test jobs
         run: |
           test "${{ needs.non-codegen-tests.result }}" = "success"
           test "${{ needs.codegen-tests.result }}" = "success"
+          test "${{ needs.image-api-sync.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite

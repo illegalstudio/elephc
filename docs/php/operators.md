@@ -21,7 +21,7 @@ sidebar:
 
 | Operator | Example | Notes |
 |---|---|---|
-| `==` | `$a == $b` | Loose equality using PHP-style scalar coercions for bool, null, numeric strings, and non-numeric strings |
+| `==` | `$a == $b` | Loose equality using PHP-style scalar coercions for bool, null, numeric `int`/`float` comparison, numeric strings, and non-numeric strings |
 | `!=` | `$a != $b` | Loose inequality using the same scalar coercions as `==` |
 | `===` | `$a === $b` | Strict equality (type and value) |
 | `!==` | `$a !== $b` | Strict inequality |
