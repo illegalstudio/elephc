@@ -1183,6 +1183,44 @@ pub(in crate::interpreter) fn eval_reflection_property_lazy_result(
     Ok(None)
 }
 
+/// Handles eval-backed `ReflectionProperty::__toString()` calls.
+pub(in crate::interpreter) fn eval_reflection_property_to_string_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("__toString") {
+        return Ok(None);
+    }
+    let Some((declaring_class, property_name)) =
+        context
+            .eval_reflection_property(identity)
+            .map(|(declaring_class, property_name)| {
+                (declaring_class.to_string(), property_name.to_string())
+            })
+    else {
+        return Ok(None);
+    };
+    eval_reflection_bind_no_args(evaluated_args)?;
+    let member = if let Some(member) =
+        eval_reflection_property_metadata(&declaring_class, &property_name, context)
+    {
+        member
+    } else {
+        eval_reflection_aot_property_metadata_if_exists(
+            &declaring_class,
+            &property_name,
+            context,
+            values,
+        )?
+        .ok_or(EvalStatus::RuntimeFatal)?
+    };
+    let text = eval_reflection_property_to_string(&property_name, &member);
+    values.string(&text).map(Some)
+}
+
 /// Handles eval-backed `ReflectionProperty::getRawValue()` and raw write calls.
 pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
     identity: u64,
@@ -3703,6 +3741,114 @@ fn eval_reflection_property_modifiers(
         modifiers |= 2048;
     }
     modifiers
+}
+
+/// Formats one reflected property similarly to PHP's `ReflectionProperty::__toString()`.
+fn eval_reflection_property_to_string(
+    property_name: &str,
+    member: &EvalReflectionMemberMetadata,
+) -> String {
+    let mut parts = Vec::new();
+    if member.is_abstract {
+        parts.push(String::from("abstract"));
+    }
+    if member.is_final {
+        parts.push(String::from("final"));
+    }
+    parts.push(eval_reflection_visibility_label(member.visibility).to_string());
+    if member.is_static {
+        parts.push(String::from("static"));
+    }
+    if member.is_readonly {
+        parts.push(String::from("readonly"));
+    }
+    if let Some(type_name) = member
+        .type_metadata
+        .as_ref()
+        .map(eval_reflection_type_metadata_to_string)
+    {
+        parts.push(type_name);
+    }
+    parts.push(format!("${property_name}"));
+
+    let default = if member.modifiers & 512 != 0 {
+        String::new()
+    } else {
+        member
+            .default_value
+            .as_ref()
+            .and_then(eval_reflection_default_expr_to_string)
+            .map(|value| format!(" = {value}"))
+            .unwrap_or_default()
+    };
+    format!("Property [ {}{} ]", parts.join(" "), default)
+}
+
+/// Returns PHP's lowercase label for one reflected visibility.
+fn eval_reflection_visibility_label(visibility: EvalVisibility) -> &'static str {
+    match visibility {
+        EvalVisibility::Public => "public",
+        EvalVisibility::Protected => "protected",
+        EvalVisibility::Private => "private",
+    }
+}
+
+/// Formats retained ReflectionType metadata for `ReflectionProperty::__toString()`.
+fn eval_reflection_type_metadata_to_string(
+    type_metadata: &EvalReflectionParameterTypeMetadata,
+) -> String {
+    match &type_metadata.kind {
+        EvalReflectionParameterTypeKind::Named(named) => {
+            if named.allows_null && named.name != "mixed" {
+                format!("?{}", named.name)
+            } else {
+                named.name.clone()
+            }
+        }
+        EvalReflectionParameterTypeKind::Union(union) => {
+            let mut names = union
+                .types
+                .iter()
+                .map(|type_metadata| type_metadata.name.clone())
+                .collect::<Vec<_>>();
+            if union.allows_null && names.iter().all(|name| name != "null") {
+                names.push(String::from("null"));
+            }
+            names.join("|")
+        }
+        EvalReflectionParameterTypeKind::Intersection(intersection) => intersection
+            .types
+            .iter()
+            .map(|type_metadata| type_metadata.name.clone())
+            .collect::<Vec<_>>()
+            .join("&"),
+    }
+}
+
+/// Formats retained literal defaults for `ReflectionProperty::__toString()`.
+fn eval_reflection_default_expr_to_string(default: &EvalExpr) -> Option<String> {
+    match default {
+        EvalExpr::Const(EvalConst::Null) => Some(String::from("NULL")),
+        EvalExpr::Const(EvalConst::Bool(value)) => Some(value.to_string()),
+        EvalExpr::Const(EvalConst::Int(value)) => Some(value.to_string()),
+        EvalExpr::Const(EvalConst::Float(value)) => Some(value.to_string()),
+        EvalExpr::Const(EvalConst::String(value)) => Some(format!("'{value}'")),
+        EvalExpr::Unary {
+            op: EvalUnaryOp::Plus,
+            expr,
+        } => eval_reflection_default_expr_to_string(expr),
+        EvalExpr::Unary {
+            op: EvalUnaryOp::Negate,
+            expr,
+        } => eval_reflection_default_expr_to_string(expr).map(|value| format!("-{value}")),
+        EvalExpr::ConstFetch(name) => Some(name.clone()),
+        EvalExpr::NamespacedConstFetch { name, .. } => Some(name.clone()),
+        EvalExpr::ClassConstantFetch {
+            class_name,
+            constant,
+        } => Some(format!("{class_name}::{constant}")),
+        _ => None,
+    }
 }
 
 /// Returns whether eval retained this property as virtual rather than backed.

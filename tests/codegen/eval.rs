@@ -8599,6 +8599,36 @@ echo $listed->getDefaultValue() === null ? "null" : "bad";');
     );
 }
 
+/// Verifies eval ReflectionProperty formats retained property metadata through `__toString()`.
+#[test]
+fn test_eval_reflection_property_to_string() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectPropertyStringTarget {
+    public int $id = 7;
+    protected static string $label = "ok";
+    private $implicit;
+    public $virtual {
+        get => 1;
+    }
+}
+foreach (["id", "label", "implicit", "virtual"] as $name) {
+    echo (new ReflectionProperty("EvalReflectPropertyStringTarget", $name))->__toString();
+    echo "|";
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Property [ public int $id = 7 ]|Property [ protected static string $label = 'ok' ]|Property [ private $implicit = NULL ]|Property [ public $virtual ]|"
+    );
+}
+
 /// Verifies eval ReflectionClass materializes property default metadata through the bridge.
 #[test]
 fn test_eval_reflection_class_get_default_properties_metadata() {
