@@ -9912,6 +9912,11 @@ fn lower_method_call(
         return lower_reflection_class_new_instance(ctx, Some(object_expr), object, args, expr);
     }
     if op == Op::MethodCall
+        && is_reflection_class_new_instance_args_call(ctx, object.value, method)
+    {
+        return lower_reflection_class_new_instance_args(ctx, Some(object_expr), object, args, expr);
+    }
+    if op == Op::MethodCall
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
     {
         return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
@@ -10141,6 +10146,20 @@ fn lower_reflection_class_new_instance(
     )
 }
 
+/// Lowers `ReflectionClass::newInstanceArgs()` by unpacking one static argument array.
+fn lower_reflection_class_new_instance_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
+    object: LoweredValue,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let Some(forwarded_args) = reflection_class_new_instance_args_array(args) else {
+        return lower_reflection_class_new_instance_args_unsupported(ctx, expr);
+    };
+    lower_reflection_class_new_instance(ctx, object_expr, object, &forwarded_args, expr)
+}
+
 /// Lowers `ReflectionClass::newInstanceWithoutConstructor()` to constructorless allocation.
 fn lower_reflection_class_new_instance_without_constructor(
     ctx: &mut LoweringContext<'_, '_>,
@@ -10168,6 +10187,58 @@ fn reflection_class_new_instance_args(args: &[Expr]) -> Vec<Expr> {
         return expand_static_call_spread_args(args);
     }
     args.to_vec()
+}
+
+/// Returns constructor arguments carried by a static `newInstanceArgs()` array argument.
+fn reflection_class_new_instance_args_array(args: &[Expr]) -> Option<Vec<Expr>> {
+    let args = reflection_class_new_instance_args(args);
+    match args.as_slice() {
+        [] => Some(Vec::new()),
+        [arg] => reflection_class_new_instance_args_value(arg),
+        _ => None,
+    }
+}
+
+/// Extracts the actual array value passed to the `newInstanceArgs()` `$args` parameter.
+fn reflection_class_new_instance_args_value(arg: &Expr) -> Option<Vec<Expr>> {
+    let array_expr = match &arg.kind {
+        ExprKind::NamedArg { name, value } if php_symbol_key(name) == "args" => value.as_ref(),
+        ExprKind::NamedArg { .. } => return None,
+        _ => arg,
+    };
+    match &array_expr.kind {
+        ExprKind::ArrayLiteral(items) => Some(items.clone()),
+        ExprKind::ArrayLiteralAssoc(entries) => reflection_class_new_instance_assoc_args(entries),
+        _ => None,
+    }
+}
+
+/// Converts a static associative argument array into positional and named call arguments.
+fn reflection_class_new_instance_assoc_args(entries: &[(Expr, Expr)]) -> Option<Vec<Expr>> {
+    entries
+        .iter()
+        .map(|(key, value)| reflection_class_new_instance_assoc_arg(key, value))
+        .collect()
+}
+
+/// Converts one `newInstanceArgs()` associative-array element into a constructor argument.
+fn reflection_class_new_instance_assoc_arg(key: &Expr, value: &Expr) -> Option<Expr> {
+    match &key.kind {
+        ExprKind::IntLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::FloatLiteral(_) => {
+            Some(value.clone())
+        }
+        ExprKind::StringLiteral(name) if crate::types::is_php_integer_array_key(name) => {
+            Some(value.clone())
+        }
+        ExprKind::StringLiteral(name) => Some(Expr::new(
+            ExprKind::NamedArg {
+                name: name.clone(),
+                value: Box::new(value.clone()),
+            },
+            value.span,
+        )),
+        _ => None,
+    }
 }
 
 /// Returns the reflected constructor signature when the ReflectionClass receiver
@@ -10276,6 +10347,19 @@ fn lower_reflection_class_new_instance_unsupported(
     result
 }
 
+/// Emits a runtime fatal for unsupported `newInstanceArgs()` argument-array forms.
+fn lower_reflection_class_new_instance_args_unsupported(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> LoweredValue {
+    let result = lower_boxed_null(ctx, expr);
+    let message = ctx.intern_string(
+        "Fatal error: unsupported ReflectionClass::newInstanceArgs() argument array\n",
+    );
+    ctx.builder.terminate(Terminator::Fatal { message });
+    result
+}
+
 /// Emits a runtime fatal for unsupported `newInstanceWithoutConstructor()` argument forms.
 fn lower_reflection_class_new_instance_without_constructor_unsupported(
     ctx: &mut LoweringContext<'_, '_>,
@@ -10296,6 +10380,22 @@ fn is_reflection_class_new_instance_call(
     method: &str,
 ) -> bool {
     if php_symbol_key(method) != "newinstance" {
+        return false;
+    }
+    let object_ty = ctx.builder.value_php_type(object);
+    let Some((class_name, false)) = singular_object_class(&object_ty) else {
+        return false;
+    };
+    php_symbol_key(class_name.trim_start_matches('\\')) == "reflectionclass"
+}
+
+/// Returns true when a method call targets `ReflectionClass::newInstanceArgs()`.
+fn is_reflection_class_new_instance_args_call(
+    ctx: &LoweringContext<'_, '_>,
+    object: ValueId,
+    method: &str,
+) -> bool {
+    if php_symbol_key(method) != "newinstanceargs" {
         return false;
     }
     let object_ty = ctx.builder.value_php_type(object);
@@ -10422,6 +10522,11 @@ fn lower_method_call_with_receiver(
 ) -> LoweredValue {
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
         return lower_reflection_class_new_instance(ctx, None, object, args, expr);
+    }
+    if op == Op::MethodCall
+        && is_reflection_class_new_instance_args_call(ctx, object.value, method)
+    {
+        return lower_reflection_class_new_instance_args(ctx, None, object, args, expr);
     }
     if op == Op::MethodCall
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)

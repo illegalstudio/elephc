@@ -466,6 +466,40 @@ fn builtin_reflection_class_new_instance_method() -> ClassMethod {
     }
 }
 
+/// Returns a public `ReflectionClass::newInstanceArgs()` method.
+///
+/// Direct calls are lowered specially so the provided argument array becomes
+/// constructor arguments for the reflected class. The placeholder body keeps
+/// the synthetic class metadata coherent for non-special paths.
+fn builtin_reflection_class_new_instance_args_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "newInstanceArgs".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![(
+            "args".to_string(),
+            Some(array_type()),
+            empty_array(),
+            false,
+        )],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public no-op method that returns the private `property` slot typed
 /// `return_type`. Reflection getters are populated at codegen; their bodies just
 /// surface the corresponding private slot.
@@ -1393,6 +1427,7 @@ fn builtin_reflection_class() -> FlattenedClass {
                 false,
             ),
             builtin_reflection_class_new_instance_method(),
+            builtin_reflection_class_new_instance_args_method(),
             builtin_reflection_class_new_instance_without_constructor_method(),
             builtin_reflection_owner_get_attributes_method(),
         ],
@@ -3306,6 +3341,12 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                         sig.ref_params.push(false);
                         sig.declared_params.push(false);
                     }
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("newInstanceArgs"))
+                {
+                    sig.return_type = PhpType::Mixed;
                 }
                 if let Some(sig) = class_info
                     .methods
