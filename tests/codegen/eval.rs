@@ -9617,6 +9617,128 @@ echo $copy->name;');
     assert_eq!(out, "A:A:hook");
 }
 
+/// Verifies eval `clone` invokes private AOT `__clone()` hooks from the declaring scope.
+#[test]
+fn test_eval_clone_aot_object_runs_private_clone_hook_in_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCloneAotPrivateHookBox {
+    public string $name;
+
+    public function __construct(string $name) {
+        $this->name = $name;
+    }
+
+    private function __clone(): void {
+        $this->name = $this->name . ":private";
+    }
+
+    public function run(): void {
+        eval('$copy = clone $this;
+echo $this->name; echo ":";
+echo $copy->name;');
+    }
+}
+
+(new EvalCloneAotPrivateHookBox("A"))->run();
+"#,
+    );
+    assert_eq!(out, "A:A:private");
+}
+
+/// Verifies eval `clone` invokes protected AOT `__clone()` hooks from child scopes.
+#[test]
+fn test_eval_clone_aot_object_runs_protected_clone_hook_in_child_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCloneAotProtectedHookBase {
+    public string $name;
+
+    public function __construct(string $name) {
+        $this->name = $name;
+    }
+
+    protected function __clone(): void {
+        $this->name = $this->name . ":protected";
+    }
+}
+
+class EvalCloneAotProtectedHookChild extends EvalCloneAotProtectedHookBase {
+    public function run(): void {
+        eval('$copy = clone $this;
+echo $this->name; echo ":";
+echo $copy->name;');
+    }
+}
+
+(new EvalCloneAotProtectedHookChild("B"))->run();
+"#,
+    );
+    assert_eq!(out, "B:B:protected");
+}
+
+/// Verifies eval `clone` rejects private AOT `__clone()` hooks outside allowed scopes.
+#[test]
+fn test_eval_clone_aot_object_rejects_private_clone_hook_outside_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalCloneAotPrivateOutsideBox {
+    public string $name;
+
+    public function __construct(string $name) {
+        $this->name = $name;
+    }
+
+    private function __clone(): void {
+        $this->name = $this->name . ":private";
+    }
+}
+
+$object = new EvalCloneAotPrivateOutsideBox("A");
+eval('$copy = clone $object; echo $copy->name;');
+"#,
+    );
+    assert!(
+        !out.success,
+        "program unexpectedly succeeded: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert!(
+        out.stderr.contains("eval() runtime failed"),
+        "expected eval runtime failure for private clone hook, got stderr={}",
+        out.stderr
+    );
+}
+
+/// Verifies eval method calls cannot directly invoke private AOT `__clone()` out of scope.
+#[test]
+fn test_eval_rejects_direct_private_aot_clone_method_call_outside_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalCloneAotPrivateDirectBox {
+    public string $name = "A";
+
+    private function __clone(): void {
+        $this->name = "private";
+    }
+}
+
+$object = new EvalCloneAotPrivateDirectBox();
+eval('$object->__clone();');
+"#,
+    );
+    assert!(
+        !out.success,
+        "program unexpectedly succeeded: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert!(
+        out.stderr.contains("eval() runtime failed"),
+        "expected eval runtime failure for private __clone call, got stderr={}",
+        out.stderr
+    );
+}
+
 /// Verifies eval ReflectionClass::isIterable reports eval and builtin class metadata.
 #[test]
 fn test_eval_reflection_class_iterable_predicate() {

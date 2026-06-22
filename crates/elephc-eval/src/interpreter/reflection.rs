@@ -2398,10 +2398,20 @@ pub(in crate::interpreter) fn eval_aot_method_dispatch_metadata(
     class_name: &str,
     method_name: &str,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<(EvalVisibility, bool, bool)>, EvalStatus> {
+) -> Result<Option<(String, EvalVisibility, bool, bool)>, EvalStatus> {
     Ok(
-        eval_reflection_aot_method_metadata_if_exists(class_name, method_name, values)?
-            .map(|member| (member.visibility, member.is_static, member.is_abstract)),
+        eval_reflection_aot_method_metadata_if_exists(class_name, method_name, values)?.map(
+            |member| {
+                (
+                    member
+                        .declaring_class_name
+                        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string()),
+                    member.visibility,
+                    member.is_static,
+                    member.is_abstract,
+                )
+            },
+        ),
     )
 }
 
