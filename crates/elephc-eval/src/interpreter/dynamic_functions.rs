@@ -109,7 +109,10 @@ fn eval_call_arg_value(
             let array = visible_scope_cell(context, caller_scope, array_name)
                 .map_or_else(|| values.null(), Ok)?;
             let index = eval_expr(index, context, caller_scope, values)?;
-            let value = values.array_get(array, index)?;
+            let value = eval_array_get_result(array, index, context, values)?;
+            if values.type_tag(array)? == EVAL_TAG_OBJECT {
+                return Ok((value, None));
+            }
             Ok((
                 value,
                 Some(EvalReferenceTarget::ArrayElement {

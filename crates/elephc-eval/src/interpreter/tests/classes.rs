@@ -73,6 +73,33 @@ return $self instanceof EvalRelativeFactoryBase
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies array reads on eval-declared `ArrayAccess` objects dispatch `offsetGet()`.
+#[test]
+fn execute_program_reads_eval_array_access_objects() {
+    let program = parse_fragment(
+        br#"class EvalArrayAccessBox implements ArrayAccess {
+    public function offsetExists(mixed $offset): bool { return true; }
+    public function offsetGet(mixed $offset): mixed {
+        echo "get:" . $offset . ":";
+        return "v" . $offset;
+    }
+    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetUnset(mixed $offset): void {}
+}
+$box = new EvalArrayAccessBox();
+echo $box["x"];
+return $box["y"];"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "get:x:vxget:y:");
+    assert_eq!(values.get(result), FakeValue::String("vy".to_string()));
+}
+
 /// Verifies by-reference promoted properties stay aliased to caller variables.
 #[test]
 fn execute_program_aliases_by_reference_promoted_variable_properties() {

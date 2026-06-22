@@ -1233,6 +1233,7 @@ impl FakeOps {
     pub(super) fn runtime_interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
         Ok([
             "KnownInterface",
+            "ArrayAccess",
             "Countable",
             "Iterator",
             "IteratorAggregate",
