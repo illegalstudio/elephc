@@ -301,7 +301,7 @@ impl Checker {
         }
     }
 
-    /// Validates `new ReflectionFunction(function)` for a statically known user function.
+    /// Validates `new ReflectionFunction(function)` for supported static function metadata.
     fn validate_reflection_function_constructor(
         &mut self,
         args: &[Expr],
@@ -331,9 +331,10 @@ impl Checker {
 
     /// Validates `new ReflectionParameter(target, param)`.
     ///
-    /// Supported targets are statically known user function names and
-    /// class/interface/trait method arrays. The parameter selector must be an
-    /// integer position or string name known at compile time.
+    /// Supported targets are statically known user function names, supported
+    /// callable-builtin function names, and class/interface/trait method arrays.
+    /// The parameter selector must be an integer position or string name known
+    /// at compile time.
     fn validate_reflection_parameter_constructor(
         &mut self,
         args: &[Expr],
@@ -494,13 +495,18 @@ impl Checker {
         Ok(class_name)
     }
 
-    /// Returns the reflected signature for a statically declared user function.
+    /// Returns the reflected signature for a user function or supported callable builtin.
     fn reflection_function_signature(
         &mut self,
         function_name: &str,
     ) -> Result<Option<FunctionSig>, CompileError> {
+        let lookup_name = function_name.trim_start_matches('\\');
+        let builtin_key = php_symbol_key(lookup_name);
+        if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_key) {
+            return Ok(Some(sig));
+        }
         let canonical =
-            match self.canonical_function_name_folded(function_name.trim_start_matches('\\')) {
+            match self.canonical_function_name_folded(lookup_name) {
                 Some(canonical) => canonical,
                 None => return Ok(None),
             };

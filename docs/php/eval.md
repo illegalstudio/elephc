@@ -339,7 +339,10 @@ reflected method is `__construct` or `__destruct`.
 `getNumberOfRequiredParameters()` report retained eval-declared function and
 method metadata, plus registered generated/AOT method parameter names, declared
 parameter and return types, required/optional counts, and scalar or null default
-values when native method/static-method signatures are registered. Eval-declared
+values when native method/static-method signatures are registered. Eval code can
+also reflect supported callable-builtin signatures, including
+internal origin, parameter names, parameter types, and return type metadata.
+Eval-declared
 functions and methods expose declared-type presence for parameters and return types, simple
 named type metadata through
 `ReflectionParameter::getType()` / `ReflectionNamedType::getName()`,
