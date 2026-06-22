@@ -96,6 +96,35 @@ echo ":" . ReflectHiddenStaticValueAccessTarget::label();
     assert_eq!(out, "4:8:old:new");
 }
 
+/// Verifies static ReflectionProperty objects selected from `getProperties()`
+/// with known indexes can read and write their reflected static storage.
+#[test]
+fn test_reflection_property_value_accessors_for_indexed_static_property_lists() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectListedStaticValueAccessTarget {
+    private static int $count = 4;
+    protected static string $label = "old";
+
+    public static function count(): int { return self::$count; }
+    public static function label(): string { return self::$label; }
+}
+
+$count = (new ReflectionClass(ReflectListedStaticValueAccessTarget::class))->getProperties()[0];
+echo $count->getName() . ":" . $count->getValue();
+$count->setValue(null, 8);
+echo ":" . ReflectListedStaticValueAccessTarget::count();
+
+$ref = new ReflectionClass(ReflectListedStaticValueAccessTarget::class);
+$label = $ref->getProperties()[1];
+echo ":" . $label->getName() . ":" . $label->getValue(null);
+$label->setValue(null, "new");
+echo ":" . ReflectListedStaticValueAccessTarget::label();
+"#,
+    );
+    assert_eq!(out, "count:4:8:label:old:new");
+}
+
 /// Verifies ReflectionClass static property value helpers bypass visibility and
 /// operate on the same live static storage as direct class methods.
 #[test]
