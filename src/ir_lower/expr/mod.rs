@@ -19,7 +19,7 @@ use crate::ir_lower::context::{
 };
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::function;
-use crate::names::{php_symbol_key, property_hook_get_method, Name};
+use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method, Name};
 use crate::parser::ast::{
     is_compound_assignment_self_read, BinOp, CallableTarget, CastType, Expr, ExprKind,
     InstanceOfTarget, MagicConstant, StaticReceiver, Stmt, StmtKind, TypeExpr, Visibility,
@@ -9967,6 +9967,13 @@ fn lower_method_call(
     }
     if op == Op::MethodCall {
         if let Some(value) =
+            lower_reflection_class_member_list_call(ctx, Some(object_expr), method, args, expr)
+        {
+            return value;
+        }
+    }
+    if op == Op::MethodCall {
+        if let Some(value) =
             lower_reflection_property_value_call(ctx, Some(object_expr), method, args, expr)
         {
             return value;
@@ -10255,6 +10262,110 @@ fn lower_reflection_class_static_property_value_call(
     }
 }
 
+/// Lowers statically-known filtered ReflectionClass member-list calls.
+fn lower_reflection_class_member_list_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let class_name = reflection_class_reflected_class(ctx, object_expr?)?;
+    let (member_class, items): (&str, Vec<Expr>) = match php_symbol_key(method).as_str() {
+        "getproperties" => {
+            let filter = reflection_class_get_properties_filter_arg(ctx, args)?;
+            (
+                "ReflectionProperty",
+                reflection_class_property_names_for_filter(ctx, &class_name, filter)?
+                    .into_iter()
+                    .map(|property| {
+                        reflection_member_constructor_expr(
+                            "ReflectionProperty",
+                            &class_name,
+                            &property,
+                            expr.span,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        }
+        "getmethods" => {
+            let filter = reflection_class_get_methods_filter_arg(ctx, args)?;
+            (
+                "ReflectionMethod",
+                reflection_class_method_names_for_filter(ctx, &class_name, filter)?
+                    .into_iter()
+                    .map(|method| {
+                        reflection_member_constructor_expr(
+                            "ReflectionMethod",
+                            &class_name,
+                            &method,
+                            expr.span,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        }
+        _ => return None,
+    };
+    Some(lower_reflection_member_array(
+        ctx,
+        member_class,
+        &items,
+        expr,
+    ))
+}
+
+/// Lowers a statically materialized Reflection member list with an explicit element type.
+fn lower_reflection_member_array(
+    ctx: &mut LoweringContext<'_, '_>,
+    member_class: &str,
+    items: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let elem_ty = PhpType::Object(member_class.to_string());
+    let array_ty = PhpType::Array(Box::new(elem_ty.clone()));
+    let array = ctx.emit_value(
+        Op::ArrayNew,
+        Vec::new(),
+        Some(Immediate::Capacity(items.len() as u32)),
+        array_ty,
+        Op::ArrayNew.default_effects(),
+        Some(expr.span),
+    );
+    for item in items {
+        let value = lower_expr(ctx, item);
+        ctx.emit_void(
+            Op::ArrayPush,
+            vec![array.value, value.value],
+            None,
+            Op::ArrayPush.default_effects(),
+            Some(item.span),
+        );
+        release_value_after_retaining_insert(ctx, Some(&elem_ty), value, item.span);
+    }
+    array
+}
+
+/// Builds a direct Reflection member constructor expression for known metadata.
+fn reflection_member_constructor_expr(
+    reflection_class: &str,
+    reflected_class: &str,
+    member: &str,
+    span: Span,
+) -> Expr {
+    Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::unqualified(reflection_class),
+            args: vec![
+                Expr::new(ExprKind::StringLiteral(reflected_class.to_string()), span),
+                Expr::new(ExprKind::StringLiteral(member.to_string()), span),
+            ],
+        },
+        span,
+    )
+}
+
 /// Lowers `ReflectionProperty::getValue($object)` when the reflected property is known.
 fn lower_reflection_property_value_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -10539,11 +10650,13 @@ fn reflection_property_class_get_properties_index_target(
     else {
         return None;
     };
-    if php_symbol_key(method) != "getproperties" || !args.is_empty() {
+    if php_symbol_key(method) != "getproperties" {
         return None;
     }
+    let filter = reflection_class_get_properties_filter_arg(ctx, args)?;
     let class_name = reflection_class_reflected_class(ctx, object)?;
-    let property = reflection_class_property_name_at_index(ctx, &class_name, *raw_index as usize)?;
+    let property =
+        reflection_class_property_name_at_index(ctx, &class_name, *raw_index as usize, filter)?;
     Some((class_name, property))
 }
 
@@ -10552,15 +10665,312 @@ fn reflection_class_property_name_at_index(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
     index: usize,
+    filter: Option<i64>,
 ) -> Option<String> {
+    reflection_class_property_names_for_filter(ctx, class_name, filter)?
+        .into_iter()
+        .nth(index)
+}
+
+/// Returns `ReflectionClass::getProperties()` names after applying a known filter.
+fn reflection_class_property_names_for_filter(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    filter: Option<i64>,
+) -> Option<Vec<String>> {
     let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
-    class_info
+    Some(
+        class_info
+            .properties
+            .iter()
+            .chain(class_info.static_properties.iter())
+            .map(|(name, _)| name)
+            .filter(|name| reflection_property_matches_filter(class_info, name, filter))
+            .cloned()
+            .collect(),
+    )
+}
+
+/// Returns `ReflectionClass::getMethods()` names after applying a known filter.
+fn reflection_class_method_names_for_filter(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    filter: Option<i64>,
+) -> Option<Vec<String>> {
+    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for name in class_info
+        .methods
+        .keys()
+        .chain(class_info.static_methods.keys())
+    {
+        if seen.insert(php_symbol_key(name))
+            && reflection_method_matches_filter(class_info, name, filter)
+        {
+            names.push(name.clone());
+        }
+    }
+    Some(names)
+}
+
+/// Returns the optional `ReflectionClass::getProperties()` modifier filter.
+fn reflection_class_get_properties_filter_arg(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Option<i64>> {
+    reflection_class_member_filter_arg(ctx, args, "ReflectionProperty")
+}
+
+/// Returns the optional `ReflectionClass::getMethods()` modifier filter.
+fn reflection_class_get_methods_filter_arg(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Option<i64>> {
+    reflection_class_member_filter_arg(ctx, args, "ReflectionMethod")
+}
+
+/// Returns the optional ReflectionClass member-list modifier filter.
+fn reflection_class_member_filter_arg(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+    constant_class: &str,
+) -> Option<Option<i64>> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    if !crate::types::call_args::has_named_args(&args) {
+        return match args.as_slice() {
+            [] => Some(None),
+            [filter] => reflection_member_filter_value(ctx, filter, constant_class),
+            _ => None,
+        };
+    }
+    let (filter, _) = reflection_class_static_property_regular_args(&args, "filter", None)?;
+    filter
+        .as_ref()
+        .map(|filter| reflection_member_filter_value(ctx, filter, constant_class))
+        .unwrap_or(Some(None))
+}
+
+/// Returns a known integer modifier filter expression.
+fn reflection_member_filter_value(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+    constant_class: &str,
+) -> Option<Option<i64>> {
+    match &expr.kind {
+        ExprKind::Null => Some(None),
+        ExprKind::IntLiteral(value) => Some(Some(*value)),
+        ExprKind::ScopedConstantAccess { receiver, name } => Some(Some(
+            reflection_member_filter_constant(ctx, receiver, name, constant_class)?,
+        )),
+        _ => None,
+    }
+}
+
+/// Resolves a `Reflection*::IS_*` class constant to its integer value.
+fn reflection_member_filter_constant(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    name: &str,
+    constant_class: &str,
+) -> Option<i64> {
+    let class_name = static_receiver_class_name(ctx, receiver)?;
+    if php_symbol_key(class_name.trim_start_matches('\\')) != php_symbol_key(constant_class) {
+        return None;
+    }
+    let value = ctx.scoped_constant_value(&class_name, name)?;
+    let ExprKind::IntLiteral(value) = value.kind else {
+        return None;
+    };
+    Some(value)
+}
+
+/// Returns whether a method should be present for a modifier filter.
+fn reflection_method_matches_filter(
+    class_info: &crate::types::ClassInfo,
+    method: &str,
+    filter: Option<i64>,
+) -> bool {
+    let Some(filter) = filter else {
+        return true;
+    };
+    reflection_method_filter_modifiers(class_info, method)
+        .is_some_and(|modifiers| modifiers & filter != 0)
+}
+
+/// Returns whether a property should be present for a modifier filter.
+fn reflection_property_matches_filter(
+    class_info: &crate::types::ClassInfo,
+    property: &str,
+    filter: Option<i64>,
+) -> bool {
+    let Some(filter) = filter else {
+        return true;
+    };
+    reflection_property_filter_modifiers(class_info, property)
+        .is_some_and(|modifiers| modifiers & filter != 0)
+}
+
+/// Computes ReflectionMethod modifier bits for static filter resolution.
+fn reflection_method_filter_modifiers(
+    class_info: &crate::types::ClassInfo,
+    method: &str,
+) -> Option<i64> {
+    let method_key = php_symbol_key(method);
+    if class_info.methods.contains_key(&method_key) {
+        let visibility = class_info
+            .method_visibilities
+            .get(&method_key)
+            .unwrap_or(&Visibility::Public);
+        return Some(reflection_method_filter_modifier_bits(
+            visibility,
+            false,
+            class_info.final_methods.contains(&method_key),
+            !class_info.method_impl_classes.contains_key(&method_key),
+        ));
+    }
+    if class_info.static_methods.contains_key(&method_key) {
+        let visibility = class_info
+            .static_method_visibilities
+            .get(&method_key)
+            .unwrap_or(&Visibility::Public);
+        return Some(reflection_method_filter_modifier_bits(
+            visibility,
+            true,
+            class_info.final_static_methods.contains(&method_key),
+            !class_info
+                .static_method_impl_classes
+                .contains_key(&method_key),
+        ));
+    }
+    None
+}
+
+/// Computes ReflectionProperty modifier bits for static filter resolution.
+fn reflection_property_filter_modifiers(
+    class_info: &crate::types::ClassInfo,
+    property: &str,
+) -> Option<i64> {
+    if class_info
         .properties
         .iter()
-        .chain(class_info.static_properties.iter())
-        .map(|(name, _)| name)
-        .nth(index)
-        .cloned()
+        .any(|(name, _)| name == property)
+    {
+        let visibility = class_info
+            .property_visibilities
+            .get(property)
+            .unwrap_or(&Visibility::Public);
+        return Some(reflection_property_filter_modifier_bits(
+            visibility,
+            false,
+            class_info.final_properties.contains(property),
+            class_info.abstract_properties.contains(property),
+            class_info.readonly_properties.contains(property),
+            reflection_property_filter_is_virtual(class_info, property),
+            class_info.property_set_visibilities.get(property),
+        ));
+    }
+    if class_info
+        .static_properties
+        .iter()
+        .any(|(name, _)| name == property)
+    {
+        let visibility = class_info
+            .static_property_visibilities
+            .get(property)
+            .unwrap_or(&Visibility::Public);
+        return Some(reflection_property_filter_modifier_bits(
+            visibility,
+            true,
+            class_info.final_static_properties.contains(property),
+            false,
+            false,
+            false,
+            None,
+        ));
+    }
+    None
+}
+
+/// Builds the ReflectionMethod modifier bitmask for filter matching.
+fn reflection_method_filter_modifier_bits(
+    visibility: &Visibility,
+    is_static: bool,
+    is_final: bool,
+    is_abstract: bool,
+) -> i64 {
+    let mut modifiers = match visibility {
+        Visibility::Public => 1,
+        Visibility::Protected => 2,
+        Visibility::Private => 4,
+    };
+    if is_static {
+        modifiers |= 16;
+    }
+    if is_final {
+        modifiers |= 32;
+    }
+    if is_abstract {
+        modifiers |= 64;
+    }
+    modifiers
+}
+
+/// Returns whether a property has hook metadata that makes it virtual.
+fn reflection_property_filter_is_virtual(
+    class_info: &crate::types::ClassInfo,
+    property: &str,
+) -> bool {
+    let get_method = php_symbol_key(&property_hook_get_method(property));
+    let set_method = php_symbol_key(&property_hook_set_method(property));
+    class_info.abstract_property_hooks.contains_key(property)
+        || class_info.methods.contains_key(&get_method)
+        || class_info.methods.contains_key(&set_method)
+}
+
+/// Builds the ReflectionProperty modifier bitmask for filter matching.
+fn reflection_property_filter_modifier_bits(
+    visibility: &Visibility,
+    is_static: bool,
+    is_final: bool,
+    is_abstract: bool,
+    is_readonly: bool,
+    is_virtual: bool,
+    set_visibility: Option<&Visibility>,
+) -> i64 {
+    let mut modifiers = match visibility {
+        Visibility::Public => 1,
+        Visibility::Protected => 2,
+        Visibility::Private => 4,
+    };
+    if is_static {
+        modifiers |= 16;
+    }
+    if is_final {
+        modifiers |= 32;
+    }
+    if is_abstract {
+        modifiers |= 64;
+    }
+    if is_readonly {
+        modifiers |= 128;
+    }
+    if is_virtual {
+        modifiers |= 512;
+    }
+    match set_visibility {
+        Some(Visibility::Private) => modifiers |= 32 | 4096,
+        Some(Visibility::Protected) => modifiers |= 2048,
+        Some(Visibility::Public) | None => {
+            if is_readonly && visibility == &Visibility::Public {
+                modifiers |= 2048;
+            }
+        }
+    }
+    modifiers
 }
 
 /// Extracts the known class and property name from an inline ReflectionProperty constructor.
@@ -10739,7 +11149,13 @@ fn lower_reflection_class_set_static_property_value(
     let (property, value) = reflection_class_set_static_property_value_args(args)?;
     let (declaring_class, _) = reflection_class_static_property_target(ctx, class_name, &property)?;
     let value = lower_expr(ctx, &value);
-    store_reflection_static_property_by_class_name(ctx, &declaring_class, &property, value.value, expr.span);
+    store_reflection_static_property_by_class_name(
+        ctx,
+        &declaring_class,
+        &property,
+        value.value,
+        expr.span,
+    );
     Some(lower_null(ctx, expr))
 }
 

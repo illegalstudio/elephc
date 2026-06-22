@@ -1393,11 +1393,6 @@ fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_implements_interface_method(),
             builtin_reflection_class_is_subclass_of_method(),
             builtin_reflection_class_is_instance_method(),
-            builtin_reflection_class_array_method(
-                "getMethods",
-                "__methods",
-                object_array_type("ReflectionMethod"),
-            ),
             builtin_reflection_class_get_member_method(
                 "getMethod",
                 "__methods",
@@ -1410,7 +1405,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 "ReflectionMethod",
             ),
             builtin_reflection_class_mixed_method("getParentClass", "__parent_class"),
-            builtin_reflection_class_array_method(
+            builtin_reflection_class_filtered_array_method(
+                "getMethods",
+                "__methods",
+                object_array_type("ReflectionMethod"),
+            ),
+            builtin_reflection_class_filtered_array_method(
                 "getProperties",
                 "__properties",
                 object_array_type("ReflectionProperty"),
@@ -2194,6 +2194,87 @@ fn builtin_reflection_class_array_method(
             ))),
             dummy_span,
         )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass` array method with a fail-closed optional filter.
+fn builtin_reflection_class_filtered_array_method(
+    method_name: &str,
+    property: &str,
+    return_type: TypeExpr,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let filter = variable_expr("filter", dummy_span);
+    let source = reflection_this_property(property, dummy_span);
+    let filter_is_null = binary_expr(
+        filter.clone(),
+        BinOp::StrictEq,
+        Expr::new(ExprKind::Null, dummy_span),
+        dummy_span,
+    );
+    let filter_is_zero = binary_expr(
+        filter,
+        BinOp::StrictEq,
+        Expr::new(ExprKind::IntLiteral(0), dummy_span),
+        dummy_span,
+    );
+    let empty_result = Expr::new(ExprKind::ArrayLiteral(Vec::new()), dummy_span);
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![(
+            "filter".to_string(),
+            Some(TypeExpr::Nullable(Box::new(TypeExpr::Int))),
+            null_expr(),
+            false,
+        )],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(return_type),
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: filter_is_null,
+                    then_body: vec![Stmt::new(
+                        StmtKind::Return(Some(source.clone())),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::If {
+                    condition: filter_is_zero,
+                    then_body: vec![Stmt::new(
+                        StmtKind::Return(Some(empty_result.clone())),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            throw_new_reflection_exception(
+                string_lit(
+                    &format!(
+                        "ReflectionClass::{}() dynamic filters are not supported",
+                        method_name
+                    ),
+                    dummy_span,
+                ),
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(Some(empty_result)), dummy_span),
+        ],
         span: dummy_span,
         attributes: Vec::new(),
     }
