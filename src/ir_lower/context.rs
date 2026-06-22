@@ -112,6 +112,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     reflection_class_locals: HashMap<String, String>,
     reflection_property_locals: HashMap<String, (String, String)>,
     reflection_method_locals: HashMap<String, (String, String)>,
+    reflection_arg_array_locals: HashMap<String, Vec<Expr>>,
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
@@ -176,6 +177,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reflection_class_locals: HashMap::new(),
             reflection_property_locals: HashMap::new(),
             reflection_method_locals: HashMap::new(),
+            reflection_arg_array_locals: HashMap::new(),
             fiber_start_sigs: HashMap::new(),
             ref_bound_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
@@ -581,6 +583,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_reflection_class_local(name);
         self.clear_reflection_property_local(name);
         self.clear_reflection_method_local(name);
+        self.clear_reflection_arg_array_local(name);
         self.clear_fiber_start_sig(name);
         if let Some(extern_type) = self.extern_global_type(name) {
             let release_source_after_store = self.value_is_owning_temporary(value);
@@ -719,6 +722,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_reflection_class_local(name);
         self.clear_reflection_property_local(name);
         self.clear_reflection_method_local(name);
+        self.clear_reflection_arg_array_local(name);
         self.clear_fiber_start_sig(name);
         let previous_kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
         let uses_global = self.uses_global_storage(name, previous_kind);
@@ -753,6 +757,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_reflection_class_local(name);
         self.clear_reflection_property_local(name);
         self.clear_reflection_method_local(name);
+        self.clear_reflection_arg_array_local(name);
         self.clear_fiber_start_sig(name);
         let slot = self.declare_local(name, PhpType::Void);
         self.release_ref_cell_owner(name, span);
@@ -804,6 +809,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_static_callable_local(target);
         self.clear_reflection_class_local(target);
         self.clear_reflection_property_local(target);
+        self.clear_reflection_method_local(target);
+        self.clear_reflection_arg_array_local(target);
         self.clear_fiber_start_sig(target);
         self.release_replaced_local_before_ref_alias(target, span);
         let source_slot = self.declare_local(source, source_ty.clone());
@@ -1017,6 +1024,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reflection_method_locals.get(name).cloned()
     }
 
+    /// Records that a PHP local currently holds a safe static argument array for reflection.
+    pub(crate) fn bind_reflection_arg_array_local(&mut self, name: &str, args: Vec<Expr>) {
+        if self.can_track_static_callable_local(name) {
+            self.reflection_arg_array_locals
+                .insert(name.to_string(), args);
+        }
+    }
+
+    /// Returns the static reflection argument array associated with a local.
+    pub(crate) fn reflection_arg_array_local(&self, name: &str) -> Option<Vec<Expr>> {
+        self.reflection_arg_array_locals.get(name).cloned()
+    }
+
     /// Records that a PHP local currently holds a Fiber with a known callback signature.
     pub(crate) fn bind_fiber_start_sig(&mut self, name: &str, sig: FunctionSig) {
         if self.can_track_static_callable_local(name) {
@@ -1060,6 +1080,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reflection_method_locals.remove(name);
     }
 
+    /// Clears the compile-time reflection argument-array association for one local.
+    pub(crate) fn clear_reflection_arg_array_local(&mut self, name: &str) {
+        self.reflection_arg_array_locals.remove(name);
+    }
+
     /// Clears the known Fiber callback association for one local.
     pub(crate) fn clear_fiber_start_sig(&mut self, name: &str) {
         self.fiber_start_sigs.remove(name);
@@ -1071,6 +1096,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reflection_class_locals.clear();
         self.reflection_property_locals.clear();
         self.reflection_method_locals.clear();
+        self.reflection_arg_array_locals.clear();
         self.fiber_start_sigs.clear();
     }
 

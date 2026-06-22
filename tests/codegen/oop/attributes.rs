@@ -3176,11 +3176,14 @@ $third = (new ReflectionClass(ReflectNewArgsTarget::class))->newInstanceArgs(arg
 echo $third->label() . ":";
 $fourth = (new ReflectionClass(ReflectNewArgsTarget::class))->newInstanceArgs(...[["left" => "M", "right" => "N"]]);
 echo $fourth->label() . ":";
+$localArgs = ["right" => "P", "left" => "O"];
+$fifth = (new ReflectionClass(ReflectNewArgsTarget::class))->newInstanceArgs($localArgs);
+echo $fifth->label() . ":";
 $empty = (new ReflectionClass(ReflectEmptyNewArgsTarget::class))->newInstanceArgs();
 echo $empty->label();
 "#,
     );
-    assert_eq!(out, "XY:QR:LB:MN:empty");
+    assert_eq!(out, "XY:QR:LB:MN:OP:empty");
 }
 
 /// Verifies that `ReflectionClass::newInstance()` accepts zero constructor

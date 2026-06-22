@@ -60,9 +60,12 @@ echo (new ReflectionClass(ReflectInvokeArgsTarget::class))->getMethod("join")->i
 echo ":";
 $method = new ReflectionMethod(ReflectInvokeArgsTarget::class, "join");
 echo $method->invokeArgs(...[$object, ["A", "C"]]);
+echo ":";
+$localArgs = ["right" => "P", "left" => "O"];
+echo (new ReflectionMethod(ReflectInvokeArgsTarget::class, "join"))->invokeArgs($object, $localArgs);
 "#,
     );
-    assert_eq!(out, "XY:QB:MN:LB:AC");
+    assert_eq!(out, "XY:QB:MN:LB:AC:OP");
 }
 
 /// Verifies constructors returned by `ReflectionClass::getConstructor()` can be invoked.

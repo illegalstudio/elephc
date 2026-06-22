@@ -322,7 +322,8 @@ the lowered call supports instance and static methods, constructors returned by
 `ReflectionClass::getConstructor()`, method-name
 case-insensitivity, defaults, and named arguments. Generated/AOT
 invoke targets whose parameter types only come from call-site inference and
-runtime-only argument arrays still require richer runtime/typechecker support.
+runtime-only or non-literal argument arrays still require richer
+runtime/typechecker support.
 Eval-declared method parameter type hints are checked when the method is
 entered. Supported checks include scalar hints with PHP-style weak scalar
 coercion, `array`, `object`, `iterable`, `mixed`, nullable/union forms, and

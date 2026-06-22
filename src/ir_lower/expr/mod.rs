@@ -1490,6 +1490,8 @@ fn lower_assignment_expr(
         assigned_name.and_then(|_| reflection_property_binding_for_expr(ctx, value));
     let reflected_method =
         assigned_name.and_then(|_| reflection_method_binding_for_expr(ctx, value));
+    let reflected_args =
+        assigned_name.and_then(|_| reflection_arg_array_binding_for_expr(value));
     let fiber_start_sig =
         assigned_name.and_then(|_| crate::ir_lower::fibers::start_sig_for_expr(ctx, value));
     let callable_array = assigned_name
@@ -1516,6 +1518,9 @@ fn lower_assignment_expr(
         }
         if let Some((reflected_class, reflected_method)) = reflected_method {
             ctx.bind_reflection_method_local(name, reflected_class, reflected_method);
+        }
+        if let Some(reflected_args) = reflected_args {
+            ctx.bind_reflection_arg_array_local(name, reflected_args);
         }
         if let Some(sig) = fiber_start_sig {
             ctx.bind_fiber_start_sig(name, sig);
@@ -3265,6 +3270,52 @@ pub(crate) fn reflection_method_binding_for_expr(
     expr: &Expr,
 ) -> Option<(String, String)> {
     reflection_method_reflected_target(ctx, expr)
+}
+
+/// Returns a safe static argument array that can be replayed for reflection forwarding.
+pub(crate) fn reflection_arg_array_binding_for_expr(expr: &Expr) -> Option<Vec<Expr>> {
+    let args = reflection_class_new_instance_args_value_without_locals(expr)?;
+    if args.iter().all(reflection_arg_expr_can_track) {
+        Some(args)
+    } else {
+        None
+    }
+}
+
+/// Returns true when replaying an argument expression cannot duplicate side effects.
+fn reflection_arg_expr_can_track(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::ConstRef(_)
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::MagicConstant(_) => true,
+        ExprKind::Negate(inner) => matches!(
+            &inner.kind,
+            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+        ),
+        ExprKind::NamedArg { value, .. } => reflection_arg_expr_can_track(value),
+        ExprKind::ArrayLiteral(items) => items.iter().all(reflection_arg_expr_can_track),
+        ExprKind::ArrayLiteralAssoc(entries) => entries.iter().all(|(key, value)| {
+            reflection_arg_array_key_can_track(key) && reflection_arg_expr_can_track(value)
+        }),
+        _ => false,
+    }
+}
+
+/// Returns true when an associative array key is stable enough for replay.
+fn reflection_arg_array_key_can_track(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::StringLiteral(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::FloatLiteral(_)
+    )
 }
 
 /// EIR value and callable binding produced by a callable-array assignment.
@@ -9142,7 +9193,7 @@ fn lower_reflection_class_new_instance_args(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let Some(forwarded_args) = reflection_class_new_instance_args_array(args) else {
+    let Some(forwarded_args) = reflection_class_new_instance_args_array(ctx, args) else {
         return lower_reflection_class_new_instance_args_unsupported(ctx, expr);
     };
     lower_reflection_class_new_instance(ctx, object_expr, object, &forwarded_args, expr)
@@ -9440,7 +9491,7 @@ fn reflection_method_invoke_args_array(
     if !crate::types::call_args::has_named_args(&args) {
         return match args.as_slice() {
             [object, forwarded] => {
-                let forwarded = reflection_class_new_instance_args_value(forwarded)?;
+                let forwarded = reflection_class_new_instance_args_value(ctx, forwarded)?;
                 Some((object.clone(), forwarded))
             }
             _ => None,
@@ -9469,7 +9520,7 @@ fn reflection_method_invoke_args_array(
     }
     let object = planned_regular_arg_expr(plan.regular_args.first()?)?.clone();
     let forwarded_arg = planned_regular_arg_expr(plan.regular_args.get(1)?)?;
-    let forwarded = reflection_class_new_instance_args_value(forwarded_arg)?;
+    let forwarded = reflection_class_new_instance_args_value(ctx, forwarded_arg)?;
     Some((object, forwarded))
 }
 
@@ -10847,17 +10898,36 @@ fn reflection_class_new_instance_args(args: &[Expr]) -> Vec<Expr> {
 }
 
 /// Returns constructor arguments carried by a static `newInstanceArgs()` array argument.
-fn reflection_class_new_instance_args_array(args: &[Expr]) -> Option<Vec<Expr>> {
+fn reflection_class_new_instance_args_array(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Vec<Expr>> {
     let args = reflection_class_new_instance_args(args);
     match args.as_slice() {
         [] => Some(Vec::new()),
-        [arg] => reflection_class_new_instance_args_value(arg),
+        [arg] => reflection_class_new_instance_args_value(ctx, arg),
         _ => None,
     }
 }
 
 /// Extracts the actual array value passed to the `newInstanceArgs()` `$args` parameter.
-fn reflection_class_new_instance_args_value(arg: &Expr) -> Option<Vec<Expr>> {
+fn reflection_class_new_instance_args_value(
+    ctx: &LoweringContext<'_, '_>,
+    arg: &Expr,
+) -> Option<Vec<Expr>> {
+    let array_expr = match &arg.kind {
+        ExprKind::NamedArg { name, value } if php_symbol_key(name) == "args" => value.as_ref(),
+        ExprKind::NamedArg { .. } => return None,
+        _ => arg,
+    };
+    if let ExprKind::Variable(name) = &array_expr.kind {
+        return ctx.reflection_arg_array_local(name);
+    }
+    reflection_class_new_instance_args_value_without_locals(array_expr)
+}
+
+/// Extracts an inline static array value passed to a reflection argument-array API.
+fn reflection_class_new_instance_args_value_without_locals(arg: &Expr) -> Option<Vec<Expr>> {
     let array_expr = match &arg.kind {
         ExprKind::NamedArg { name, value } if php_symbol_key(name) == "args" => value.as_ref(),
         ExprKind::NamedArg { .. } => return None,
