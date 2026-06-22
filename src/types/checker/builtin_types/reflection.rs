@@ -666,6 +666,12 @@ fn builtin_reflection_parameter() -> FlattenedClass {
                 null_lit(),
             ),
             builtin_property(
+                "__default_value_object_class",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
                 "__declaring_class",
                 Visibility::Private,
                 Some(mixed_type()),
@@ -752,6 +758,32 @@ fn builtin_reflection_parameter_get_default_value_method() -> ClassMethod {
                             "Internal error: Failed to retrieve the default value",
                             dummy_span,
                         ),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::If {
+                    condition: binary_expr(
+                        reflection_this_property("__default_value_object_class", dummy_span),
+                        BinOp::NotEq,
+                        string_lit("", dummy_span),
+                        dummy_span,
+                    ),
+                    then_body: vec![Stmt::new(
+                        StmtKind::Return(Some(Expr::new(
+                            ExprKind::NewDynamic {
+                                name_expr: Box::new(reflection_this_property(
+                                    "__default_value_object_class",
+                                    dummy_span,
+                                )),
+                                args: Vec::new(),
+                            },
+                            dummy_span,
+                        ))),
                         dummy_span,
                     )],
                     elseif_clauses: Vec::new(),

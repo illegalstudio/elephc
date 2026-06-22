@@ -178,6 +178,9 @@ enum ReflectionParameterDefaultValue {
     Float(f64),
     Str(String),
     Null,
+    Object {
+        class_name: String,
+    },
     Array(Vec<ReflectionParameterDefaultValue>),
     AssocArray(Vec<ReflectionDefaultAssocEntry>),
 }
@@ -2802,6 +2805,11 @@ fn reflection_literal_parameter_default_value(
         ExprKind::FloatLiteral(value) => Some(ReflectionParameterDefaultValue::Float(*value)),
         ExprKind::StringLiteral(value) => Some(ReflectionParameterDefaultValue::Str(value.clone())),
         ExprKind::Null => Some(ReflectionParameterDefaultValue::Null),
+        ExprKind::NewObject { class_name, args } if args.is_empty() => {
+            Some(ReflectionParameterDefaultValue::Object {
+                class_name: class_name.as_str().to_string(),
+            })
+        }
         ExprKind::ArrayLiteral(items) => items
             .iter()
             .map(reflection_literal_parameter_default_value)
@@ -4166,6 +4174,7 @@ fn emit_reflection_default_value_as_mixed(
             emit_boxed_string_literal_default_to_result(ctx, value)
         }
         ReflectionParameterDefaultValue::Null => emit_boxed_null_literal_to_result(ctx),
+        ReflectionParameterDefaultValue::Object { .. } => emit_boxed_null_literal_to_result(ctx),
         ReflectionParameterDefaultValue::Array(elements) => {
             emit_reflection_indexed_array_default_as_mixed(ctx, elements)
         }
@@ -4523,6 +4532,8 @@ fn emit_reflection_parameter_properties(
     let name_offset = reflection_property_offset(class_info, "__name")?;
     let default_value_constant_name_offset =
         reflection_property_offset(class_info, "__default_value_constant_name")?;
+    let default_value_object_class_offset =
+        reflection_property_offset(class_info, "__default_value_object_class")?;
     emit_reflection_string_property(ctx, &parameter.name, name_offset, name_offset + 8);
     emit_reflection_attrs_property(
         ctx,
@@ -4606,10 +4617,26 @@ fn emit_reflection_parameter_properties(
         default_value_constant_name_offset,
         default_value_constant_name_offset + 8,
     );
+    emit_reflection_string_property(
+        ctx,
+        reflection_parameter_default_object_class(parameter.default_value.as_ref()).unwrap_or(""),
+        default_value_object_class_offset,
+        default_value_object_class_offset + 8,
+    );
     emit_reflection_parameter_default_property(ctx, parameter)?;
     emit_reflection_parameter_declaring_class_property(ctx, parameter)?;
     emit_reflection_parameter_declaring_function_property(ctx, parameter)?;
     Ok(())
+}
+
+/// Returns the class name for object parameter defaults that are materialized lazily.
+fn reflection_parameter_default_object_class(
+    default_value: Option<&ReflectionParameterDefaultValue>,
+) -> Option<&str> {
+    match default_value {
+        Some(ReflectionParameterDefaultValue::Object { class_name }) => Some(class_name),
+        _ => None,
+    }
 }
 
 /// Writes one ReflectionParameter object's declaring-function slot.

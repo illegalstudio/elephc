@@ -2783,6 +2783,50 @@ echo $assoc[0] . ":" . $assoc[3]["deep"];
     );
 }
 
+/// Verifies `ReflectionParameter::getDefaultValue()` materializes object defaults lazily.
+#[test]
+fn test_reflection_parameter_exposes_object_default_values() {
+    let out = compile_and_run_capture(
+        r##"<?php
+class ReflectObjectDefaultValue {
+    public string $label;
+    public function __construct() {
+        $this->label = "ctor";
+    }
+}
+function reflect_object_default(ReflectObjectDefaultValue $value = new ReflectObjectDefaultValue()) {}
+class ReflectObjectDefaultMethod {
+    public function run(ReflectObjectDefaultValue $value = new ReflectObjectDefaultValue()) {}
+}
+$param = (new ReflectionFunction("reflect_object_default"))->getParameters()[0];
+echo $param->isDefaultValueAvailable() ? "D:" : "d:";
+$first = $param->getDefaultValue();
+$second = $param->getDefaultValue();
+if ($first instanceof ReflectObjectDefaultValue) {
+    echo "object:" . $first->label . ":";
+} else {
+    echo "not-object:";
+}
+echo $first === $second ? "same" : "diff";
+$direct = (new ReflectionParameter("reflect_object_default", "value"))->getDefaultValue();
+echo $direct instanceof ReflectObjectDefaultValue ? ":direct:" . $direct->label : ":direct:bad";
+$method = (new ReflectionMethod(ReflectObjectDefaultMethod::class, "run"))->getParameters()[0]->getDefaultValue();
+echo $method instanceof ReflectObjectDefaultValue ? ":method:" . $method->label : ":method:bad";
+$directMethod = (new ReflectionParameter([ReflectObjectDefaultMethod::class, "run"], "value"))->getDefaultValue();
+echo $directMethod instanceof ReflectObjectDefaultValue ? ":direct-method:" . $directMethod->label : ":direct-method:bad";
+"##,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "D:object:ctor:diff:direct:ctor:method:ctor:direct-method:ctor"
+    );
+}
+
 /// Verifies `ReflectionParameter` exposes class-constant default metadata.
 #[test]
 fn test_reflection_parameter_exposes_default_constant_metadata() {
