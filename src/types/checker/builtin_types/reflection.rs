@@ -2582,6 +2582,82 @@ fn builtin_reflection_property_modifier_mask_method(method_name: &str, mask: i64
     }
 }
 
+/// Returns the fallback `ReflectionProperty::getValue()` body for unsupported dynamic receivers.
+fn builtin_reflection_property_get_value_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "getValue".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(mixed_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        body: vec![throw_new_reflection_exception(
+            string_lit(
+                "ReflectionProperty::getValue() requires an inline known public instance property",
+                dummy_span,
+            ),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionProperty::setValue()` for explicit public instance-object writes.
+fn builtin_reflection_property_set_value_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let target = reflection_dynamic_object_property(dummy_span);
+    let value = Expr::new(ExprKind::Variable("value".to_string()), dummy_span);
+    ClassMethod {
+        name: "setValue".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            ("object".to_string(), Some(mixed_type()), None, false),
+            ("value".to_string(), Some(mixed_type()), None, false),
+        ],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        body: vec![Stmt::new(
+            StmtKind::ExprStmt(Expr::new(
+                ExprKind::Assignment {
+                    target: Box::new(target),
+                    value: Box::new(value),
+                    result_target: None,
+                    prelude: Vec::new(),
+                    conditional_value_temp: None,
+                },
+                dummy_span,
+            )),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `$object->{$this->__name}` for ReflectionProperty value accessors.
+fn reflection_dynamic_object_property(span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::DynamicPropertyAccess {
+            object: Box::new(Expr::new(ExprKind::Variable("object".to_string()), span)),
+            property: Box::new(reflection_this_property("__name", span)),
+        },
+        span,
+    )
+}
+
 /// Returns `ReflectionProperty::isLazy()` for the non-lazy property model elephc supports.
 fn builtin_reflection_property_is_lazy_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
@@ -2986,6 +3062,8 @@ fn add_reflection_member_flag_methods(
         ));
         methods.push(builtin_reflection_property_is_lazy_method());
         methods.push(builtin_reflection_property_skip_lazy_initialization_method());
+        methods.push(builtin_reflection_property_get_value_method());
+        methods.push(builtin_reflection_property_set_value_method());
         methods.push(builtin_reflection_property_modifier_mask_method(
             "isProtectedSet",
             2048,

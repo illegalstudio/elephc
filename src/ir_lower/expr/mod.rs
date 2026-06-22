@@ -9923,10 +9923,15 @@ fn lower_method_call(
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
         return lower_reflection_class_new_instance(ctx, Some(object_expr), object, args, expr);
     }
-    if op == Op::MethodCall
-        && is_reflection_class_new_instance_args_call(ctx, object.value, method)
+    if op == Op::MethodCall && is_reflection_class_new_instance_args_call(ctx, object.value, method)
     {
-        return lower_reflection_class_new_instance_args(ctx, Some(object_expr), object, args, expr);
+        return lower_reflection_class_new_instance_args(
+            ctx,
+            Some(object_expr),
+            object,
+            args,
+            expr,
+        );
     }
     if op == Op::MethodCall
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
@@ -9941,6 +9946,13 @@ fn lower_method_call(
             args,
             expr,
         ) {
+            return value;
+        }
+    }
+    if op == Op::MethodCall {
+        if let Some(value) =
+            lower_reflection_property_value_call(ctx, Some(object_expr), method, args, expr)
+        {
             return value;
         }
     }
@@ -10227,6 +10239,127 @@ fn lower_reflection_class_static_property_value_call(
     }
 }
 
+/// Lowers `ReflectionProperty::getValue($object)` when the reflected property is known.
+fn lower_reflection_property_value_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(method) != "getvalue" {
+        return None;
+    }
+    let (_, property, _) = reflection_property_instance_target(ctx, object_expr?)?;
+    let object_arg = reflection_property_get_value_object_arg(args)?;
+    let object = lower_expr(ctx, &object_arg);
+    Some(lower_property_get_from_value(
+        ctx,
+        object,
+        &property,
+        Op::PropGet,
+        expr,
+    ))
+}
+
+/// Returns the explicit object argument passed to `ReflectionProperty::getValue()`.
+fn reflection_property_get_value_object_arg(args: &[Expr]) -> Option<Expr> {
+    match args {
+        [arg] => Some(arg.clone()),
+        _ => None,
+    }
+}
+
+/// Resolves an inline `new ReflectionProperty(Known::class, "prop")` instance property target.
+fn reflection_property_instance_target(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<(String, String, PhpType)> {
+    let (class_name, property) = reflection_property_constructor_target(ctx, object_expr)?;
+    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    if class_info
+        .static_properties
+        .iter()
+        .any(|(name, _)| name == &property)
+    {
+        return None;
+    }
+    if class_info.property_visibilities.get(&property) != Some(&Visibility::Public) {
+        return None;
+    }
+    let (_, (_, property_ty)) = class_info.visible_property(&property)?;
+    Some((
+        class_name,
+        property,
+        normalize_value_php_type(property_ty.codegen_repr()),
+    ))
+}
+
+/// Extracts the known class and property name from an inline ReflectionProperty constructor.
+fn reflection_property_constructor_target(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<(String, String)> {
+    let ExprKind::NewObject { class_name, args } = &object_expr.kind else {
+        return None;
+    };
+    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) != "reflectionproperty" {
+        return None;
+    }
+    let (class_arg, property_arg) = reflection_property_constructor_regular_args(ctx, args)?;
+    let raw_class_name = match &class_arg.kind {
+        ExprKind::StringLiteral(value) => value.clone(),
+        ExprKind::ClassConstant { receiver } => static_receiver_class_name(ctx, receiver)?,
+        _ => return None,
+    };
+    let class_name = resolve_known_class_name(ctx, &raw_class_name)?;
+    let ExprKind::StringLiteral(property) = property_arg.kind else {
+        return None;
+    };
+    Some((class_name, property))
+}
+
+/// Returns normalized constructor args for `ReflectionProperty($class, $property)`.
+fn reflection_property_constructor_regular_args(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<(Expr, Expr)> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    if !crate::types::call_args::has_named_args(&args) {
+        return match args.as_slice() {
+            [class_arg, property_arg] => Some((class_arg.clone(), property_arg.clone())),
+            _ => None,
+        };
+    }
+    let sig = ctx
+        .classes
+        .get("ReflectionProperty")
+        .and_then(|class_info| class_info.methods.get("__construct"))?;
+    let call_span = args
+        .first()
+        .map(|arg| arg.span)
+        .unwrap_or_else(crate::span::Span::dummy);
+    let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+        sig,
+        &args,
+        call_span,
+        crate::types::call_args::regular_param_count(sig),
+        false,
+        true,
+        &assoc_spread_sources(ctx, &args),
+    )
+    .ok()?;
+    if plan.has_spread_args() {
+        return None;
+    }
+    let class_arg = planned_regular_arg_expr(plan.regular_args.first()?)?.clone();
+    let property_arg = planned_regular_arg_expr(plan.regular_args.get(1)?)?.clone();
+    Some((class_arg, property_arg))
+}
+
 /// Lowers `ReflectionClass::getStaticProperties()` to a live static-property map.
 fn lower_reflection_class_get_static_properties(
     ctx: &mut LoweringContext<'_, '_>,
@@ -10368,9 +10501,7 @@ fn reflection_class_get_static_property_value_args(
 }
 
 /// Returns the literal property name and value expression for a set call.
-fn reflection_class_set_static_property_value_args(
-    args: &[Expr],
-) -> Option<(String, Expr)> {
+fn reflection_class_set_static_property_value_args(args: &[Expr]) -> Option<(String, Expr)> {
     let args = reflection_class_new_instance_args(args);
     if args.iter().any(is_spread_arg) {
         return None;
@@ -10834,8 +10965,7 @@ fn lower_method_call_with_receiver(
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
         return lower_reflection_class_new_instance(ctx, None, object, args, expr);
     }
-    if op == Op::MethodCall
-        && is_reflection_class_new_instance_args_call(ctx, object.value, method)
+    if op == Op::MethodCall && is_reflection_class_new_instance_args_call(ctx, object.value, method)
     {
         return lower_reflection_class_new_instance_args(ctx, None, object, args, expr);
     }
