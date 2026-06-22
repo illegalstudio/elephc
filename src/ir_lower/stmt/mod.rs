@@ -20,8 +20,8 @@ use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
     array_access_element_result_type, coerce_to_int_at_span, lower_callable_array_for_assignment,
     lower_array_literal_with_expected_type, lower_closure_for_assignment, lower_expr,
-    static_callable_binding_for_expr, string_op_uses_scratch_storage,
-    type_satisfies_array_access_for_ir,
+    reflection_class_binding_for_expr, static_callable_binding_for_expr,
+    string_op_uses_scratch_storage, type_satisfies_array_access_for_ir,
 };
 use crate::names::{php_symbol_key, property_hook_set_method};
 use crate::parser::ast::{
@@ -234,6 +234,7 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     let direct_closure = matches!(value.kind, ExprKind::Closure { .. }) || bound_closure;
     ctx.clear_pending_static_callable_result();
     let static_callable = static_callable_binding_for_expr(ctx, value);
+    let reflected_class = reflection_class_binding_for_expr(ctx, value);
     let fiber_start_sig = crate::ir_lower::fibers::start_sig_for_expr(ctx, value);
     let callable_array = lower_callable_array_for_assignment(ctx, value, static_callable.as_ref());
     let lowered = callable_array
@@ -262,6 +263,9 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
         if let Some(target) = static_callable {
             ctx.bind_static_callable_local(name, target);
         }
+    }
+    if let Some(reflected_class) = reflected_class {
+        ctx.bind_reflection_class_local(name, reflected_class);
     }
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(name, sig);
@@ -1023,6 +1027,7 @@ fn lower_typed_assign(
     ctx.clear_pending_static_callable_result();
     let php_type = ctx.type_expr_to_php_type_for_value(type_expr);
     let static_callable = static_callable_binding_for_expr(ctx, value);
+    let reflected_class = reflection_class_binding_for_expr(ctx, value);
     let fiber_start_sig = crate::ir_lower::fibers::start_sig_for_expr(ctx, value);
     let callable_array = lower_callable_array_for_assignment(ctx, value, static_callable.as_ref());
     let lowered = callable_array
@@ -1044,6 +1049,9 @@ fn lower_typed_assign(
         .or(callable_result);
     if let Some(target) = static_callable {
         ctx.bind_static_callable_local(name, target);
+    }
+    if let Some(reflected_class) = reflected_class {
+        ctx.bind_reflection_class_local(name, reflected_class);
     }
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(name, sig);

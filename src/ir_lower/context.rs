@@ -120,6 +120,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub loop_stack: Vec<LoopFrame>,
     pub finally_stack: Vec<FinallyFrame>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
+    reflection_class_locals: HashMap<String, String>,
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
@@ -194,6 +195,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             loop_stack: Vec::new(),
             finally_stack: Vec::new(),
             static_callable_locals: HashMap::new(),
+            reflection_class_locals: HashMap::new(),
             fiber_start_sigs: HashMap::new(),
             ref_bound_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
@@ -697,6 +699,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Emits a store to a PHP local slot, updates type facts, and returns the stored value.
     pub(crate) fn store_local(&mut self, name: &str, value: LoweredValue, php_type: PhpType, span: Option<Span>) -> LoweredValue {
         self.clear_static_callable_local(name);
+        self.clear_reflection_class_local(name);
         self.clear_fiber_start_sig(name);
         if let Some(extern_type) = self.extern_global_type(name) {
             let release_source_after_store = self.value_is_owning_temporary(value);
@@ -917,6 +920,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) -> LoweredValue {
         self.clear_static_callable_local(name);
+        self.clear_reflection_class_local(name);
         self.clear_fiber_start_sig(name);
         let previous_kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
         let uses_global = self.uses_global_storage(name, previous_kind);
@@ -948,6 +952,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return self.store_local(name, null, PhpType::Void, span);
         }
         self.clear_static_callable_local(name);
+        self.clear_reflection_class_local(name);
         self.clear_fiber_start_sig(name);
         let slot = self.declare_local(name, PhpType::Void);
         self.release_ref_cell_owner(name, span);
@@ -1014,6 +1019,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.promote_local_ref_cell(source, span);
         }
         self.clear_static_callable_local(target);
+        self.clear_reflection_class_local(target);
         self.clear_fiber_start_sig(target);
         self.release_replaced_local_before_ref_alias(target, span);
         let source_slot = self.declare_local(source, source_ty.clone());
@@ -1289,6 +1295,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.static_callable_locals.get(name).cloned()
     }
 
+    /// Records that a PHP local currently holds a statically-known `ReflectionClass` object.
+    pub(crate) fn bind_reflection_class_local(&mut self, name: &str, reflected_class: String) {
+        if self.can_track_static_callable_local(name) {
+            self.reflection_class_locals
+                .insert(name.to_string(), reflected_class);
+        }
+    }
+
+    /// Returns the reflected class associated with a local `ReflectionClass`, if known.
+    pub(crate) fn reflection_class_local(&self, name: &str) -> Option<String> {
+        self.reflection_class_locals.get(name).cloned()
+    }
+
     /// Records that a PHP local currently holds a Fiber with a known callback signature.
     pub(crate) fn bind_fiber_start_sig(&mut self, name: &str, sig: FunctionSig) {
         if self.can_track_static_callable_local(name) {
@@ -1317,6 +1336,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.static_callable_locals.remove(name);
     }
 
+    /// Clears the compile-time `ReflectionClass` association for one local.
+    pub(crate) fn clear_reflection_class_local(&mut self, name: &str) {
+        self.reflection_class_locals.remove(name);
+    }
+
     /// Clears the known Fiber callback association for one local.
     pub(crate) fn clear_fiber_start_sig(&mut self, name: &str) {
         self.fiber_start_sigs.remove(name);
@@ -1325,6 +1349,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Clears all compile-time callable associations after a control-flow join.
     pub(crate) fn clear_static_callable_locals(&mut self) {
         self.static_callable_locals.clear();
+        self.reflection_class_locals.clear();
         self.fiber_start_sigs.clear();
     }
 

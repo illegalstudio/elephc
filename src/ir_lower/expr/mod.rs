@@ -1511,6 +1511,7 @@ fn lower_assignment_expr(
         }
     }
     let static_callable = assigned_name.and_then(|_| static_callable_binding_for_expr(ctx, value));
+    let reflected_class = assigned_name.and_then(|_| reflection_class_binding_for_expr(ctx, value));
     let fiber_start_sig =
         assigned_name.and_then(|_| crate::ir_lower::fibers::start_sig_for_expr(ctx, value));
     let callable_array = assigned_name
@@ -1544,6 +1545,9 @@ fn lower_assignment_expr(
             .or(static_callable);
         if let Some(target) = static_callable {
             ctx.bind_static_callable_local(name, target);
+        }
+        if let Some(reflected_class) = reflected_class {
+            ctx.bind_reflection_class_local(name, reflected_class);
         }
         if let Some(sig) = fiber_start_sig {
             ctx.bind_fiber_start_sig(name, sig);
@@ -3582,6 +3586,14 @@ pub(crate) fn static_callable_binding_for_expr(
         ExprKind::Variable(name) => ctx.static_callable_local(name),
         _ => None,
     }
+}
+
+/// Returns the reflected class captured by a statically-known `ReflectionClass` expression.
+pub(crate) fn reflection_class_binding_for_expr(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> Option<String> {
+    reflection_class_new_instance_reflected_class(ctx, expr)
 }
 
 /// EIR value and callable binding produced by a callable-array assignment.
@@ -10200,7 +10212,7 @@ fn lower_reflection_class_static_property_value_call(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let class_name = reflection_class_new_instance_reflected_class(ctx, object_expr?)?;
+    let class_name = reflection_class_reflected_class(ctx, object_expr?)?;
     match php_symbol_key(method).as_str() {
         "getstaticpropertyvalue" => {
             lower_reflection_class_get_static_property_value(ctx, &class_name, args, expr)
@@ -10436,7 +10448,7 @@ fn reflection_class_new_instance_constructor_signature<'a>(
     object_expr: Option<&Expr>,
     forwarded_args: &[Expr],
 ) -> Option<&'a FunctionSig> {
-    let class_name = reflection_class_new_instance_reflected_class(ctx, object_expr?)?;
+    let class_name = reflection_class_reflected_class(ctx, object_expr?)?;
     if forwarded_args.is_empty() && constructor_signature_for_class_name(ctx, &class_name).is_none()
     {
         return None;
@@ -10463,6 +10475,19 @@ fn reflection_class_new_instance_reflected_class(
         _ => return None,
     };
     resolve_known_class_name(ctx, &raw_class_name)
+}
+
+/// Resolves a reflected class from an inline constructor or tracked local receiver.
+fn reflection_class_reflected_class(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<String> {
+    reflection_class_new_instance_reflected_class(ctx, object_expr).or_else(|| {
+        let ExprKind::Variable(name) = &object_expr.kind else {
+            return None;
+        };
+        ctx.reflection_class_local(name)
+    })
 }
 
 /// Returns the `ReflectionClass::__construct()` class-name argument after static
