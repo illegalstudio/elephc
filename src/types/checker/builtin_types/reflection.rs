@@ -2235,6 +2235,27 @@ fn builtin_reflection_constant_false_bool_method(method_name: &str) -> ClassMeth
     }
 }
 
+/// Returns a public Reflection method that always reports an empty array.
+fn builtin_reflection_constant_empty_array_method(method_name: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(array_type()),
+        body: vec![Stmt::new(StmtKind::Return(empty_array()), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public Reflection method that always reports PHP `null` as mixed.
 fn builtin_reflection_constant_null_mixed_method(method_name: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
@@ -2869,6 +2890,9 @@ fn builtin_reflection_owner_class(
     if name == "ReflectionFunction" {
         methods.push(builtin_reflection_function_invoke_method());
         methods.push(builtin_reflection_function_invoke_args_method());
+        methods.push(builtin_reflection_constant_empty_array_method(
+            "getClosureUsedVariables",
+        ));
         methods.push(builtin_reflection_constant_false_bool_method(
             "isDisabled",
         ));

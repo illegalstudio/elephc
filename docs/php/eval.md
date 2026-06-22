@@ -216,6 +216,8 @@ and `getReturnType()` expose retained eval return type metadata for supported
 named, nullable, union, and intersection declarations, including `void` and
 `never` as builtin non-nullable named types.
 `ReflectionFunction::isDisabled()` reports `false` for eval-visible functions.
+`ReflectionFunction::getClosureUsedVariables()` reports an empty array for
+supported non-closure function reflectors.
 `ReflectionClass::isFinal()`, `ReflectionClass::isAbstract()`,
 `ReflectionClass::isInterface()`, `ReflectionClass::isTrait()`, and
 `ReflectionClass::isEnum()` report eval class-like metadata, including

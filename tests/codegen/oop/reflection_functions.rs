@@ -6,9 +6,9 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - `ReflectionFunction::invoke()` and `invokeArgs()` are lowered only for
-//!   statically-known reflectors whose target function has declared parameter
-//!   types.
+//! - `ReflectionFunction::invoke()` and `invokeArgs()` are lowered for
+//!   statically-known reflectors whose target user function has declared
+//!   parameter types, plus supported callable builtins.
 //! - Tests cover inline constructors, local tracking, case-insensitive function
 //!   names, defaults, named arguments, and static argument arrays.
 
@@ -161,6 +161,25 @@ echo $ref->invokeArgs(args: ["string" => "abcdef"]);
 "#,
     );
     assert_eq!(out, "3:4:5:6");
+}
+
+/// Verifies non-closure `ReflectionFunction` objects report no used variables.
+#[test]
+fn test_reflection_function_reports_empty_closure_used_variables() {
+    let out = compile_and_run(
+        r#"<?php
+function reflect_function_closure_vars_plain(): void {}
+
+$user = new ReflectionFunction("reflect_function_closure_vars_plain");
+$builtin = new ReflectionFunction("strlen");
+echo count($user->getClosureUsedVariables()) . ":";
+echo count($builtin->getClosureUsedVariables()) . ":";
+$vars = $user->getClosureUsedVariables();
+$vars["x"] = "changed";
+echo count($user->getClosureUsedVariables());
+"#,
+    );
+    assert_eq!(out, "0:0:0");
 }
 
 /// Verifies `ReflectionFunction::invoke()` calls declared AOT functions.
