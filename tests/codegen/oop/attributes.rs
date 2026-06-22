@@ -2760,9 +2760,19 @@ class ReflectObjectDefaultValue {
         $this->label = "ctor";
     }
 }
+class ReflectObjectDefaultValueArgs {
+    public mixed $label;
+    public mixed $extra;
+    public function __construct(mixed $label, mixed $extra) {
+        $this->label = $label;
+        $this->extra = $extra;
+    }
+}
 function reflect_object_default(ReflectObjectDefaultValue $value = new ReflectObjectDefaultValue()) {}
+function reflect_object_default_args(ReflectObjectDefaultValueArgs $value = new ReflectObjectDefaultValueArgs("arg", 42)) {}
 class ReflectObjectDefaultMethod {
     public function run(ReflectObjectDefaultValue $value = new ReflectObjectDefaultValue()) {}
+    public function withArgs(ReflectObjectDefaultValueArgs $value = new ReflectObjectDefaultValueArgs("method-arg", "M")) {}
 }
 $param = (new ReflectionFunction("reflect_object_default"))->getParameters()[0];
 echo $param->isDefaultValueAvailable() ? "D:" : "d:";
@@ -2780,6 +2790,12 @@ $method = (new ReflectionMethod(ReflectObjectDefaultMethod::class, "run"))->getP
 echo $method instanceof ReflectObjectDefaultValue ? ":method:" . $method->label : ":method:bad";
 $directMethod = (new ReflectionParameter([ReflectObjectDefaultMethod::class, "run"], "value"))->getDefaultValue();
 echo $directMethod instanceof ReflectObjectDefaultValue ? ":direct-method:" . $directMethod->label : ":direct-method:bad";
+$args = (new ReflectionFunction("reflect_object_default_args"))->getParameters()[0]->getDefaultValue();
+echo $args instanceof ReflectObjectDefaultValueArgs ? ":args:" . $args->label . ":" . $args->extra : ":args:bad";
+$methodArgs = (new ReflectionMethod(ReflectObjectDefaultMethod::class, "withArgs"))->getParameters()[0]->getDefaultValue();
+echo $methodArgs instanceof ReflectObjectDefaultValueArgs ? ":method-args:" . $methodArgs->label . ":" . $methodArgs->extra : ":method-args:bad";
+$directMethodArgs = (new ReflectionParameter([ReflectObjectDefaultMethod::class, "withArgs"], "value"))->getDefaultValue();
+echo $directMethodArgs instanceof ReflectObjectDefaultValueArgs ? ":direct-method-args:" . $directMethodArgs->label . ":" . $directMethodArgs->extra : ":direct-method-args:bad";
 "##,
     );
     assert!(
@@ -2789,7 +2805,7 @@ echo $directMethod instanceof ReflectObjectDefaultValue ? ":direct-method:" . $d
     );
     assert_eq!(
         out.stdout,
-        "D:object:ctor:diff:direct:ctor:method:ctor:direct-method:ctor"
+        "D:object:ctor:diff:direct:ctor:method:ctor:direct-method:ctor:args:arg:42:method-args:method-arg:M:direct-method-args:method-arg:M"
     );
 }
 

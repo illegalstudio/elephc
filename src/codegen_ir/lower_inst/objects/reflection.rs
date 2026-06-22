@@ -199,6 +199,7 @@ enum ReflectionParameterDefaultValue {
     Null,
     Object {
         class_name: String,
+        args: Vec<ReflectionParameterDefaultValue>,
     },
     Array(Vec<ReflectionParameterDefaultValue>),
     AssocArray(Vec<ReflectionDefaultAssocEntry>),
@@ -3449,6 +3450,9 @@ fn reflection_parameter_default_value(
     current_info: Option<&crate::types::ClassInfo>,
     default: &Expr,
 ) -> Result<Option<ReflectionParameterDefaultValue>> {
+    if let Some(value) = reflection_object_parameter_default_value(default) {
+        return Ok(Some(value));
+    }
     if let Some(value) = reflection_literal_parameter_default_value(default) {
         return Ok(Some(value));
     }
@@ -3458,6 +3462,55 @@ fn reflection_parameter_default_value(
             Ok(reflection_parameter_default_from_constant_value(value))
         }
         _ => Ok(None),
+    }
+}
+
+/// Converts a top-level object parameter default into Reflection metadata.
+fn reflection_object_parameter_default_value(
+    default: &Expr,
+) -> Option<ReflectionParameterDefaultValue> {
+    let ExprKind::NewObject { class_name, args } = &default.kind else {
+        return None;
+    };
+    if args.len() > 3 {
+        return None;
+    }
+    let args = args
+        .iter()
+        .map(reflection_literal_parameter_default_non_object_value)
+        .collect::<Option<Vec<_>>>()?;
+    Some(ReflectionParameterDefaultValue::Object {
+        class_name: class_name.as_str().to_string(),
+        args,
+    })
+}
+
+/// Converts constructor arguments for object defaults, rejecting nested objects.
+fn reflection_literal_parameter_default_non_object_value(
+    default: &Expr,
+) -> Option<ReflectionParameterDefaultValue> {
+    let value = reflection_literal_parameter_default_value(default)?;
+    if reflection_default_value_contains_object(&value) {
+        return None;
+    }
+    Some(value)
+}
+
+/// Returns whether a retained default contains an object value.
+fn reflection_default_value_contains_object(value: &ReflectionParameterDefaultValue) -> bool {
+    match value {
+        ReflectionParameterDefaultValue::Object { .. } => true,
+        ReflectionParameterDefaultValue::Array(elements) => elements
+            .iter()
+            .any(reflection_default_value_contains_object),
+        ReflectionParameterDefaultValue::AssocArray(entries) => entries
+            .iter()
+            .any(|entry| reflection_default_value_contains_object(&entry.value)),
+        ReflectionParameterDefaultValue::Int(_)
+        | ReflectionParameterDefaultValue::Bool(_)
+        | ReflectionParameterDefaultValue::Float(_)
+        | ReflectionParameterDefaultValue::Str(_)
+        | ReflectionParameterDefaultValue::Null => false,
     }
 }
 
@@ -3471,11 +3524,6 @@ fn reflection_literal_parameter_default_value(
         ExprKind::FloatLiteral(value) => Some(ReflectionParameterDefaultValue::Float(*value)),
         ExprKind::StringLiteral(value) => Some(ReflectionParameterDefaultValue::Str(value.clone())),
         ExprKind::Null => Some(ReflectionParameterDefaultValue::Null),
-        ExprKind::NewObject { class_name, args } if args.is_empty() => {
-            Some(ReflectionParameterDefaultValue::Object {
-                class_name: class_name.as_str().to_string(),
-            })
-        }
         ExprKind::ArrayLiteral(items) => items
             .iter()
             .map(reflection_literal_parameter_default_value)
@@ -5171,7 +5219,12 @@ fn emit_reflection_default_value_as_mixed(
             emit_boxed_string_literal_default_to_result(ctx, value)
         }
         ReflectionParameterDefaultValue::Null => emit_boxed_null_literal_to_result(ctx),
-        ReflectionParameterDefaultValue::Object { .. } => emit_boxed_null_literal_to_result(ctx),
+        ReflectionParameterDefaultValue::Object { args, .. } if args.is_empty() => {
+            emit_boxed_null_literal_to_result(ctx)
+        }
+        ReflectionParameterDefaultValue::Object { args, .. } => {
+            emit_reflection_indexed_array_default_as_mixed(ctx, args)
+        }
         ReflectionParameterDefaultValue::Array(elements) => {
             emit_reflection_indexed_array_default_as_mixed(ctx, elements)
         }
@@ -5717,7 +5770,7 @@ fn reflection_parameter_default_object_class(
     default_value: Option<&ReflectionParameterDefaultValue>,
 ) -> Option<&str> {
     match default_value {
-        Some(ReflectionParameterDefaultValue::Object { class_name }) => Some(class_name),
+        Some(ReflectionParameterDefaultValue::Object { class_name, .. }) => Some(class_name),
         _ => None,
     }
 }
