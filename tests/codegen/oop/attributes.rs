@@ -2755,9 +2755,11 @@ fn test_reflection_parameter_exposes_object_default_values() {
     let out = compile_and_run_capture(
         r##"<?php
 class ReflectObjectDefaultValue {
-    public string $label;
-    public function __construct() {
-        $this->label = "ctor";
+    public mixed $label;
+    public mixed $extra;
+    public function __construct(mixed $label = "ctor", mixed $extra = null) {
+        $this->label = $label;
+        $this->extra = $extra;
     }
 }
 class ReflectObjectDefaultValueArgs {
