@@ -2062,7 +2062,7 @@ fn reflection_property_static_value_guard(method: &str, span: crate::span::Span)
             then_body: vec![throw_new_reflection_exception(
                 string_lit(
                     &format!(
-                        "ReflectionProperty::{}() for static properties requires an inline known public static property",
+                        "ReflectionProperty::{}() for static properties requires an inline known static property",
                         method
                     ),
                     span,

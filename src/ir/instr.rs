@@ -177,6 +177,8 @@ pub enum Op {
     InitStaticLocal,
     LoadStaticProperty,
     StoreStaticProperty,
+    LoadReflectionStaticProperty,
+    StoreReflectionStaticProperty,
     IAdd,
     ISub,
     IMul,
@@ -380,10 +382,11 @@ impl Op {
             },
             AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
             ReleaseLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
-            LoadGlobal | LoadStaticProperty | ScopedConstantGet | ClassAttrNames
-            | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
-            StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal | IncludeOnceMark
-            | FunctionVariantMark | TryPushHandler | TryPopHandler => E::WRITES_GLOBAL,
+            LoadGlobal | LoadStaticProperty | LoadReflectionStaticProperty | ScopedConstantGet
+            | ClassAttrNames | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
+            StoreGlobal | StoreStaticLocal | StoreStaticProperty | StoreReflectionStaticProperty
+            | InitStaticLocal | IncludeOnceMark | FunctionVariantMark | TryPushHandler
+            | TryPopHandler => E::WRITES_GLOBAL,
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
             IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
@@ -491,6 +494,8 @@ impl Op {
             InitStaticLocal => "init_static_local",
             LoadStaticProperty => "load_static_property",
             StoreStaticProperty => "store_static_property",
+            LoadReflectionStaticProperty => "load_reflection_static_property",
+            StoreReflectionStaticProperty => "store_reflection_static_property",
             IAdd => "iadd",
             ISub => "isub",
             IMul => "imul",

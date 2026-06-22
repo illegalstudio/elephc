@@ -8,8 +8,8 @@
 //! Key details:
 //! - Covers explicit object arguments for public and non-public instance properties.
 //! - Covers runtime-held public instance property reflectors.
-//! - Covers static properties where PHP permits no object argument.
-//! - Visibility-bypassing reflection access remains a separate surface.
+//! - Covers static properties where PHP permits omitted or ignored object args.
+//! - Covers Reflection visibility bypass for instance and inline static properties.
 
 use super::*;
 
@@ -67,6 +67,63 @@ echo ":" . ReflectStaticValueAccessTarget::$count;
 "#,
     );
     assert_eq!(out, "2:17:19:old:new:23");
+}
+
+/// Verifies ReflectionProperty static value access bypasses visibility for
+/// private and protected properties when the reflected target is statically known.
+#[test]
+fn test_reflection_property_value_accessors_bypass_static_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectHiddenStaticValueAccessTarget {
+    private static int $count = 4;
+    protected static string $label = "old";
+
+    public static function count(): int { return self::$count; }
+    public static function label(): string { return self::$label; }
+}
+
+echo (new ReflectionProperty(ReflectHiddenStaticValueAccessTarget::class, "count"))->getValue();
+(new ReflectionProperty(ReflectHiddenStaticValueAccessTarget::class, "count"))->setValue(null, 8);
+echo ":" . ReflectHiddenStaticValueAccessTarget::count();
+
+$label = (new ReflectionClass(ReflectHiddenStaticValueAccessTarget::class))->getProperty("label");
+echo ":" . $label->getValue(null);
+$label->setValue(object: null, value: "new");
+echo ":" . ReflectHiddenStaticValueAccessTarget::label();
+"#,
+    );
+    assert_eq!(out, "4:8:old:new");
+}
+
+/// Verifies ReflectionClass static property value helpers bypass visibility and
+/// operate on the same live static storage as direct class methods.
+#[test]
+fn test_reflection_class_static_value_accessors_bypass_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectClassHiddenStaticValueTarget {
+    private static int $count = 5;
+    protected static string $label = "old";
+
+    public static function count(): int { return self::$count; }
+    public static function label(): string { return self::$label; }
+}
+
+$ref = new ReflectionClass(ReflectClassHiddenStaticValueTarget::class);
+echo $ref->getStaticPropertyValue("count");
+$ref->setStaticPropertyValue("count", 9);
+echo ":" . ReflectClassHiddenStaticValueTarget::count();
+echo ":" . $ref->getStaticPropertyValue("label");
+$ref->setStaticPropertyValue(name: "label", value: "new");
+echo ":" . ReflectClassHiddenStaticValueTarget::label();
+
+$props = $ref->getStaticProperties();
+echo ":" . $props["count"];
+echo ":" . $props["label"];
+"#,
+    );
+    assert_eq!(out, "5:9:old:new:9:new");
 }
 
 /// Verifies runtime-held `ReflectionProperty` objects can read and write public
