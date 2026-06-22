@@ -1338,6 +1338,8 @@ echo $staticProp->isProtected() ? "P" : "p";
 echo $staticProp->isFinal() ? "F" : "f";
 echo $staticProp->isAbstract() ? "A" : "a";
 echo $staticProp->isReadOnly() ? "R" : "r";
+echo $staticProp->isProtectedSet() ? "T" : "t";
+echo $staticProp->isPrivateSet() ? "D" : "d";
 echo $staticProp->getModifiers();
 echo ":";
 $visibleProp = new ReflectionProperty("EvalReflectMemberChild", "visible");
@@ -1347,11 +1349,15 @@ echo $visibleProp->isPublic() ? "U" : "u";
 echo $visibleProp->isFinal() ? "F" : "f";
 echo $visibleProp->isAbstract() ? "A" : "a";
 echo $visibleProp->isReadOnly() ? "R" : "r";
+echo $visibleProp->isProtectedSet() ? "T" : "t";
+echo $visibleProp->isPrivateSet() ? "D" : "d";
 echo $visibleProp->getModifiers();
 echo ":";
 $readonlyProp = new ReflectionProperty("EvalReflectMemberChild", "locked");
 echo $readonlyProp->isReadOnly() ? "R" : "r";
 echo $readonlyProp->isPublic() ? "U" : "u";
+echo $readonlyProp->isProtectedSet() ? "T" : "t";
+echo $readonlyProp->isPrivateSet() ? "D" : "d";
 echo $readonlyProp->getModifiers();
 echo ":";
 $sealedProp = new ReflectionProperty("EvalReflectMemberChild", "sealed");
@@ -1371,6 +1377,8 @@ echo $abstractProp->getModifiers();
 echo ":";
 $classReadonlyProp = new ReflectionProperty("EvalReflectReadonlyClass", "classReadonly");
 echo $classReadonlyProp->isReadOnly() ? "C" : "c";
+echo $classReadonlyProp->isProtectedSet() ? "T" : "t";
+echo $classReadonlyProp->isPrivateSet() ? "D" : "d";
 echo $classReadonlyProp->getModifiers();
 return true;"#,
     )
@@ -1382,7 +1390,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "SPurfa:APs:FUs:SRpfar20:sPufar2:RU2177:FU33:FS49:Af577:C2177"
+        "SPurfa:APs:FUs:SRpfartd20:sPufartd2:RUTd2177:FU33:FS49:Af577:CTd2177"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

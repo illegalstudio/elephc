@@ -7420,6 +7420,8 @@ echo $staticProp->isProtected() ? "P" : "p";
 echo $staticProp->isFinal() ? "F" : "f";
 echo $staticProp->isAbstract() ? "A" : "a";
 echo $staticProp->isReadOnly() ? "R" : "r";
+echo $staticProp->isProtectedSet() ? "T" : "t";
+echo $staticProp->isPrivateSet() ? "D" : "d";
 echo $staticProp->getModifiers();
 echo ":";
 $visibleProp = new ReflectionProperty("EvalReflectMemberChild", "visible");
@@ -7429,11 +7431,15 @@ echo $visibleProp->isPublic() ? "U" : "u";
 echo $visibleProp->isFinal() ? "F" : "f";
 echo $visibleProp->isAbstract() ? "A" : "a";
 echo $visibleProp->isReadOnly() ? "R" : "r";
+echo $visibleProp->isProtectedSet() ? "T" : "t";
+echo $visibleProp->isPrivateSet() ? "D" : "d";
 echo $visibleProp->getModifiers();
 echo ":";
 $readonlyProp = new ReflectionProperty("EvalReflectMemberChild", "locked");
 echo $readonlyProp->isReadOnly() ? "R" : "r";
 echo $readonlyProp->isPublic() ? "U" : "u";
+echo $readonlyProp->isProtectedSet() ? "T" : "t";
+echo $readonlyProp->isPrivateSet() ? "D" : "d";
 echo $readonlyProp->getModifiers();
 echo ":";
 $sealedProp = new ReflectionProperty("EvalReflectMemberChild", "sealed");
@@ -7453,6 +7459,8 @@ echo $abstractProp->getModifiers();
 echo ":";
 $classReadonlyProp = new ReflectionProperty("EvalReflectReadonlyClass", "classReadonly");
 echo $classReadonlyProp->isReadOnly() ? "C" : "c";
+echo $classReadonlyProp->isProtectedSet() ? "T" : "t";
+echo $classReadonlyProp->isPrivateSet() ? "D" : "d";
 echo $classReadonlyProp->getModifiers();');
 "#,
     );
@@ -7463,8 +7471,30 @@ echo $classReadonlyProp->getModifiers();');
     );
     assert_eq!(
         out.stdout,
-        "SPurfa:APs:FUs:SRpfar20:sPufar2:RU2177:FU33:FS49:Af577:C2177"
+        "SPurfa:APs:FUs:SRpfartd20:sPufartd2:RUTd2177:FU33:FS49:Af577:CTd2177"
     );
+}
+
+/// Verifies eval ReflectionProperty reports generated asymmetric set-visibility predicates.
+#[test]
+fn test_eval_reflection_property_set_visibility_predicates_for_aot_class() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotReflectSetVisibility {
+    public private(set) int $privateSet = 1;
+    public protected(set) int $protectedSet = 2;
+}
+eval('$private = new ReflectionProperty("EvalAotReflectSetVisibility", "privateSet");
+echo $private->isPrivateSet() ? "P" : "p";
+echo $private->isProtectedSet() ? "T" : "t";
+echo $private->getModifiers(); echo ":";
+$protected = new ReflectionProperty("EvalAotReflectSetVisibility", "protectedSet");
+echo $protected->isPrivateSet() ? "P" : "p";
+echo $protected->isProtectedSet() ? "T" : "t";
+echo $protected->getModifiers();');
+"#,
+    );
+    assert_eq!(out, "Pt4129:pT2049");
 }
 
 /// Verifies eval can observe AOT constructor-promotion metadata through

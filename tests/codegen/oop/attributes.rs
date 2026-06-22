@@ -1083,11 +1083,17 @@ class ReflectSetVisibility {
     public private(set) int $privateSet = 1;
     public protected(set) int $protectedSet = 2;
 }
-echo (new ReflectionProperty(ReflectSetVisibility::class, "privateSet"))->getModifiers() . ":";
-echo (new ReflectionProperty(ReflectSetVisibility::class, "protectedSet"))->getModifiers();
+$private = new ReflectionProperty(ReflectSetVisibility::class, "privateSet");
+echo $private->isPrivateSet() ? "P" : "p";
+echo $private->isProtectedSet() ? "T" : "t";
+echo $private->getModifiers() . ":";
+$protected = new ReflectionProperty(ReflectSetVisibility::class, "protectedSet");
+echo $protected->isPrivateSet() ? "P" : "p";
+echo $protected->isProtectedSet() ? "T" : "t";
+echo $protected->getModifiers();
 "#,
     );
-    assert_eq!(out, "4129:2049");
+    assert_eq!(out, "Pt4129:pT2049");
 }
 
 /// Verifies that `ReflectionClass::isReadOnly()` reports readonly class metadata.

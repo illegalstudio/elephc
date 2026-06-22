@@ -41,6 +41,8 @@ pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_CLASS_CONSTANT
 pub(in crate::interpreter) const EVAL_REFLECTION_ATTRIBUTE_TARGET_PARAMETER: u64 = 32;
 const EVAL_REFLECTION_MEMBER_FLAG_PROMOTED: u64 = 512;
 const EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL: u64 = 1024;
+const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET: u64 = 2048;
+const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET: u64 = 4096;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
@@ -2144,6 +2146,20 @@ fn eval_reflection_aot_property_metadata(
     let is_final = flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL != 0;
     let is_abstract = flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT != 0;
     let is_readonly = flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY != 0;
+    let is_virtual = flags & EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL != 0;
+    let mut modifiers = eval_reflection_property_modifiers(
+        visibility,
+        is_static,
+        is_final,
+        is_abstract,
+        is_readonly,
+        is_virtual,
+    );
+    if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET != 0 {
+        modifiers |= 32 | 4096;
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET != 0 {
+        modifiers |= 2048;
+    }
     EvalReflectionMemberMetadata {
         declaring_class_name: Some(class_name.trim_start_matches('\\').to_string()),
         attributes,
@@ -2153,14 +2169,7 @@ fn eval_reflection_aot_property_metadata(
         is_abstract,
         is_readonly,
         is_promoted: flags & EVAL_REFLECTION_MEMBER_FLAG_PROMOTED != 0,
-        modifiers: eval_reflection_property_modifiers(
-            visibility,
-            is_static,
-            is_final,
-            is_abstract,
-            is_readonly,
-            false,
-        ),
+        modifiers,
         type_metadata,
         return_type_metadata: None,
         default_value,

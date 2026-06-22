@@ -366,11 +366,14 @@ when the variadic container itself is not rebound, and are reported through
 `ReflectionParameter::canBePassedByValue()`.
 `ReflectionProperty::isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`,
 `isFinal()`, `isAbstract()`, `isReadOnly()`, `isPromoted()`, `isVirtual()`,
-`isInitialized()`, `isDefault()`, and `getModifiers()` report eval property
+`isProtectedSet()`, `isPrivateSet()`, `isInitialized()`, `isDefault()`, and
+`getModifiers()` report eval property
 metadata with PHP-compatible `ReflectionProperty::IS_*` constants for the
 bitmask. `isPromoted()` reports generated/AOT and eval-declared
-promoted-property metadata. `isInitialized()` tracks eval-backed instance and
-static property storage, including typed properties without defaults, unset
+promoted-property metadata. `isProtectedSet()` and `isPrivateSet()` derive from
+the retained modifier bitmask, including generated/AOT asymmetric visibility and
+public readonly property metadata. `isInitialized()` tracks eval-backed instance
+and static property storage, including typed properties without defaults, unset
 properties, and virtual property hooks.
 `ReflectionProperty::hasType()` and `getType()` expose retained property type
 metadata through `ReflectionNamedType`, `ReflectionUnionType`, and

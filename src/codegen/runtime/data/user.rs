@@ -28,6 +28,8 @@ const EVAL_REFLECTION_PROPERTY_FLAG_ABSTRACT: u64 = 32;
 const EVAL_REFLECTION_PROPERTY_FLAG_READONLY: u64 = 64;
 const EVAL_REFLECTION_PROPERTY_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
 const EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED: u64 = 512;
+const EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED_SET: u64 = 2048;
+const EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE_SET: u64 = 4096;
 const EVAL_REFLECTION_METHOD_FLAG_STATIC: u64 = 1;
 const EVAL_REFLECTION_METHOD_FLAG_PUBLIC: u64 = 2;
 const EVAL_REFLECTION_METHOD_FLAG_PROTECTED: u64 = 4;
@@ -1299,6 +1301,11 @@ fn eval_reflection_instance_property_flags(
     }
     if class_info.promoted_properties.contains(property_name) {
         flags |= EVAL_REFLECTION_PROPERTY_FLAG_PROMOTED;
+    }
+    match class_info.property_set_visibilities.get(property_name) {
+        Some(Visibility::Protected) => flags |= EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED_SET,
+        Some(Visibility::Private) => flags |= EVAL_REFLECTION_PROPERTY_FLAG_PRIVATE_SET,
+        Some(Visibility::Public) | None => {}
     }
     if class_info.defaults.get(slot).is_some_and(Option::is_some) {
         flags |= EVAL_REFLECTION_PROPERTY_FLAG_HAS_DEFAULT_VALUE;

@@ -229,6 +229,12 @@ impl FakeOps {
             (FakeValue::Object(properties), "getmodifiers") if args.is_empty() => {
                 Self::object_property(&properties, "__modifiers").map_or_else(|| self.int(0), Ok)
             }
+            (FakeValue::Object(properties), "isprotectedset") if args.is_empty() => {
+                self.reflection_modifier_mask(&properties, 2048)
+            }
+            (FakeValue::Object(properties), "isprivateset") if args.is_empty() => {
+                self.reflection_modifier_mask(&properties, 4096)
+            }
             (FakeValue::Object(properties), "getvalue") if args.is_empty() => {
                 Self::object_property(&properties, "__value").map_or_else(|| self.null(), Ok)
             }
@@ -824,6 +830,18 @@ impl FakeOps {
             _ => false,
         };
         self.bool_value(contains)
+    }
+
+    /// Returns whether a fake Reflection owner stores one modifier bit.
+    fn reflection_modifier_mask(
+        &mut self,
+        properties: &[(String, RuntimeCellHandle)],
+        mask: i64,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let modifiers = Self::object_property(properties, "__modifiers")
+            .map(|handle| self.fake_int(&self.get(handle)))
+            .unwrap_or(0);
+        self.bool_value((modifiers & mask) != 0)
     }
 
     /// Builds a name-keyed fake ReflectionClass map from a private string-array property.

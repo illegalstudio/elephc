@@ -1906,6 +1906,43 @@ fn builtin_reflection_property_has_type_method() -> ClassMethod {
     }
 }
 
+/// Returns a public ReflectionProperty predicate over one `__modifiers` bit.
+fn builtin_reflection_property_modifier_mask_method(method_name: &str, mask: i64) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let masked_modifiers = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(reflection_this_property("__modifiers", dummy_span)),
+            op: BinOp::BitAnd,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(mask), dummy_span)),
+        },
+        dummy_span,
+    );
+    let comparison = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(masked_modifiers),
+            op: BinOp::StrictNotEq,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(0), dummy_span)),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        body: vec![Stmt::new(StmtKind::Return(Some(comparison)), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Builds a `FlattenedClass` for simple reflection owner classes
 /// with a private `__attrs` array property and two methods: `__construct`
 /// (public, accepting the supplied params) and `getAttributes` (public,
@@ -2209,6 +2246,14 @@ fn add_reflection_member_flag_methods(
         methods.push(builtin_reflection_class_bool_method(
             "isVirtual",
             "__is_virtual",
+        ));
+        methods.push(builtin_reflection_property_modifier_mask_method(
+            "isProtectedSet",
+            2048,
+        ));
+        methods.push(builtin_reflection_property_modifier_mask_method(
+            "isPrivateSet",
+            4096,
         ));
         methods.push(builtin_reflection_constant_bool_method("isDefault", true));
         methods.push(builtin_reflection_class_mixed_method(
@@ -3011,6 +3056,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "isreadonly",
                     "isdefault",
                     "ispromoted",
+                    "isvirtual",
+                    "isprotectedset",
+                    "isprivateset",
                 ] {
                     if let Some(sig) = class_info.methods.get_mut(method_name) {
                         sig.return_type = PhpType::Bool;
