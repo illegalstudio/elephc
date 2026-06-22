@@ -13,9 +13,11 @@
 //!   builds.
 
 mod allocation;
+mod branch_simplify;
 mod cfg;
 mod clobber;
 mod dead_inst;
+mod dead_store;
 mod driver;
 mod identity_arith;
 mod intervals;

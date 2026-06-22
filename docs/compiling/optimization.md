@@ -120,9 +120,42 @@ elephc --emit-ir app.php
 elephc --emit-ir --no-ir-opt app.php
 ```
 
-Later releases add more EIR passes (dead-store elimination, branch
-simplification, common-subexpression elimination, loop-invariant code motion,
-small-function inlining) to this same driver.
+### Dead store elimination
+
+The fourth registered pass removes `store_local` writes whose value is never read
+before the slot is overwritten or the function exits. It computes backward,
+CFG-aware liveness over local slots (a `load_local` makes a slot live, a
+`store_local` kills it) so a dead store is dropped even when the overwrite is in a
+later block. Unlike the peephole's per-block, value-equality store drop, this pass
+is liveness-based and crosses block boundaries, so it removes a store of a
+*different* value whose result is never observed.
+
+It is restricted to non-refcounted scalar locals that are accessed only through
+plain `load_local`/`store_local` and never escape by reference. Refcounted slots
+are wrapped by separate `acquire`/`release` ownership ops, and by-reference call
+arguments or closure captures alias the slot through its `load_local`, so both are
+left untouched to keep reference counting and aliasing semantics intact.
+
+### Branch simplification
+
+The fifth registered pass prunes the control-flow graph three ways:
+
+- **Constant-condition folding** — a `cond_br` whose condition is a constant
+  (`const_bool`, non-zero `const_i64`, or `const_null`) becomes an unconditional
+  `br` to the taken edge; a `switch` on a constant scrutinee folds to its matching
+  case. A `while (true)` loop, for instance, lowers to a constant `cond_br` that
+  this fold collapses.
+- **Empty-block jump threading** — predecessors of an empty, parameterless
+  forwarding block (one that only branches onward) are redirected to the end of
+  the forwarding chain.
+- **Unreachable-block removal** — blocks no longer reachable from the entry are
+  neutralized (terminator set to `unreachable`, instructions to `nop`).
+
+Functions that use exception handling are skipped, because their handler blocks
+are reachable through implicit edges that the terminator graph does not show.
+
+Later releases add more EIR passes (common-subexpression elimination,
+loop-invariant code motion, small-function inlining) to this same driver.
 
 ## Register allocation
 
