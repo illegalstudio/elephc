@@ -10214,6 +10214,9 @@ fn lower_reflection_class_static_property_value_call(
 ) -> Option<LoweredValue> {
     let class_name = reflection_class_reflected_class(ctx, object_expr?)?;
     match php_symbol_key(method).as_str() {
+        "getstaticproperties" => {
+            lower_reflection_class_get_static_properties(ctx, &class_name, args, expr)
+        }
         "getstaticpropertyvalue" => {
             lower_reflection_class_get_static_property_value(ctx, &class_name, args, expr)
         }
@@ -10224,6 +10227,51 @@ fn lower_reflection_class_static_property_value_call(
     }
 }
 
+/// Lowers `ReflectionClass::getStaticProperties()` to a live static-property map.
+fn lower_reflection_class_get_static_properties(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if !args.is_empty() {
+        return None;
+    }
+    let properties = reflection_class_static_property_map_entries(ctx, class_name)?;
+    let hash_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Mixed),
+    };
+    let hash = ctx.emit_value(
+        Op::HashNew,
+        Vec::new(),
+        Some(Immediate::Capacity(properties.len() as u32)),
+        hash_ty,
+        Op::HashNew.default_effects(),
+        Some(expr.span),
+    );
+    for (property, declaring_class, property_ty) in properties {
+        let key_expr = Expr::new(ExprKind::StringLiteral(property.clone()), expr.span);
+        let key = lower_string_literal(ctx, &property, &key_expr);
+        let value = lower_static_property_get_by_class_name(
+            ctx,
+            &declaring_class,
+            &property,
+            property_ty,
+            expr,
+        );
+        let value = box_value_as_mixed(ctx, value, expr.span);
+        ctx.emit_void(
+            Op::HashSet,
+            vec![hash.value, key.value, value.value],
+            None,
+            Op::HashSet.default_effects(),
+            Some(expr.span),
+        );
+    }
+    Some(hash)
+}
+
 /// Lowers `ReflectionClass::getStaticPropertyValue()` to a live static-property read.
 fn lower_reflection_class_get_static_property_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -10232,11 +10280,13 @@ fn lower_reflection_class_get_static_property_value(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let (property, default) = reflection_class_get_static_property_value_args(args)?;
-    if let Some(property_ty) = reflection_class_static_property_type(ctx, class_name, &property) {
+    if let Some((declaring_class, property_ty)) =
+        reflection_class_static_property_target(ctx, class_name, &property)
+    {
         if default.is_none() {
             return Some(lower_static_property_get_by_class_name(
                 ctx,
-                class_name,
+                &declaring_class,
                 &property,
                 property_ty,
                 expr,
@@ -10255,10 +10305,52 @@ fn lower_reflection_class_set_static_property_value(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let (property, value) = reflection_class_set_static_property_value_args(args)?;
-    reflection_class_static_property_type(ctx, class_name, &property)?;
+    let (declaring_class, _) = reflection_class_static_property_target(ctx, class_name, &property)?;
     let value = lower_expr(ctx, &value);
-    store_static_property_by_class_name(ctx, class_name, &property, value.value, expr.span);
+    store_static_property_by_class_name(ctx, &declaring_class, &property, value.value, expr.span);
     Some(lower_null(ctx, expr))
+}
+
+/// Returns synthetic array entries for current static-property values on a reflected class.
+fn reflection_class_static_property_map_entries(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+) -> Option<Vec<(String, String, PhpType)>> {
+    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    Some(
+        class_info
+            .static_properties
+            .iter()
+            .map(|(property, property_ty)| {
+                let declaring_class = class_info
+                    .static_property_declaring_classes
+                    .get(property)
+                    .cloned()
+                    .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+                let property_ty = normalize_value_php_type(property_ty.codegen_repr());
+                (property.clone(), declaring_class, property_ty)
+            })
+            .collect(),
+    )
+}
+
+/// Boxes a concrete PHP value into the runtime `Mixed` cell representation.
+fn box_value_as_mixed(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Mixed {
+        return value;
+    }
+    ctx.emit_value(
+        Op::MixedBox,
+        vec![value.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(span),
+    )
 }
 
 /// Returns the literal property name and optional explicit default argument for a get call.
@@ -10330,18 +10422,24 @@ fn reflection_class_static_property_name_arg(arg: &Expr) -> Option<String> {
     }
 }
 
-/// Returns the retained PHP type for one static property on a reflected class.
-fn reflection_class_static_property_type(
+/// Returns the declaring class and retained PHP type for one reflected static property.
+fn reflection_class_static_property_target(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
     property: &str,
-) -> Option<PhpType> {
+) -> Option<(String, PhpType)> {
     let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
-    class_info
+    let property_ty = class_info
         .static_properties
         .iter()
         .find(|(name, _)| name == property)
-        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))
+        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))?;
+    let declaring_class = class_info
+        .static_property_declaring_classes
+        .get(property)
+        .cloned()
+        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    Some((declaring_class, property_ty))
 }
 
 /// Emits a live static-property read from a known reflected class and property name.

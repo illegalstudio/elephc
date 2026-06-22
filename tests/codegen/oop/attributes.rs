@@ -2711,6 +2711,38 @@ echo ":" . $obj2->id . ":" . $obj2->name;
     assert_eq!(out.stdout, "7:9:11:fallback:5:Ada:6:Bob");
 }
 
+/// Verifies `ReflectionClass::getStaticProperties()` reads current AOT static values.
+#[test]
+fn test_reflection_class_get_static_properties_reads_live_storage() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReflectStaticPropertiesBase {
+    public static string $base = "base";
+}
+
+class ReflectStaticPropertiesChild extends ReflectStaticPropertiesBase {
+    public static int $count = 1;
+    public static string $label = "old";
+}
+
+$ref = new ReflectionClass(ReflectStaticPropertiesChild::class);
+ReflectStaticPropertiesBase::$base = "B2";
+ReflectStaticPropertiesChild::$count = 4;
+ReflectStaticPropertiesChild::$label = "new";
+$props = $ref->getStaticProperties();
+echo $props["base"] . ":" . $props["count"] . ":" . $props["label"];
+$inline = (new ReflectionClass(ReflectStaticPropertiesChild::class))->getStaticProperties();
+echo ":" . $inline["count"];
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "B2:4:new:4");
+}
+
 /// Verifies `ReflectionParameter::getAttributes()` exposes parameter attributes.
 #[test]
 fn test_reflection_parameter_get_attributes_returns_parameter_metadata() {
