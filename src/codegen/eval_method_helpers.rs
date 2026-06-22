@@ -1,6 +1,6 @@
 //! Purpose:
-//! Emits user-assembly helpers that let libelephc-eval call public native
-//! instance and static methods known to the current module.
+//! Emits user-assembly helpers that let libelephc-eval call native instance and
+//! static methods known to the current module.
 //!
 //! Called from:
 //! - `crate::codegen::finalize_user_asm()` when an EIR module uses eval.
@@ -8,9 +8,8 @@
 //! Key details:
 //! - The cacheable runtime object cannot know user class ids, method symbols,
 //!   or return types, so this bridge is emitted into the user assembly.
-//! - This method-call slice supports public AOT methods with fixed non-by-ref
-//!   scalar/Mixed/object argument lists and reports unsupported calls as
-//!   runtime failure.
+//! - This method-call slice supports public AOT methods plus non-public
+//!   `__clone` hooks after interpreter-side visibility checks.
 
 use std::collections::BTreeMap;
 
@@ -20,7 +19,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::ir::{Function, LocalKind, Module};
-use crate::names::{method_symbol, static_method_symbol};
+use crate::names::{method_symbol, php_symbol_key, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
@@ -116,7 +115,7 @@ fn function_uses_eval(function: &Function) -> bool {
     })
 }
 
-/// Collects public bridge-supported instance methods backed by emitted EIR symbols.
+/// Collects bridge-supported instance methods backed by emitted EIR symbols.
 fn collect_eval_method_slots(module: &Module) -> Vec<EvalMethodSlot> {
     let emitted_methods = super::eir_class_method_keys(module);
     let mut slots = Vec::new();
@@ -152,7 +151,7 @@ fn collect_builtin_throwable_method_class_ids(module: &Module) -> Vec<u64> {
     class_ids
 }
 
-/// Adds bridge-supported public methods for one class.
+/// Adds bridge-supported instance methods for one class.
 fn collect_class_method_slots(
     class_name: &str,
     class_info: &ClassInfo,
@@ -162,7 +161,7 @@ fn collect_class_method_slots(
     let mut methods = class_info.methods.iter().collect::<Vec<_>>();
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method, sig) in methods {
-        if !method_is_public(class_info, method)
+        if !method_can_dispatch_through_eval_bridge(class_info, method)
             || !method_signature_supported(sig)
             || !method_return_supported(&sig.return_type)
         {
@@ -220,6 +219,11 @@ fn collect_class_static_method_slots(
             return_ty: sig.return_type.codegen_repr(),
         });
     }
+}
+
+/// Returns true when an instance method can be reached through eval's native bridge.
+fn method_can_dispatch_through_eval_bridge(class_info: &ClassInfo, method: &str) -> bool {
+    method_is_public(class_info, method) || php_symbol_key(method) == "__clone"
 }
 
 /// Returns true when a method is publicly visible to runtime eval.
@@ -397,7 +401,7 @@ fn emit_method_call_aarch64(
         builtin_throwable_class_ids,
     );
     emit_aarch64_method_dispatch(module, emitter, data, slots);
-    emitter.instruction(&format!("b {}", fail_label));                          // no supported public method matched the request
+    emitter.instruction(&format!("b {}", fail_label));                          // no supported method matched the request
     emit_aarch64_builtin_throwable_method_bodies(module, emitter, done_label, fail_label);
     emit_aarch64_method_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
@@ -438,7 +442,7 @@ fn emit_method_call_x86_64(
         builtin_throwable_class_ids,
     );
     emit_x86_64_method_dispatch(module, emitter, data, slots);
-    emitter.instruction(&format!("jmp {}", fail_label));                        // no supported public method matched the request
+    emitter.instruction(&format!("jmp {}", fail_label));                        // no supported method matched the request
     emit_x86_64_builtin_throwable_method_bodies(module, emitter, done_label, fail_label);
     emit_x86_64_method_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);

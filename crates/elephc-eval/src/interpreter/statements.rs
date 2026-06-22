@@ -3069,7 +3069,7 @@ pub(in crate::interpreter) fn eval_object_clone_result(
         validate_eval_member_access(declaring_class, method.visibility(), context)?;
     }
     let should_call_aot_clone_hook = if dynamic_class_name.is_none() {
-        eval_aot_clone_hook_is_callable(object, values)?
+        eval_aot_clone_hook_is_callable(object, context, values)?
     } else {
         false
     };
@@ -3097,20 +3097,22 @@ pub(in crate::interpreter) fn eval_object_clone_result(
     Ok(clone)
 }
 
-/// Returns whether a public instance AOT `__clone()` hook should run.
+/// Returns whether an accessible instance AOT `__clone()` hook should run.
 fn eval_aot_clone_hook_is_callable(
     object: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let class_name = eval_runtime_object_class_name(object, values)?;
-    let Some((visibility, is_static, is_abstract)) =
+    let Some((declaring_class, visibility, is_static, is_abstract)) =
         eval_aot_method_dispatch_metadata(&class_name, "__clone", values)?
     else {
         return Ok(false);
     };
-    if visibility != EvalVisibility::Public || is_static || is_abstract {
+    if is_static || is_abstract {
         return Err(EvalStatus::RuntimeFatal);
     }
+    validate_eval_member_access(&declaring_class, visibility, context)?;
     Ok(true)
 }
 
@@ -3516,6 +3518,16 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = runtime_object_class_name(object, values)?;
+        if method_name.eq_ignore_ascii_case("__clone") {
+            if let Some((declaring_class, visibility, is_static, is_abstract)) =
+                eval_aot_method_dispatch_metadata(&class_name, method_name, values)?
+            {
+                if is_static || is_abstract {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                validate_eval_member_access(&declaring_class, visibility, context)?;
+            }
+        }
         let evaluated_args = bind_native_callable_args(
             context.native_method_signature(&class_name, method_name),
             evaluated_args,
@@ -3851,11 +3863,32 @@ fn same_eval_class_name(left: &str, right: &str) -> bool {
         .eq_ignore_ascii_case(right.trim_start_matches('\\'))
 }
 
-/// Returns true when two eval classes are in the same inheritance family.
+/// Returns true when two eval or generated classes are in the same inheritance family.
 fn eval_classes_are_related(left: &str, right: &str, context: &ElephcEvalContext) -> bool {
     same_eval_class_name(left, right)
         || context.class_is_a(left, right, false)
         || context.class_is_a(right, left, false)
+        || native_class_is_a(left, right, context)
+        || native_class_is_a(right, left, context)
+}
+
+/// Returns true when generated AOT parent metadata proves one class extends another.
+fn native_class_is_a(class_name: &str, target: &str, context: &ElephcEvalContext) -> bool {
+    let mut current = class_name.trim_start_matches('\\').to_string();
+    let target = target.trim_start_matches('\\');
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if !seen.insert(current.to_ascii_lowercase()) {
+            return false;
+        }
+        if same_eval_class_name(&current, target) {
+            return true;
+        }
+        let Some(parent) = context.native_class_parent(&current) else {
+            return false;
+        };
+        current = parent.to_string();
+    }
 }
 
 /// Binds method parameters into a fresh method scope and marks by-reference params as aliases.
