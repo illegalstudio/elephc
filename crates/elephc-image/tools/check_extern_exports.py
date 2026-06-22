@@ -22,7 +22,8 @@ import glob
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 PRELUDE = os.path.join(ROOT, "src", "image_prelude.rs")
-CRATE_SRC = os.path.join(ROOT, "crates", "elephc-image", "src", "*.rs")
+# Recursive so submodule directories (e.g. `src/cairo/`) are scanned too.
+CRATE_SRC = os.path.join(ROOT, "crates", "elephc-image", "src", "**", "*.rs")
 
 
 def declared_externs():
@@ -37,7 +38,7 @@ def declared_externs():
 def exported_symbols():
     """Names exported as `#[no_mangle] pub [unsafe] extern "C" fn elephc_*`."""
     out = set()
-    for path in glob.glob(CRATE_SRC):
+    for path in glob.glob(CRATE_SRC, recursive=True):
         src = open(path, encoding="utf-8").read()
         for m in re.finditer(
             r'#\[no_mangle\]\s*pub (?:unsafe )?extern "C" fn (elephc_\w+)', src
