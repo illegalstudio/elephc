@@ -5,11 +5,11 @@
 <h1 align="center">Elephc</h1>
 
 <p align="center">
-  <em>Write PHP. Ship a native binary.</em>
+  <sub><strong>Pronounced</strong> <em>el-ef-see</em> — just spell out &ldquo;LFC&rdquo;.</sub>
 </p>
 
 <p align="center">
-  <sub><strong>Pronounced</strong> <em>el-ef-see</em> — just spell out &ldquo;LFC&rdquo;.</sub>
+  <em>Write PHP. Ship a native binary.</em>
 </p>
 
 <p align="center">
