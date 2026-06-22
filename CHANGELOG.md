@@ -3,7 +3,7 @@
 All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
-## [Unreleased]
+## [0.25.1] - 2026-06-22
 - Image support (EIR backend), pure-Rust with no runtime dependency (`elephc-image` crate): GD raster I/O (PNG/JPEG/GIF/BMP/WebP/TGA), drawing primitives, bitmap text, transforms/filters/copy, and color handling; Exif and IPTC metadata; Imagick and Gmagick OOP with the full method surface callable (operations with no pure-Rust equivalent throw `*Exception("... is not supported in elephc")` at runtime, matching PHP); and a Cairo (tiny-skia) procedural + OOP subset.
 - Loose equality (`==`/`!=`) and `switch` compare a float against an int numerically (`1.5 == 1` is `false`, `1.0 == 1` is `true`, `switch (1.5)` matches `case 1.5`) instead of failing to compile or truncating the float subject to int.
 - EIR dead store elimination over PHP local slots: a CFG-liveness pass that drops `store_local` writes to scalar locals that are never read before being overwritten or the function exits, gated by `--ir-opt`. Refcounted and by-reference-aliased slots are left untouched to preserve ownership and aliasing semantics.
@@ -393,7 +393,7 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.25.0...HEAD
+[0.25.1]: https://github.com/illegalstudio/elephc/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/illegalstudio/elephc/compare/v0.24.3...v0.25.0
 [0.24.3]: https://github.com/illegalstudio/elephc/compare/v0.24.2...v0.24.3
 [0.24.2]: https://github.com/illegalstudio/elephc/compare/v0.24.1...v0.24.2
