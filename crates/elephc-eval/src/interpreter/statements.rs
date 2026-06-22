@@ -1181,6 +1181,16 @@ fn validate_eval_declared_properties(class: &EvalClass) -> Result<(), EvalStatus
         if property.is_static() && property.is_readonly() {
             return Err(EvalStatus::RuntimeFatal);
         }
+        if let Some(set_visibility) = property.set_visibility() {
+            if property.is_static() || property.property_type().is_none() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            if property_visibility_rank(set_visibility)
+                > property_visibility_rank(property.visibility())
+            {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+        }
         if property.is_final() && property.visibility() == EvalVisibility::Private {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -1454,9 +1464,10 @@ fn apply_class_abstract_property_requirements(
         let key = property.name().to_string();
         if property.is_abstract() {
             if let Some(existing) = requirements.get(&key) {
-                property_contract_visibility_allows(existing, property)
-                    .then_some(())
-                    .ok_or(EvalStatus::RuntimeFatal)?;
+                (property_contract_visibility_allows(existing, property)
+                    && property_contract_write_visibility_allows(existing, property))
+                .then_some(())
+                .ok_or(EvalStatus::RuntimeFatal)?;
                 requirements.insert(key, merge_abstract_property_contracts(existing, property));
             } else {
                 requirements.insert(key, property.clone());
@@ -1491,6 +1502,16 @@ fn property_contract_visibility_allows(
         >= property_visibility_rank(inherited.visibility())
 }
 
+/// Returns whether a redeclared property keeps compatible write visibility.
+fn property_contract_write_visibility_allows(
+    inherited: &EvalClassProperty,
+    redeclared: &EvalClassProperty,
+) -> bool {
+    !inherited.requires_set_hook()
+        || property_visibility_rank(redeclared.write_visibility())
+            >= property_visibility_rank(inherited.write_visibility())
+}
+
 /// Returns whether a concrete property satisfies an abstract hook contract.
 fn class_property_satisfies_abstract_contract(
     property: &EvalClassProperty,
@@ -1503,7 +1524,8 @@ fn class_property_satisfies_abstract_contract(
         return false;
     }
     if requirement.requires_set_hook() {
-        return property.has_set_hook() || (!property.has_get_hook() && !property.is_readonly());
+        return property_contract_write_visibility_allows(requirement, property)
+            && (property.has_set_hook() || (!property.has_get_hook() && !property.is_readonly()));
     }
     requirement.requires_get_hook()
 }
@@ -1753,8 +1775,9 @@ fn class_has_interface_property(
             return false;
         }
         if requirement.requires_set() {
-            return property.has_set_hook()
-                || (!property.has_get_hook() && !property.is_readonly());
+            return property.write_visibility() == EvalVisibility::Public
+                && (property.has_set_hook()
+                    || (!property.has_get_hook() && !property.is_readonly()));
         }
         requirement.requires_get()
     })
@@ -1891,6 +1914,7 @@ pub(in crate::interpreter) fn eval_property_set_result(
             }
             return Err(EvalStatus::RuntimeFatal);
         }
+        validate_eval_property_write_access(&declaring_class, &property, context)?;
         validate_eval_readonly_property_write(&declaring_class, &property, context)?;
         storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
         if property.has_set_hook() {
@@ -1978,7 +2002,7 @@ fn eval_property_reference_bind_result(
     let (declaring_class, property) =
         eval_dynamic_property_for_access(&object_class_name, property_name, context)
             .ok_or(EvalStatus::RuntimeFatal)?;
-    validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+    validate_eval_property_write_access(&declaring_class, &property, context)?;
     if property.is_readonly() {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -2125,6 +2149,7 @@ pub(in crate::interpreter) fn eval_property_unset_result(
         eval_dynamic_property_for_access(&object_class_name, property_name, context)
     {
         if validate_eval_member_access(&declaring_class, property.visibility(), context).is_ok() {
+            validate_eval_property_write_access(&declaring_class, &property, context)?;
             validate_eval_readonly_property_write(&declaring_class, &property, context)?;
             let storage_property_name =
                 eval_instance_property_storage_name(&declaring_class, &property);
@@ -2410,6 +2435,15 @@ pub(in crate::interpreter) fn eval_instance_property_storage_name(
     }
 }
 
+/// Validates the visibility that applies to property writes, including asymmetric `set` visibility.
+fn validate_eval_property_write_access(
+    declaring_class: &str,
+    property: &EvalClassProperty,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    validate_eval_member_access(declaring_class, property.write_visibility(), context)
+}
+
 /// Reads one eval-declared static property after resolving the class-like receiver.
 pub(in crate::interpreter) fn eval_static_property_get_result(
     class_name: &str,
@@ -2581,7 +2615,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
     if !property.is_static() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+    validate_eval_property_write_access(&declaring_class, &property, context)?;
     validate_eval_readonly_property_write(&declaring_class, &property, context)?;
     if let Some(replaced) = context.set_static_property(&declaring_class, property.name(), value) {
         values.release(replaced)?;

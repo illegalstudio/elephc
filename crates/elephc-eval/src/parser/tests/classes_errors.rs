@@ -583,6 +583,63 @@ fn parse_fragment_accepts_readonly_class_property() {
     );
 }
 
+/// Verifies asymmetric property visibility lowers into eval class metadata.
+#[test]
+fn parse_fragment_accepts_asymmetric_property_visibility() {
+    let program = parse_fragment(
+        b"class DynEvalAsymmetric { public private(set) int $id = 1; protected(set) string $name = \"x\"; }",
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(EvalClass::new(
+            "DynEvalAsymmetric",
+            vec![
+                EvalClassProperty::with_visibility_static_final_and_readonly(
+                    "id",
+                    EvalVisibility::Public,
+                    false,
+                    false,
+                    false,
+                    Some(EvalExpr::Const(EvalConst::Int(1)))
+                )
+                .with_type(Some(EvalParameterType::new(
+                    vec![EvalParameterTypeVariant::Int],
+                    false
+                )))
+                .with_set_visibility(Some(EvalVisibility::Private)),
+                EvalClassProperty::with_visibility_static_final_and_readonly(
+                    "name",
+                    EvalVisibility::Public,
+                    false,
+                    false,
+                    false,
+                    Some(EvalExpr::Const(EvalConst::String("x".to_string())))
+                )
+                .with_type(Some(EvalParameterType::new(
+                    vec![EvalParameterTypeVariant::String],
+                    false
+                )))
+                .with_set_visibility(Some(EvalVisibility::Protected)),
+            ],
+            Vec::new()
+        ))]
+    );
+}
+
+/// Verifies eval rejects asymmetric property visibility forms that PHP rejects.
+#[test]
+fn parse_fragment_rejects_invalid_asymmetric_property_visibility() {
+    parse_fragment(b"class DynEvalAsymUntyped { public private(set) $id = 1; }")
+        .expect_err("asymmetric properties must be typed");
+    parse_fragment(b"class DynEvalAsymStatic { public private(set) static int $id = 1; }")
+        .expect_err("asymmetric properties cannot be static");
+    parse_fragment(b"class DynEvalAsymWeak { private public(set) int $id = 1; }")
+        .expect_err("set visibility cannot be weaker than read visibility");
+    parse_fragment(b"class DynEvalAsymMethod { public private(set) function run() {} }")
+        .expect_err("asymmetric visibility is property-only");
+}
+
 /// Verifies readonly class modifiers lower into class and property metadata.
 #[test]
 fn parse_fragment_accepts_readonly_class_modifier() {

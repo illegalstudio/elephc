@@ -1397,6 +1397,7 @@ pub struct EvalClassProperty {
     attributes: Vec<EvalAttribute>,
     property_type: Option<EvalParameterType>,
     visibility: EvalVisibility,
+    set_visibility: Option<EvalVisibility>,
     is_static: bool,
     is_final: bool,
     is_readonly: bool,
@@ -1467,6 +1468,7 @@ impl EvalClassProperty {
             attributes: Vec::new(),
             property_type: None,
             visibility,
+            set_visibility: None,
             is_static,
             is_final,
             is_readonly,
@@ -1520,6 +1522,12 @@ impl EvalClassProperty {
         self
     }
 
+    /// Returns a copy of this property with PHP asymmetric write visibility metadata.
+    pub const fn with_set_visibility(mut self, set_visibility: Option<EvalVisibility>) -> Self {
+        self.set_visibility = set_visibility;
+        self
+    }
+
     /// Returns a copy of this property marked as coming from constructor promotion.
     pub const fn with_promoted(mut self) -> Self {
         self.is_promoted = true;
@@ -1544,6 +1552,19 @@ impl EvalClassProperty {
     /// Returns the PHP visibility declared for this property.
     pub const fn visibility(&self) -> EvalVisibility {
         self.visibility
+    }
+
+    /// Returns the PHP asymmetric write visibility, if it differs from read visibility.
+    pub const fn set_visibility(&self) -> Option<EvalVisibility> {
+        self.set_visibility
+    }
+
+    /// Returns the visibility that applies to writes for this property.
+    pub const fn write_visibility(&self) -> EvalVisibility {
+        match self.set_visibility {
+            Some(visibility) => visibility,
+            None => self.visibility,
+        }
     }
 
     /// Returns whether this property was declared `static`.
