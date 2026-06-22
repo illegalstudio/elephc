@@ -1528,6 +1528,11 @@ fn throw_new_reflection_exception(message: Expr, span: crate::span::Span) -> Stm
     )
 }
 
+/// Builds a `null` expression for synthetic Reflection method bodies.
+fn null_value(span: crate::span::Span) -> Expr {
+    Expr::new(ExprKind::Null, span)
+}
+
 /// Builds `$this->{$property}` for synthetic ReflectionClass method bodies.
 fn reflection_this_property(property: &str, span: crate::span::Span) -> Expr {
     Expr::new(
@@ -1978,9 +1983,10 @@ fn builtin_reflection_property_modifier_mask_method(method_name: &str, mask: i64
     }
 }
 
-/// Returns the fallback `ReflectionProperty::getValue()` body for unsupported dynamic receivers.
+/// Returns `ReflectionProperty::getValue()` for dynamic public instance reflectors.
 fn builtin_reflection_property_get_value_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
+    let object = variable_expr("object", dummy_span);
     ClassMethod {
         name: "getValue".to_string(),
         visibility: Visibility::Public,
@@ -1988,31 +1994,29 @@ fn builtin_reflection_property_get_value_method() -> ClassMethod {
         is_abstract: false,
         is_final: false,
         has_body: true,
-        params: vec![(
-            "object".to_string(),
-            Some(mixed_type()),
-            null_expr(),
-            false,
-        )],
+        params: vec![("object".to_string(), Some(mixed_type()), null_expr(), false)],
         param_attributes: Vec::new(),
         variadic: None,
         variadic_type: None,
         return_type: Some(mixed_type()),
-        body: vec![throw_new_reflection_exception(
-            string_lit(
-                "ReflectionProperty::getValue() requires an inline known public instance or static property",
+        body: vec![
+            reflection_property_static_value_guard("getValue", dummy_span),
+            reflection_property_object_required_guard("getValue", dummy_span),
+            Stmt::new(
+                StmtKind::Return(Some(reflection_dynamic_object_property(object, dummy_span))),
                 dummy_span,
             ),
-            dummy_span,
-        )],
+        ],
         span: dummy_span,
         attributes: Vec::new(),
     }
 }
 
-/// Returns the fallback `ReflectionProperty::setValue()` body for unsupported dynamic receivers.
+/// Returns `ReflectionProperty::setValue()` for dynamic public instance reflectors.
 fn builtin_reflection_property_set_value_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
+    let object = variable_expr("object", dummy_span);
+    let value = variable_expr("value", dummy_span);
     ClassMethod {
         name: "setValue".to_string(),
         visibility: Visibility::Public,
@@ -2028,16 +2032,86 @@ fn builtin_reflection_property_set_value_method() -> ClassMethod {
         variadic: None,
         variadic_type: None,
         return_type: Some(TypeExpr::Void),
-        body: vec![throw_new_reflection_exception(
-            string_lit(
-                "ReflectionProperty::setValue() requires an inline known public instance or static property",
+        body: vec![
+            reflection_property_static_value_guard("setValue", dummy_span),
+            reflection_property_object_required_guard("setValue", dummy_span),
+            Stmt::new(
+                StmtKind::ExprStmt(Expr::new(
+                    ExprKind::Assignment {
+                        target: Box::new(reflection_dynamic_object_property(object, dummy_span)),
+                        value: Box::new(value),
+                        result_target: None,
+                        prelude: Vec::new(),
+                        conditional_value_temp: None,
+                    },
+                    dummy_span,
+                )),
                 dummy_span,
             ),
-            dummy_span,
-        )],
+        ],
         span: dummy_span,
         attributes: Vec::new(),
     }
+}
+
+/// Builds a guard for static property value access that still needs inline lowering.
+fn reflection_property_static_value_guard(method: &str, span: crate::span::Span) -> Stmt {
+    Stmt::new(
+        StmtKind::If {
+            condition: reflection_this_property("__is_static", span),
+            then_body: vec![throw_new_reflection_exception(
+                string_lit(
+                    &format!(
+                        "ReflectionProperty::{}() for static properties requires an inline known public static property",
+                        method
+                    ),
+                    span,
+                ),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+/// Builds a guard requiring an object argument for instance property value access.
+fn reflection_property_object_required_guard(method: &str, span: crate::span::Span) -> Stmt {
+    Stmt::new(
+        StmtKind::If {
+            condition: binary_expr(
+                variable_expr("object", span),
+                BinOp::StrictEq,
+                null_value(span),
+                span,
+            ),
+            then_body: vec![throw_new_reflection_exception(
+                string_lit(
+                    &format!(
+                        "ReflectionProperty::{}() requires an object for instance properties",
+                        method
+                    ),
+                    span,
+                ),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+/// Builds `$object->{$this->__name}` for ReflectionProperty value access.
+fn reflection_dynamic_object_property(object: Expr, span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::DynamicPropertyAccess {
+            object: Box::new(object),
+            property: Box::new(reflection_this_property("__name", span)),
+        },
+        span,
+    )
 }
 
 /// Returns `ReflectionProperty::isLazy()` for the non-lazy property model elephc supports.
