@@ -468,13 +468,7 @@ impl Checker {
             ExprKind::StringLiteral(_) | ExprKind::ClassConstant { .. } => {
                 self.reflection_class_literal_arg("ReflectionParameter", arg, env)
             }
-            ExprKind::Variable(_) | ExprKind::This | ExprKind::NewObject { .. } => {
-                self.reflection_parameter_concrete_object_class_name(arg, env)
-            }
-            _ => Err(CompileError::new(
-                arg.span,
-                "ReflectionParameter::__construct() requires a literal class name or statically typed object target",
-            )),
+            _ => self.reflection_parameter_concrete_object_class_name(arg, env),
         }
     }
 
