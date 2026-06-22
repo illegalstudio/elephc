@@ -9921,6 +9921,17 @@ fn lower_method_call(
     {
         return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
     }
+    if op == Op::MethodCall {
+        if let Some(value) = lower_reflection_class_static_property_value_call(
+            ctx,
+            Some(object_expr),
+            method,
+            args,
+            expr,
+        ) {
+            return value;
+        }
+    }
     if matches!(
         ctx.builder.value_php_type(object.value).codegen_repr(),
         PhpType::Callable
@@ -10179,6 +10190,183 @@ fn lower_reflection_class_new_instance_without_constructor(
         Op::DynamicObjectNewWithoutConstructorMixed.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Lowers live static-property value access for statically-known `ReflectionClass` calls.
+fn lower_reflection_class_static_property_value_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let class_name = reflection_class_new_instance_reflected_class(ctx, object_expr?)?;
+    match php_symbol_key(method).as_str() {
+        "getstaticpropertyvalue" => {
+            lower_reflection_class_get_static_property_value(ctx, &class_name, args, expr)
+        }
+        "setstaticpropertyvalue" => {
+            lower_reflection_class_set_static_property_value(ctx, &class_name, args, expr)
+        }
+        _ => None,
+    }
+}
+
+/// Lowers `ReflectionClass::getStaticPropertyValue()` to a live static-property read.
+fn lower_reflection_class_get_static_property_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let (property, default) = reflection_class_get_static_property_value_args(args)?;
+    if let Some(property_ty) = reflection_class_static_property_type(ctx, class_name, &property) {
+        if default.is_none() {
+            return Some(lower_static_property_get_by_class_name(
+                ctx,
+                class_name,
+                &property,
+                property_ty,
+                expr,
+            ));
+        }
+        return None;
+    }
+    default.map(|default| lower_expr(ctx, &default))
+}
+
+/// Lowers `ReflectionClass::setStaticPropertyValue()` to a live static-property write.
+fn lower_reflection_class_set_static_property_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let (property, value) = reflection_class_set_static_property_value_args(args)?;
+    reflection_class_static_property_type(ctx, class_name, &property)?;
+    let value = lower_expr(ctx, &value);
+    store_static_property_by_class_name(ctx, class_name, &property, value.value, expr.span);
+    Some(lower_null(ctx, expr))
+}
+
+/// Returns the literal property name and optional explicit default argument for a get call.
+fn reflection_class_get_static_property_value_args(
+    args: &[Expr],
+) -> Option<(String, Option<Expr>)> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    let (name, default) =
+        reflection_class_static_property_regular_args(&args, "name", Some("default"))?;
+    let property = reflection_class_static_property_name_arg(name.as_ref()?)?;
+    Some((property, default))
+}
+
+/// Returns the literal property name and value expression for a set call.
+fn reflection_class_set_static_property_value_args(
+    args: &[Expr],
+) -> Option<(String, Expr)> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    let (name, value) =
+        reflection_class_static_property_regular_args(&args, "name", Some("value"))?;
+    let property = reflection_class_static_property_name_arg(name.as_ref()?)?;
+    let value = value?;
+    Some((property, value))
+}
+
+/// Normalizes supported static-property method arguments into parameter order.
+fn reflection_class_static_property_regular_args(
+    args: &[Expr],
+    first_name: &str,
+    second_name: Option<&str>,
+) -> Option<(Option<Expr>, Option<Expr>)> {
+    if !crate::types::call_args::has_named_args(args) {
+        return match args {
+            [first] => Some((Some(first.clone()), None)),
+            [first, second] => Some((Some(first.clone()), Some(second.clone()))),
+            _ => None,
+        };
+    }
+
+    let mut first = None;
+    let mut second = None;
+    for arg in args {
+        match &arg.kind {
+            ExprKind::NamedArg { name, value } if php_symbol_key(name) == first_name => {
+                first = Some((**value).clone());
+            }
+            ExprKind::NamedArg { name, value }
+                if second_name.is_some_and(|expected| php_symbol_key(name) == expected) =>
+            {
+                second = Some((**value).clone());
+            }
+            _ => return None,
+        }
+    }
+    Some((first, second))
+}
+
+/// Extracts a literal property name from a ReflectionClass static-property call argument.
+fn reflection_class_static_property_name_arg(arg: &Expr) -> Option<String> {
+    match &arg.kind {
+        ExprKind::StringLiteral(name) => Some(name.clone()),
+        _ => None,
+    }
+}
+
+/// Returns the retained PHP type for one static property on a reflected class.
+fn reflection_class_static_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+) -> Option<PhpType> {
+    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    class_info
+        .static_properties
+        .iter()
+        .find(|(name, _)| name == property)
+        .map(|(_, property_ty)| normalize_value_php_type(property_ty.codegen_repr()))
+}
+
+/// Emits a live static-property read from a known reflected class and property name.
+fn lower_static_property_get_by_class_name(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+    result_type: PhpType,
+    expr: &Expr,
+) -> LoweredValue {
+    let data = ctx.intern_string(&format!("{}::{}", class_name, property));
+    ctx.emit_value(
+        Op::LoadStaticProperty,
+        Vec::new(),
+        Some(Immediate::Data(data)),
+        result_type,
+        Op::LoadStaticProperty.default_effects(),
+        Some(expr.span),
+    )
+}
+
+/// Emits a live static-property write for a known reflected class and property name.
+fn store_static_property_by_class_name(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+    value: ValueId,
+    span: Span,
+) {
+    let data = ctx.intern_string(&format!("{}::{}", class_name, property));
+    ctx.emit_void(
+        Op::StoreStaticProperty,
+        vec![value],
+        Some(Immediate::Data(data)),
+        Op::StoreStaticProperty.default_effects(),
+        Some(span),
+    );
 }
 
 /// Returns the source arguments that can be forwarded to `new $class(...)`.
