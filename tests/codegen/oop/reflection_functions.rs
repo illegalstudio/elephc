@@ -14,6 +14,24 @@
 
 use super::*;
 
+/// Verifies `ReflectionFunction::isVariadic()` reports the function-level variadic flag.
+#[test]
+fn test_reflection_function_reports_aot_variadic_flag() {
+    let out = compile_and_run(
+        r#"<?php
+function reflect_variadic_function(string $head, string ...$tail): void {}
+function reflect_fixed_function(string $head): void {}
+
+$variadic = new ReflectionFunction("reflect_variadic_function");
+$fixed = new ReflectionFunction("reflect_fixed_function");
+echo ($variadic->isVariadic() ? "V" : "v") . ":";
+echo $variadic->getNumberOfParameters() . ":";
+echo ($fixed->isVariadic() ? "V" : "v");
+"#,
+    );
+    assert_eq!(out, "V:2:v");
+}
+
 /// Verifies `ReflectionFunction` exposes AOT function name and origin metadata.
 #[test]
 fn test_reflection_function_reports_aot_name_origin_predicates() {

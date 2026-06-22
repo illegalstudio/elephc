@@ -13,6 +13,26 @@
 
 use super::*;
 
+/// Verifies `ReflectionMethod::isVariadic()` reports the method-level variadic flag.
+#[test]
+fn test_reflection_method_reports_aot_variadic_flag() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectMethodVariadicTarget {
+    public function variadic(string $head, string ...$tail): void {}
+    public function fixed(string $head): void {}
+}
+
+$variadic = new ReflectionMethod(ReflectMethodVariadicTarget::class, "variadic");
+$fixed = new ReflectionMethod(ReflectMethodVariadicTarget::class, "fixed");
+echo ($variadic->isVariadic() ? "V" : "v") . ":";
+echo $variadic->getNumberOfParameters() . ":";
+echo ($fixed->isVariadic() ? "V" : "v");
+"#,
+    );
+    assert_eq!(out, "V:2:v");
+}
+
 /// Verifies `ReflectionMethod` exposes AOT method name and origin metadata.
 #[test]
 fn test_reflection_method_reports_aot_name_origin_predicates() {

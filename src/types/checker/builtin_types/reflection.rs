@@ -2630,6 +2630,7 @@ fn builtin_reflection_owner_class(
             "getNumberOfRequiredParameters",
             "__required_parameter_count",
         ));
+        methods.push(builtin_reflection_function_method_is_variadic_method());
     }
     if name == "ReflectionMethod" {
         methods.push(builtin_reflection_method_invoke_method());
@@ -2752,6 +2753,80 @@ fn builtin_reflection_parameter_count_method() -> ClassMethod {
             ))),
             dummy_span,
         )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `ReflectionFunctionAbstract::isVariadic()` from the retained parameter list.
+fn builtin_reflection_function_method_is_variadic_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let parameters = variable_expr("parameters", dummy_span);
+    let count = variable_expr("count", dummy_span);
+    let last_index = binary_expr(
+        count.clone(),
+        BinOp::Sub,
+        Expr::new(ExprKind::IntLiteral(1), dummy_span),
+        dummy_span,
+    );
+    let last_parameter = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(parameters.clone()),
+            index: Box::new(last_index),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: "isVariadic".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        body: vec![
+            Stmt::new(
+                StmtKind::Assign {
+                    name: "parameters".to_string(),
+                    value: reflection_this_property("__parameters", dummy_span),
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Assign {
+                    name: "count".to_string(),
+                    value: function_call("count", vec![parameters], dummy_span),
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::If {
+                    condition: binary_expr(
+                        count.clone(),
+                        BinOp::StrictEq,
+                        Expr::new(ExprKind::IntLiteral(0), dummy_span),
+                        dummy_span,
+                    ),
+                    then_body: vec![Stmt::new(StmtKind::Return(false_bool()), dummy_span)],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Return(Some(method_call_expr(
+                    last_parameter,
+                    "isVariadic",
+                    Vec::new(),
+                    dummy_span,
+                ))),
+                dummy_span,
+            ),
+        ],
         span: dummy_span,
         attributes: Vec::new(),
     }
