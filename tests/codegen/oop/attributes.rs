@@ -2509,6 +2509,38 @@ echo ":" . (new ReflectionClass(ReflectStaticValueTarget::class))->getStaticProp
     assert_eq!(out.stdout, "7:9:11:fallback");
 }
 
+/// Verifies a local `ReflectionClass` receiver keeps statically-known class metadata.
+#[test]
+fn test_reflection_class_tracked_local_receiver_uses_static_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReflectTrackedClassTarget {
+    public static int $count = 7;
+
+    public function __construct(public int $id = 1, public string $name = "unset") {}
+}
+
+$ref = new ReflectionClass(ReflectTrackedClassTarget::class);
+echo $ref->getStaticPropertyValue("count");
+ReflectTrackedClassTarget::$count = 9;
+echo ":" . $ref->getStaticPropertyValue("count");
+$ref->setStaticPropertyValue("count", 11);
+echo ":" . ReflectTrackedClassTarget::$count;
+echo ":" . $ref->getStaticPropertyValue("missing", "fallback");
+$obj = $ref->newInstance(id: 5, name: "Ada");
+echo ":" . $obj->id . ":" . $obj->name;
+$obj2 = $ref->newInstanceArgs(["name" => "Bob", "id" => 6]);
+echo ":" . $obj2->id . ":" . $obj2->name;
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "7:9:11:fallback:5:Ada:6:Bob");
+}
+
 /// Verifies `ReflectionParameter::getAttributes()` exposes parameter attributes.
 #[test]
 fn test_reflection_parameter_get_attributes_returns_parameter_metadata() {
