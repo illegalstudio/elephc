@@ -14,6 +14,47 @@
 
 use super::*;
 
+/// Verifies `ReflectionFunction` exposes declared AOT return type metadata.
+#[test]
+fn test_reflection_function_reports_aot_return_type_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+function reflect_return_named(?int $value): ?int { return $value; }
+function reflect_return_union(): int|string { return 1; }
+function reflect_return_never(): never { throw new Exception("stop"); }
+function reflect_return_plain() {}
+
+$namedRef = new ReflectionFunction("reflect_return_named");
+$named = $namedRef->getReturnType();
+echo ($namedRef->hasReturnType() ? "T" : "t") . ":";
+echo $named->getName() . ":";
+echo ($named->allowsNull() ? "N" : "n") . ":";
+echo ($named->isBuiltin() ? "B" : "b") . ":";
+$declaring = $namedRef->getParameters()[0]->getDeclaringFunction()->getReturnType();
+echo $declaring->getName() . ":";
+$union = (new ReflectionFunction("reflect_return_union"))->getReturnType();
+if ($union instanceof ReflectionUnionType) {
+    echo count($union->getTypes()) . ":";
+    foreach ($union->getTypes() as $type) {
+        echo $type->getName();
+        echo $type->isBuiltin() ? "B" : "b";
+    }
+} else {
+    echo "not-union";
+}
+echo ":";
+$never = (new ReflectionFunction("reflect_return_never"))->getReturnType();
+echo $never->getName() . ":";
+echo ($never->allowsNull() ? "N" : "n") . ":";
+echo ($never->isBuiltin() ? "B" : "b") . ":";
+$plain = new ReflectionFunction("reflect_return_plain");
+echo ($plain->hasReturnType() ? "P" : "p") . ":";
+echo $plain->getReturnType() === null ? "Q" : "q";
+"#,
+    );
+    assert_eq!(out, "T:int:N:B:int:2:intBstringB:never:n:B:p:Q");
+}
+
 /// Verifies `ReflectionFunction::isVariadic()` reports the function-level variadic flag.
 #[test]
 fn test_reflection_function_reports_aot_variadic_flag() {

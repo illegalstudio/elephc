@@ -2615,6 +2615,18 @@ fn builtin_reflection_owner_class(
             empty_array(),
         ));
         properties.push(builtin_property(
+            "__type",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        properties.push(builtin_property(
+            "__has_return_type",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
             "__required_parameter_count",
             Visibility::Private,
             Some(TypeExpr::Int),
@@ -2630,6 +2642,11 @@ fn builtin_reflection_owner_class(
             "getNumberOfRequiredParameters",
             "__required_parameter_count",
         ));
+        methods.push(builtin_reflection_class_bool_method(
+            "hasReturnType",
+            "__has_return_type",
+        ));
+        methods.push(builtin_reflection_class_mixed_method("getReturnType", "__type"));
         methods.push(builtin_reflection_function_method_is_variadic_method());
     }
     if name == "ReflectionMethod" {
@@ -3918,10 +3935,19 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                         sig.return_type = PhpType::Str;
                     }
                 }
-                for method_name in ["inNamespace", "isInternal", "isUserDefined"] {
+                for method_name in [
+                    "inNamespace",
+                    "isInternal",
+                    "isUserDefined",
+                    "hasReturnType",
+                    "isVariadic",
+                ] {
                     if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
                         sig.return_type = PhpType::Bool;
                     }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getReturnType")) {
+                    sig.return_type = PhpType::Mixed;
                 }
             }
             if class_name == "ReflectionProperty" {
