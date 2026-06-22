@@ -243,6 +243,7 @@ fn test_reflection_class_runtime_static_properties_materialize_aot_values() {
 class ReflectRuntimeStaticPropertiesTarget {
     public static int $count = 2;
     private static string $label = "old";
+    public static ?string $nullable = null;
     public static int $unset;
 
     public static function rename(string $value): void {
@@ -255,8 +256,11 @@ function inspect_static_props(ReflectionClass $ref): void {
     echo count($props);
     echo ":" . $props["count"];
     echo ":" . $props["label"];
+    echo ":" . (array_key_exists("nullable", $props) && $props["nullable"] === null ? "null" : "bad");
     echo ":" . ($props["unset"] ?? "missing");
     echo ":" . $ref->getStaticPropertyValue("count", "fallback");
+    echo ":" . ($ref->getStaticPropertyValue("nullable", "fallback") === null ? "null" : "bad");
+    echo ":" . $ref->getStaticPropertyValue("missing", "fallback");
 }
 
 ReflectRuntimeStaticPropertiesTarget::$count = 5;
@@ -264,7 +268,7 @@ ReflectRuntimeStaticPropertiesTarget::rename("new");
 inspect_static_props(new ReflectionClass(ReflectRuntimeStaticPropertiesTarget::class));
 "#,
     );
-    assert_eq!(out, "2:5:new:missing:5");
+    assert_eq!(out, "3:5:new:null:missing:5:null:fallback");
 }
 
 /// Verifies runtime-held `ReflectionProperty` objects can read and write public

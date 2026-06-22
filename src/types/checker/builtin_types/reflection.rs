@@ -288,6 +288,14 @@ fn reflection_string_map_type() -> PhpType {
     }
 }
 
+/// Returns `array<string, mixed>` for static-property value reflection maps.
+fn reflection_static_properties_map_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Mixed),
+    }
+}
+
 /// Returns a nullable object type expression for one synthetic reflection class.
 fn nullable_object_type(class_name: &str) -> TypeExpr {
     TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(class_name))))
@@ -1051,10 +1059,29 @@ fn builtin_reflection_class_get_constant_method() -> ClassMethod {
 fn builtin_reflection_class_get_static_property_value_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     let name = variable_expr("name", dummy_span);
+    let default = variable_expr("default", dummy_span);
     let value_read = Expr::new(
         ExprKind::ArrayAccess {
             array: Box::new(reflection_this_property("__static_properties", dummy_span)),
-            index: Box::new(name),
+            index: Box::new(name.clone()),
+        },
+        dummy_span,
+    );
+    let key_exists = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("array_key_exists"),
+            args: vec![
+                name,
+                reflection_this_property("__static_properties", dummy_span),
+            ],
+        },
+        dummy_span,
+    );
+    let value_or_default = Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(key_exists),
+            then_expr: Box::new(value_read),
+            else_expr: Box::new(default),
         },
         dummy_span,
     );
@@ -1078,7 +1105,10 @@ fn builtin_reflection_class_get_static_property_value_method() -> ClassMethod {
         variadic: None,
         variadic_type: None,
         return_type: Some(mixed_type()),
-        body: vec![Stmt::new(StmtKind::Return(Some(value_read)), dummy_span)],
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(value_or_default)),
+            dummy_span,
+        )],
         span: dummy_span,
         attributes: Vec::new(),
     }
@@ -3400,6 +3430,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                         "__trait_aliases" => {
                             *property_type = reflection_string_map_type();
                         }
+                        "__static_properties" => {
+                            *property_type = reflection_static_properties_map_type();
+                        }
                         _ => {}
                     }
                 }
@@ -3467,6 +3500,12 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getProperty")) {
                     sig.return_type = PhpType::Object("ReflectionProperty".to_string());
+                }
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("getStaticProperties"))
+                {
+                    sig.return_type = reflection_static_properties_map_type();
                 }
                 if let Some(sig) = class_info
                     .methods
