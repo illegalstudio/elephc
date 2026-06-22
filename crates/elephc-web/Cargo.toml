@@ -20,7 +20,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 tokio = { version = "1", default-features = false, features = ["net", "rt", "io-util", "sync"] }
 # socket2 sets SO_REUSEPORT before bind so N workers share one port and the
 # kernel load-balances connections across them.
-socket2 = "0.5"
+socket2 = { version = "0.5", features = ["all"] }
 # libc: fork/waitpid/signals for the prefork master, kept default-features for
 # musl-compatibility on the Docker Linux images.
 libc = "0.2"

@@ -15,6 +15,7 @@
 
 mod request_state;
 mod server;
+mod worker;
 
 // Re-exported so the compiled `--web` runtime's `__rt_stdout_write` capture
 // branch links against the real per-request output sink (defined in
