@@ -1144,7 +1144,46 @@ pub(in crate::interpreter) fn eval_reflection_property_is_initialized_result(
     .map(Some)
 }
 
-/// Handles eval-backed `ReflectionProperty::getRawValue()` and `setRawValue()` calls.
+/// Handles eval-backed `ReflectionProperty::isLazy()` and `skipLazyInitialization()` calls.
+pub(in crate::interpreter) fn eval_reflection_property_lazy_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some((declaring_class, property_name)) =
+        context
+            .eval_reflection_property(identity)
+            .map(|(declaring_class, property_name)| {
+                (declaring_class.to_string(), property_name.to_string())
+            })
+    else {
+        return Ok(None);
+    };
+    if method_name.eq_ignore_ascii_case("isLazy") {
+        let object = eval_reflection_property_raw_value_arg(evaluated_args)?;
+        eval_reflection_property_validate_object(&declaring_class, object, context, values)?;
+        return values.bool_value(false).map(Some);
+    }
+    if method_name.eq_ignore_ascii_case("skipLazyInitialization") {
+        let object = eval_reflection_property_raw_value_arg(evaluated_args)?;
+        let (_, property) = eval_reflection_instance_property_target(
+            &declaring_class,
+            &property_name,
+            object,
+            context,
+            values,
+        )?;
+        if property.is_virtual() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        return values.null().map(Some);
+    }
+    Ok(None)
+}
+
+/// Handles eval-backed `ReflectionProperty::getRawValue()` and raw write calls.
 pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
     identity: u64,
     method_name: &str,
@@ -1172,7 +1211,9 @@ pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
         )
         .map(Some);
     }
-    if method_name.eq_ignore_ascii_case("setRawValue") {
+    if method_name.eq_ignore_ascii_case("setRawValue")
+        || method_name.eq_ignore_ascii_case("setRawValueWithoutLazyInitialization")
+    {
         let (object, value) = eval_reflection_property_set_raw_value_args(evaluated_args)?;
         eval_reflection_instance_property_set_raw_value(
             &declaring_class,
@@ -4877,6 +4918,24 @@ fn eval_reflection_instance_property_set_raw_value(
     values.property_set(object, &storage_property_name, value)?;
     let identity = values.object_identity(object)?;
     context.mark_dynamic_property_initialized(identity, &storage_property_name);
+    Ok(())
+}
+
+/// Validates the object argument shared by non-mutating ReflectionProperty instance APIs.
+fn eval_reflection_property_validate_object(
+    declaring_class: &str,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let identity = values.object_identity(object)?;
+    let object_class_name = context
+        .dynamic_object_class(identity)
+        .map(|class| class.name().to_string())
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    if !context.class_is_a(&object_class_name, declaring_class, false) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     Ok(())
 }
 

@@ -1943,6 +1943,90 @@ fn builtin_reflection_property_modifier_mask_method(method_name: &str, mask: i64
     }
 }
 
+/// Returns `ReflectionProperty::isLazy()` for the non-lazy property model elephc supports.
+fn builtin_reflection_property_is_lazy_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "isLazy".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(object_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        body: vec![Stmt::new(StmtKind::Return(false_bool()), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionProperty::skipLazyInitialization()` as a no-op for non-lazy properties.
+fn builtin_reflection_property_skip_lazy_initialization_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let static_modifier = binary_expr(
+        binary_expr(
+            reflection_this_property("__modifiers", dummy_span),
+            BinOp::BitAnd,
+            Expr::new(ExprKind::IntLiteral(16), dummy_span),
+            dummy_span,
+        ),
+        BinOp::StrictNotEq,
+        Expr::new(ExprKind::IntLiteral(0), dummy_span),
+        dummy_span,
+    );
+    ClassMethod {
+        name: "skipLazyInitialization".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(object_type()), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Void),
+        body: vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: static_modifier,
+                    then_body: vec![throw_new_reflection_exception(
+                        string_lit(
+                            "Can not use skipLazyInitialization on static property",
+                            dummy_span,
+                        ),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::If {
+                    condition: reflection_this_property("__is_virtual", dummy_span),
+                    then_body: vec![throw_new_reflection_exception(
+                        string_lit(
+                            "Can not use skipLazyInitialization on virtual property",
+                            dummy_span,
+                        ),
+                        dummy_span,
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy_span,
+            ),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Builds a `FlattenedClass` for simple reflection owner classes
 /// with a private `__attrs` array property and two methods: `__construct`
 /// (public, accepting the supplied params) and `getAttributes` (public,
@@ -2261,6 +2345,8 @@ fn add_reflection_member_flag_methods(
             "isDynamic",
             "__is_dynamic",
         ));
+        methods.push(builtin_reflection_property_is_lazy_method());
+        methods.push(builtin_reflection_property_skip_lazy_initialization_method());
         methods.push(builtin_reflection_property_modifier_mask_method(
             "isProtectedSet",
             2048,

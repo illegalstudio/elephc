@@ -401,7 +401,11 @@ still reject readonly writes.
 `ReflectionProperty::getRawValue()` and `setRawValue()` are supported for
 eval-declared backed instance properties, including backed property hooks, and
 bypass concrete property hook accessors. Virtual property hooks reject raw
-access like PHP.
+access like PHP. `ReflectionProperty::isLazy()` reports `false` for
+eval-declared properties because eval does not implement lazy properties;
+`skipLazyInitialization()` is a no-op for supported non-static backed
+properties, and `setRawValueWithoutLazyInitialization()` follows the same raw
+storage write path as `setRawValue()`.
 `ReflectionClassConstant::getAttributes()`,
 `ReflectionEnumUnitCase::getAttributes()`, and
 `ReflectionEnumBackedCase::getAttributes()` expose eval-retained class-constant

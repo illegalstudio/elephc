@@ -1903,6 +1903,11 @@ echo $backed->getValue($hook); echo ":";
 $backed->setRawValue(object: $hook, value: 7);
 echo $backed->getRawValue($hook); echo ":";
 echo $backed->getValue($hook); echo ":";
+echo $backed->isLazy($hook) ? "L" : "l"; echo ":";
+$backed->skipLazyInitialization(object: $hook);
+$backed->setRawValueWithoutLazyInitialization(object: $hook, value: 8);
+echo $backed->getRawValue($hook); echo ":";
+echo $backed->getValue($hook); echo ":";
 echo $backed->getModifiers(); echo ":";
 echo $backed->isVirtual() ? "V" : "b"; echo ":";
 echo (new ReflectionProperty("EvalReflectValueHook", "virtual"))->isVirtual() ? "V" : "b"; echo ":";
@@ -1917,7 +1922,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "base:changed:Ada:Grace:1:5:6:4:5:10:2:4:4:8:7:14:1:b:V:513"
+        "base:changed:Ada:Grace:1:5:6:4:5:10:2:4:4:8:7:14:l:8:16:1:b:V:513"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
