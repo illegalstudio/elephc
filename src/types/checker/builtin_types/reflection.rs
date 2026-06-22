@@ -2159,6 +2159,27 @@ fn builtin_reflection_constant_false_union_method(method_name: &str) -> ClassMet
     }
 }
 
+/// Returns a public Reflection predicate that always reports PHP `false`.
+fn builtin_reflection_constant_false_bool_method(method_name: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(bool_type()),
+        body: vec![Stmt::new(StmtKind::Return(false_bool()), dummy_span)],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public Reflection method that always reports PHP `null` as mixed.
 fn builtin_reflection_constant_null_mixed_method(method_name: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
@@ -2615,6 +2636,18 @@ fn builtin_reflection_owner_class(
             empty_array(),
         ));
         properties.push(builtin_property(
+            "__is_deprecated",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
+            "__is_generator",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
             "__type",
             Visibility::Private,
             Some(mixed_type()),
@@ -2647,6 +2680,24 @@ fn builtin_reflection_owner_class(
             "__has_return_type",
         ));
         methods.push(builtin_reflection_class_mixed_method("getReturnType", "__type"));
+        methods.push(builtin_reflection_constant_false_bool_method("isClosure"));
+        methods.push(builtin_reflection_class_bool_method(
+            "isDeprecated",
+            "__is_deprecated",
+        ));
+        methods.push(builtin_reflection_constant_false_bool_method(
+            "returnsReference",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isGenerator",
+            "__is_generator",
+        ));
+        methods.push(builtin_reflection_constant_false_bool_method(
+            "hasTentativeReturnType",
+        ));
+        methods.push(builtin_reflection_constant_null_mixed_method(
+            "getTentativeReturnType",
+        ));
         methods.push(builtin_reflection_function_method_is_variadic_method());
     }
     if name == "ReflectionMethod" {
@@ -2657,6 +2708,9 @@ fn builtin_reflection_owner_class(
     if name == "ReflectionFunction" {
         methods.push(builtin_reflection_function_invoke_method());
         methods.push(builtin_reflection_function_invoke_args_method());
+        methods.push(builtin_reflection_constant_false_bool_method(
+            "isDisabled",
+        ));
     }
     if name == "ReflectionProperty" {
         methods.push(builtin_reflection_set_accessible_method());
@@ -3941,13 +3995,20 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "isUserDefined",
                     "hasReturnType",
                     "isVariadic",
+                    "isClosure",
+                    "isDeprecated",
+                    "returnsReference",
+                    "isGenerator",
+                    "hasTentativeReturnType",
                 ] {
                     if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
                         sig.return_type = PhpType::Bool;
                     }
                 }
-                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getReturnType")) {
-                    sig.return_type = PhpType::Mixed;
+                for method_name in ["getReturnType", "getTentativeReturnType"] {
+                    if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
+                        sig.return_type = PhpType::Mixed;
+                    }
                 }
             }
             if class_name == "ReflectionProperty" {
@@ -4034,6 +4095,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
                         sig.return_type = PhpType::Int;
                     }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("isDisabled")) {
+                    sig.return_type = PhpType::Bool;
                 }
             }
             if class_name == "ReflectionParameter" {

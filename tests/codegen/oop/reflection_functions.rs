@@ -14,6 +14,33 @@
 
 use super::*;
 
+/// Verifies AOT `ReflectionFunction` exposes function-abstract predicate metadata.
+#[test]
+fn test_reflection_function_reports_aot_function_abstract_predicates() {
+    let out = compile_and_run(
+        r#"<?php
+#[Deprecated]
+function reflect_function_meta_deprecated(): void {}
+function reflect_function_meta_generator() { yield 1; }
+function reflect_function_meta_plain(): void {}
+
+$deprecated = new ReflectionFunction("reflect_function_meta_deprecated");
+$generator = new ReflectionFunction("reflect_function_meta_generator");
+$plain = new ReflectionFunction("reflect_function_meta_plain");
+echo ($deprecated->isDeprecated() ? "D" : "d") . ":";
+echo ($plain->isDeprecated() ? "D" : "d") . ":";
+echo ($generator->isGenerator() ? "G" : "g") . ":";
+echo ($plain->isGenerator() ? "G" : "g") . ":";
+echo ($plain->isClosure() ? "C" : "c") . ":";
+echo ($plain->returnsReference() ? "R" : "r") . ":";
+echo ($plain->hasTentativeReturnType() ? "H" : "h") . ":";
+echo ($plain->getTentativeReturnType() === null ? "Q" : "q") . ":";
+echo $plain->isDisabled() ? "X" : "x";
+"#,
+    );
+    assert_eq!(out, "D:d:G:g:c:r:h:Q:x");
+}
+
 /// Verifies `ReflectionFunction` exposes declared AOT return type metadata.
 #[test]
 fn test_reflection_function_reports_aot_return_type_metadata() {
