@@ -1747,7 +1747,7 @@ fn eval_reflection_class_new(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("class_name")], evaluated_args)?;
-    let class_name = eval_reflection_string_arg(args[0], values)?;
+    let class_name = eval_reflection_class_target_name(args[0], context, values)?;
     let reflected_name = context
         .resolve_class_like_name(&class_name)
         .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
@@ -1811,6 +1811,18 @@ fn eval_reflection_class_new(
         values,
     )
     .map(Some)
+}
+
+/// Resolves a ReflectionClass constructor target from a class-name string or object.
+fn eval_reflection_class_target_name(
+    target: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    if values.type_tag(target)? == EVAL_TAG_OBJECT {
+        return eval_reflection_object_class_name(target, context, values);
+    }
+    eval_reflection_string_arg(target, values)
 }
 
 /// Returns generated/AOT class flags for synthetic ReflectionClass fallback objects.

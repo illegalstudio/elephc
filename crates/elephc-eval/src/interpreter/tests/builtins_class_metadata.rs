@@ -711,6 +711,10 @@ $iface = new ReflectionClass("EvalInstanceIface");
 $trait = new ReflectionClass("EvalInstanceTrait");
 $enum = new ReflectionClass("EvalInstanceEnum");
 $childObj = new EvalInstanceChild();
+$objectRef = new ReflectionClass($childObj);
+echo $objectRef->getName(); echo ":";
+echo $objectRef->getParentClass()->getName(); echo ":";
+echo $objectRef->isInstance($childObj) ? "O" : "o"; echo ":";
 echo $base->isInstance($childObj) ? "B" : "b";
 echo $child->isInstance(new EvalInstanceBase()) ? "C" : "c";
 echo $iface->isInstance($childObj) ? "I" : "i";
@@ -725,7 +729,7 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "BcItEN");
+    assert_eq!(values.output, "EvalInstanceChild:EvalInstanceBase:O:BcItEN");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

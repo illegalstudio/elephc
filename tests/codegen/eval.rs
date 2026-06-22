@@ -6832,6 +6832,10 @@ $iface = new ReflectionClass("EvalInstanceIface");
 $trait = new ReflectionClass("EvalInstanceTrait");
 $enum = new ReflectionClass("EvalInstanceEnum");
 $childObj = new EvalInstanceChild();
+$objectRef = new ReflectionClass($childObj);
+echo $objectRef->getName(); echo ":";
+echo $objectRef->getParentClass()->getName(); echo ":";
+echo $objectRef->isInstance($childObj) ? "O" : "o"; echo ":";
 echo $base->isInstance($childObj) ? "B" : "b";
 echo $child->isInstance(new EvalInstanceBase()) ? "C" : "c";
 echo $iface->isInstance($childObj) ? "I" : "i";
@@ -6845,7 +6849,7 @@ echo $iface->isInstance(EvalInstanceEnum::Ready) ? "N" : "n";');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "BcItEN");
+    assert_eq!(out.stdout, "EvalInstanceChild:EvalInstanceBase:O:BcItEN");
 }
 
 /// Verifies eval ReflectionClass::isInstance can query generated AOT object
@@ -6863,7 +6867,10 @@ echo $parent->isInstance(new EvalAotInstanceChild()) ? "P" : "p";
 $child = new ReflectionClass("EvalAotInstanceChild");
 echo $child->isInstance(new EvalAotInstanceParent()) ? "C" : "c";
 $iface = new ReflectionClass("EvalAotInstanceIface");
-echo $iface->isInstance(new EvalAotInstanceImpl()) ? "I" : "i";');
+$objectRef = new ReflectionClass(new EvalAotInstanceChild());
+echo $iface->isInstance(new EvalAotInstanceImpl()) ? "I" : "i"; echo ":";
+echo $objectRef->getName(); echo ":";
+echo $objectRef->getParentClass()->getName();');
 "#,
     );
     assert!(
@@ -6871,7 +6878,7 @@ echo $iface->isInstance(new EvalAotInstanceImpl()) ? "I" : "i";');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "PcI");
+    assert_eq!(out.stdout, "PcI:EvalAotInstanceChild:EvalAotInstanceParent");
 }
 
 /// Verifies eval ReflectionClass::getParentClass crosses the generated runtime bridge.

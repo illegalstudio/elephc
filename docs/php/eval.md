@@ -193,6 +193,9 @@ for those owners. `ReflectionClass`, `ReflectionFunction`, `ReflectionMethod`,
 eval does not retain docblock text. `ReflectionClass`, `ReflectionFunction`,
 and `ReflectionMethod` expose `getExtensionName()` and `getExtension()` and
 report `false` / `null` for eval-declared user symbols.
+`ReflectionClass` construction accepts class-name strings and object arguments;
+object arguments reflect the runtime class of eval-created or generated/AOT
+objects.
 `ReflectionClass::getShortName()`,
 `ReflectionClass::getNamespaceName()`, and `ReflectionClass::inNamespace()`
 derive namespace-aware parts from the resolved eval class-like name.
