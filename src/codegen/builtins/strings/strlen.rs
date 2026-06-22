@@ -34,7 +34,7 @@ pub fn emit(
     super::args::emit_string_arg(&args[0], emitter, ctx, data);
     // -- return the string length as an integer --
     let (_, len_reg) = abi::string_result_regs(emitter);
-    emitter.instruction(&format!("mov {}, {}", abi::int_result_reg(emitter), len_reg)); // move the ABI string-length register into the integer return register
+    emitter.instruction(&format!("mov {}, {}", abi::int_result_reg(emitter), len_reg)); //move the ABI string-length register into the integer return register
 
     Some(PhpType::Int)
 }

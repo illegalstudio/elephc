@@ -64,7 +64,7 @@ fn emit_called_class_id_into(emitter: &mut Emitter, ctx: &Context, dest: &str) -
     } else {
         return false;
     }
-    emitter.instruction(&format!("mov {}, {}", dest, abi::int_result_reg(emitter))); // copy the called class id into a scratch register for branch dispatch
+    emitter.instruction(&format!("mov {}, {}", dest, abi::int_result_reg(emitter))); //copy the called class id into a scratch register for branch dispatch
     true
 }
 
@@ -199,11 +199,11 @@ fn emit_branch_if_class_id_matches(
     abi::emit_load_int_immediate(emitter, compare_reg, class_id as i64);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); // compare the runtime called class id to a redeclared static property owner
+            emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); //compare the runtime called class id to a redeclared static property owner
             emitter.instruction(&format!("b.eq {}", label));                    // use this static property slot when the called class id matches
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); // compare the runtime called class id to a redeclared static property owner
+            emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); //compare the runtime called class id to a redeclared static property owner
             emitter.instruction(&format!("je {}", label));                      // use this static property slot when the called class id matches
         }
     }

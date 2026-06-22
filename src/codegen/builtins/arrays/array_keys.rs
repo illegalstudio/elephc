@@ -53,11 +53,11 @@ pub(crate) fn emit_loaded_keys(
         match emitter.target.arch {
             Arch::AArch64 => {
                 emitter.instruction("ldr x0, [x0]");                            // load the associative-array entry count to size the result keys array exactly
-                emitter.instruction(&format!("mov x1, #{}", assoc_key_elem_size)); // materialize the result key element width for associative-array keys
+                emitter.instruction(&format!("mov x1, #{}", assoc_key_elem_size)); //materialize the result key element width for associative-array keys
             }
             Arch::X86_64 => {
                 emitter.instruction("mov rdi, QWORD PTR [rax]");                // load the associative-array entry count to size the result keys array exactly
-                emitter.instruction(&format!("mov rsi, {}", assoc_key_elem_size)); // materialize the result key element width for associative-array keys
+                emitter.instruction(&format!("mov rsi, {}", assoc_key_elem_size)); //materialize the result key element width for associative-array keys
             }
         }
         abi::emit_call_label(emitter, "__rt_array_new");                        // allocate the result keys array with exact associative-array capacity
@@ -138,7 +138,7 @@ pub(crate) fn emit_loaded_keys(
                 emitter.instruction("mov r11, QWORD PTR [r10]");                // load the current result keys array length before appending one more key
                 match &key_ty {
                     PhpType::Int | PhpType::Bool => {
-                        emitter.instruction("mov QWORD PTR [r10 + r11 * 8 + 24], rdi"); // store the normalized integer key into the next result keys slot
+                        emitter.instruction("mov QWORD PTR [r10 + r11 * 8 + 24], rdi"); //store the normalized integer key into the next result keys slot
                     }
                     PhpType::Str => {
                         emitter.instruction("sub rsp, 16");                     // reserve a temporary slot for result array state during key persistence
@@ -176,7 +176,7 @@ pub(crate) fn emit_loaded_keys(
                         emitter.instruction("mov r10, QWORD PTR [rsp]");        // restore the result keys array pointer after mixed key boxing
                         emitter.instruction("mov r11, QWORD PTR [rsp + 8]");    // restore the current result keys array length after mixed key boxing
                         emitter.instruction("add rsp, 16");                     // release the temporary result-array state slot
-                        emitter.instruction("mov QWORD PTR [r10 + r11 * 8 + 24], rax"); // store the boxed mixed key pointer into the next result keys slot
+                        emitter.instruction("mov QWORD PTR [r10 + r11 * 8 + 24], rax"); //store the boxed mixed key pointer into the next result keys slot
                     }
                 }
                 emitter.instruction("add r11, 1");                              // increment the result keys array length after storing one more key

@@ -346,11 +346,11 @@ fn emit_branch_if_class_id_matches(
     abi::emit_load_int_immediate(ctx.emitter, compare_reg, class_id as i64);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); // compare the runtime called class id to a redeclared static property owner
+            ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); //compare the runtime called class id to a redeclared static property owner
             ctx.emitter.instruction(&format!("b.eq {}", label));                // use this static property slot when the called class id matches
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); // compare the runtime called class id to a redeclared static property owner
+            ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, compare_reg)); //compare the runtime called class id to a redeclared static property owner
             ctx.emitter.instruction(&format!("je {}", label));                  // use this static property slot when the called class id matches
         }
     }
@@ -676,11 +676,11 @@ fn emit_uninitialized_static_property_guard(
     abi::emit_load_int_immediate(ctx.emitter, sentinel_reg, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the static property marker against the uninitialized sentinel
+            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); //compare the static property marker against the uninitialized sentinel
             ctx.emitter.instruction(&format!("b.ne {}", initialized_label));    // continue the static property read once the slot has been initialized
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the static property marker against the uninitialized sentinel
+            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); //compare the static property marker against the uninitialized sentinel
             ctx.emitter.instruction(&format!("jne {}", initialized_label));     // continue the static property read once the slot has been initialized
         }
     }

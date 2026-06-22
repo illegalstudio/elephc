@@ -151,7 +151,7 @@ fn lower_angle_conversion(
             ctx.emitter.instruction("fmul d0, d0, d1");                         // apply the angle conversion multiplier
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movsd xmm1, QWORD PTR [{}]", scratch)); // load the angle conversion multiplier from the data section
+            ctx.emitter.instruction(&format!("movsd xmm1, QWORD PTR [{}]", scratch)); //load the angle conversion multiplier from the data section
             ctx.emitter.instruction("mulsd xmm0, xmm1");                        // apply the angle conversion multiplier
         }
     }

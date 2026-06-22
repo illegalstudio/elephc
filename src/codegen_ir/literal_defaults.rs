@@ -263,10 +263,10 @@ pub(crate) fn emit_boxed_float_literal_to_result(ctx: &mut FunctionContext<'_>, 
     abi::emit_symbol_address(ctx.emitter, scratch, &label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [{}]", float_reg, scratch)); // load the boxed float literal through the symbol scratch register
+            ctx.emitter.instruction(&format!("ldr {}, [{}]", float_reg, scratch)); //load the boxed float literal through the symbol scratch register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", float_reg, scratch)); // load the boxed float literal through the symbol scratch register
+            ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", float_reg, scratch)); //load the boxed float literal through the symbol scratch register
         }
     }
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);

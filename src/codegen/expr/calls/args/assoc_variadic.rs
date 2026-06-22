@@ -103,14 +103,14 @@ fn emit_loaded_assoc_variadic_entries(
     abi::emit_reserve_temporary_stack(emitter, SCRATCH_BYTES);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("str {}, [sp, #{}]", source_hash_reg, SOURCE_HASH_OFF)); // save the source hash for the variadic scan
+            emitter.instruction(&format!("str {}, [sp, #{}]", source_hash_reg, SOURCE_HASH_OFF)); //save the source hash for the variadic scan
             emitter.instruction(&format!("str xzr, [sp, #{}]", CURSOR_OFF));    // start hash iteration from the insertion-order head
-            emitter.instruction(&format!("str xzr, [sp, #{}]", NUMERIC_KEY_OFF)); // start numeric variadic keys from zero
+            emitter.instruction(&format!("str xzr, [sp, #{}]", NUMERIC_KEY_OFF)); //start numeric variadic keys from zero
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], {}", SOURCE_HASH_OFF, source_hash_reg)); // save the source hash for the variadic scan
-            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", CURSOR_OFF)); // start hash iteration from the insertion-order head
-            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", NUMERIC_KEY_OFF)); // start numeric variadic keys from zero
+            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], {}", SOURCE_HASH_OFF, source_hash_reg)); //save the source hash for the variadic scan
+            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", CURSOR_OFF)); //start hash iteration from the insertion-order head
+            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", NUMERIC_KEY_OFF)); //start numeric variadic keys from zero
         }
     }
 

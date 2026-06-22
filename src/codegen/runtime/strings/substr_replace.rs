@@ -193,7 +193,7 @@ fn emit_substr_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r8], al");                               // store the current replacement byte into the concat-buffer destination
     emitter.instruction("add r8, 1");                                           // advance the concat-buffer destination after storing one replacement byte
     emitter.instruction("add rcx, 1");                                          // advance to the next replacement byte before repeating the loop
-    emitter.instruction("jmp __rt_substr_replace_replacement_loop_linux_x86_64"); // continue copying replacement bytes until the full replacement string is emitted
+    emitter.instruction("jmp __rt_substr_replace_replacement_loop_linux_x86_64"); //continue copying replacement bytes until the full replacement string is emitted
 
     emitter.label("__rt_substr_replace_suffix_linux_x86_64");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // start the suffix copy from the clamped byte offset immediately after the replaced slice

@@ -60,12 +60,12 @@ pub(super) fn emit_yield(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("mov w10, #{}", state_idx));           // bump state to this yield's resume index
-            emitter.instruction(&format!("str w10, [x19, #{}]", gen_frame::OFF_STATE_IDX)); // store updated state_idx
+            emitter.instruction(&format!("str w10, [x19, #{}]", gen_frame::OFF_STATE_IDX)); //store updated state_idx
             emitter.instruction(&format!("b {}", ctx.end_label));               // jump to common epilogue
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov r10d, {}", state_idx));           // bump state to this yield's resume index
-            emitter.instruction(&format!("mov DWORD PTR [r12 + {}], r10d", gen_frame::OFF_STATE_IDX)); // store updated state_idx
+            emitter.instruction(&format!("mov DWORD PTR [r12 + {}], r10d", gen_frame::OFF_STATE_IDX)); //store updated state_idx
             emitter.instruction(&format!("jmp {}", ctx.end_label));             // jump to common epilogue
         }
     }
@@ -82,13 +82,13 @@ pub(super) fn emit_yield(
 fn emit_clear_sent_value(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // load ignored sent_value pointer
-            emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // clear sent_value before the next resume
+            emitter.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); //load ignored sent_value pointer
+            emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); //clear sent_value before the next resume
             emitter.instruction("bl __rt_decref_mixed");                        // release the ignored sent_value box (NULL is safe)
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", gen_frame::OFF_SENT_VALUE)); // load ignored sent_value pointer
-            emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_SENT_VALUE)); // clear sent_value before the next resume
+            emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", gen_frame::OFF_SENT_VALUE)); //load ignored sent_value pointer
+            emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_SENT_VALUE)); //clear sent_value before the next resume
             emitter.instruction("call __rt_decref_mixed");                      // release the ignored sent_value box (NULL is safe)
         }
     }
@@ -110,12 +110,12 @@ fn emit_resume_delegated_iter(emitter: &mut Emitter, ctx: &mut ResumeCtx) {
 
     let no_send_lbl = ctx.fresh_label("yield_from_no_send");
     let done_lbl = ctx.fresh_label("yield_from_resume_done");
-    emitter.instruction(&format!("ldr x9, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // load the boxed payload sent to the outer generator
-    emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // clear the outer sent_value slot before transfer
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); // x0 = inner generator frame pointer
+    emitter.instruction(&format!("ldr x9, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); //load the boxed payload sent to the outer generator
+    emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); //clear the outer sent_value slot before transfer
+    emitter.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); //x0 = inner generator frame pointer
     emitter.instruction(&format!("cbz x9, {}", no_send_lbl));                   // no send payload means this resume is a plain next()
-    emitter.instruction(&format!("str x9, [x0, #{}]", gen_frame::OFF_SENT_VALUE)); // transfer the sent payload into the inner frame
-    emitter.instruction(&format!("ldr x10, [x0, #{}]", gen_frame::OFF_RESUME_FN)); // load the inner resume function pointer
+    emitter.instruction(&format!("str x9, [x0, #{}]", gen_frame::OFF_SENT_VALUE)); //transfer the sent payload into the inner frame
+    emitter.instruction(&format!("ldr x10, [x0, #{}]", gen_frame::OFF_RESUME_FN)); //load the inner resume function pointer
     emitter.instruction("blr x10");                                             // resume the inner generator with the transferred send payload
     emitter.instruction(&format!("b {}", done_lbl));                            // skip the plain next() path
     emitter.label(&no_send_lbl);
@@ -127,13 +127,13 @@ fn emit_resume_delegated_iter(emitter: &mut Emitter, ctx: &mut ResumeCtx) {
 fn emit_resume_delegated_iter_x86_64(emitter: &mut Emitter, ctx: &mut ResumeCtx) {
     let no_send_lbl = ctx.fresh_label("yield_from_no_send");
     let done_lbl = ctx.fresh_label("yield_from_resume_done");
-    emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", gen_frame::OFF_SENT_VALUE)); // load the boxed payload sent to the outer generator
-    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_SENT_VALUE)); // clear the outer sent_value slot before transfer
-    emitter.instruction(&format!("mov rdi, QWORD PTR [r12 + {}]", gen_frame::OFF_DELEGATED_ITER)); // rdi = inner generator frame pointer
+    emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", gen_frame::OFF_SENT_VALUE)); //load the boxed payload sent to the outer generator
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_SENT_VALUE)); //clear the outer sent_value slot before transfer
+    emitter.instruction(&format!("mov rdi, QWORD PTR [r12 + {}]", gen_frame::OFF_DELEGATED_ITER)); //rdi = inner generator frame pointer
     emitter.instruction("test r10, r10");                                       // check whether the outer resume came from send()
     emitter.instruction(&format!("jz {}", no_send_lbl));                        // no send payload means this resume is a plain next()
-    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r10", gen_frame::OFF_SENT_VALUE)); // transfer the sent payload into the inner frame
-    emitter.instruction(&format!("call QWORD PTR [rdi + {}]", gen_frame::OFF_RESUME_FN)); // resume the inner generator with the transferred send payload
+    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r10", gen_frame::OFF_SENT_VALUE)); //transfer the sent payload into the inner frame
+    emitter.instruction(&format!("call QWORD PTR [rdi + {}]", gen_frame::OFF_RESUME_FN)); //resume the inner generator with the transferred send payload
     emitter.instruction(&format!("jmp {}", done_lbl));                          // skip the plain next() path
     emitter.label(&no_send_lbl);
     emitter.instruction("call __rt_gen_next");                                  // resume the inner generator without a send payload
@@ -171,24 +171,24 @@ pub(super) fn emit_yield_from_generator(
             emit_int_function_call(emitter, fn_name, args);                 // x0 = inner generator pointer
         }
         YieldFromSource::IntSlot(idx) => {
-            emitter.instruction(&format!("ldr x0, [x19, #{}]", slot_offset(*idx))); // x0 = raw Generator pointer (loaded from int-typed slot)
+            emitter.instruction(&format!("ldr x0, [x19, #{}]", slot_offset(*idx))); //x0 = raw Generator pointer (loaded from int-typed slot)
         }
         YieldFromSource::MixedSlot(idx) => {
             // The Mixed slot holds a boxed Mixed cell wrapping an Object
             // payload. Unbox to recover the raw Generator/Iterator
             // pointer; `__rt_mixed_unbox` returns the unboxed payload
             // in x1 (low word) and the type tag in x0.
-            emitter.instruction(&format!("ldr x0, [x19, #{}]", slot_offset(*idx))); // x0 = boxed Mixed pointer
+            emitter.instruction(&format!("ldr x0, [x19, #{}]", slot_offset(*idx))); //x0 = boxed Mixed pointer
             emitter.instruction("bl __rt_mixed_unbox");                         // x1 = unboxed object pointer (low word)
             emitter.instruction("mov x0, x1");                                  // x0 = inner generator pointer
         }
     }
-    emitter.instruction(&format!("str x0, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); // store the inner generator handle in the frame
+    emitter.instruction(&format!("str x0, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); //store the inner generator handle in the frame
     emitter.instruction("bl __rt_gen_rewind");                                  // run inner up to its first yield (x0 already = inner)
 
     // -- delegation loop: entered both initially and on every resume --
     emitter.label(&loop_lbl);
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); // reload inner pointer for valid()
+    emitter.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); //reload inner pointer for valid()
     emitter.instruction("bl __rt_gen_valid");                                   // x0 = 1 if inner has more values, 0 otherwise
     emitter.instruction(&format!("cbz x0, {}", end_lbl));                       // inner exhausted — leave the delegation loop
 
@@ -209,7 +209,7 @@ pub(super) fn emit_yield_from_generator(
 
     // -- bump state_idx and yield back to the outer caller --
     emitter.instruction(&format!("mov w10, #{}", state_idx));                   // mark this yield-from's resume index
-    emitter.instruction(&format!("str w10, [x19, #{}]", gen_frame::OFF_STATE_IDX)); // store updated state_idx
+    emitter.instruction(&format!("str w10, [x19, #{}]", gen_frame::OFF_STATE_IDX)); //store updated state_idx
     emitter.instruction(&format!("b {}", ctx.end_label));                       // return to the outer caller via the resume epilogue
     emitter.label(&format!("{}_resume_{}", ctx.label, state_idx));          // resume label hit on each subsequent next()
     emit_resume_delegated_iter(emitter, ctx);
@@ -224,11 +224,11 @@ pub(super) fn emit_yield_from_generator(
         }
     }
     if owns_delegated_iter {
-        emitter.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); // load the owned inner generator before clearing delegation state
-        emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); // clear delegated_iter so future yields don't re-enter the loop
+        emitter.instruction(&format!("ldr x0, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); //load the owned inner generator before clearing delegation state
+        emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); //clear delegated_iter so future yields don't re-enter the loop
         emitter.instruction("bl __rt_decref_any");                              // release the inner generator produced by yield-from's direct call
     } else {
-        emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); // clear borrowed delegated_iter without releasing the local owner
+        emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_DELEGATED_ITER)); //clear borrowed delegated_iter without releasing the local owner
     }
     // Fall through to the caller's continuation of the outer body.
 }
@@ -252,20 +252,20 @@ fn emit_yield_from_generator_x86_64(
             emit_int_function_call(emitter, fn_name, args);                     // rax = inner generator pointer
         }
         YieldFromSource::IntSlot(idx) => {
-            emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", slot_offset(*idx))); // rax = raw Generator pointer
+            emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", slot_offset(*idx))); //rax = raw Generator pointer
         }
         YieldFromSource::MixedSlot(idx) => {
-            emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", slot_offset(*idx))); // rax = boxed Mixed pointer
+            emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", slot_offset(*idx))); //rax = boxed Mixed pointer
             emitter.instruction("call __rt_mixed_unbox");                       // rdi = unboxed object pointer
             emitter.instruction("mov rax, rdi");                                // rax = inner generator pointer
         }
     }
-    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rax", gen_frame::OFF_DELEGATED_ITER)); // store the inner generator handle in the frame
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rax", gen_frame::OFF_DELEGATED_ITER)); //store the inner generator handle in the frame
     emitter.instruction("mov rdi, rax");                                        // pass inner generator to rewind()
     emitter.instruction("call __rt_gen_rewind");                                // run inner up to its first yield
 
     emitter.label(&loop_lbl);
-    emitter.instruction(&format!("mov rdi, QWORD PTR [r12 + {}]", gen_frame::OFF_DELEGATED_ITER)); // reload inner pointer for valid()
+    emitter.instruction(&format!("mov rdi, QWORD PTR [r12 + {}]", gen_frame::OFF_DELEGATED_ITER)); //reload inner pointer for valid()
     emitter.instruction("call __rt_gen_valid");                                 // rax = 1 if inner has more values, 0 otherwise
     emitter.instruction("test rax, rax");                                       // check whether the inner generator is exhausted
     emitter.instruction(&format!("jz {}", end_lbl));                            // inner exhausted -> leave the delegation loop
@@ -280,7 +280,7 @@ fn emit_yield_from_generator_x86_64(
     });
 
     emitter.instruction(&format!("mov r10d, {}", state_idx));                   // mark this yield-from's resume index
-    emitter.instruction(&format!("mov DWORD PTR [r12 + {}], r10d", gen_frame::OFF_STATE_IDX)); // store updated state_idx
+    emitter.instruction(&format!("mov DWORD PTR [r12 + {}], r10d", gen_frame::OFF_STATE_IDX)); //store updated state_idx
     emitter.instruction(&format!("jmp {}", ctx.end_label));                     // return to the outer caller via the resume epilogue
     emitter.label(&format!("{}_resume_{}", ctx.label, state_idx));              // resume label hit on each subsequent next()
     emit_resume_delegated_iter(emitter, ctx);
@@ -295,11 +295,11 @@ fn emit_yield_from_generator_x86_64(
         }
     }
     if owns_delegated_iter {
-        emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", gen_frame::OFF_DELEGATED_ITER)); // load the owned inner generator before clearing delegation state
-        emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_DELEGATED_ITER)); // clear delegated_iter so future yields don't re-enter
+        emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", gen_frame::OFF_DELEGATED_ITER)); //load the owned inner generator before clearing delegation state
+        emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_DELEGATED_ITER)); //clear delegated_iter so future yields don't re-enter
         emitter.instruction("call __rt_decref_any");                            // release the inner generator produced by yield-from's direct call
     } else {
-        emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_DELEGATED_ITER)); // clear borrowed delegated_iter without releasing the local owner
+        emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_DELEGATED_ITER)); //clear borrowed delegated_iter without releasing the local owner
     }
 }
 
@@ -337,7 +337,7 @@ pub(super) fn emit_yield_assign_unbox_int(
 
     let null_lbl = ctx.fresh_label("send_null");
     let done_lbl = ctx.fresh_label("send_done");
-    emitter.instruction(&format!("ldr x20, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // x20 = boxed sent_value pointer
+    emitter.instruction(&format!("ldr x20, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); //x20 = boxed sent_value pointer
     emitter.instruction("mov x0, x20");                                         // pass sent_value to the mixed unbox helper
     emitter.instruction(&format!("cbz x0, {}", null_lbl));                      // jump to null path when no send was performed
     emitter.instruction("bl __rt_mixed_unbox");                                 // x1 = unboxed low payload
@@ -346,8 +346,8 @@ pub(super) fn emit_yield_assign_unbox_int(
     emitter.label(&null_lbl);
     emitter.instruction("mov x9, xzr");                                         // no sent_value → assignment receives 0
     emitter.label(&done_lbl);
-    emitter.instruction(&format!("str x9, [x19, #{}]", slot_offset(local_idx))); // store the int into the assignment LHS local
-    emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // clear sent_value for the next round
+    emitter.instruction(&format!("str x9, [x19, #{}]", slot_offset(local_idx))); //store the int into the assignment LHS local
+    emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); //clear sent_value for the next round
     emitter.instruction("mov x0, x20");                                         // reload the consumed sent_value box for release
     emitter.instruction("bl __rt_decref_mixed");                                // release the consumed sent_value box (NULL is safe)
 }
@@ -362,7 +362,7 @@ fn emit_yield_assign_unbox_int_x86_64(
 ) {
     let null_lbl = ctx.fresh_label("send_null");
     let done_lbl = ctx.fresh_label("send_done");
-    emitter.instruction(&format!("mov r13, QWORD PTR [r12 + {}]", gen_frame::OFF_SENT_VALUE)); // r13 = boxed sent_value pointer
+    emitter.instruction(&format!("mov r13, QWORD PTR [r12 + {}]", gen_frame::OFF_SENT_VALUE)); //r13 = boxed sent_value pointer
     emitter.instruction("mov rax, r13");                                        // pass sent_value to the mixed unbox helper
     emitter.instruction("test rax, rax");                                       // check whether send() provided a value
     emitter.instruction(&format!("jz {}", null_lbl));                           // jump to null path when no send was performed
@@ -372,8 +372,8 @@ fn emit_yield_assign_unbox_int_x86_64(
     emitter.label(&null_lbl);
     emitter.instruction("xor r10, r10");                                        // no sent_value -> assignment receives 0
     emitter.label(&done_lbl);
-    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", slot_offset(local_idx))); // store the int into the assignment LHS local
-    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_SENT_VALUE)); // clear sent_value for the next round
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", slot_offset(local_idx))); //store the int into the assignment LHS local
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_SENT_VALUE)); //clear sent_value for the next round
     emitter.instruction("mov rax, r13");                                        // reload the consumed sent_value box for release
     emitter.instruction("call __rt_decref_mixed");                              // release the consumed sent_value box (NULL is safe)
 }
@@ -397,16 +397,16 @@ pub(super) fn emit_yield_assign_store_mixed(
     let off = slot_offset(local_idx);
     let skip = ctx.fresh_label("send_mixed_skip");
     let done = ctx.fresh_label("send_mixed_done");
-    emitter.instruction(&format!("ldr x9, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // x9 = boxed sent_value pointer
+    emitter.instruction(&format!("ldr x9, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); //x9 = boxed sent_value pointer
     emitter.instruction(&format!("cbz x9, {}", skip));                          // no send_value → keep slot unchanged
     emitter.instruction("mov x20, x9");                                         // park the sent pointer across the slot decref call
-    emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // clear sent_value (slot now owns the refcount)
+    emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); //clear sent_value (slot now owns the refcount)
     emitter.instruction(&format!("ldr x0, [x19, #{}]", off));                   // x0 = previous slot occupant (or NULL)
     emitter.instruction(&format!("str x20, [x19, #{}]", off));                  // overwrite slot with the sent pointer
     emitter.instruction("bl __rt_decref_mixed");                                // decref the previous occupant (NULL is safe)
     emitter.instruction(&format!("b {}", done));                                // skip the no-send cleanup path
     emitter.label(&skip);
-    emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); // clear sent_value defensively
+    emitter.instruction(&format!("str xzr, [x19, #{}]", gen_frame::OFF_SENT_VALUE)); //clear sent_value defensively
     emitter.label(&done);
 }
 
@@ -422,15 +422,15 @@ fn emit_yield_assign_store_mixed_x86_64(
     let off = slot_offset(local_idx);
     let skip = ctx.fresh_label("send_mixed_skip");
     let done = ctx.fresh_label("send_mixed_done");
-    emitter.instruction(&format!("mov r13, QWORD PTR [r12 + {}]", gen_frame::OFF_SENT_VALUE)); // r13 = boxed sent_value pointer
+    emitter.instruction(&format!("mov r13, QWORD PTR [r12 + {}]", gen_frame::OFF_SENT_VALUE)); //r13 = boxed sent_value pointer
     emitter.instruction("test r13, r13");                                       // check whether send() provided a value
     emitter.instruction(&format!("jz {}", skip));                               // no send_value -> keep slot unchanged
-    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_SENT_VALUE)); // clear sent_value (slot now owns the refcount)
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_SENT_VALUE)); //clear sent_value (slot now owns the refcount)
     emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", off));        // rax = previous slot occupant (or NULL)
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r13", off));        // overwrite slot with the sent pointer
     emitter.instruction("call __rt_decref_mixed");                              // decref the previous occupant (NULL is safe)
     emitter.instruction(&format!("jmp {}", done));                              // skip the no-send cleanup path
     emitter.label(&skip);
-    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_SENT_VALUE)); // clear sent_value defensively
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], 0", gen_frame::OFF_SENT_VALUE)); //clear sent_value defensively
     emitter.label(&done);
 }

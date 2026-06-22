@@ -103,7 +103,7 @@ pub(crate) fn emit_arm64(
     abi::emit_symbol_address(emitter, "x11", "_stream_filter_buf");
     emitter.instruction("str x11, [x10, #24]");                                 // z_stream.next_out = scratch window base
     emitter.instruction(&format!("mov w12, #{}", FILTER_BUF_SIZE & 0xFFFF));    // low half of the scratch window capacity
-    emitter.instruction(&format!("movk w12, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
+    emitter.instruction(&format!("movk w12, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); //high half of the scratch window capacity
     emitter.instruction("str w12, [x10, #32]");                                 // z_stream.avail_out = scratch window capacity
     emitter.instruction("mov x0, x10");                                         // arg 0 = z_stream pointer
     emitter.instruction("mov w1, #0");                                          // arg 1 = Z_NO_FLUSH (0)
@@ -112,7 +112,7 @@ pub(crate) fn emit_arm64(
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the z_stream pointer after the deflate call
     emitter.instruction("ldr w12, [x10, #32]");                                 // reload avail_out left after this deflate step
     emitter.instruction(&format!("mov w13, #{}", FILTER_BUF_SIZE & 0xFFFF));    // low half of the scratch window capacity
-    emitter.instruction(&format!("movk w13, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
+    emitter.instruction(&format!("movk w13, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); //high half of the scratch window capacity
     emitter.instruction("sub w12, w13, w12");                                   // produced = capacity - avail_out
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd = the saved file descriptor
     abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
@@ -152,7 +152,7 @@ pub(crate) fn emit_arm64(
     abi::emit_symbol_address(emitter, "x11", "_stream_filter_buf");
     emitter.instruction("str x11, [x10, #24]");                                 // z_stream.next_out = scratch window base
     emitter.instruction(&format!("mov w12, #{}", FILTER_BUF_SIZE & 0xFFFF));    // low half of the scratch window capacity
-    emitter.instruction(&format!("movk w12, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
+    emitter.instruction(&format!("movk w12, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); //high half of the scratch window capacity
     emitter.instruction("str w12, [x10, #32]");                                 // z_stream.avail_out = scratch window capacity
     emitter.instruction("mov x0, x10");                                         // arg 0 = z_stream pointer
     emitter.instruction("mov w1, #4");                                          // arg 1 = Z_FINISH (4)
@@ -162,7 +162,7 @@ pub(crate) fn emit_arm64(
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the z_stream pointer
     emitter.instruction("ldr w12, [x10, #32]");                                 // reload avail_out left after this flush step
     emitter.instruction(&format!("mov w13, #{}", FILTER_BUF_SIZE & 0xFFFF));    // low half of the scratch window capacity
-    emitter.instruction(&format!("movk w13, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
+    emitter.instruction(&format!("movk w13, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); //high half of the scratch window capacity
     emitter.instruction("sub w12, w13, w12");                                   // produced = capacity - avail_out
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd = the saved file descriptor
     abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
@@ -279,7 +279,7 @@ pub(crate) fn emit_x86_64(
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the z_stream pointer
     abi::emit_symbol_address(emitter, "r11", "_stream_filter_buf");             // scratch window base
     emitter.instruction("mov QWORD PTR [r10 + 24], r11");                       // z_stream.next_out = scratch window base
-    emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); // z_stream.avail_out = scratch window capacity
+    emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); //z_stream.avail_out = scratch window capacity
     emitter.instruction("mov rdi, r10");                                        // arg 0 = z_stream pointer
     emitter.instruction("xor esi, esi");                                        // arg 1 = Z_NO_FLUSH (0)
     emitter.instruction("call deflate");                                        // run one deflate step over the input window
@@ -325,7 +325,7 @@ pub(crate) fn emit_x86_64(
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the z_stream pointer
     abi::emit_symbol_address(emitter, "r11", "_stream_filter_buf");             // scratch window base
     emitter.instruction("mov QWORD PTR [r10 + 24], r11");                       // z_stream.next_out = scratch window base
-    emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); // z_stream.avail_out = scratch window capacity
+    emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); //z_stream.avail_out = scratch window capacity
     emitter.instruction("mov rdi, r10");                                        // arg 0 = z_stream pointer
     emitter.instruction("mov esi, 4");                                          // arg 1 = Z_FINISH (4)
     emitter.instruction("call deflate");                                        // flush a chunk of the compressed tail
@@ -391,7 +391,7 @@ pub(crate) fn emit_x86_64(
     emitter.instruction("sub rsp, 16");                                         // reserve the two stack arguments (kept 16-aligned)
     abi::emit_symbol_address(emitter, "rax", "_zlib_version");                  // the zlib version string
     emitter.instruction("mov QWORD PTR [rsp + 0], rax");                        // stack arg 6 = version
-    emitter.instruction(&format!("mov QWORD PTR [rsp + 8], {}", Z_STREAM_SIZE)); // stack arg 7 = sizeof(z_stream)
+    emitter.instruction(&format!("mov QWORD PTR [rsp + 8], {}", Z_STREAM_SIZE)); //stack arg 7 = sizeof(z_stream)
     emitter.instruction("call deflateInit2_");                                  // initialize a raw-deflate zlib stream
     emitter.instruction("add rsp, 16");                                         // release the stack-argument space
 

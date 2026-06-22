@@ -218,15 +218,15 @@ fn emit_gen_current_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r12");                                            // preserve r12 before caching the generator frame
     emitter.instruction("sub rsp, 8");                                          // keep the stack 16-byte aligned across nested calls
     emitter.instruction("mov r12, rdi");                                        // r12 = generator frame pointer
-    emitter.instruction(&format!("mov r10d, DWORD PTR [r12 + {}]", f::OFF_FLAGS)); // load generator flags
+    emitter.instruction(&format!("mov r10d, DWORD PTR [r12 + {}]", f::OFF_FLAGS)); //load generator flags
     emitter.instruction("test r10d, 1");                                        // has the generator already been rewound/started?
     emitter.instruction("jnz __rt_gen_current_load");                           // skip auto-rewind when current() is not the first operation
     emitter.instruction(&format!("or r10d, {}", f::FLAG_REWOUND));              // mark current() as the first rewind/start operation
-    emitter.instruction(&format!("mov DWORD PTR [r12 + {}], r10d", f::OFF_FLAGS)); // persist the rewound flag before entering user code
+    emitter.instruction(&format!("mov DWORD PTR [r12 + {}], r10d", f::OFF_FLAGS)); //persist the rewound flag before entering user code
     emitter.instruction("mov rdi, r12");                                        // pass the generator frame to the resume function
-    emitter.instruction(&format!("call QWORD PTR [r12 + {}]", f::OFF_RESUME_FN)); // run until the first yield so current() matches PHP's lazy start
+    emitter.instruction(&format!("call QWORD PTR [r12 + {}]", f::OFF_RESUME_FN)); //run until the first yield so current() matches PHP's lazy start
     emitter.label("__rt_gen_current_load");
-    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", f::OFF_LAST_VALUE)); // load the boxed Mixed pointer for the most-recent yield value
+    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", f::OFF_LAST_VALUE)); //load the boxed Mixed pointer for the most-recent yield value
     emitter.instruction("call __rt_incref");                                    // incref so the caller owns a fresh refcount on the cell
     emitter.instruction("add rsp, 8");                                          // release the alignment pad
     emitter.instruction("pop r12");                                             // restore caller's r12
@@ -240,7 +240,7 @@ fn emit_gen_key_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_key ---");
     emitter.label_global("__rt_gen_key");
-    emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", f::OFF_LAST_KEY)); // load the boxed Mixed pointer for the most-recent yield key
+    emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", f::OFF_LAST_KEY)); //load the boxed Mixed pointer for the most-recent yield key
     emitter.instruction("jmp __rt_incref");                                     // tail-call incref so the caller owns a fresh refcount on the cell
 }
 
@@ -249,7 +249,7 @@ fn emit_gen_valid_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_valid ---");
     emitter.label_global("__rt_gen_valid");
-    emitter.instruction(&format!("mov r10d, DWORD PTR [rdi + {}]", f::OFF_FLAGS)); // load flags word
+    emitter.instruction(&format!("mov r10d, DWORD PTR [rdi + {}]", f::OFF_FLAGS)); //load flags word
     emitter.instruction(&format!("test r10d, {}", f::FLAG_TERMINATED));         // test the TERMINATED bit
     emitter.instruction("sete al");                                             // al = 1 if not terminated, else 0
     emitter.instruction("movzx rax, al");                                       // widen the validity flag to the integer return register
@@ -262,10 +262,10 @@ fn emit_gen_next_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_next ---");
     emitter.label_global("__rt_gen_next");
-    emitter.instruction(&format!("mov r10d, DWORD PTR [rdi + {}]", f::OFF_FLAGS)); // load flags
+    emitter.instruction(&format!("mov r10d, DWORD PTR [rdi + {}]", f::OFF_FLAGS)); //load flags
     emitter.instruction(&format!("test r10d, {}", f::FLAG_TERMINATED));         // check whether the generator is already terminated
     emitter.instruction("jnz __rt_gen_next_done");                              // if TERMINATED bit set, skip the resume call
-    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", f::OFF_RESUME_FN)); // load the resume function pointer
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", f::OFF_RESUME_FN)); //load the resume function pointer
     emitter.instruction("jmp r10");                                             // tail-call resume_fn(rdi=frame)
     emitter.label_global("__rt_gen_next_done");
     emitter.instruction("ret");                                                 // already terminated — return immediately
@@ -284,16 +284,16 @@ fn emit_gen_send_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r12");                                            // preserve r12 before caching the generator frame
     emitter.instruction("sub rsp, 8");                                          // keep the stack 16-byte aligned across nested calls
     emitter.instruction("mov r12, rdi");                                        // r12 = generator frame pointer
-    emitter.instruction(&format!("mov r10d, DWORD PTR [r12 + {}]", f::OFF_FLAGS)); // load flags before deciding whether resume is possible
+    emitter.instruction(&format!("mov r10d, DWORD PTR [r12 + {}]", f::OFF_FLAGS)); //load flags before deciding whether resume is possible
     emitter.instruction(&format!("test r10d, {}", f::FLAG_TERMINATED));         // check whether the generator is already terminated
     emitter.instruction("jnz __rt_gen_send_done");                              // if TERMINATED bit set, return null without resuming
-    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rsi", f::OFF_SENT_VALUE)); // stash the boxed sent payload in sent_value
+    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rsi", f::OFF_SENT_VALUE)); //stash the boxed sent payload in sent_value
     emitter.instruction("mov rdi, r12");                                        // pass the generator frame to the resume function
-    emitter.instruction(&format!("call QWORD PTR [r12 + {}]", f::OFF_RESUME_FN)); // resume until the next yield or termination
-    emitter.instruction(&format!("mov r10d, DWORD PTR [r12 + {}]", f::OFF_FLAGS)); // reload flags after user code resumed
+    emitter.instruction(&format!("call QWORD PTR [r12 + {}]", f::OFF_RESUME_FN)); //resume until the next yield or termination
+    emitter.instruction(&format!("mov r10d, DWORD PTR [r12 + {}]", f::OFF_FLAGS)); //reload flags after user code resumed
     emitter.instruction(&format!("test r10d, {}", f::FLAG_TERMINATED));         // check whether resume exhausted the generator
     emitter.instruction("jnz __rt_gen_send_done");                              // exhausted generators return null from send()
-    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", f::OFF_LAST_VALUE)); // load the boxed Mixed pointer for the new current value
+    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", f::OFF_LAST_VALUE)); //load the boxed Mixed pointer for the new current value
     emitter.instruction("call __rt_incref");                                    // incref so send() returns an owned Mixed cell
     emitter.instruction("jmp __rt_gen_send_epilogue");                          // skip the null return path
     emitter.label_global("__rt_gen_send_done");
@@ -311,12 +311,12 @@ fn emit_gen_rewind_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_rewind ---");
     emitter.label_global("__rt_gen_rewind");
-    emitter.instruction(&format!("mov r10d, DWORD PTR [rdi + {}]", f::OFF_FLAGS)); // load flags
+    emitter.instruction(&format!("mov r10d, DWORD PTR [rdi + {}]", f::OFF_FLAGS)); //load flags
     emitter.instruction(&format!("test r10d, {}", f::FLAG_REWOUND));            // check whether rewind already happened
     emitter.instruction("jnz __rt_gen_rewind_done");                            // if REWOUND bit set, skip
     emitter.instruction(&format!("or r10d, {}", f::FLAG_REWOUND));              // set REWOUND bit
-    emitter.instruction(&format!("mov DWORD PTR [rdi + {}], r10d", f::OFF_FLAGS)); // store updated flags
-    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", f::OFF_RESUME_FN)); // load resume_fn
+    emitter.instruction(&format!("mov DWORD PTR [rdi + {}], r10d", f::OFF_FLAGS)); //store updated flags
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", f::OFF_RESUME_FN)); //load resume_fn
     emitter.instruction("jmp r10");                                             // tail-call resume_fn(rdi=frame)
     emitter.label_global("__rt_gen_rewind_done");
     emitter.instruction("ret");                                                 // already rewound — return immediately
@@ -329,9 +329,9 @@ fn emit_gen_throw_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_throw ---");
     emitter.label_global("__rt_gen_throw");
-    emitter.instruction(&format!("mov r10d, DWORD PTR [rdi + {}]", f::OFF_FLAGS)); // load flags
+    emitter.instruction(&format!("mov r10d, DWORD PTR [rdi + {}]", f::OFF_FLAGS)); //load flags
     emitter.instruction(&format!("or r10d, {}", f::FLAG_TERMINATED));           // set TERMINATED bit
-    emitter.instruction(&format!("mov DWORD PTR [rdi + {}], r10d", f::OFF_FLAGS)); // store updated flags
+    emitter.instruction(&format!("mov DWORD PTR [rdi + {}], r10d", f::OFF_FLAGS)); //store updated flags
     crate::codegen::abi::emit_store_reg_to_symbol(emitter, "rsi", "_exc_value", 0);
     emitter.instruction("jmp __rt_throw_current");                              // tail-call the unwinder; never returns
 }
@@ -342,6 +342,6 @@ fn emit_gen_get_return_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_get_return ---");
     emitter.label_global("__rt_gen_get_return");
-    emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", f::OFF_RETURN_VALUE)); // load the boxed return_value pointer
+    emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", f::OFF_RETURN_VALUE)); //load the boxed return_value pointer
     emitter.instruction("jmp __rt_incref");                                     // tail-call incref so the caller owns a fresh refcount on the cell
 }

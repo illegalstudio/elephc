@@ -470,35 +470,35 @@ fn emit_array_get_in_bounds_aarch64(
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
-            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
-            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); // load the selected pointer-sized indexed-array element
+            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); //skip the indexed-array header to reach element payloads
+            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); //load the selected pointer-sized indexed-array element
             if matches!(result_ty, PhpType::TaggedScalar) {
                 crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
             }
         }
         PhpType::Float => {
-            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach float payloads
-            ctx.emitter.instruction(&format!("ldr d0, [{}, {}, lsl #3]", array_reg, index_reg)); // load the selected indexed-array float element
+            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); //skip the indexed-array header to reach float payloads
+            ctx.emitter.instruction(&format!("ldr d0, [{}, {}, lsl #3]", array_reg, index_reg)); //load the selected indexed-array float element
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            ctx.emitter.instruction(&format!("lsl {}, {}, #4", index_reg, index_reg)); // scale the string-array offset by the pointer-plus-length slot size
-            ctx.emitter.instruction(&format!("add {}, {}, {}", array_reg, array_reg, index_reg)); // move to the selected string slot within the indexed array
-            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header before loading the string slot
+            ctx.emitter.instruction(&format!("lsl {}, {}, #4", index_reg, index_reg)); //scale the string-array offset by the pointer-plus-length slot size
+            ctx.emitter.instruction(&format!("add {}, {}, {}", array_reg, array_reg, index_reg)); //move to the selected string slot within the indexed array
+            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); //skip the indexed-array header before loading the string slot
             abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 8);
         }
         PhpType::TaggedScalar => {
             let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
-            ctx.emitter.instruction(&format!("lsl {}, {}, #4", index_reg, index_reg)); // scale the tagged-scalar offset by the payload-plus-tag slot size
-            ctx.emitter.instruction(&format!("add {}, {}, {}", array_reg, array_reg, index_reg)); // move to the selected tagged-scalar slot within the indexed array
-            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header before loading the tagged-scalar slot
+            ctx.emitter.instruction(&format!("lsl {}, {}, #4", index_reg, index_reg)); //scale the tagged-scalar offset by the payload-plus-tag slot size
+            ctx.emitter.instruction(&format!("add {}, {}, {}", array_reg, array_reg, index_reg)); //move to the selected tagged-scalar slot within the indexed array
+            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); //skip the indexed-array header before loading the tagged-scalar slot
             abi::emit_load_from_address(ctx.emitter, index_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, tag_reg, array_reg, 8);
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach pointer payloads
-            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); // load the selected refcounted indexed-array element
+            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); //skip the indexed-array header to reach pointer payloads
+            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); //load the selected refcounted indexed-array element
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -523,20 +523,20 @@ fn emit_array_get_in_bounds_x86_64(
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
-            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); // load the selected pointer-sized indexed-array element
+            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); //skip the indexed-array header to reach element payloads
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); //load the selected pointer-sized indexed-array element
             if matches!(result_ty, PhpType::TaggedScalar) {
                 crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
             }
         }
         PhpType::Float => {
-            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach float payloads
-            ctx.emitter.instruction(&format!("movsd xmm0, QWORD PTR [{} + {} * 8]", array_reg, index_reg)); // load the selected indexed-array float element
+            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); //skip the indexed-array header to reach float payloads
+            ctx.emitter.instruction(&format!("movsd xmm0, QWORD PTR [{} + {} * 8]", array_reg, index_reg)); //load the selected indexed-array float element
         }
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             ctx.emitter.instruction(&format!("shl {}, 4", index_reg));          // scale the string-array offset by the pointer-plus-length slot size
-            ctx.emitter.instruction(&format!("add {}, {}", array_reg, index_reg)); // move to the selected string slot within the indexed array
+            ctx.emitter.instruction(&format!("add {}, {}", array_reg, index_reg)); //move to the selected string slot within the indexed array
             ctx.emitter.instruction(&format!("add {}, 24", array_reg));         // skip the indexed-array header before loading the string slot
             abi::emit_load_from_address(ctx.emitter, ptr_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 8);
@@ -544,14 +544,14 @@ fn emit_array_get_in_bounds_x86_64(
         PhpType::TaggedScalar => {
             let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
             ctx.emitter.instruction(&format!("shl {}, 4", index_reg));          // scale the tagged-scalar offset by the payload-plus-tag slot size
-            ctx.emitter.instruction(&format!("add {}, {}", array_reg, index_reg)); // move to the selected tagged-scalar slot within the indexed array
+            ctx.emitter.instruction(&format!("add {}, {}", array_reg, index_reg)); //move to the selected tagged-scalar slot within the indexed array
             ctx.emitter.instruction(&format!("add {}, 24", array_reg));         // skip the indexed-array header before loading the tagged-scalar slot
             abi::emit_load_from_address(ctx.emitter, index_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, tag_reg, array_reg, 8);
         }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach pointer payloads
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); // load the selected refcounted indexed-array element
+            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); //skip the indexed-array header to reach pointer payloads
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); //load the selected refcounted indexed-array element
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -1326,17 +1326,17 @@ fn emit_tagged_scalar_array_value_type_stamp(ctx: &mut FunctionContext<'_>, arra
             ctx.emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg)); // load the packed indexed-array metadata before replacing value_type bits
             ctx.emitter.instruction("mov x11, #0x80ff");                        // preserve heap kind and persistent COW metadata only
             ctx.emitter.instruction("and x10, x10, x11");                       // clear stale indexed-array value_type bits
-            ctx.emitter.instruction(&format!("mov x11, #{}", TAGGED_SCALAR_ARRAY_VALUE_TYPE)); // value_type 11 = inline tagged-scalar slots
+            ctx.emitter.instruction(&format!("mov x11, #{}", TAGGED_SCALAR_ARRAY_VALUE_TYPE)); //value_type 11 = inline tagged-scalar slots
             ctx.emitter.instruction("lsl x11, x11, #8");                        // move the tagged-scalar value_type into the packed kind word
             ctx.emitter.instruction("orr x10, x10, x11");                       // combine stable metadata with the tagged-scalar value_type tag
             ctx.emitter.instruction(&format!("str x10, [{}, #-8]", array_reg)); // publish tagged-scalar indexed-array metadata
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); // load the packed indexed-array metadata before replacing value_type bits
+            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); //load the packed indexed-array metadata before replacing value_type bits
             ctx.emitter.instruction("mov r11, 0xffffffff000080ff");             // preserve heap marker, indexed-array kind, and persistent COW metadata
             ctx.emitter.instruction("and r10, r11");                            // clear stale indexed-array value_type bits
-            ctx.emitter.instruction(&format!("or r10, 0x{:x}", TAGGED_SCALAR_ARRAY_VALUE_TYPE << 8)); // add value_type 11 for inline tagged-scalar slots
-            ctx.emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); // publish tagged-scalar indexed-array metadata
+            ctx.emitter.instruction(&format!("or r10, 0x{:x}", TAGGED_SCALAR_ARRAY_VALUE_TYPE << 8)); //add value_type 11 for inline tagged-scalar slots
+            ctx.emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); //publish tagged-scalar indexed-array metadata
         }
     }
 }

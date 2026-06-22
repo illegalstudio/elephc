@@ -193,7 +193,7 @@ pub(crate) fn emit_loaded_values(
                         emitter.label(&store_box);
                         emitter.instruction("mov r10, QWORD PTR [rsp + 16]");   // load the result values array pointer from the fixed stack layout
                         emitter.instruction("mov r11, QWORD PTR [r10]");        // load the current result values array length before appending one more value
-                        emitter.instruction("mov QWORD PTR [r10 + r11 * 8 + 24], rax"); // store the owned mixed box pointer into the next result values slot
+                        emitter.instruction("mov QWORD PTR [r10 + r11 * 8 + 24], rax"); //store the owned mixed box pointer into the next result values slot
                         emitter.instruction("add r11, 1");                      // increment the result values array length after storing one more mixed box
                         emitter.instruction("mov QWORD PTR [r10], r11");        // persist the updated result values array length in the header
                     }
@@ -205,7 +205,7 @@ pub(crate) fn emit_loaded_values(
                         }
                         emitter.instruction("mov r10, QWORD PTR [rsp + 16]");   // load the result values array pointer from the fixed stack layout
                         emitter.instruction("mov r11, QWORD PTR [r10]");        // load the current result values array length before appending one more value
-                        emitter.instruction("mov QWORD PTR [r10 + r11 * 8 + 24], rcx"); // store the associative-array value payload into the next result values slot
+                        emitter.instruction("mov QWORD PTR [r10 + r11 * 8 + 24], rcx"); //store the associative-array value payload into the next result values slot
                         emitter.instruction("add r11, 1");                      // increment the result values array length after storing one more value
                         emitter.instruction("mov QWORD PTR [r10], r11");        // persist the updated result values array length in the header
                     }

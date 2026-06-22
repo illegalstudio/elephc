@@ -696,7 +696,7 @@ pub(super) fn prepare_foreach_value_ref_slot(
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 16);
     abi::emit_call_label(emitter, "__rt_heap_alloc");                          // allocate a stable fallback cell for empty by-reference foreach loops
     let cell_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!("mov {}, {}", cell_reg, abi::int_result_reg(emitter))); // keep the fallback reference cell address while copying the current value
+    emitter.instruction(&format!("mov {}, {}", cell_reg, abi::int_result_reg(emitter))); //keep the fallback reference cell address while copying the current value
     copy_local_value_to_ref_cell(&current_ty, slot_offset, cell_reg, emitter);
     release_owned_local_value_after_ref_cell_copy(
         &current_ty,
@@ -954,7 +954,7 @@ pub(super) fn mark_foreach_value_ref_bound(flag_offset: usize, emitter: &mut Emi
             emitter.instruction(&format!("str x10, [sp, #{}]", flag_offset));   // persist the by-reference foreach bound flag for loop cleanup
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 1", flag_offset)); // mark that this by-reference foreach bound at least one element
+            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 1", flag_offset)); //mark that this by-reference foreach bound at least one element
         }
     }
 }

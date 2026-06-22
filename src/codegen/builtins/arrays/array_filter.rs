@@ -184,11 +184,11 @@ pub fn emit(
         };
         abi::emit_pop_reg(emitter, array_arg_reg);                               // pop the source array pointer into the second runtime argument register
         if dynamic_mode_loaded {
-            emitter.instruction(&format!("mov {}, {}", mode_arg_reg, result_reg)); // forward the runtime-computed mode to the filter helper
+            emitter.instruction(&format!("mov {}, {}", mode_arg_reg, result_reg)); //forward the runtime-computed mode to the filter helper
         } else {
             emit_static_filter_mode_arg(emitter, mode_arg_reg, mode_for_callback_shape);
         }
-        emitter.instruction(&format!("mov {}, {}", callback_arg_reg, call_reg)); // move the callback function address into the first runtime argument register
+        emitter.instruction(&format!("mov {}, {}", callback_arg_reg, call_reg)); //move the callback function address into the first runtime argument register
         abi::emit_load_int_immediate(emitter, env_arg_reg, 0);
     } else {
         abi::emit_pop_reg(emitter, result_reg);                                  // recover the source array pointer before building the capture environment
@@ -207,7 +207,7 @@ pub fn emit(
             false
         };
         if dynamic_mode_loaded {
-            emitter.instruction(&format!("mov {}, {}", mode_arg_reg, result_reg)); // preserve the runtime-computed mode before loading callback runtime arguments
+            emitter.instruction(&format!("mov {}, {}", mode_arg_reg, result_reg)); //preserve the runtime-computed mode before loading callback runtime arguments
         } else {
             emit_static_filter_mode_arg(emitter, mode_arg_reg, mode_for_callback_shape);
         }

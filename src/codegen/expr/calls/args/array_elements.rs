@@ -349,7 +349,7 @@ fn emit_branch_if_hash_value_tag(
 ) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #{}", tag_reg, expected_tag)); // compare the raw hash value tag with the expected runtime tag
+            emitter.instruction(&format!("cmp {}, #{}", tag_reg, expected_tag)); //compare the raw hash value tag with the expected runtime tag
             emitter.instruction(&format!("b.eq {}", label));                    // dispatch this hash value shape when the tag matches
         }
         Arch::X86_64 => {
@@ -363,11 +363,11 @@ fn emit_branch_if_hash_value_tag(
 fn emit_branch_if_invoker_ref_cell_tag(tag_reg: &str, label: &str, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #{}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); // check for an invoker-only by-reference argument marker
+            emitter.instruction(&format!("cmp {}, #{}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); //check for an invoker-only by-reference argument marker
             emitter.instruction(&format!("b.eq {}", label));                    // use the original caller storage when this hash value is a marker
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, {}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); // check for an invoker-only by-reference argument marker
+            emitter.instruction(&format!("cmp {}, {}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); //check for an invoker-only by-reference argument marker
             emitter.instruction(&format!("je {}", label));                      // use the original caller storage when this hash value is a marker
         }
     }
@@ -401,7 +401,7 @@ fn emit_box_raw_invoker_ref_cell_value_as_mixed(
     let string_hi_label = ctx.next_label("hash_invoker_ref_string_hi");
     let box_label = ctx.next_label("hash_invoker_ref_box");
 
-    emitter.instruction(&format!("mov {}, {}", ref_cell_scratch, ref_cell_reg)); // preserve the source variable cell before loading its current value
+    emitter.instruction(&format!("mov {}, {}", ref_cell_scratch, ref_cell_reg)); //preserve the source variable cell before loading its current value
     emitter.instruction(&format!("mov {}, {}", tag_scratch, source_tag_reg));   // preserve the source variable runtime tag before boxing
     abi::emit_load_from_address(emitter, lo_reg, ref_cell_scratch, 0);
     abi::emit_load_int_immediate(emitter, hi_reg, 0);

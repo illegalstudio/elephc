@@ -153,7 +153,7 @@ fn emit_intdiv_zero_fatal(ctx: &mut FunctionContext<'_>, zero_label: &str) {
             ctx.emitter.syscall(1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("lea rsi, [rip + {}]", err_label)); // pass the fatal diagnostic buffer to write()
+            ctx.emitter.instruction(&format!("lea rsi, [rip + {}]", err_label)); //pass the fatal diagnostic buffer to write()
             ctx.emitter.instruction(&format!("mov edx, {}", err_len));          // pass the fatal diagnostic byte length to write()
             ctx.emitter.instruction("mov edi, 2");                              // select stderr as the fatal diagnostic destination
             ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall

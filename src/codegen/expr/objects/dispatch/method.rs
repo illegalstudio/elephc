@@ -317,11 +317,11 @@ fn emit_dynamic_method_call(
         abi::emit_load_int_immediate(emitter, imm_reg, *class_id as i64);
         match emitter.target.arch {
             crate::codegen::platform::Arch::AArch64 => {
-                emitter.instruction(&format!("cmp {}, {}", class_id_reg, imm_reg)); // compare the runtime class id with this candidate class
+                emitter.instruction(&format!("cmp {}, {}", class_id_reg, imm_reg)); //compare the runtime class id with this candidate class
                 emitter.instruction(&format!("b.ne {}", next));                 // try the next candidate when the class id differs
             }
             crate::codegen::platform::Arch::X86_64 => {
-                emitter.instruction(&format!("cmp {}, {}", class_id_reg, imm_reg)); // compare the runtime class id with this candidate class
+                emitter.instruction(&format!("cmp {}, {}", class_id_reg, imm_reg)); //compare the runtime class id with this candidate class
                 emitter.instruction(&format!("jne {}", next));                  // try the next candidate when the class id differs
             }
         }

@@ -70,7 +70,7 @@ pub(super) fn emit_float_literal(
     abi::emit_symbol_address(emitter, scratch, &label);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldr {}, [{}]", abi::float_result_reg(emitter), scratch)); // load the 64-bit float literal through the symbol scratch register
+            emitter.instruction(&format!("ldr {}, [{}]", abi::float_result_reg(emitter), scratch)); //load the 64-bit float literal through the symbol scratch register
         }
         Arch::X86_64 => {
             emitter.instruction(&format!(                                       // load the 64-bit float literal through the symbol scratch register
@@ -131,7 +131,7 @@ pub(super) fn emit_negate(
                 ));
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("neg {}", abi::int_result_reg(emitter))); // two's-complement negate the current integer result in place
+                emitter.instruction(&format!("neg {}", abi::int_result_reg(emitter))); //two's-complement negate the current integer result in place
             }
         }
         PhpType::Int
@@ -158,7 +158,7 @@ pub(super) fn emit_bit_not(
             ));
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("not {}", abi::int_result_reg(emitter))); // invert every bit of the current integer result in place
+            emitter.instruction(&format!("not {}", abi::int_result_reg(emitter))); //invert every bit of the current integer result in place
         }
     }
     PhpType::Int

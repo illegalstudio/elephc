@@ -249,7 +249,7 @@ fn push_existing_prefix_array_element_arg(
     abi::emit_load_temporary_stack_slot(emitter, array_data_reg, prefix_offset);
     match emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("add {}, {}, #24", array_data_reg, array_data_reg)); // address the positional-prefix array payload
+            emitter.instruction(&format!("add {}, {}, #24", array_data_reg, array_data_reg)); //address the positional-prefix array payload
         }
         crate::codegen::platform::Arch::X86_64 => {
             emitter.instruction(&format!("add {}, 24", array_data_reg));        // address the positional-prefix array payload

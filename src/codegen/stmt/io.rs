@@ -69,11 +69,11 @@ pub(crate) fn emit_expr_to_stdout(
                 abi::emit_load_int_immediate(emitter, sentinel_reg, NULL_SENTINEL);
                 match emitter.target.arch {
                     Arch::AArch64 => {
-                        emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); // compare integer value against the runtime null sentinel
+                        emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); //compare integer value against the runtime null sentinel
                         emitter.instruction(&format!("b.eq {}", skip_label));   // skip echo if value is the null sentinel
                     }
                     Arch::X86_64 => {
-                        emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); // compare integer value against the runtime null sentinel
+                        emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); //compare integer value against the runtime null sentinel
                         emitter.instruction(&format!("je {}", skip_label));     // skip echo if value is the null sentinel
                     }
                 }

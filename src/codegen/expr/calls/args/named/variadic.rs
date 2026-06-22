@@ -92,7 +92,7 @@ pub(super) fn emit_variadic_array_arg_from_sources(
                 emitter.instruction(&format!("ldr {}, [sp]", peek_reg));        // peek the variadic array pointer without removing it from the stack
             }
             crate::codegen::platform::Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", peek_reg)); // peek the variadic array pointer without removing it from the stack
+                emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", peek_reg)); //peek the variadic array pointer without removing it from the stack
             }
         }
         if idx == 0 {
@@ -251,10 +251,10 @@ fn emit_prefix_tail_into_variadic_hash(
             let bits_reg = abi::temp_int_reg(emitter.target);
             match emitter.target.arch {
                 crate::codegen::platform::Arch::AArch64 => {
-                    emitter.instruction(&format!("fmov {}, {}", bits_reg, abi::float_result_reg(emitter))); // move variadic float bits into the hash value register
+                    emitter.instruction(&format!("fmov {}, {}", bits_reg, abi::float_result_reg(emitter))); //move variadic float bits into the hash value register
                 }
                 crate::codegen::platform::Arch::X86_64 => {
-                    emitter.instruction(&format!("movq {}, {}", bits_reg, abi::float_result_reg(emitter))); // move variadic float bits into the hash value register
+                    emitter.instruction(&format!("movq {}, {}", bits_reg, abi::float_result_reg(emitter))); //move variadic float bits into the hash value register
                 }
             }
             (bits_reg, zero_reg)
@@ -409,10 +409,10 @@ fn emit_variadic_assoc_arg_from_sources(
                 let bits_reg = abi::temp_int_reg(emitter.target);
                 match emitter.target.arch {
                     crate::codegen::platform::Arch::AArch64 => {
-                        emitter.instruction(&format!("fmov {}, {}", bits_reg, abi::float_result_reg(emitter))); // move variadic float bits into the hash value register
+                        emitter.instruction(&format!("fmov {}, {}", bits_reg, abi::float_result_reg(emitter))); //move variadic float bits into the hash value register
                     }
                     crate::codegen::platform::Arch::X86_64 => {
-                        emitter.instruction(&format!("movq {}, {}", bits_reg, abi::float_result_reg(emitter))); // move variadic float bits into the hash value register
+                        emitter.instruction(&format!("movq {}, {}", bits_reg, abi::float_result_reg(emitter))); //move variadic float bits into the hash value register
                     }
                 }
                 (bits_reg, zero_reg)

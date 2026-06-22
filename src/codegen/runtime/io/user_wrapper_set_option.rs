@@ -60,7 +60,7 @@ pub fn emit_user_wrapper_set_option(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x0]");                                       // class_id at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable
-    emitter.instruction(&format!("ldr x11, [x11, #{}]", VTABLE_SET_OPTION_OFFSET)); // load the stream_set_option method pointer (slot 13)
+    emitter.instruction(&format!("ldr x11, [x11, #{}]", VTABLE_SET_OPTION_OFFSET)); //load the stream_set_option method pointer (slot 13)
     emitter.instruction("cbz x11, __rt_uwsetopt_false");                        // class did not implement stream_set_option → false
 
     // -- call stream_set_option($this, $option, $arg1, $arg2) → bool in x0 --
@@ -97,7 +97,7 @@ fn emit_user_wrapper_set_option_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable
-    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_SET_OPTION_OFFSET)); // load the stream_set_option method pointer (slot 13)
+    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_SET_OPTION_OFFSET)); //load the stream_set_option method pointer (slot 13)
     emitter.instruction("test r11, r11");                                       // class did not implement stream_set_option?
     emitter.instruction("jz __rt_uwsetopt_false_x86");                          // missing method → false
 

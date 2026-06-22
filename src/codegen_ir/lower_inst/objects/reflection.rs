@@ -4074,8 +4074,8 @@ fn emit_reflection_class_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
     let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x3, x0"); // pass the ReflectionClass object as the hash payload
-            ctx.emitter.instruction("mov x4, xzr"); // object hash payloads do not use the high word
+            ctx.emitter.instruction("mov x3, x0");                              // pass the ReflectionClass object as the hash payload
+            ctx.emitter.instruction("mov x4, xzr");                             // object hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
@@ -4087,8 +4087,8 @@ fn emit_reflection_class_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
             abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rcx, rax"); // pass the ReflectionClass object as the hash payload
-            ctx.emitter.instruction("xor r8, r8"); // object hash payloads do not use the high word
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the ReflectionClass object as the hash payload
+            ctx.emitter.instruction("xor r8, r8");                              // object hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "rdi");
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
@@ -4345,8 +4345,8 @@ fn emit_reflection_constant_hash_insert(ctx: &mut FunctionContext<'_>, key: &str
     let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x3, x0"); // pass the boxed Reflection constant value as the hash payload
-            ctx.emitter.instruction("mov x4, xzr"); // boxed Mixed hash payloads do not use the high word
+            ctx.emitter.instruction("mov x3, x0");                              // pass the boxed Reflection constant value as the hash payload
+            ctx.emitter.instruction("mov x4, xzr");                             // boxed Mixed hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
@@ -4358,8 +4358,8 @@ fn emit_reflection_constant_hash_insert(ctx: &mut FunctionContext<'_>, key: &str
             abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rcx, rax"); // pass the boxed Reflection constant value as the hash payload
-            ctx.emitter.instruction("xor r8, r8"); // boxed Mixed hash payloads do not use the high word
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the boxed Reflection constant value as the hash payload
+            ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "rdi");
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
@@ -5070,32 +5070,32 @@ fn emit_reflection_string_array(ctx: &mut FunctionContext<'_>, names: &[String])
 
 /// Appends ReflectionClass metadata names to the current ARM64 result array.
 fn emit_reflection_string_array_fill_aarch64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("str x0, [sp, #-16]!"); // park the metadata-name array while appending strings
+    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // park the metadata-name array while appending strings
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("ldr x0, [sp]"); // reload the metadata-name array for this append
+        ctx.emitter.instruction("ldr x0, [sp]");                                // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "x1", &label);
         abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("str x0, [sp]"); // preserve the possibly-grown metadata-name array
+        ctx.emitter.instruction("str x0, [sp]");                                // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("ldr x0, [sp], #16"); // restore the final metadata-name array as the result
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the final metadata-name array as the result
 }
 
 /// Appends ReflectionClass metadata names to the current x86_64 result array.
 fn emit_reflection_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]) {
-    ctx.emitter.instruction("push rax"); // park the metadata-name array while appending strings
-    ctx.emitter.instruction("sub rsp, 8"); // keep stack alignment stable across append helper calls
+    ctx.emitter.instruction("push rax");                                        // park the metadata-name array while appending strings
+    ctx.emitter.instruction("sub rsp, 8");                                      // keep stack alignment stable across append helper calls
     for name in names {
         let (label, len) = ctx.data.add_string(name.as_bytes());
-        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]"); // reload the metadata-name array for this append
+        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // reload the metadata-name array for this append
         abi::emit_symbol_address(ctx.emitter, "rsi", &label);
         abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
         abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
-        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax"); // preserve the possibly-grown metadata-name array
+        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // preserve the possibly-grown metadata-name array
     }
-    ctx.emitter.instruction("add rsp, 8"); // drop the temporary alignment slot
-    ctx.emitter.instruction("pop rax"); // restore the final metadata-name array as the result
+    ctx.emitter.instruction("add rsp, 8");                                      // drop the temporary alignment slot
+    ctx.emitter.instruction("pop rax");                                         // restore the final metadata-name array as the result
 }
 
 /// Stores ReflectionMethod/ReflectionProperty boolean predicate slots when supported.

@@ -87,11 +87,11 @@ pub fn emit_fread(emitter: &mut Emitter) {
     if emitter.platform.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: negative read result means failure
     }
-    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fread_read_ok")); // continue only when the read syscall succeeded
+    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fread_read_ok")); //continue only when the read syscall succeeded
     if emitter.platform.needs_cmp_before_error_branch() {
-        emitter.instruction(&format!("cmn x0, #{}", emitter.platform.would_block_errno())); // Linux: is this -EAGAIN/-EWOULDBLOCK from a nonblocking fd?
+        emitter.instruction(&format!("cmn x0, #{}", emitter.platform.would_block_errno())); //Linux: is this -EAGAIN/-EWOULDBLOCK from a nonblocking fd?
     } else {
-        emitter.instruction(&format!("cmp x0, #{}", emitter.platform.would_block_errno())); // macOS: is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
+        emitter.instruction(&format!("cmp x0, #{}", emitter.platform.would_block_errno())); //macOS: is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
     }
     emitter.instruction("b.eq __rt_fread_would_block");                         // a transient nonblocking miss is not EOF
     emitter.instruction("str xzr, [sp, #24]");                                  // failed reads return an empty result

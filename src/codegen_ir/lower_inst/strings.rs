@@ -150,10 +150,10 @@ pub(super) fn lower_str_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let len_reg = abi::string_result_regs(ctx.emitter).1;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, len_reg)); // return the byte length of the loaded PHP string
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, len_reg)); //return the byte length of the loaded PHP string
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, len_reg)); // return the byte length of the loaded PHP string
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, len_reg)); //return the byte length of the loaded PHP string
         }
     }
     store_if_result(ctx, inst)

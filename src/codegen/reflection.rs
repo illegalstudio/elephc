@@ -237,12 +237,12 @@ pub(crate) fn emit_reflection_attribute_array(
     // -- allocate the result indexed array (one heap-pointer slot per attr) --
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov x0, #{}", attr_names.len().max(1))); // initial capacity (>=1 to avoid grow on first push)
+            emitter.instruction(&format!("mov x0, #{}", attr_names.len().max(1))); //initial capacity (>=1 to avoid grow on first push)
             emitter.instruction("mov x1, #8");                                  // element stride: one heap pointer per slot (object handle)
             emitter.instruction("bl __rt_array_new");                           // x0 = freshly allocated array pointer
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rdi, {}", attr_names.len().max(1))); // initial capacity (>=1)
+            emitter.instruction(&format!("mov rdi, {}", attr_names.len().max(1))); //initial capacity (>=1)
             emitter.instruction("mov rsi, 8");                                  // element stride: one heap pointer per slot
             emitter.instruction("call __rt_array_new");                         // rax = array pointer
         }
@@ -328,19 +328,19 @@ pub(crate) fn emit_set_string_property(
             emitter.instruction(&format!("mov x2, #{}", len));                  // x2 = source string length
             emitter.instruction("bl __rt_str_persist");                         // x1 = heap-resident pointer, x2 = length
             emitter.instruction(&format!("ldr {}, [sp]", obj_ptr_scratch));     // peek the obj pointer back
-            emitter.instruction(&format!("str x1, [{}, #{}]", obj_ptr_scratch, low_offset)); // commit the string pointer
-            emitter.instruction(&format!("str x2, [{}, #{}]", obj_ptr_scratch, high_offset)); // commit the string length
+            emitter.instruction(&format!("str x1, [{}, #{}]", obj_ptr_scratch, low_offset)); //commit the string pointer
+            emitter.instruction(&format!("str x2, [{}, #{}]", obj_ptr_scratch, high_offset)); //commit the string length
         }
         Arch::X86_64 => {
             emitter.instruction("mov r10, QWORD PTR [rsp]");                    // peek the obj pointer
-            emitter.instruction(&format!("mov rax, QWORD PTR [r10 + {}]", low_offset)); // load the old string pointer
+            emitter.instruction(&format!("mov rax, QWORD PTR [r10 + {}]", low_offset)); //load the old string pointer
             emitter.instruction("call __rt_heap_free_safe");                    // release the previous owned string
             abi::emit_symbol_address(emitter, "rax", &sym);                     // rax = source string address
             emitter.instruction(&format!("mov rdx, {}", len));                  // rdx = source string length
             emitter.instruction("call __rt_str_persist");                       // rax = heap-resident pointer, rdx = length
-            emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", obj_ptr_scratch)); // peek the obj pointer back
-            emitter.instruction(&format!("mov QWORD PTR [{} + {}], rax", obj_ptr_scratch, low_offset)); // commit the string pointer
-            emitter.instruction(&format!("mov QWORD PTR [{} + {}], rdx", obj_ptr_scratch, high_offset)); // commit the string length
+            emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", obj_ptr_scratch)); //peek the obj pointer back
+            emitter.instruction(&format!("mov QWORD PTR [{} + {}], rax", obj_ptr_scratch, low_offset)); //commit the string pointer
+            emitter.instruction(&format!("mov QWORD PTR [{} + {}], rdx", obj_ptr_scratch, high_offset)); //commit the string length
         }
     }
 }
@@ -374,12 +374,12 @@ fn emit_set_args_property(
     // -- allocate a fresh mixed-cell pointer array for the literal args --
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov x0, #{}", attr_arg_list.len().max(1))); // initial capacity (>=1)
+            emitter.instruction(&format!("mov x0, #{}", attr_arg_list.len().max(1))); //initial capacity (>=1)
             emitter.instruction("mov x1, #8");                                  // element stride: one boxed mixed-cell pointer per slot
             emitter.instruction("bl __rt_array_new");                           // x0 = freshly allocated args array
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rdi, {}", attr_arg_list.len().max(1))); // initial capacity (>=1)
+            emitter.instruction(&format!("mov rdi, {}", attr_arg_list.len().max(1))); //initial capacity (>=1)
             emitter.instruction("mov rsi, 8");                                  // element stride: one boxed mixed-cell pointer per slot
             emitter.instruction("call __rt_array_new");                         // rax = freshly allocated args array
         }
@@ -412,14 +412,14 @@ fn emit_set_args_property(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("ldr {}, [sp]", obj_ptr_scratch));     // peek the obj pointer
-            emitter.instruction(&format!("str {}, [{}, #24]", result_reg, obj_ptr_scratch)); // commit __args.lo (array pointer)
+            emitter.instruction(&format!("str {}, [{}, #24]", result_reg, obj_ptr_scratch)); //commit __args.lo (array pointer)
             emitter.instruction("mov x10, #4");                                 // runtime kind tag 4 = indexed array
-            emitter.instruction(&format!("str x10, [{}, #32]", obj_ptr_scratch)); // commit __args.hi (kind tag)
+            emitter.instruction(&format!("str x10, [{}, #32]", obj_ptr_scratch)); //commit __args.hi (kind tag)
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", obj_ptr_scratch)); // peek the obj pointer
-            emitter.instruction(&format!("mov QWORD PTR [{} + 24], {}", obj_ptr_scratch, result_reg)); // commit __args.lo (array pointer)
-            emitter.instruction(&format!("mov QWORD PTR [{} + 32], 4", obj_ptr_scratch)); // commit __args.hi (kind tag = 4 = indexed array)
+            emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", obj_ptr_scratch)); //peek the obj pointer
+            emitter.instruction(&format!("mov QWORD PTR [{} + 24], {}", obj_ptr_scratch, result_reg)); //commit __args.lo (array pointer)
+            emitter.instruction(&format!("mov QWORD PTR [{} + 32], 4", obj_ptr_scratch)); //commit __args.hi (kind tag = 4 = indexed array)
         }
     }
 }
@@ -436,14 +436,14 @@ fn emit_set_factory_property(
         Arch::AArch64 => {
             emitter.instruction(&format!("ldr {}, [sp]", obj_ptr_scratch));     // peek the obj pointer
             abi::emit_load_int_immediate(emitter, "x10", factory_id);
-            emitter.instruction(&format!("str x10, [{}, #40]", obj_ptr_scratch)); // commit __factory id for newInstance()
-            emitter.instruction(&format!("str xzr, [{}, #48]", obj_ptr_scratch)); // clear the unused high word of the int property slot
+            emitter.instruction(&format!("str x10, [{}, #40]", obj_ptr_scratch)); //commit __factory id for newInstance()
+            emitter.instruction(&format!("str xzr, [{}, #48]", obj_ptr_scratch)); //clear the unused high word of the int property slot
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", obj_ptr_scratch)); // peek the obj pointer
+            emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", obj_ptr_scratch)); //peek the obj pointer
             abi::emit_load_int_immediate(emitter, "r10", factory_id);
-            emitter.instruction(&format!("mov QWORD PTR [{} + 40], r10", obj_ptr_scratch)); // commit __factory id for newInstance()
-            emitter.instruction(&format!("mov QWORD PTR [{} + 48], 0", obj_ptr_scratch)); // clear the unused high word of the int property slot
+            emitter.instruction(&format!("mov QWORD PTR [{} + 40], r10", obj_ptr_scratch)); //commit __factory id for newInstance()
+            emitter.instruction(&format!("mov QWORD PTR [{} + 48], 0", obj_ptr_scratch)); //clear the unused high word of the int property slot
         }
     }
 }

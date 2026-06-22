@@ -113,7 +113,7 @@ pub fn emit(
     // -- evaluate the format string and format through the sprintf runtime --
     emit_expr(&args[1], emitter, ctx, data);
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("mov x0, #{}", arg_count)), // number of packed variadic records
+        Arch::AArch64 => emitter.instruction(&format!("mov x0, #{}", arg_count)), //number of packed variadic records
         Arch::X86_64 => abi::emit_load_int_immediate(emitter, "rdi", arg_count as i64), // number of packed variadic records
     }
     abi::emit_call_label(emitter, "__rt_sprintf");                              // format → ptr+len; pops the caller's packed records

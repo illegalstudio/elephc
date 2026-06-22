@@ -60,7 +60,7 @@ pub fn emit(
     abi::emit_call_label(emitter, "__rt_fflush");                               // libc fsync(fd) wrapper (PHP-side fflush semantics)
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("b {}", after_dispatch)), // skip the user-wrapper path on the normal-fd result
-        Arch::X86_64 => emitter.instruction(&format!("jmp {}", after_dispatch)), // skip the user-wrapper path on the normal-fd result
+        Arch::X86_64 => emitter.instruction(&format!("jmp {}", after_dispatch)), //skip the user-wrapper path on the normal-fd result
     }
     emitter.label(&user_wrapper_label);
     if matches!(emitter.target.arch, Arch::X86_64) {

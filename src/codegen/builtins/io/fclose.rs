@@ -107,7 +107,7 @@ pub fn emit(
     emitter.label(&done);
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("b {}", after_dispatch)), // skip the user-wrapper close path on the normal-fd success/failure
-        Arch::X86_64 => emitter.instruction(&format!("jmp {}", after_dispatch)), // skip the user-wrapper close path on the normal-fd success/failure
+        Arch::X86_64 => emitter.instruction(&format!("jmp {}", after_dispatch)), //skip the user-wrapper close path on the normal-fd success/failure
     }
 
     // -- user-wrapper dispatch: call __rt_user_wrapper_fclose with fd --
@@ -124,7 +124,7 @@ pub fn emit(
 
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("b {}", after_dispatch)), // skip the phar finalize block on the user-wrapper path
-        Arch::X86_64 => emitter.instruction(&format!("jmp {}", after_dispatch)), // skip the phar finalize block on the user-wrapper path
+        Arch::X86_64 => emitter.instruction(&format!("jmp {}", after_dispatch)), //skip the phar finalize block on the user-wrapper path
     }
 
     // -- phar:// write finalize: flush the buffered archive to disk --

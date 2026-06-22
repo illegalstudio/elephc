@@ -196,10 +196,10 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("cbz {}, {}", int_result_reg(emitter), label)); // branch when the coerced integer truthiness result is zero
+            emitter.instruction(&format!("cbz {}, {}", int_result_reg(emitter), label)); //branch when the coerced integer truthiness result is zero
         }
         crate::codegen::platform::Arch::X86_64 => {
-            emitter.instruction(&format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter))); // test whether the coerced integer truthiness result is zero
+            emitter.instruction(&format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter))); //test whether the coerced integer truthiness result is zero
             emitter.instruction(&format!("je {}", label));                      // branch when the coerced integer truthiness result is zero
         }
     }
@@ -212,10 +212,10 @@ pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
 pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("cbnz {}, {}", int_result_reg(emitter), label)); // branch when the coerced integer truthiness result is non-zero
+            emitter.instruction(&format!("cbnz {}, {}", int_result_reg(emitter), label)); //branch when the coerced integer truthiness result is non-zero
         }
         crate::codegen::platform::Arch::X86_64 => {
-            emitter.instruction(&format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter))); // test whether the coerced integer truthiness result is non-zero
+            emitter.instruction(&format!("test {}, {}", int_result_reg(emitter), int_result_reg(emitter))); //test whether the coerced integer truthiness result is non-zero
             emitter.instruction(&format!("jne {}", label));                     // branch when the coerced integer truthiness result is non-zero
         }
     }
@@ -284,7 +284,7 @@ pub fn emit_load_int_immediate(emitter: &mut Emitter, reg: &str, value: i64) {
                 emitter.instruction(&format!("mov {}, #{}", reg, value));       // load a small negative immediate directly into the target register
             } else {
                 let uval = value as u64;
-                emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF)); // seed the low 16 bits of the wider immediate value
+                emitter.instruction(&format!("movz {}, #0x{:x}", reg, uval & 0xFFFF)); //seed the low 16 bits of the wider immediate value
                 if (uval >> 16) & 0xFFFF != 0 {
                     emitter.instruction(&format!(                               // patch bits 16-31 of the wider immediate value
                         "movk {}, #0x{:x}, lsl #16",

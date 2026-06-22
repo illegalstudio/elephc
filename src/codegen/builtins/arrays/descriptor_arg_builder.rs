@@ -335,7 +335,7 @@ pub(crate) fn emit_box_current_ref_arg_address_for_invoker(
     let ref_cell_reg = abi::secondary_scratch_reg(emitter);
     let marker_tag_reg = abi::tertiary_scratch_reg(emitter);
     let source_tag_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!("mov {}, {}", ref_cell_reg, abi::int_result_reg(emitter))); // preserve the source variable storage address before Mixed marker boxing
+    emitter.instruction(&format!("mov {}, {}", ref_cell_reg, abi::int_result_reg(emitter))); //preserve the source variable storage address before Mixed marker boxing
     abi::emit_load_int_immediate(
         emitter,
         marker_tag_reg,

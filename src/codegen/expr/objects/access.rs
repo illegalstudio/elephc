@@ -680,7 +680,7 @@ pub(super) fn emit_loaded_object_property_access(
             if class_info.methods.contains_key("__get") {
                 emitter.comment(&format!("magic __get('{}')", property));
                 let object_reg = abi::symbol_scratch_reg(emitter);
-                emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); // preserve $this while the magic-property name setup clobbers normal result registers
+                emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); //preserve $this while the magic-property name setup clobbers normal result registers
                 super::push_magic_property_name_arg(property, emitter, data);
                 abi::emit_push_reg(emitter, object_reg);                      // push $this pointer for __get dispatch using the preserved object register
                 return super::emit_method_call_with_pushed_args(
@@ -857,11 +857,11 @@ fn emit_uninitialized_typed_property_guard(
     abi::emit_load_int_immediate(emitter, sentinel_reg, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // check whether the typed property still carries the uninitialized marker
+            emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); //check whether the typed property still carries the uninitialized marker
             emitter.instruction(&format!("b.ne {}", initialized_label));        // continue the property read once the slot has been initialized
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // check whether the typed property still carries the uninitialized marker
+            emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); //check whether the typed property still carries the uninitialized marker
             emitter.instruction(&format!("jne {}", initialized_label));         // continue the property read once the slot has been initialized
         }
     }

@@ -130,7 +130,7 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
                             emitter.instruction("str x0, [sp, #16]");           // replace the old left comparison slot with the boxed left mixed pointer
                         }
                         crate::codegen::platform::Arch::X86_64 => {
-                            emitter.instruction("mov QWORD PTR [rsp + 16], rax"); // replace the old left comparison slot with the boxed left mixed pointer
+                            emitter.instruction("mov QWORD PTR [rsp + 16], rax"); //replace the old left comparison slot with the boxed left mixed pointer
                         }
                     }
                 }
@@ -144,7 +144,7 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
                             emitter.instruction("str x0, [sp, #16]");           // replace the old left comparison slot with the boxed left mixed pointer
                         }
                         crate::codegen::platform::Arch::X86_64 => {
-                            emitter.instruction("mov QWORD PTR [rsp + 16], rax"); // replace the old left comparison slot with the boxed left mixed pointer
+                            emitter.instruction("mov QWORD PTR [rsp + 16], rax"); //replace the old left comparison slot with the boxed left mixed pointer
                         }
                     }
                 }
@@ -158,7 +158,7 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
                             emitter.instruction("str x0, [sp, #16]");           // replace the old left comparison slot with the boxed left mixed pointer
                         }
                         crate::codegen::platform::Arch::X86_64 => {
-                            emitter.instruction("mov QWORD PTR [rsp + 16], rax"); // replace the old left comparison slot with the boxed left mixed pointer
+                            emitter.instruction("mov QWORD PTR [rsp + 16], rax"); //replace the old left comparison slot with the boxed left mixed pointer
                         }
                     }
                 }
@@ -170,7 +170,7 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
                             emitter.instruction("str x0, [sp, #16]");           // replace the old left comparison slot with the boxed left mixed pointer
                         }
                         crate::codegen::platform::Arch::X86_64 => {
-                            emitter.instruction("mov QWORD PTR [rsp + 16], rax"); // replace the old left comparison slot with the boxed left mixed pointer
+                            emitter.instruction("mov QWORD PTR [rsp + 16], rax"); //replace the old left comparison slot with the boxed left mixed pointer
                         }
                     }
                 }
@@ -275,13 +275,13 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::Resource(_) => {
                 let left_reg = abi::symbol_scratch_reg(emitter);
                 abi::emit_pop_reg(emitter, left_reg);                           // pop the saved left scalar or pointer-like value from the temporary comparison stack
-                emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); // compare the left and right scalar values
+                emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); //compare the left and right scalar values
                 match emitter.target.arch {
                     crate::codegen::platform::Arch::AArch64 => {
-                        emitter.instruction(&format!("cset x0, {}", if is_eq { "eq" } else { "ne" })); // materialize the scalar strict-comparison result on AArch64
+                        emitter.instruction(&format!("cset x0, {}", if is_eq { "eq" } else { "ne" })); //materialize the scalar strict-comparison result on AArch64
                     }
                     crate::codegen::platform::Arch::X86_64 => {
-                        emitter.instruction(&format!("set{} al", if is_eq { "e" } else { "ne" })); // materialize the scalar strict-comparison result in the low result byte on x86_64
+                        emitter.instruction(&format!("set{} al", if is_eq { "e" } else { "ne" })); //materialize the scalar strict-comparison result in the low result byte on x86_64
                         emitter.instruction("movzx rax, al");                   // widen the x86_64 comparison byte back into the full integer result register
                     }
                 }
@@ -291,12 +291,12 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
                     crate::codegen::platform::Arch::AArch64 => {
                         abi::emit_pop_float_reg(emitter, "d1");                 // pop the saved left float operand from the temporary comparison stack
                         emitter.instruction("fcmp d1, d0");                     // compare the two doubles, setting NZCV flags
-                        emitter.instruction(&format!("cset x0, {}", if is_eq { "eq" } else { "ne" })); // materialize the floating-point strict-comparison result on AArch64
+                        emitter.instruction(&format!("cset x0, {}", if is_eq { "eq" } else { "ne" })); //materialize the floating-point strict-comparison result on AArch64
                     }
                     crate::codegen::platform::Arch::X86_64 => {
                         abi::emit_pop_float_reg(emitter, "xmm1");               // pop the saved left float operand from the temporary comparison stack
                         emitter.instruction("ucomisd xmm1, xmm0");              // compare the two doubles in the native x86_64 floating-point registers
-                        emitter.instruction(&format!("set{} al", if is_eq { "e" } else { "ne" })); // materialize the floating-point strict-comparison result in the low result byte on x86_64
+                        emitter.instruction(&format!("set{} al", if is_eq { "e" } else { "ne" })); //materialize the floating-point strict-comparison result in the low result byte on x86_64
                         emitter.instruction("movzx rax, al");                   // widen the x86_64 comparison byte back into the full integer result register
                     }
                 }
@@ -333,13 +333,13 @@ pub(in crate::codegen::expr) fn emit_strict_compare(
             | PhpType::Pointer(_) => {
                 let left_reg = abi::symbol_scratch_reg(emitter);
                 abi::emit_pop_reg(emitter, left_reg);                           // pop the saved left array/callable/object/iterable pointer from the temporary comparison stack
-                emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); // compare the two pointers for reference equality
+                emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); //compare the two pointers for reference equality
                 match emitter.target.arch {
                     crate::codegen::platform::Arch::AArch64 => {
-                        emitter.instruction(&format!("cset x0, {}", if is_eq { "eq" } else { "ne" })); // materialize the pointer strict-comparison result on AArch64
+                        emitter.instruction(&format!("cset x0, {}", if is_eq { "eq" } else { "ne" })); //materialize the pointer strict-comparison result on AArch64
                     }
                     crate::codegen::platform::Arch::X86_64 => {
-                        emitter.instruction(&format!("set{} al", if is_eq { "e" } else { "ne" })); // materialize the pointer strict-comparison result in the low result byte on x86_64
+                        emitter.instruction(&format!("set{} al", if is_eq { "e" } else { "ne" })); //materialize the pointer strict-comparison result in the low result byte on x86_64
                         emitter.instruction("movzx rax, al");                   // widen the x86_64 comparison byte back into the full integer result register
                     }
                 }

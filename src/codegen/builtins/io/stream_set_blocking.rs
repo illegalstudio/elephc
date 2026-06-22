@@ -58,7 +58,7 @@ pub fn emit(
             emitter.instruction(&format!("b {}", after));                       // skip the wrapper path
             emitter.label(&wrapper);
             emitter.instruction("mov x2, x1");                                  // arg1 = blocking flag
-            emitter.instruction(&format!("mov x1, #{}", STREAM_OPTION_BLOCKING)); // option = STREAM_OPTION_BLOCKING
+            emitter.instruction(&format!("mov x1, #{}", STREAM_OPTION_BLOCKING)); //option = STREAM_OPTION_BLOCKING
             emitter.instruction("mov x3, #0");                                  // arg2 = 0 (unused for blocking)
             abi::emit_call_label(emitter, "__rt_user_wrapper_set_option");     // call the wrapper's stream_set_option($option, $arg1, $arg2)
             emitter.label(&after);
@@ -73,7 +73,7 @@ pub fn emit(
             emitter.instruction(&format!("jmp {}", after));                     // skip the wrapper path
             emitter.label(&wrapper);
             emitter.instruction("mov rdx, rsi");                                // arg1 = blocking flag
-            emitter.instruction(&format!("mov rsi, {}", STREAM_OPTION_BLOCKING)); // option = STREAM_OPTION_BLOCKING
+            emitter.instruction(&format!("mov rsi, {}", STREAM_OPTION_BLOCKING)); //option = STREAM_OPTION_BLOCKING
             emitter.instruction("xor ecx, ecx");                                // arg2 = 0 (unused for blocking)
             abi::emit_call_label(emitter, "__rt_user_wrapper_set_option");     // call the wrapper's stream_set_option($option, $arg1, $arg2)
             emitter.label(&after);

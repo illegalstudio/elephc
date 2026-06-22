@@ -441,10 +441,10 @@ fn box_json_encode_result(ctx: &mut FunctionContext<'_>) {
         }
         Arch::X86_64 => {
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-            ctx.emitter.instruction("mov r10, QWORD PTR [rip + _json_last_error]"); // load the current JSON error code
+            ctx.emitter.instruction("mov r10, QWORD PTR [rip + _json_last_error]"); //load the current JSON error code
             ctx.emitter.instruction("test r10, r10");                           // check whether the encoder reported an error
             ctx.emitter.instruction(&format!("jz {}", string_label));           // no JSON error means the string result is valid
-            ctx.emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]"); // load the active JSON flag bitmask
+            ctx.emitter.instruction("mov r10, QWORD PTR [rip + _json_active_flags]"); //load the active JSON flag bitmask
             ctx.emitter.instruction("test r10, 512");                           // JSON_PARTIAL_OUTPUT_ON_ERROR keeps the partial string result
             ctx.emitter.instruction(&format!("jnz {}", string_label));          // partial-output flag means return the encoded string
             abi::emit_pop_reg_pair(ctx.emitter, "r10", "r11");

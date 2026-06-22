@@ -36,7 +36,7 @@ pub(super) fn emit_load_int_source(emitter: &mut Emitter, dest_reg: &str, src: &
             emitter.instruction(&format!("mov {}, #{}", dest_reg, n));          // load the literal int into the destination register
         }
         IntSource::Slot(idx) => {
-            emitter.instruction(&format!("ldr {}, [x19, #{}]", dest_reg, slot_offset(*idx))); // load the int slot from the generator frame
+            emitter.instruction(&format!("ldr {}, [x19, #{}]", dest_reg, slot_offset(*idx))); //load the int slot from the generator frame
         }
         IntSource::BinaryOp(left, op, right) => {
             emit_load_int_source(emitter, dest_reg, left);
@@ -52,7 +52,7 @@ pub(super) fn emit_load_int_source(emitter: &mut Emitter, dest_reg: &str, src: &
                 IntBinOp::Mul => "mul",
                 IntBinOp::Div => "sdiv",
             };
-            emitter.instruction(&format!("{} {}, {}, {}", mnem, dest_reg, dest_reg, right_reg)); // combine left and right with the chosen op
+            emitter.instruction(&format!("{} {}, {}, {}", mnem, dest_reg, dest_reg, right_reg)); //combine left and right with the chosen op
         }
         IntSource::Call { fn_name, args } => {
             emit_int_function_call(emitter, fn_name, args);
@@ -72,7 +72,7 @@ fn emit_load_int_source_x86_64(emitter: &mut Emitter, dest_reg: &str, src: &IntS
             emitter.instruction(&format!("mov {}, {}", dest_reg, n));           // load the literal int into the destination register
         }
         IntSource::Slot(idx) => {
-            emitter.instruction(&format!("mov {}, QWORD PTR [r12 + {}]", dest_reg, slot_offset(*idx))); // load the int slot from the generator frame
+            emitter.instruction(&format!("mov {}, QWORD PTR [r12 + {}]", dest_reg, slot_offset(*idx))); //load the int slot from the generator frame
         }
         IntSource::BinaryOp(left, op, right) => {
             if matches!(op, IntBinOp::Div) {
@@ -98,13 +98,13 @@ fn emit_load_int_source_x86_64(emitter: &mut Emitter, dest_reg: &str, src: &IntS
             emitter.instruction("add rsp, 16");                                 // release the temporary operand storage
             match op {
                 IntBinOp::Add => {
-                    emitter.instruction(&format!("add {}, {}", dest_reg, right_reg)); // add the right operand into the left value
+                    emitter.instruction(&format!("add {}, {}", dest_reg, right_reg)); //add the right operand into the left value
                 }
                 IntBinOp::Sub => {
-                    emitter.instruction(&format!("sub {}, {}", dest_reg, right_reg)); // subtract the right operand from the left value
+                    emitter.instruction(&format!("sub {}, {}", dest_reg, right_reg)); //subtract the right operand from the left value
                 }
                 IntBinOp::Mul => {
-                    emitter.instruction(&format!("imul {}, {}", dest_reg, right_reg)); // multiply the left value by the right operand
+                    emitter.instruction(&format!("imul {}, {}", dest_reg, right_reg)); //multiply the left value by the right operand
                 }
                 IntBinOp::Div => unreachable!(),
             }
@@ -164,19 +164,19 @@ fn emit_int_function_call_x86_64(emitter: &mut Emitter, fn_name: &str, args: &[I
         emitter.instruction(&format!("sub rsp, {}", stash_bytes));              // reserve a 16-byte aligned slab for evaluated arguments
         for (i, arg) in args.iter().enumerate() {
             emit_load_int_source_x86_64(emitter, "r10", arg);
-            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", i * 8)); // park argument i in its stash slot
+            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", i * 8)); //park argument i in its stash slot
         }
         if overflow_bytes > 0 {
             emitter.instruction(&format!("sub rsp, {}", overflow_bytes));       // reserve aligned outgoing stack slots for overflow arguments
             for i in 0..overflow_count {
                 let src_off = overflow_bytes + (regs.len() + i) * 8;
-                emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", src_off)); // reload overflow argument from the evaluation stash
-                emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", i * 8)); // place overflow argument in its outgoing stack slot
+                emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", src_off)); //reload overflow argument from the evaluation stash
+                emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", i * 8)); //place overflow argument in its outgoing stack slot
             }
         }
         for (i, reg) in regs.iter().take(reg_count).enumerate() {
             let src_off = overflow_bytes + i * 8;
-            emitter.instruction(&format!("mov {}, QWORD PTR [rsp + {}]", reg, src_off)); // load argument i into its ABI register
+            emitter.instruction(&format!("mov {}, QWORD PTR [rsp + {}]", reg, src_off)); //load argument i into its ABI register
         }
     }
     let label = crate::names::function_symbol(fn_name);
@@ -225,7 +225,7 @@ pub(super) fn emit_box_mixed_source(emitter: &mut Emitter, src: &MixedSource) {
             // The slot already holds a boxed Mixed pointer; we share it
             // with the destination by incref'ing — the slot keeps its
             // own reference and the new owner gets one too.
-            emitter.instruction(&format!("ldr x0, [x19, #{}]", slot_offset(*idx))); // load the boxed Mixed pointer from the slot
+            emitter.instruction(&format!("ldr x0, [x19, #{}]", slot_offset(*idx))); //load the boxed Mixed pointer from the slot
             emitter.instruction("bl __rt_incref");                              // retain a refcount for the new owner
         }
     }
@@ -257,7 +257,7 @@ fn emit_box_mixed_source_x86_64(emitter: &mut Emitter, src: &MixedSource) {
             emit_box_int_array_literal(emitter, values);
         }
         MixedSource::MixedSlot(idx) => {
-            emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", slot_offset(*idx))); // load the boxed Mixed pointer from the slot
+            emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", slot_offset(*idx))); //load the boxed Mixed pointer from the slot
             emitter.instruction("call __rt_incref");                            // retain a refcount for the new owner
         }
     }
@@ -304,7 +304,7 @@ fn emit_box_int_array_literal_x86_64(emitter: &mut Emitter, values: &[i64]) {
     let payload_bytes = 24 + n * 8;
     emitter.instruction(&format!("mov rax, {}", payload_bytes));                // request bytes for the array header plus slots
     emitter.instruction("call __rt_heap_alloc");                                // rax = pointer to array body
-    emitter.instruction(&format!("mov r10, 0x{:x}", (super::X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // heap kind 1 = indexed-int array with x86 heap marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", (super::X86_64_HEAP_MAGIC_HI32 << 32) | 1)); //heap kind 1 = indexed-int array with x86 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap header kind
     emitter.instruction(&format!("mov QWORD PTR [rax], {}", n));                // store array length at +0
     emitter.instruction(&format!("mov QWORD PTR [rax + 8], {}", n));            // store array capacity at +8
@@ -331,17 +331,17 @@ pub(super) fn emit_compute_key(emitter: &mut Emitter, key: Option<&MixedSource>)
             // Auto-key: load + increment the counter, then box the read value.
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction(&format!("ldr x1, [x19, #{}]", gen_frame::OFF_AUTO_KEY_COUNTER)); // x1 = current auto-key
+                    emitter.instruction(&format!("ldr x1, [x19, #{}]", gen_frame::OFF_AUTO_KEY_COUNTER)); //x1 = current auto-key
                     emitter.instruction("add x9, x1, #1");                      // x9 = next auto-key
-                    emitter.instruction(&format!("str x9, [x19, #{}]", gen_frame::OFF_AUTO_KEY_COUNTER)); // store the incremented counter
+                    emitter.instruction(&format!("str x9, [x19, #{}]", gen_frame::OFF_AUTO_KEY_COUNTER)); //store the incremented counter
                     emitter.instruction("mov x2, xzr");                         // x2 = unused hi for an int
                     emitter.instruction("mov x0, #0");                          // x0 = int tag
                     emitter.instruction("bl __rt_mixed_from_value");            // x0 = boxed auto-key Mixed pointer
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("mov rdi, QWORD PTR [r12 + {}]", gen_frame::OFF_AUTO_KEY_COUNTER)); // rdi = current auto-key
+                    emitter.instruction(&format!("mov rdi, QWORD PTR [r12 + {}]", gen_frame::OFF_AUTO_KEY_COUNTER)); //rdi = current auto-key
                     emitter.instruction("lea r10, [rdi + 1]");                  // r10 = next auto-key
-                    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", gen_frame::OFF_AUTO_KEY_COUNTER)); // store the incremented counter
+                    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", gen_frame::OFF_AUTO_KEY_COUNTER)); //store the incremented counter
                     emitter.instruction("xor rsi, rsi");                        // rsi = unused hi for an int
                     emitter.instruction("xor rax, rax");                        // rax = int tag
                     emitter.instruction("call __rt_mixed_from_value");          // rax = boxed auto-key Mixed pointer
@@ -370,9 +370,9 @@ pub(super) fn emit_replace_mixed_slot(
         }
         Arch::X86_64 => {
             let old_reg = preserved_scratch_reg(emitter);
-            emitter.instruction(&format!("mov {}, QWORD PTR [r12 + {}]", old_reg, slot_off)); // remember the previous boxed pointer
+            emitter.instruction(&format!("mov {}, QWORD PTR [r12 + {}]", old_reg, slot_off)); //remember the previous boxed pointer
             produce_new(emitter);
-            emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rax", slot_off)); // store the freshly boxed pointer
+            emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rax", slot_off)); //store the freshly boxed pointer
             emitter.instruction(&format!("mov rax, {}", old_reg));              // rax = previous boxed pointer (or NULL)
             emitter.instruction("call __rt_decref_mixed");                      // release the previous boxed pointer (NULL is safe)
         }
@@ -443,12 +443,12 @@ fn emit_branch_if_mixed_slot_null_condition_false(
     let boxed_null = format!("{}_mixed_null", false_label);
     let done = format!("{}_mixed_null_done", false_label);
     if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", slot_offset(slot_idx))); // load the boxed Mixed slot pointer for null comparison
+        emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", slot_offset(slot_idx))); //load the boxed Mixed slot pointer for null comparison
         emitter.instruction("test rax, rax");                                   // null pointer slots are PHP null
         emitter.instruction(&format!("jz {}", boxed_null));                     // skip unboxing when the slot has no box
         emitter.instruction("call __rt_mixed_unbox");                           // rax = Mixed tag for the boxed slot
         emitter.instruction("cmp rax, 8");                                      // tag 8 is PHP null
-        emitter.instruction(&format!("{} {}", if is_equal { "jne" } else { "je" }, false_label)); // branch when the null predicate is false
+        emitter.instruction(&format!("{} {}", if is_equal { "jne" } else { "je" }, false_label)); //branch when the null predicate is false
         emitter.instruction(&format!("jmp {}", done));                          // skip the raw-null branch
         emitter.label(&boxed_null);
         if !is_equal {
@@ -462,7 +462,7 @@ fn emit_branch_if_mixed_slot_null_condition_false(
     emitter.instruction(&format!("cbz x0, {}", boxed_null));                    // null pointer slots are PHP null
     emitter.instruction("bl __rt_mixed_unbox");                                 // x0 = Mixed tag for the boxed slot
     emitter.instruction("cmp x0, #8");                                          // tag 8 is PHP null
-    emitter.instruction(&format!("b.{} {}", if is_equal { "ne" } else { "eq" }, false_label)); // branch when the null predicate is false
+    emitter.instruction(&format!("b.{} {}", if is_equal { "ne" } else { "eq" }, false_label)); //branch when the null predicate is false
     emitter.instruction(&format!("b {}", done));                                // skip the raw-null branch
     emitter.label(&boxed_null);
     if !is_equal {

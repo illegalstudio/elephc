@@ -84,7 +84,7 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     if emitter.platform.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: explicit compare for error branch
     }
-    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_readfile_open_ok")); // platform-aware success branch (Darwin: b.cc / Linux: b.ge)
+    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_readfile_open_ok")); //platform-aware success branch (Darwin: b.cc / Linux: b.ge)
     emitter.instruction("b __rt_readfile_fail");                                // open failed → return failure sentinel
     emitter.label("__rt_readfile_open_ok");
     emitter.instruction(&format!("str x0, [sp, #{}]", fd_off));                 // save fd
@@ -98,7 +98,7 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     if emitter.platform.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: negative read result means failure
     }
-    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_readfile_read_ok")); // continue only when read succeeded
+    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_readfile_read_ok")); //continue only when read succeeded
     emitter.instruction("b __rt_readfile_read_error");                          // read failed → close fd and return -1
     emitter.label("__rt_readfile_read_ok");
     emitter.instruction("cmp x0, #0");                                          // bytes read?
@@ -159,7 +159,7 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     if emitter.platform.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: negative read result means failure
     }
-    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fpassthru_read_ok")); // continue only when read succeeded
+    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fpassthru_read_ok")); //continue only when read succeeded
     emitter.instruction("b __rt_fpassthru_read_error");                         // read failed → return -1
     emitter.label("__rt_fpassthru_read_ok");
     emitter.instruction("cmp x0, #0");                                          // bytes read?

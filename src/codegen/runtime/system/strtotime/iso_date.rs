@@ -241,17 +241,17 @@ fn emit_iso_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rsi, 10");                                         // check for YYYY-MM-DD
     emitter.instruction("je __rt_strtotime_iso_validate_date_linux_x86_64");    // validate date-only shape
     emitter.instruction("cmp rsi, 16");                                         // check for YYYY-MM-DD HH:MM
-    emitter.instruction("je __rt_strtotime_iso_validate_datetime_linux_x86_64"); // validate datetime without seconds
+    emitter.instruction("je __rt_strtotime_iso_validate_datetime_linux_x86_64"); //validate datetime without seconds
     emitter.instruction("cmp rsi, 19");                                         // check for YYYY-MM-DD HH:MM:SS
-    emitter.instruction("je __rt_strtotime_iso_validate_datetime_linux_x86_64"); // validate full datetime shape
+    emitter.instruction("je __rt_strtotime_iso_validate_datetime_linux_x86_64"); //validate full datetime shape
     emitter.instruction("jmp __rt_strtotime_fail_linux_x86_64");                // reject trailing junk or partial times
 
     emitter.label("__rt_strtotime_iso_validate_datetime_linux_x86_64");
     emitter.instruction("movzx eax, BYTE PTR [r8 + 10]");                       // load date/time separator
     emitter.instruction("cmp eax, 32");                                         // accept a space separator
-    emitter.instruction("je __rt_strtotime_iso_datetime_separator_ok_linux_x86_64"); // continue after space separator
+    emitter.instruction("je __rt_strtotime_iso_datetime_separator_ok_linux_x86_64"); //continue after space separator
     emitter.instruction("cmp eax, 84");                                         // accept uppercase ISO T separator
-    emitter.instruction("je __rt_strtotime_iso_datetime_separator_ok_linux_x86_64"); // continue after uppercase T separator
+    emitter.instruction("je __rt_strtotime_iso_datetime_separator_ok_linux_x86_64"); //continue after uppercase T separator
     emitter.instruction("cmp eax, 116");                                        // accept lowercase ISO t separator
     emitter.instruction("jne __rt_strtotime_fail_linux_x86_64");                // reject unsupported date/time separator
     emitter.label("__rt_strtotime_iso_datetime_separator_ok_linux_x86_64");

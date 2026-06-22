@@ -148,7 +148,7 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the high payload word
     emitter.instruction("mov rax, 24");                                         // Mixed cells store tag plus two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate the boxed Mixed cell
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the x86_64 Mixed heap kind word
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); //materialize the x86_64 Mixed heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap allocation as a Mixed cell
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the saved runtime value tag
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the runtime value tag in the Mixed cell

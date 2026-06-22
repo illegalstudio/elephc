@@ -235,7 +235,7 @@ fn emit_symlink_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rax, 4096");                                       // request 4 KiB owned buffer
     emitter.instruction("call __rt_heap_alloc");                                // allocate owned heap storage in rax
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // owned-string heap kind word
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); //owned-string heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // tag the buffer in the uniform heap header
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save buffer pointer
 

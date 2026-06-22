@@ -469,7 +469,7 @@ fn emit_string_parser_aarch64(emitter: &mut Emitter) {
 fn emit_uhex_loop_aarch64(emitter: &mut Emitter, suffix: &str, error_label: &str) {
     emitter.label(&format!("__rt_json_validate_uhex_loop_{suffix}"));
     emitter.instruction("cmp x14, #0");                                         // 4 digits consumed?
-    emitter.instruction(&format!("b.eq __rt_json_validate_uhex_done_{suffix}")); // exit loop with w15 = codepoint
+    emitter.instruction(&format!("b.eq __rt_json_validate_uhex_done_{suffix}")); //exit loop with w15 = codepoint
     emitter.instruction("cmp x12, x10");                                        // bounds check
     emitter.instruction(&format!("b.ge {error_label}"));                        // branch on the current JSON validator condition
     emitter.instruction("ldrb w13, [x11, x12]");                                // load or prepare JSON validator state
@@ -480,7 +480,7 @@ fn emit_uhex_loop_aarch64(emitter: &mut Emitter, suffix: &str, error_label: &str
     emitter.instruction("cmp w13, #65");                                        // 'A'?
     emitter.instruction(&format!("b.lt {error_label}"));                        // branch on the current JSON validator condition
     emitter.instruction("cmp w13, #70");                                        // ..'F'?
-    emitter.instruction(&format!("b.le __rt_json_validate_uhex_upper_{suffix}")); // branch on the current JSON validator condition
+    emitter.instruction(&format!("b.le __rt_json_validate_uhex_upper_{suffix}")); //branch on the current JSON validator condition
     emitter.instruction("cmp w13, #97");                                        // 'a'?
     emitter.instruction(&format!("b.lt {error_label}"));                        // branch on the current JSON validator condition
     emitter.instruction("cmp w13, #102");                                       // ..'f'?

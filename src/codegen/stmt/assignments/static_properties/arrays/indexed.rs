@@ -140,10 +140,10 @@ fn publish_static_array_pointer(
         let class_id_reg = late_bound::class_id_work_reg(emitter);
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("ldr {}, [sp, #{}]", class_id_reg, class_id_stack_offset)); // reload the called class id from the static array temporary stack
+                emitter.instruction(&format!("ldr {}, [sp, #{}]", class_id_reg, class_id_stack_offset)); //reload the called class id from the static array temporary stack
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, QWORD PTR [rsp + {}]", class_id_reg, class_id_stack_offset)); // reload the called class id from the static array temporary stack
+                emitter.instruction(&format!("mov {}, QWORD PTR [rsp + {}]", class_id_reg, class_id_stack_offset)); //reload the called class id from the static array temporary stack
             }
         }
         late_bound::emit_dynamic_store_reg_to_static_property(

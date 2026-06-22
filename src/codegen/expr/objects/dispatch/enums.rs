@@ -148,7 +148,7 @@ fn emit_enum_from_like(
                 let next_label = ctx.next_label("enum_from_next");
                 let case_value_reg = abi::temp_int_reg(emitter.target);
                 load_immediate(emitter, case_value_reg, *value);                // materialize the current enum backing integer for comparison
-                emitter.instruction(&format!("cmp {}, {}", result_reg, case_value_reg)); // compare the input integer with the current enum backing value
+                emitter.instruction(&format!("cmp {}, {}", result_reg, case_value_reg)); //compare the input integer with the current enum backing value
                 match emitter.target.arch {
                     Arch::AArch64 => {
                         emitter.instruction(&format!("b.ne {}", next_label));   // continue scanning when the current enum backing value does not match

@@ -546,7 +546,7 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("b __elephc_eval_value_array_iter_key_assoc_loop");     // continue walking until the requested position is reached
     emitter.label("__elephc_eval_value_array_iter_key_assoc_box");
     emitter.instruction("cmn x2, #1");                                          // integer hash keys carry key_hi = -1
-    emitter.instruction("b.ne __elephc_eval_value_array_iter_key_assoc_string"); // string hash keys need string-tag boxing
+    emitter.instruction("b.ne __elephc_eval_value_array_iter_key_assoc_string"); //string hash keys need string-tag boxing
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer key
     emitter.instruction("mov x2, xzr");                                         // integer keys do not use a high payload word
     emitter.instruction("bl __rt_mixed_from_value");                            // box the associative integer key as Mixed
@@ -604,19 +604,19 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the element count to Rust
 
     label_c_global(emitter, "__elephc_eval_value_object_property_len");
-    emitter.instruction("cbz x0, __elephc_eval_value_object_property_len_zero"); // null handles have no JSON-visible object properties
+    emitter.instruction("cbz x0, __elephc_eval_value_object_property_len_zero"); //null handles have no JSON-visible object properties
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
     emitter.instruction("cmp x9, #6");                                          // tag 6 = object
     emitter.instruction("b.ne __elephc_eval_value_object_property_len_zero");   // non-objects expose no JSON-visible properties here
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
-    emitter.instruction("cbz x9, __elephc_eval_value_object_property_len_zero"); // null object payloads have no visible properties
+    emitter.instruction("cbz x9, __elephc_eval_value_object_property_len_zero"); //null object payloads have no visible properties
     abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
     emitter.instruction("ldr x10, [x10]");                                      // load the compile-time stdClass class id
     emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
     emitter.instruction("cmp x11, x10");                                        // check whether the object is stdClass
     emitter.instruction("b.ne __elephc_eval_value_object_property_len_zero");   // non-stdClass objects expose no bridge-visible properties
     emitter.instruction("ldr x9, [x9, #8]");                                    // load stdClass dynamic-property hash pointer
-    emitter.instruction("cbz x9, __elephc_eval_value_object_property_len_zero"); // null property hashes are treated as empty objects
+    emitter.instruction("cbz x9, __elephc_eval_value_object_property_len_zero"); //null property hashes are treated as empty objects
     emitter.instruction("ldr x0, [x9]");                                        // load the hash entry count
     emitter.instruction("ret");                                                 // return the public property count to Rust
     emitter.label("__elephc_eval_value_object_property_len_zero");
@@ -629,19 +629,19 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // establish a stable property-iterator frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the boxed object receiver while walking properties
     emitter.instruction("str x1, [sp, #8]");                                    // save the requested zero-based property position
-    emitter.instruction("cbz x0, __elephc_eval_value_object_property_iter_key_null"); // null handles produce a null property key
+    emitter.instruction("cbz x0, __elephc_eval_value_object_property_iter_key_null"); //null handles produce a null property key
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
     emitter.instruction("cmp x9, #6");                                          // tag 6 = object
-    emitter.instruction("b.ne __elephc_eval_value_object_property_iter_key_null"); // non-objects have no JSON-visible property key
+    emitter.instruction("b.ne __elephc_eval_value_object_property_iter_key_null"); //non-objects have no JSON-visible property key
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
-    emitter.instruction("cbz x9, __elephc_eval_value_object_property_iter_key_null"); // null object payloads produce a null key
+    emitter.instruction("cbz x9, __elephc_eval_value_object_property_iter_key_null"); //null object payloads produce a null key
     abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
     emitter.instruction("ldr x10, [x10]");                                      // load the compile-time stdClass class id
     emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
     emitter.instruction("cmp x11, x10");                                        // check whether the object is stdClass
-    emitter.instruction("b.ne __elephc_eval_value_object_property_iter_key_null"); // non-stdClass objects have no bridge-visible key
+    emitter.instruction("b.ne __elephc_eval_value_object_property_iter_key_null"); //non-stdClass objects have no bridge-visible key
     emitter.instruction("ldr x9, [x9, #8]");                                    // load stdClass dynamic-property hash pointer
-    emitter.instruction("cbz x9, __elephc_eval_value_object_property_iter_key_null"); // null property hashes produce a null key
+    emitter.instruction("cbz x9, __elephc_eval_value_object_property_iter_key_null"); //null property hashes produce a null key
     emitter.instruction("str x9, [sp, #16]");                                   // save the hash pointer for repeated iterator helper calls
     emitter.instruction("str xzr, [sp, #24]");                                  // start the insertion-order property counter at zero
     emitter.instruction("mov x1, xzr");                                         // cursor 0 starts at the property hash head entry
@@ -649,18 +649,18 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the hash pointer before advancing the iterator
     emitter.instruction("bl __rt_hash_iter_next");                              // fetch the next insertion-order property key
     emitter.instruction("cmn x0, #1");                                          // did the iterator report the done sentinel?
-    emitter.instruction("b.eq __elephc_eval_value_object_property_iter_key_null"); // out-of-range positions produce a null key
+    emitter.instruction("b.eq __elephc_eval_value_object_property_iter_key_null"); //out-of-range positions produce a null key
     emitter.instruction("ldr x10, [sp, #24]");                                  // load the current insertion-order property position
     emitter.instruction("ldr x11, [sp, #8]");                                   // load the requested property position
     emitter.instruction("cmp x10, x11");                                        // is this the requested property entry?
-    emitter.instruction("b.eq __elephc_eval_value_object_property_iter_key_box"); // box the current property key when the position matches
+    emitter.instruction("b.eq __elephc_eval_value_object_property_iter_key_box"); //box the current property key when the position matches
     emitter.instruction("add x10, x10, #1");                                    // advance the insertion-order property counter
     emitter.instruction("str x10, [sp, #24]");                                  // persist the updated property counter
     emitter.instruction("mov x1, x0");                                          // use the returned cursor for the next iterator call
     emitter.instruction("b __elephc_eval_value_object_property_iter_key_loop"); // continue walking until the requested position is reached
     emitter.label("__elephc_eval_value_object_property_iter_key_box");
     emitter.instruction("cmn x2, #1");                                          // integer hash keys carry key_hi = -1
-    emitter.instruction("b.ne __elephc_eval_value_object_property_iter_key_string"); // string property keys need string-tag boxing
+    emitter.instruction("b.ne __elephc_eval_value_object_property_iter_key_string"); //string property keys need string-tag boxing
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer key fallback
     emitter.instruction("mov x2, xzr");                                         // integer keys do not use a high payload word
     emitter.instruction("bl __rt_mixed_from_value");                            // box the integer property key as Mixed
@@ -1337,9 +1337,9 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("b __elephc_eval_mixed_loose_eq_done");                 // return the string/null equality result
     emitter.label("__elephc_eval_mixed_loose_eq_left_string");
     emitter.instruction("cmp x0, #0");                                          // can the right operand be compared numerically as an int?
-    emitter.instruction("b.eq __elephc_eval_mixed_loose_eq_left_string_numeric"); // parse the left string for numeric equality
+    emitter.instruction("b.eq __elephc_eval_mixed_loose_eq_left_string_numeric"); //parse the left string for numeric equality
     emitter.instruction("cmp x0, #2");                                          // can the right operand be compared numerically as a float?
-    emitter.instruction("b.eq __elephc_eval_mixed_loose_eq_left_string_numeric"); // parse the left string for numeric equality
+    emitter.instruction("b.eq __elephc_eval_mixed_loose_eq_left_string_numeric"); //parse the left string for numeric equality
     emitter.instruction("b __elephc_eval_mixed_loose_eq_false");                // non-numeric string mismatches are not loosely equal here
     emitter.label("__elephc_eval_mixed_loose_eq_left_string_numeric");
     emitter.instruction("ldp x1, x2, [sp, #24]");                               // reload the left string pointer and length for numeric parsing
@@ -1354,9 +1354,9 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("b __elephc_eval_mixed_loose_eq_done");                 // return the string/numeric equality result
     emitter.label("__elephc_eval_mixed_loose_eq_right_string");
     emitter.instruction("cmp x9, #0");                                          // can the left operand be compared numerically as an int?
-    emitter.instruction("b.eq __elephc_eval_mixed_loose_eq_right_string_numeric"); // parse the right string for numeric equality
+    emitter.instruction("b.eq __elephc_eval_mixed_loose_eq_right_string_numeric"); //parse the right string for numeric equality
     emitter.instruction("cmp x9, #2");                                          // can the left operand be compared numerically as a float?
-    emitter.instruction("b.eq __elephc_eval_mixed_loose_eq_right_string_numeric"); // parse the right string for numeric equality
+    emitter.instruction("b.eq __elephc_eval_mixed_loose_eq_right_string_numeric"); //parse the right string for numeric equality
     emitter.instruction("b __elephc_eval_mixed_loose_eq_false");                // non-numeric string mismatches are not loosely equal here
     emitter.label("__elephc_eval_mixed_loose_eq_right_string_numeric");
     emitter.instruction("ldp x1, x2, [sp, #48]");                               // reload the right string pointer and length for numeric parsing
@@ -1706,7 +1706,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("test rdi, rdi");                                       // check the unboxed object pointer before reading its header
     emitter.instruction("jz __elephc_eval_value_parent_class_name_empty_x86");  // malformed object payloads have no parent class
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
-    emitter.instruction("jmp __elephc_eval_value_parent_class_name_from_id_x86"); // convert the class id to its parent class name
+    emitter.instruction("jmp __elephc_eval_value_parent_class_name_from_id_x86"); //convert the class id to its parent class name
     emitter.label("__elephc_eval_value_parent_class_name_string_x86");
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the requested class-name length
@@ -2066,20 +2066,20 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the boxed object receiver while walking properties
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested zero-based property position
     emitter.instruction("test rdi, rdi");                                       // null handles produce a null property key
-    emitter.instruction("jz __elephc_eval_value_object_property_iter_key_null"); // branch to boxed null for null runtime cells
+    emitter.instruction("jz __elephc_eval_value_object_property_iter_key_null"); //branch to boxed null for null runtime cells
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed Mixed runtime tag
     emitter.instruction("cmp r10, 6");                                          // tag 6 = object
-    emitter.instruction("jne __elephc_eval_value_object_property_iter_key_null"); // non-objects have no JSON-visible property key
+    emitter.instruction("jne __elephc_eval_value_object_property_iter_key_null"); //non-objects have no JSON-visible property key
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
     emitter.instruction("test r10, r10");                                       // is the object payload null?
-    emitter.instruction("jz __elephc_eval_value_object_property_iter_key_null"); // null object payloads produce a null key
+    emitter.instruction("jz __elephc_eval_value_object_property_iter_key_null"); //null object payloads produce a null key
     abi::emit_load_symbol_to_reg(emitter, "r11", "_stdclass_class_id", 0);
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
     emitter.instruction("cmp rax, r11");                                        // check whether the object is stdClass
-    emitter.instruction("jne __elephc_eval_value_object_property_iter_key_null"); // non-stdClass objects have no bridge-visible key
+    emitter.instruction("jne __elephc_eval_value_object_property_iter_key_null"); //non-stdClass objects have no bridge-visible key
     emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                        // load stdClass dynamic-property hash pointer
     emitter.instruction("test r10, r10");                                       // is the property hash null?
-    emitter.instruction("jz __elephc_eval_value_object_property_iter_key_null"); // null property hashes produce a null key
+    emitter.instruction("jz __elephc_eval_value_object_property_iter_key_null"); //null property hashes produce a null key
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the hash pointer for repeated iterator helper calls
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // start the insertion-order property counter at zero
     emitter.instruction("xor esi, esi");                                        // cursor 0 starts at the property hash head entry
@@ -2087,7 +2087,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the hash pointer before advancing the iterator
     emitter.instruction("call __rt_hash_iter_next");                            // fetch the next insertion-order property key
     emitter.instruction("cmp rax, -1");                                         // did the iterator report the done sentinel?
-    emitter.instruction("je __elephc_eval_value_object_property_iter_key_null"); // out-of-range positions produce a null key
+    emitter.instruction("je __elephc_eval_value_object_property_iter_key_null"); //out-of-range positions produce a null key
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // load the current insertion-order property position
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // load the requested property position
     emitter.instruction("cmp r10, r11");                                        // is this the requested property entry?
@@ -2095,19 +2095,19 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add r10, 1");                                          // advance the insertion-order property counter
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // persist the updated property counter
     emitter.instruction("mov rsi, rax");                                        // use the returned cursor for the next iterator call
-    emitter.instruction("jmp __elephc_eval_value_object_property_iter_key_loop"); // continue walking until the requested position is reached
+    emitter.instruction("jmp __elephc_eval_value_object_property_iter_key_loop"); //continue walking until the requested position is reached
     emitter.label("__elephc_eval_value_object_property_iter_key_box");
     emitter.instruction("cmp rdx, -1");                                         // integer hash keys carry key_hi = -1
-    emitter.instruction("jne __elephc_eval_value_object_property_iter_key_string"); // string property keys need string-tag boxing
+    emitter.instruction("jne __elephc_eval_value_object_property_iter_key_string"); //string property keys need string-tag boxing
     emitter.instruction("mov eax, 0");                                          // runtime tag 0 = integer key fallback
     emitter.instruction("xor esi, esi");                                        // integer keys do not use a high payload word
     emitter.instruction("call __rt_mixed_from_value");                          // box the integer property key as Mixed
-    emitter.instruction("jmp __elephc_eval_value_object_property_iter_key_done"); // return the boxed key to Rust
+    emitter.instruction("jmp __elephc_eval_value_object_property_iter_key_done"); //return the boxed key to Rust
     emitter.label("__elephc_eval_value_object_property_iter_key_string");
     emitter.instruction("mov rsi, rdx");                                        // move the string key length into the boxing high word
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string property key
     emitter.instruction("call __rt_mixed_from_value");                          // persist and box the string property key as Mixed
-    emitter.instruction("jmp __elephc_eval_value_object_property_iter_key_done"); // return the boxed key to Rust
+    emitter.instruction("jmp __elephc_eval_value_object_property_iter_key_done"); //return the boxed key to Rust
     emitter.label("__elephc_eval_value_object_property_iter_key_null");
     emitter.instruction("mov eax, 8");                                          // runtime tag 8 = null
     emitter.instruction("xor edi, edi");                                        // null keys do not use a low payload word
@@ -2848,9 +2848,9 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("jmp __elephc_eval_mixed_loose_eq_done");               // return the string/numeric equality result
     emitter.label("__elephc_eval_mixed_loose_eq_right_string");
     emitter.instruction("cmp r10, 0");                                          // can the left operand be compared numerically as an int?
-    emitter.instruction("je __elephc_eval_mixed_loose_eq_right_string_numeric"); // parse the right string for numeric equality
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_right_string_numeric"); //parse the right string for numeric equality
     emitter.instruction("cmp r10, 2");                                          // can the left operand be compared numerically as a float?
-    emitter.instruction("je __elephc_eval_mixed_loose_eq_right_string_numeric"); // parse the right string for numeric equality
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_right_string_numeric"); //parse the right string for numeric equality
     emitter.instruction("jmp __elephc_eval_mixed_loose_eq_false");              // non-numeric string mismatches are not loosely equal here
     emitter.label("__elephc_eval_mixed_loose_eq_right_string_numeric");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the right string pointer for numeric parsing
@@ -3177,7 +3177,7 @@ fn emit_aarch64_eval_reflection_method_declaring_class(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #24]");                                   // save the requested method-name length
     abi::emit_symbol_address(emitter, "x9", "_eval_reflection_method_count");
     emitter.instruction("ldr x9, [x9]");                                        // load the AOT reflection-method row count
-    emitter.instruction("cbz x9, __elephc_eval_reflection_method_declaring_class_miss"); // an empty table cannot contain the requested method
+    emitter.instruction("cbz x9, __elephc_eval_reflection_method_declaring_class_miss"); //an empty table cannot contain the requested method
     emitter.instruction("str x9, [sp, #32]");                                   // save the table count across string comparisons
     abi::emit_symbol_address(emitter, "x10", "_eval_reflection_methods");
     emitter.instruction("str x10, [sp, #40]");                                  // save the current method metadata row
@@ -3185,12 +3185,12 @@ fn emit_aarch64_eval_reflection_method_declaring_class(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_reflection_method_declaring_class_loop");
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the method metadata row count
     emitter.instruction("cmp x11, x9");                                         // have all method metadata rows been scanned?
-    emitter.instruction("b.ge __elephc_eval_reflection_method_declaring_class_miss"); // no row matched before the end of the table
+    emitter.instruction("b.ge __elephc_eval_reflection_method_declaring_class_miss"); //no row matched before the end of the table
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current method metadata row
     emitter.instruction("ldr x12, [x10, #8]");                                  // load the stored class-name length
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the requested class-name length
     emitter.instruction("cmp x12, x2");                                         // compare stored and requested class-name lengths
-    emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); // length mismatch means the class cannot match
+    emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); //length mismatch means the class cannot match
     emitter.instruction("str x11, [sp, #48]");                                  // save the row index across the class-name compare
     emitter.instruction("ldr x1, [sp, #0]");                                    // pass the requested class-name pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // pass the requested class-name length
@@ -3199,12 +3199,12 @@ fn emit_aarch64_eval_reflection_method_declaring_class(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_strcasecmp");                                  // compare class names with PHP case-insensitive rules
     emitter.instruction("ldr x11, [sp, #48]");                                  // restore the row index after the class-name compare
     emitter.instruction("cmp x0, #0");                                          // did the requested class name match this row?
-    emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); // class mismatch means the row cannot match
+    emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); //class mismatch means the row cannot match
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current row for the method-name compare
     emitter.instruction("ldr x12, [x10, #24]");                                 // load the stored method-name length
     emitter.instruction("ldr x2, [sp, #24]");                                   // reload the requested method-name length
     emitter.instruction("cmp x12, x2");                                         // compare stored and requested method-name lengths
-    emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); // length mismatch means the method cannot match
+    emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); //length mismatch means the method cannot match
     emitter.instruction("str x11, [sp, #48]");                                  // save the row index across the method-name compare
     emitter.instruction("ldr x1, [sp, #16]");                                   // pass the requested method-name pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // pass the requested method-name length
@@ -3213,19 +3213,19 @@ fn emit_aarch64_eval_reflection_method_declaring_class(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_strcasecmp");                                  // compare method names with PHP case-insensitive rules
     emitter.instruction("ldr x11, [sp, #48]");                                  // restore the row index after the method-name compare
     emitter.instruction("cmp x0, #0");                                          // did the requested method name match this row?
-    emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); // method mismatch means scanning must continue
+    emitter.instruction("b.ne __elephc_eval_reflection_method_declaring_class_skip"); //method mismatch means scanning must continue
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the matched method metadata row
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
     emitter.instruction("ldr x1, [x10, #40]");                                  // load the declaring class-name pointer
     emitter.instruction("ldr x2, [x10, #48]");                                  // load the declaring class-name length
     emitter.instruction("bl __rt_mixed_from_value");                            // box the declaring class name for Rust
-    emitter.instruction("b __elephc_eval_reflection_method_declaring_class_done"); // restore the wrapper frame after a match
+    emitter.instruction("b __elephc_eval_reflection_method_declaring_class_done"); //restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_method_declaring_class_skip");
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current method metadata row
     emitter.instruction("add x10, x10, #56");                                   // advance to the next 56-byte method metadata row
     emitter.instruction("str x10, [sp, #40]");                                  // persist the advanced row cursor
     emitter.instruction("add x11, x11, #1");                                    // advance the row index
-    emitter.instruction("b __elephc_eval_reflection_method_declaring_class_loop"); // continue scanning method metadata rows
+    emitter.instruction("b __elephc_eval_reflection_method_declaring_class_loop"); //continue scanning method metadata rows
     emitter.label("__elephc_eval_reflection_method_declaring_class_miss");
     emitter.instruction("mov x0, xzr");                                         // return null when no AOT method metadata matched
     emitter.label("__elephc_eval_reflection_method_declaring_class_done");
@@ -3246,7 +3246,7 @@ fn emit_aarch64_eval_reflection_property_declaring_class(emitter: &mut Emitter) 
     emitter.instruction("str x3, [sp, #24]");                                   // save the requested property-name length
     abi::emit_symbol_address(emitter, "x9", "_eval_reflection_property_count");
     emitter.instruction("ldr x9, [x9]");                                        // load the AOT reflection-property row count
-    emitter.instruction("cbz x9, __elephc_eval_reflection_property_declaring_class_miss"); // an empty table cannot contain the requested property
+    emitter.instruction("cbz x9, __elephc_eval_reflection_property_declaring_class_miss"); //an empty table cannot contain the requested property
     emitter.instruction("str x9, [sp, #32]");                                   // save the table count across string comparisons
     abi::emit_symbol_address(emitter, "x10", "_eval_reflection_properties");
     emitter.instruction("str x10, [sp, #40]");                                  // save the current property metadata row
@@ -3254,12 +3254,12 @@ fn emit_aarch64_eval_reflection_property_declaring_class(emitter: &mut Emitter) 
     emitter.label("__elephc_eval_reflection_property_declaring_class_loop");
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the property metadata row count
     emitter.instruction("cmp x11, x9");                                         // have all property metadata rows been scanned?
-    emitter.instruction("b.ge __elephc_eval_reflection_property_declaring_class_miss"); // no row matched before the end of the table
+    emitter.instruction("b.ge __elephc_eval_reflection_property_declaring_class_miss"); //no row matched before the end of the table
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current property metadata row
     emitter.instruction("ldr x12, [x10, #8]");                                  // load the stored class-name length
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the requested class-name length
     emitter.instruction("cmp x12, x2");                                         // compare stored and requested class-name lengths
-    emitter.instruction("b.ne __elephc_eval_reflection_property_declaring_class_skip"); // length mismatch means the class cannot match
+    emitter.instruction("b.ne __elephc_eval_reflection_property_declaring_class_skip"); //length mismatch means the class cannot match
     emitter.instruction("str x11, [sp, #48]");                                  // save the row index across the class-name compare
     emitter.instruction("ldr x1, [sp, #0]");                                    // pass the requested class-name pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // pass the requested class-name length
@@ -3268,12 +3268,12 @@ fn emit_aarch64_eval_reflection_property_declaring_class(emitter: &mut Emitter) 
     emitter.instruction("bl __rt_strcasecmp");                                  // compare class names with PHP case-insensitive rules
     emitter.instruction("ldr x11, [sp, #48]");                                  // restore the row index after the class-name compare
     emitter.instruction("cmp x0, #0");                                          // did the requested class name match this row?
-    emitter.instruction("b.ne __elephc_eval_reflection_property_declaring_class_skip"); // class mismatch means the row cannot match
+    emitter.instruction("b.ne __elephc_eval_reflection_property_declaring_class_skip"); //class mismatch means the row cannot match
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current row for the property-name compare
     emitter.instruction("ldr x12, [x10, #24]");                                 // load the stored property-name length
     emitter.instruction("ldr x2, [sp, #24]");                                   // reload the requested property-name length
     emitter.instruction("cmp x12, x2");                                         // compare stored and requested property-name lengths
-    emitter.instruction("b.ne __elephc_eval_reflection_property_declaring_class_skip"); // length mismatch means the property cannot match
+    emitter.instruction("b.ne __elephc_eval_reflection_property_declaring_class_skip"); //length mismatch means the property cannot match
     emitter.instruction("str x11, [sp, #48]");                                  // save the row index across the property-name compare
     emitter.instruction("ldr x1, [sp, #16]");                                   // pass the requested property-name pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // pass the requested property-name length
@@ -3282,19 +3282,19 @@ fn emit_aarch64_eval_reflection_property_declaring_class(emitter: &mut Emitter) 
     emitter.instruction("bl __rt_strcasecmp");                                  // compare property names with PHP case-insensitive rules
     emitter.instruction("ldr x11, [sp, #48]");                                  // restore the row index after the property-name compare
     emitter.instruction("cmp x0, #0");                                          // did the requested property name match this row?
-    emitter.instruction("b.ne __elephc_eval_reflection_property_declaring_class_skip"); // property mismatch means scanning must continue
+    emitter.instruction("b.ne __elephc_eval_reflection_property_declaring_class_skip"); //property mismatch means scanning must continue
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the matched property metadata row
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
     emitter.instruction("ldr x1, [x10, #40]");                                  // load the declaring class-name pointer
     emitter.instruction("ldr x2, [x10, #48]");                                  // load the declaring class-name length
     emitter.instruction("bl __rt_mixed_from_value");                            // box the declaring class name for Rust
-    emitter.instruction("b __elephc_eval_reflection_property_declaring_class_done"); // restore the wrapper frame after a match
+    emitter.instruction("b __elephc_eval_reflection_property_declaring_class_done"); //restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_property_declaring_class_skip");
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload the current property metadata row
     emitter.instruction("add x10, x10, #56");                                   // advance to the next 56-byte property metadata row
     emitter.instruction("str x10, [sp, #40]");                                  // persist the advanced row cursor
     emitter.instruction("add x11, x11, #1");                                    // advance the row index
-    emitter.instruction("b __elephc_eval_reflection_property_declaring_class_loop"); // continue scanning property metadata rows
+    emitter.instruction("b __elephc_eval_reflection_property_declaring_class_loop"); //continue scanning property metadata rows
     emitter.label("__elephc_eval_reflection_property_declaring_class_miss");
     emitter.instruction("mov x0, xzr");                                         // return null when no AOT property metadata matched
     emitter.label("__elephc_eval_reflection_property_declaring_class_done");
@@ -3315,7 +3315,7 @@ fn emit_aarch64_eval_reflection_property_flags(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #24]");                                   // save the requested property-name length
     abi::emit_symbol_address(emitter, "x9", "_eval_reflection_property_count");
     emitter.instruction("ldr x9, [x9]");                                        // load the AOT reflection-property row count
-    emitter.instruction("cbz x9, __elephc_eval_reflection_property_flags_miss"); // an empty table cannot contain the requested property
+    emitter.instruction("cbz x9, __elephc_eval_reflection_property_flags_miss"); //an empty table cannot contain the requested property
     emitter.instruction("str x9, [sp, #32]");                                   // save the table count across string comparisons
     abi::emit_symbol_address(emitter, "x10", "_eval_reflection_properties");
     emitter.instruction("str x10, [sp, #40]");                                  // save the current property metadata row
@@ -3565,7 +3565,7 @@ fn emit_x86_64_eval_reflection_method_declaring_class(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r10", "_eval_reflection_method_count");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the AOT reflection-method row count
     emitter.instruction("test r10, r10");                                       // is the method metadata table empty?
-    emitter.instruction("jz __elephc_eval_reflection_method_declaring_class_miss_x86"); // an empty table cannot contain the requested method
+    emitter.instruction("jz __elephc_eval_reflection_method_declaring_class_miss_x86"); //an empty table cannot contain the requested method
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the table count across string comparisons
     abi::emit_symbol_address(emitter, "r11", "_eval_reflection_methods");
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // save the current method metadata row
@@ -3573,11 +3573,11 @@ fn emit_x86_64_eval_reflection_method_declaring_class(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_reflection_method_declaring_class_loop_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the method metadata row count
     emitter.instruction("cmp r11, r10");                                        // have all method metadata rows been scanned?
-    emitter.instruction("jae __elephc_eval_reflection_method_declaring_class_miss_x86"); // no row matched before the end of the table
+    emitter.instruction("jae __elephc_eval_reflection_method_declaring_class_miss_x86"); //no row matched before the end of the table
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current method metadata row
     emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the stored class-name length
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 16]");                       // compare stored and requested class-name lengths
-    emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); // length mismatch means the class cannot match
+    emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); //length mismatch means the class cannot match
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the class-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the requested class-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the requested class-name length
@@ -3585,11 +3585,11 @@ fn emit_x86_64_eval_reflection_method_declaring_class(emitter: &mut Emitter) {
     emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the class-name compare
     emitter.instruction("test rax, rax");                                       // did the requested class name match this row?
-    emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); // class mismatch means the row cannot match
+    emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); //class mismatch means the row cannot match
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current row for the method-name compare
     emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");                       // load the stored method-name length
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 32]");                       // compare stored and requested method-name lengths
-    emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); // length mismatch means the method cannot match
+    emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); //length mismatch means the method cannot match
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the method-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the requested method-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the requested method-name length
@@ -3597,19 +3597,19 @@ fn emit_x86_64_eval_reflection_method_declaring_class(emitter: &mut Emitter) {
     emitter.instruction("call __rt_strcasecmp");                                // compare method names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the method-name compare
     emitter.instruction("test rax, rax");                                       // did the requested method name match this row?
-    emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); // method mismatch means scanning must continue
+    emitter.instruction("jne __elephc_eval_reflection_method_declaring_class_skip_x86"); //method mismatch means scanning must continue
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the matched method metadata row
     emitter.instruction("mov rdi, QWORD PTR [r10 + 40]");                       // load the declaring class-name pointer
     emitter.instruction("mov rsi, QWORD PTR [r10 + 48]");                       // load the declaring class-name length
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
     emitter.instruction("call __rt_mixed_from_value");                          // box the declaring class name for Rust
-    emitter.instruction("jmp __elephc_eval_reflection_method_declaring_class_done_x86"); // restore the wrapper frame after a match
+    emitter.instruction("jmp __elephc_eval_reflection_method_declaring_class_done_x86"); //restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_method_declaring_class_skip_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current method metadata row
     emitter.instruction("add r10, 56");                                         // advance to the next 56-byte method metadata row
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // persist the advanced row cursor
     emitter.instruction("inc r11");                                             // advance the row index
-    emitter.instruction("jmp __elephc_eval_reflection_method_declaring_class_loop_x86"); // continue scanning method metadata rows
+    emitter.instruction("jmp __elephc_eval_reflection_method_declaring_class_loop_x86"); //continue scanning method metadata rows
     emitter.label("__elephc_eval_reflection_method_declaring_class_miss_x86");
     emitter.instruction("xor eax, eax");                                        // return null when no AOT method metadata matched
     emitter.label("__elephc_eval_reflection_method_declaring_class_done_x86");
@@ -3631,7 +3631,7 @@ fn emit_x86_64_eval_reflection_property_declaring_class(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r10", "_eval_reflection_property_count");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the AOT reflection-property row count
     emitter.instruction("test r10, r10");                                       // is the property metadata table empty?
-    emitter.instruction("jz __elephc_eval_reflection_property_declaring_class_miss_x86"); // an empty table cannot contain the requested property
+    emitter.instruction("jz __elephc_eval_reflection_property_declaring_class_miss_x86"); //an empty table cannot contain the requested property
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the table count across string comparisons
     abi::emit_symbol_address(emitter, "r11", "_eval_reflection_properties");
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // save the current property metadata row
@@ -3639,11 +3639,11 @@ fn emit_x86_64_eval_reflection_property_declaring_class(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_reflection_property_declaring_class_loop_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the property metadata row count
     emitter.instruction("cmp r11, r10");                                        // have all property metadata rows been scanned?
-    emitter.instruction("jae __elephc_eval_reflection_property_declaring_class_miss_x86"); // no row matched before the end of the table
+    emitter.instruction("jae __elephc_eval_reflection_property_declaring_class_miss_x86"); //no row matched before the end of the table
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current property metadata row
     emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the stored class-name length
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 16]");                       // compare stored and requested class-name lengths
-    emitter.instruction("jne __elephc_eval_reflection_property_declaring_class_skip_x86"); // length mismatch means the class cannot match
+    emitter.instruction("jne __elephc_eval_reflection_property_declaring_class_skip_x86"); //length mismatch means the class cannot match
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the class-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the requested class-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the requested class-name length
@@ -3651,11 +3651,11 @@ fn emit_x86_64_eval_reflection_property_declaring_class(emitter: &mut Emitter) {
     emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the class-name compare
     emitter.instruction("test rax, rax");                                       // did the requested class name match this row?
-    emitter.instruction("jne __elephc_eval_reflection_property_declaring_class_skip_x86"); // class mismatch means the row cannot match
+    emitter.instruction("jne __elephc_eval_reflection_property_declaring_class_skip_x86"); //class mismatch means the row cannot match
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current row for the property-name compare
     emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");                       // load the stored property-name length
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 32]");                       // compare stored and requested property-name lengths
-    emitter.instruction("jne __elephc_eval_reflection_property_declaring_class_skip_x86"); // length mismatch means the property cannot match
+    emitter.instruction("jne __elephc_eval_reflection_property_declaring_class_skip_x86"); //length mismatch means the property cannot match
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the property-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the requested property-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the requested property-name length
@@ -3663,19 +3663,19 @@ fn emit_x86_64_eval_reflection_property_declaring_class(emitter: &mut Emitter) {
     emitter.instruction("call __rt_strcasecmp");                                // compare property names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the property-name compare
     emitter.instruction("test rax, rax");                                       // did the requested property name match this row?
-    emitter.instruction("jne __elephc_eval_reflection_property_declaring_class_skip_x86"); // property mismatch means scanning must continue
+    emitter.instruction("jne __elephc_eval_reflection_property_declaring_class_skip_x86"); //property mismatch means scanning must continue
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the matched property metadata row
     emitter.instruction("mov rdi, QWORD PTR [r10 + 40]");                       // load the declaring class-name pointer
     emitter.instruction("mov rsi, QWORD PTR [r10 + 48]");                       // load the declaring class-name length
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
     emitter.instruction("call __rt_mixed_from_value");                          // box the declaring class name for Rust
-    emitter.instruction("jmp __elephc_eval_reflection_property_declaring_class_done_x86"); // restore the wrapper frame after a match
+    emitter.instruction("jmp __elephc_eval_reflection_property_declaring_class_done_x86"); //restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_property_declaring_class_skip_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current property metadata row
     emitter.instruction("add r10, 56");                                         // advance to the next 56-byte property metadata row
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // persist the advanced row cursor
     emitter.instruction("inc r11");                                             // advance the row index
-    emitter.instruction("jmp __elephc_eval_reflection_property_declaring_class_loop_x86"); // continue scanning property metadata rows
+    emitter.instruction("jmp __elephc_eval_reflection_property_declaring_class_loop_x86"); //continue scanning property metadata rows
     emitter.label("__elephc_eval_reflection_property_declaring_class_miss_x86");
     emitter.instruction("xor eax, eax");                                        // return null when no AOT property metadata matched
     emitter.label("__elephc_eval_reflection_property_declaring_class_done_x86");
@@ -3705,11 +3705,11 @@ fn emit_x86_64_eval_reflection_property_flags(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_reflection_property_flags_loop_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the property metadata row count
     emitter.instruction("cmp r11, r10");                                        // have all property metadata rows been scanned?
-    emitter.instruction("jae __elephc_eval_reflection_property_flags_miss_x86"); // no row matched before the end of the table
+    emitter.instruction("jae __elephc_eval_reflection_property_flags_miss_x86"); //no row matched before the end of the table
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current property metadata row
     emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load the stored class-name length
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 16]");                       // compare stored and requested class-name lengths
-    emitter.instruction("jne __elephc_eval_reflection_property_flags_skip_x86"); // length mismatch means the class cannot match
+    emitter.instruction("jne __elephc_eval_reflection_property_flags_skip_x86"); //length mismatch means the class cannot match
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the class-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the requested class-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass the requested class-name length
@@ -3717,11 +3717,11 @@ fn emit_x86_64_eval_reflection_property_flags(emitter: &mut Emitter) {
     emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // restore the row index after the class-name compare
     emitter.instruction("test rax, rax");                                       // did the requested class name match this row?
-    emitter.instruction("jne __elephc_eval_reflection_property_flags_skip_x86"); // class mismatch means the row cannot match
+    emitter.instruction("jne __elephc_eval_reflection_property_flags_skip_x86"); //class mismatch means the row cannot match
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current row for the property-name compare
     emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");                       // load the stored property-name length
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 32]");                       // compare stored and requested property-name lengths
-    emitter.instruction("jne __elephc_eval_reflection_property_flags_skip_x86"); // length mismatch means the property cannot match
+    emitter.instruction("jne __elephc_eval_reflection_property_flags_skip_x86"); //length mismatch means the property cannot match
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // save the row index across the property-name compare
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the requested property-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the requested property-name length
@@ -3732,13 +3732,13 @@ fn emit_x86_64_eval_reflection_property_flags(emitter: &mut Emitter) {
     emitter.instruction("jz __elephc_eval_reflection_property_flags_skip_x86"); // property mismatch means scanning must continue
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the matched property metadata row
     emitter.instruction("mov rax, QWORD PTR [r10 + 32]");                       // return the row's ReflectionProperty predicate flags
-    emitter.instruction("jmp __elephc_eval_reflection_property_flags_done_x86"); // restore the wrapper frame after a match
+    emitter.instruction("jmp __elephc_eval_reflection_property_flags_done_x86"); //restore the wrapper frame after a match
     emitter.label("__elephc_eval_reflection_property_flags_skip_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current property metadata row
     emitter.instruction("add r10, 56");                                         // advance to the next 56-byte property metadata row
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // persist the advanced row cursor
     emitter.instruction("inc r11");                                             // advance the row index
-    emitter.instruction("jmp __elephc_eval_reflection_property_flags_loop_x86"); // continue scanning property metadata rows
+    emitter.instruction("jmp __elephc_eval_reflection_property_flags_loop_x86"); //continue scanning property metadata rows
     emitter.label("__elephc_eval_reflection_property_flags_miss_x86");
     emitter.instruction("xor eax, eax");                                        // return zero when no AOT property metadata matched
     emitter.label("__elephc_eval_reflection_property_flags_done_x86");
@@ -3864,12 +3864,12 @@ fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #80");                                     // reserve source, clone, descriptor, counters, and wrapper frame slots
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address across clone helper calls
     emitter.instruction("add x29, sp, #64");                                    // establish a stable clone wrapper frame pointer
-    emitter.instruction("cbz x0, __elephc_eval_value_object_clone_shallow_null"); // null handles cannot be cloned as objects
+    emitter.instruction("cbz x0, __elephc_eval_value_object_clone_shallow_null"); //null handles cannot be cloned as objects
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed Mixed runtime tag
     emitter.instruction("cmp x9, #6");                                          // tag 6 = object
     emitter.instruction("b.ne __elephc_eval_value_object_clone_shallow_null");  // non-object values cannot be cloned by this bridge
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
-    emitter.instruction("cbz x9, __elephc_eval_value_object_clone_shallow_null"); // malformed object payloads cannot be cloned
+    emitter.instruction("cbz x9, __elephc_eval_value_object_clone_shallow_null"); //malformed object payloads cannot be cloned
     emitter.instruction("str x9, [sp, #0]");                                    // save the source object payload pointer
     emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
     emitter.instruction("str x11, [sp, #56]");                                  // save class id across allocation and ownership calls
@@ -3915,15 +3915,15 @@ fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload the property-tag descriptor pointer
     emitter.instruction("ldrb w14, [x11, x12]");                                // load the compile-time ownership tag for this slot
     emitter.instruction("cmp x14, #1");                                         // does the slot hold an owned string payload?
-    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_string"); // string slots need an independent payload copy
+    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_string"); //string slots need an independent payload copy
     emitter.instruction("cmp x14, #4");                                         // does the slot hold a retained indexed-array payload?
-    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); // retained array slots need an extra owner reference
+    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); //retained array slots need an extra owner reference
     emitter.instruction("cmp x14, #5");                                         // does the slot hold a retained associative-array payload?
-    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); // retained hash slots need an extra owner reference
+    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); //retained hash slots need an extra owner reference
     emitter.instruction("cmp x14, #6");                                         // does the slot hold a retained object payload?
-    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); // retained object slots need an extra owner reference
+    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); //retained object slots need an extra owner reference
     emitter.instruction("cmp x14, #7");                                         // does the slot hold a retained boxed Mixed payload?
-    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); // retained Mixed slots need an extra owner reference
+    emitter.instruction("b.eq __elephc_eval_value_object_clone_shallow_retain"); //retained Mixed slots need an extra owner reference
     emitter.instruction("b __elephc_eval_value_object_clone_shallow_next");     // scalar slots are copied without ownership changes
 
     emitter.label("__elephc_eval_value_object_clone_shallow_string");
@@ -3950,7 +3950,7 @@ fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_value_object_clone_shallow_next");
     emitter.instruction("add x12, x12, #1");                                    // advance to the next declared-property slot
     emitter.instruction("str x12, [sp, #32]");                                  // save the advanced property-copy index
-    emitter.instruction("b __elephc_eval_value_object_clone_shallow_prop_loop"); // continue copying declared properties
+    emitter.instruction("b __elephc_eval_value_object_clone_shallow_prop_loop"); //continue copying declared properties
 
     emitter.label("__elephc_eval_value_object_clone_shallow_dyn");
     emitter.instruction("ldr x12, [sp, #48]");                                  // reload clone payload size for dynamic-property detection
@@ -3963,7 +3963,7 @@ fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source object pointer
     emitter.instruction("ldr x10, [x9, x13]");                                  // load the source dynamic-property hash pointer
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the clone object pointer
-    emitter.instruction("cbz x10, __elephc_eval_value_object_clone_shallow_dyn_null"); // null source hash stays null on the clone
+    emitter.instruction("cbz x10, __elephc_eval_value_object_clone_shallow_dyn_null"); //null source hash stays null on the clone
     emitter.instruction("mov x0, x10");                                         // pass the source dynamic hash to the clone helper
     emitter.instruction("bl __rt_hash_clone_shallow");                          // clone dynamic properties and retain nested values
     emitter.instruction("ldr x13, [sp, #40]");                                  // restore the dynamic-property slot offset
@@ -3996,20 +3996,20 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable clone wrapper frame pointer
     emitter.instruction("sub rsp, 64");                                         // reserve source, clone, descriptor, counters, and payload slots
     emitter.instruction("test rdi, rdi");                                       // null handles cannot be cloned as objects
-    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_null_x86"); // branch to the null sentinel for null handles
+    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_null_x86"); //branch to the null sentinel for null handles
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed Mixed runtime tag
     emitter.instruction("cmp r10, 6");                                          // tag 6 = object
-    emitter.instruction("jne __elephc_eval_value_object_clone_shallow_null_x86"); // non-object values cannot be cloned by this bridge
+    emitter.instruction("jne __elephc_eval_value_object_clone_shallow_null_x86"); //non-object values cannot be cloned by this bridge
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
     emitter.instruction("test r10, r10");                                       // malformed object payloads cannot be cloned
-    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_null_x86"); // branch to the null sentinel for missing payloads
+    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_null_x86"); //branch to the null sentinel for missing payloads
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the source object payload pointer
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save class id across allocation and ownership calls
     emit_x86_64_reject_runtime_managed_clone_classes(emitter, "rax", "__elephc_eval_value_object_clone_shallow_null_x86");
     abi::emit_load_symbol_to_reg(emitter, "r11", "_class_gc_desc_count", 0);
     emitter.instruction("cmp rax, r11");                                        // is this class id inside the descriptor table?
-    emitter.instruction("jae __elephc_eval_value_object_clone_shallow_null_x86"); // unknown class layouts cannot be cloned by the eval bridge
+    emitter.instruction("jae __elephc_eval_value_object_clone_shallow_null_x86"); //unknown class layouts cannot be cloned by the eval bridge
     abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_ptrs");
     emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load the class property-tag descriptor pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save descriptor pointer for the property-copy loop
@@ -4017,7 +4017,7 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save payload size for allocation and dyn-prop detection
     emitter.instruction("mov rax, rcx");                                        // pass the source payload size to the heap allocator
     emitter.instruction("call __rt_heap_alloc");                                // allocate a clone object payload with the same byte size
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the x86_64 object heap kind word
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); //materialize the x86_64 object heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform object heap header
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the source class id
     emitter.instruction("mov QWORD PTR [rax], rcx");                            // store the class id at the clone payload head
@@ -4031,7 +4031,7 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_value_object_clone_shallow_prop_loop_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current property index
     emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // has every declared property slot been copied?
-    emitter.instruction("jae __elephc_eval_value_object_clone_shallow_dyn_x86"); // move on to the optional dynamic-property hash
+    emitter.instruction("jae __elephc_eval_value_object_clone_shallow_dyn_x86"); //move on to the optional dynamic-property hash
     emitter.instruction("mov rcx, r10");                                        // copy property index before scaling it into a byte offset
     emitter.instruction("shl rcx, 4");                                          // each declared-property slot is two 8-byte words
     emitter.instruction("add rcx, 8");                                          // skip the leading class id to reach this slot
@@ -4044,16 +4044,16 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the property-tag descriptor pointer
     emitter.instruction("movzx r11, BYTE PTR [r9 + r10]");                      // load the compile-time ownership tag for this slot
     emitter.instruction("cmp r11, 1");                                          // does the slot hold an owned string payload?
-    emitter.instruction("je __elephc_eval_value_object_clone_shallow_string_x86"); // string slots need an independent payload copy
+    emitter.instruction("je __elephc_eval_value_object_clone_shallow_string_x86"); //string slots need an independent payload copy
     emitter.instruction("cmp r11, 4");                                          // does the slot hold a retained indexed-array payload?
-    emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); // retained array slots need an extra owner reference
+    emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); //retained array slots need an extra owner reference
     emitter.instruction("cmp r11, 5");                                          // does the slot hold a retained associative-array payload?
-    emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); // retained hash slots need an extra owner reference
+    emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); //retained hash slots need an extra owner reference
     emitter.instruction("cmp r11, 6");                                          // does the slot hold a retained object payload?
-    emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); // retained object slots need an extra owner reference
+    emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); //retained object slots need an extra owner reference
     emitter.instruction("cmp r11, 7");                                          // does the slot hold a retained boxed Mixed payload?
-    emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); // retained Mixed slots need an extra owner reference
-    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_next_x86"); // scalar slots are copied without ownership changes
+    emitter.instruction("je __elephc_eval_value_object_clone_shallow_retain_x86"); //retained Mixed slots need an extra owner reference
+    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_next_x86"); //scalar slots are copied without ownership changes
 
     emitter.label("__elephc_eval_value_object_clone_shallow_string_x86");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve property index across string persistence
@@ -4063,7 +4063,7 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the clone object pointer after persistence
     emitter.instruction("mov QWORD PTR [r8 + rcx], rax");                       // install the persisted string pointer on the clone
     emitter.instruction("mov QWORD PTR [r8 + rcx + 8], rdx");                   // install the persisted string length on the clone
-    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_next_x86"); // continue with the next declared property
+    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_next_x86"); //continue with the next declared property
 
     emitter.label("__elephc_eval_value_object_clone_shallow_retain_x86");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve property index across the retain helper
@@ -4072,7 +4072,7 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
 
     emitter.label("__elephc_eval_value_object_clone_shallow_next_x86");
     emitter.instruction("add QWORD PTR [rbp - 40], 1");                         // advance to the next declared-property slot
-    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_prop_loop_x86"); // continue copying declared properties
+    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_prop_loop_x86"); //continue copying declared properties
 
     emitter.label("__elephc_eval_value_object_clone_shallow_dyn_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload clone payload size for dynamic-property detection
@@ -4080,20 +4080,20 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("sub r11, 8");                                          // isolate bytes after the leading class id field
     emitter.instruction("and r11, 15");                                         // check whether an 8-byte dynamic-property tail exists
     emitter.instruction("cmp r11, 8");                                          // remainder 8 means the layout has a dyn-props hash slot
-    emitter.instruction("jne __elephc_eval_value_object_clone_shallow_box_x86"); // no dynamic hash slot: box the copied clone
+    emitter.instruction("jne __elephc_eval_value_object_clone_shallow_box_x86"); //no dynamic hash slot: box the copied clone
     emitter.instruction("sub r10, 8");                                          // compute dyn-props slot offset as payload_size - 8
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save dyn-props slot offset across hash cloning
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the source object pointer
     emitter.instruction("mov rax, QWORD PTR [r11 + r10]");                      // load the source dynamic-property hash pointer
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the clone object pointer
     emitter.instruction("test rax, rax");                                       // is the source dynamic-property hash present?
-    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_dyn_null_x86"); // null source hash stays null on the clone
+    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_dyn_null_x86"); //null source hash stays null on the clone
     emitter.instruction("mov rdi, rax");                                        // pass the source dynamic hash to the clone helper
     emitter.instruction("call __rt_hash_clone_shallow");                        // clone dynamic properties and retain nested values
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // restore the dynamic-property slot offset
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the clone object pointer after hash cloning
     emitter.instruction("mov QWORD PTR [r11 + r10], rax");                      // install the cloned dynamic-property hash
-    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_box_x86"); // box the clone after dynamic properties are installed
+    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_box_x86"); //box the clone after dynamic properties are installed
 
     emitter.label("__elephc_eval_value_object_clone_shallow_dyn_null_x86");
     emitter.instruction("mov QWORD PTR [r11 + r10], 0");                        // clear the clone's dynamic-property hash slot
@@ -4103,7 +4103,7 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
     emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
     emitter.instruction("call __rt_mixed_from_value");                          // box the cloned object for Rust
-    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_done_x86"); // skip the null sentinel after a successful clone
+    emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_done_x86"); //skip the null sentinel after a successful clone
 
     emitter.label("__elephc_eval_value_object_clone_shallow_null_x86");
     emitter.instruction("xor eax, eax");                                        // return a null C pointer for unsupported clone inputs

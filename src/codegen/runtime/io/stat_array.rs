@@ -237,10 +237,10 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
         emitter.instruction("mov rdi, 32");                                     // first hash_new argument: capacity
         emitter.instruction("mov rsi, 0");                                      // second hash_new argument: value type = Int
         emitter.instruction("call __rt_hash_new");                              // returns hash pointer in rax
-        emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", hash_slot_neg)); // save hash pointer
+        emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", hash_slot_neg)); //save hash pointer
         for (idx, key_sym, key_len, load_instr) in entries {
             // numeric key
-            emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", hash_slot_neg)); // hash pointer
+            emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", hash_slot_neg)); //hash pointer
             emitter.instruction(&format!("mov rsi, {}", idx));                  // key_lo = numeric key
             emitter.instruction("mov rdx, -1");                                 // key_hi = -1 (integer marker)
             emitter.instruction(load_instr);                                    // load value into rax
@@ -248,10 +248,10 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
             emitter.instruction("mov r8, 0");                                   // value_hi
             emitter.instruction("mov r9, 0");                                   // value tag = Int
             emitter.instruction("call __rt_hash_set");                          // insert
-            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", hash_slot_neg)); // persist hash
+            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", hash_slot_neg)); //persist hash
 
             // string key
-            emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", hash_slot_neg)); // hash pointer
+            emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", hash_slot_neg)); //hash pointer
             abi::emit_symbol_address(emitter, "rsi", key_sym);                  // key pointer
             emitter.instruction(&format!("mov rdx, {}", key_len));              // key length
             emitter.instruction(load_instr);                                    // reload value
@@ -259,9 +259,9 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
             emitter.instruction("mov r8, 0");                                   // value_hi
             emitter.instruction("mov r9, 0");                                   // value tag = Int
             emitter.instruction("call __rt_hash_set");                          // insert
-            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", hash_slot_neg)); // persist hash
+            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", hash_slot_neg)); //persist hash
         }
-        emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", hash_slot_neg)); // result in rax
+        emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", hash_slot_neg)); //result in rax
     };
 
     // -- stat --

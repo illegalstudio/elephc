@@ -314,7 +314,7 @@ fn emit_offsets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx eax, BYTE PTR [rdi + 1]");                       // load byte after "a"
     emitter.instruction("or al, 32");                                           // lowercase ASCII
     emitter.instruction("cmp al, 110");                                         // 'n' ?
-    emitter.instruction("je __rt_strtotime_offsets_article_an_check_linux_x86_64"); // maybe "an"
+    emitter.instruction("je __rt_strtotime_offsets_article_an_check_linux_x86_64"); //maybe "an"
     emitter.instruction("mov ecx, eax");                                        // copy byte for boundary check
     emitter.instruction("sub ecx, 97");                                         // normalize byte after "a"
     emitter.instruction("cmp ecx, 25");                                         // alpha immediately after "a" ?
@@ -374,13 +374,13 @@ fn emit_offsets_linux_x86_64(emitter: &mut Emitter) {
 
     // adjust kind: week (4) → mday (3) with × 7; kinds 5,6 → 4,5
     emitter.instruction("cmp rdx, 4");                                          // week ?
-    emitter.instruction("jne __rt_strtotime_offsets_kind_post_week_linux_x86_64"); // non-week unit → remap higher kinds
+    emitter.instruction("jne __rt_strtotime_offsets_kind_post_week_linux_x86_64"); //non-week unit → remap higher kinds
     emitter.instruction("imul rcx, rcx, 7");                                    // signed_value *= 7
     emitter.instruction("mov rdx, 3");                                          // adjusted kind = day
-    emitter.instruction("jmp __rt_strtotime_offsets_kind_adjusted_linux_x86_64"); // use adjusted unit kind
+    emitter.instruction("jmp __rt_strtotime_offsets_kind_adjusted_linux_x86_64"); //use adjusted unit kind
     emitter.label("__rt_strtotime_offsets_kind_post_week_linux_x86_64");
     emitter.instruction("cmp rdx, 4");                                          // kind > 4 ?
-    emitter.instruction("jle __rt_strtotime_offsets_kind_adjusted_linux_x86_64"); // day-or-smaller unit needs no remap
+    emitter.instruction("jle __rt_strtotime_offsets_kind_adjusted_linux_x86_64"); //day-or-smaller unit needs no remap
     emitter.instruction("dec rdx");                                             // kind 5→4, 6→5
 
     emitter.label("__rt_strtotime_offsets_kind_adjusted_linux_x86_64");

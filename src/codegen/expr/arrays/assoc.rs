@@ -161,10 +161,10 @@ pub(crate) fn emit_assoc_array_literal(
             PhpType::Float => {
                 match emitter.target.arch {
                     Arch::AArch64 => {
-                        emitter.instruction(&format!("fmov {}, {}", float_bits_reg, abi::float_result_reg(emitter))); // move the float bits into an integer scratch register for hash insertion
+                        emitter.instruction(&format!("fmov {}, {}", float_bits_reg, abi::float_result_reg(emitter))); //move the float bits into an integer scratch register for hash insertion
                     }
                     Arch::X86_64 => {
-                        emitter.instruction(&format!("movq {}, {}", float_bits_reg, abi::float_result_reg(emitter))); // move the float bits into an integer scratch register for hash insertion
+                        emitter.instruction(&format!("movq {}, {}", float_bits_reg, abi::float_result_reg(emitter))); //move the float bits into an integer scratch register for hash insertion
                     }
                 }
                 (float_bits_reg, zero_reg)

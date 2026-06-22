@@ -226,8 +226,8 @@ fn emit_checked_address_arm64(ctx: &mut FunctionContext<'_>, buffer_reg: &str, i
     ctx.emitter.instruction("b __rt_buffer_bounds_fail");                       // abort immediately on an out-of-range buffer index
     ctx.emitter.label(&bounds_ok);
     abi::emit_load_from_address(ctx.emitter, "x11", buffer_reg, 8);
-    ctx.emitter.instruction(&format!("add {}, {}, #16", buffer_reg, buffer_reg)); // skip the buffer header to reach the contiguous payload base
-    ctx.emitter.instruction(&format!("madd {}, {}, x11, {}", buffer_reg, index_reg, buffer_reg)); // compute payload base + index * stride
+    ctx.emitter.instruction(&format!("add {}, {}, #16", buffer_reg, buffer_reg)); //skip the buffer header to reach the contiguous payload base
+    ctx.emitter.instruction(&format!("madd {}, {}, x11, {}", buffer_reg, index_reg, buffer_reg)); //compute payload base + index * stride
 }
 
 /// Emits x86_64 null, bounds, and payload-address checks for a buffer element.
@@ -270,10 +270,10 @@ fn load_element_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType, address_
             if result_reg != address_reg {
                 match ctx.emitter.target.arch {
                     Arch::AArch64 => {
-                        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, address_reg)); // return the checked packed-element address as the packed receiver pointer
+                        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, address_reg)); //return the checked packed-element address as the packed receiver pointer
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, address_reg)); // return the checked packed-element address as the packed receiver pointer
+                        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, address_reg)); //return the checked packed-element address as the packed receiver pointer
                     }
                 }
             }

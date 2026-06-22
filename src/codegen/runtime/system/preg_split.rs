@@ -569,25 +569,25 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving regex-split scratch storage
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for regex object and split bookkeeping
     emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve aligned local storage for regex_t, regmatch buffer, and split spill slots
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); // preserve the elephc subject pointer across helper calls
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length across helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); //preserve the elephc subject pointer across helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); //preserve the elephc subject length across helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r8", limit_off));   // preserve the PHP split limit
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", preg_flags_off)); // preserve the PHP preg_split flags
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", preg_flags_off)); //preserve the PHP preg_split flags
     emitter.instruction("mov rax, rdi");                                        // move pattern pointer into preg-strip input register
     emitter.instruction("mov rdx, rsi");                                        // move pattern length into preg-strip input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and gather supported regex flags
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", regex_flags_off)); // preserve delimiter-strip regex flags
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", regex_flags_off)); //preserve delimiter-strip regex flags
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a C string
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // preserve null-terminated PCRE pattern
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); //preserve null-terminated PCRE pattern
     super::emit_prepare_regex_locale(emitter);
     emitter.instruction("lea rdi, [rsp]");                                      // pass local regex_t storage to PCRE2
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass null-terminated PCRE pattern to PCRE2
-    emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", regex_flags_off)); // pass PCRE2 POSIX compile flags from delimiter parsing
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); //pass null-terminated PCRE pattern to PCRE2
+    emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", regex_flags_off)); //pass PCRE2 POSIX compile flags from delimiter parsing
     emitter.bl_c("pcre2_regcomp");                                              // compile regex through PCRE2
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?
     emitter.instruction("jnz __rt_preg_split_fail_linux_x86_64");               // return an empty result array on compilation failure
 
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", regex_re_nsub_off)); // load regex_t.re_nsub after successful compilation
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", regex_re_nsub_off)); //load regex_t.re_nsub after successful compilation
     emitter.instruction("add r9, 1");                                           // include the full-match slot in the regmatch count
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", nmatch_off));  // save dynamic regmatch count for split capture loops
     emitter.instruction("mov rdi, r9");                                         // copy nmatch before scaling it to a malloc byte count
@@ -599,47 +599,47 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.bl_c("malloc");                                                     // allocate the regmatch_t vector for all capture groups
     emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
     emitter.instruction("jz __rt_preg_split_malloc_fail_linux_x86_64");         // allocation failure frees regex_t and returns an empty array
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic regmatch_t buffer pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); //save dynamic regmatch_t buffer pointer
 
     emit_preg_split_alloc_result_x86_64(emitter, "main", preg_flags_off, array_ptr_off);
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload elephc subject pointer before C-string conversion
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // reload elephc subject length before C-string conversion
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); //reload elephc subject pointer before C-string conversion
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); //reload elephc subject length before C-string conversion
     emitter.instruction("call __rt_cstr2");                                     // materialize a null-terminated subject copy
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // save subject C string pointer
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_cstr_off)); // initialize C-string cursor
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload original elephc subject pointer
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_elephc_off)); // initialize elephc payload cursor
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", split_count_off)); // initialize processed separator count
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); //save subject C string pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_cstr_off)); //initialize C-string cursor
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); //reload original elephc subject pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_elephc_off)); //initialize elephc payload cursor
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", split_count_off)); //initialize processed separator count
 
     emitter.label("__rt_preg_split_loop_linux_x86_64");
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", limit_off));   // reload PHP split limit
     emitter.instruction("cmp r9, 0");                                           // non-positive limits mean unlimited splitting
     emitter.instruction("jle __rt_preg_split_limit_ok_linux_x86_64");           // skip the split-count check for unlimited splitting
     emitter.instruction("sub r9, 1");                                           // compute max separators to process for the requested limit
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", split_count_off)); // reload processed separator count
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", split_count_off)); //reload processed separator count
     emitter.instruction("cmp r10, r9");                                         // has the positive split limit already been reached?
     emitter.instruction("jge __rt_preg_split_last_linux_x86_64");               // emit the unsplit remainder as the final element
     emitter.label("__rt_preg_split_limit_ok_linux_x86_64");
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_cstr_off)); // reload current C-string cursor
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_cstr_off)); //reload current C-string cursor
     emitter.instruction("movzx r9d, BYTE PTR [rsi]");                           // inspect current subject byte
     emitter.instruction("test r9d, r9d");                                       // is the current byte the trailing null terminator?
     emitter.instruction("jz __rt_preg_split_last_linux_x86_64");                // emit the final segment at end of string
     emit_preg_split_init_regmatches_x86_64(emitter, regmatches_ptr_off, nmatch_off, regmatch_size);
     emitter.instruction("lea rdi, [rsp]");                                      // pass compiled regex_t storage to regexec
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_cstr_off)); // pass current C-string cursor to regexec
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_cstr_off)); //pass current C-string cursor to regexec
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every compiled capture group
-    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic regmatch_t capture buffer
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //pass dynamic regmatch_t capture buffer
     emitter.instruction("xor r8d, r8d");                                        // eflags = 0 for ordinary matching
     emitter.bl_c("pcre2_regexec");                                                    // execute regex against remaining subject
     emitter.instruction("test eax, eax");                                       // did regexec find another separator?
     emitter.instruction("jnz __rt_preg_split_last_linux_x86_64");               // no more matches means the trailing segment remains
 
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic full-match slot for the pre-match extent
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //load dynamic full-match slot for the pre-match extent
     emit_x86_load_regoff_from_ptr(emitter, "r9", "r12", 0, regmatch_size);
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_elephc_off)); // load pre-match segment start
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_elephc_off)); //load pre-match segment start
     emitter.instruction("mov rdx, r9");                                         // use rm_so as the pre-match segment length
-    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", current_elephc_off)); // reload current elephc cursor for offset calculation
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", subject_ptr_off)); // load original subject start
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", current_elephc_off)); //reload current elephc cursor for offset calculation
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", subject_ptr_off)); //load original subject start
     emitter.instruction("sub rcx, r10");                                        // compute absolute byte offset of the segment
     emit_preg_split_push_piece_x86_64(
         emitter,
@@ -670,10 +670,10 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
         capture_idx_off,
     );
 
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", split_count_off)); // reload processed separator count
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", split_count_off)); //reload processed separator count
     emitter.instruction("add r9, 1");                                           // account for the separator just processed
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", split_count_off)); // save updated separator count
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic full-match slot for cursor advancement
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", split_count_off)); //save updated separator count
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //load dynamic full-match slot for cursor advancement
     emit_x86_load_regoff_from_ptr(
         emitter,
         "r9",
@@ -685,18 +685,18 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jg __rt_preg_split_advance_ok_linux_x86_64");          // trust rm_eo when the separator consumed bytes
     emitter.instruction("mov r9, 1");                                           // force progress for zero-length matches
     emitter.label("__rt_preg_split_advance_ok_linux_x86_64");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_cstr_off)); // reload current C-string cursor
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_cstr_off)); //reload current C-string cursor
     emitter.instruction("add r10, r9");                                         // advance C-string cursor past separator
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", current_cstr_off)); // save advanced C-string cursor
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_elephc_off)); // reload current elephc payload cursor
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", current_cstr_off)); //save advanced C-string cursor
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_elephc_off)); //reload current elephc payload cursor
     emitter.instruction("add r10, r9");                                         // advance elephc cursor by the same byte distance
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", current_elephc_off)); // save advanced elephc cursor
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", current_elephc_off)); //save advanced elephc cursor
     emitter.instruction("jmp __rt_preg_split_loop_linux_x86_64");               // continue splitting the remaining subject
 
     emitter.label("__rt_preg_split_last_linux_x86_64");
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_elephc_off)); // load trailing segment start
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", subject_ptr_off)); // load original subject start
-    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", subject_len_off)); // load original subject length
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_elephc_off)); //load trailing segment start
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", subject_ptr_off)); //load original subject start
+    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", subject_len_off)); //load original subject length
     emitter.instruction("add r11, r10");                                        // compute end address of original subject
     emitter.instruction("mov rdx, r11");                                        // seed trailing length from subject end
     emitter.instruction("sub rdx, rsi");                                        // compute trailing segment length
@@ -715,21 +715,21 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     );
     emitter.instruction("lea rdi, [rsp]");                                      // reload compiled regex_t storage before freeing
     emitter.bl_c("pcre2_regfree");                                                    // release PCRE2 regex resources
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //reload dynamic capture buffer for cleanup
     emitter.bl_c("free");                                                       // release the reusable regmatch_t vector
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", array_ptr_off)); // return final result array pointer
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", array_ptr_off)); //return final result array pointer
     emitter.instruction("jmp __rt_preg_split_ret_linux_x86_64");                // share common epilogue
 
     emitter.label("__rt_preg_split_fail_linux_x86_64");
     emit_preg_split_alloc_result_x86_64(emitter, "fail", preg_flags_off, array_ptr_off);
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", array_ptr_off)); // return empty result array pointer
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", array_ptr_off)); //return empty result array pointer
     emitter.instruction("jmp __rt_preg_split_ret_linux_x86_64");                // return through common epilogue
 
     emitter.label("__rt_preg_split_malloc_fail_linux_x86_64");
     emitter.instruction("lea rdi, [rsp]");                                      // reload compiled regex_t storage after allocation failure
     emitter.bl_c("pcre2_regfree");                                                    // release PCRE2 regex resources before returning empty
     emit_preg_split_alloc_result_x86_64(emitter, "malloc_fail", preg_flags_off, array_ptr_off);
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", array_ptr_off)); // return empty result array pointer after allocation failure
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", array_ptr_off)); //return empty result array pointer after allocation failure
 
     emitter.label("__rt_preg_split_ret_linux_x86_64");
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release local regex_t, regmatch buffer, and split spill storage
@@ -747,23 +747,23 @@ fn emit_preg_split_alloc_result_x86_64(
     let mixed = format!("__rt_preg_split_alloc_mixed_{suffix}_linux_x86_64");
     let done = format!("__rt_preg_split_alloc_done_{suffix}_linux_x86_64");
 
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); // reload preg_split flags before choosing result element layout
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); //reload preg_split flags before choosing result element layout
     emitter.instruction(&format!("test r9, {}", PREG_SPLIT_OFFSET_CAPTURE));    // offset capture requires boxed Mixed rows
     emitter.instruction(&format!("jnz {mixed}"));                               // allocate Mixed slots for offset-capture results
-    emitter.instruction(&format!("mov r10, {}", PREG_SPLIT_FORCE_MIXED_RESULT)); // materialize the internal force-Mixed bit
+    emitter.instruction(&format!("mov r10, {}", PREG_SPLIT_FORCE_MIXED_RESULT)); //materialize the internal force-Mixed bit
     emitter.instruction("test r9, r10");                                        // dynamic flags force Mixed slots even without offset capture
     emitter.instruction(&format!("jnz {mixed}"));                               // allocate Mixed slots for dynamic flag calls
     emitter.instruction("mov edi, 8");                                          // initial string-result capacity
     emitter.instruction("mov esi, 16");                                         // string result slots store ptr/len pairs
     emitter.instruction("call __rt_array_new");                                 // allocate string result array
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", array_ptr_off)); // save result array pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", array_ptr_off)); //save result array pointer
     emitter.instruction(&format!("jmp {done}"));                                // skip Mixed metadata stamping
     emitter.label(&mixed);
     emitter.instruction("mov edi, 8");                                          // initial Mixed-result capacity
     emitter.instruction("mov esi, 8");                                          // Mixed result slots store boxed pointers
     emitter.instruction("call __rt_array_new");                                 // allocate Mixed result array
     emit_stamp_indexed_array_mixed_x86_64(emitter, "rax");
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", array_ptr_off)); // save result array pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", array_ptr_off)); //save result array pointer
     emitter.label(&done);
 }
 
@@ -775,7 +775,7 @@ fn emit_preg_split_init_regmatches_x86_64(
     regmatch_size: usize,
 ) {
     emitter.instruction("mov r9, -1");                                          // prepare unmatched sentinel for capture slots
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic regmatch_t buffer base
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //load dynamic regmatch_t buffer base
     emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", nmatch_off)); // load dynamic regmatch slot count
     emitter.instruction("xor r12d, r12d");                                      // initialize regmatch initialization index
     emitter.label("__rt_preg_split_init_loop_linux_x86_64");
@@ -808,26 +808,26 @@ fn emit_preg_split_push_piece_x86_64(
     let offset = format!("__rt_preg_split_push_offset_{suffix}_linux_x86_64");
     let done = format!("__rt_preg_split_push_done_{suffix}_linux_x86_64");
 
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", piece_ptr_off)); // save split piece pointer across append helpers
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", piece_len_off)); // save split piece length across append helpers
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", piece_offset_off)); // save split piece absolute offset across append helpers
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); // reload preg_split flags for no-empty filtering
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", piece_ptr_off)); //save split piece pointer across append helpers
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", piece_len_off)); //save split piece length across append helpers
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", piece_offset_off)); //save split piece absolute offset across append helpers
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); //reload preg_split flags for no-empty filtering
     emitter.instruction(&format!("test r9, {}", PREG_SPLIT_NO_EMPTY));          // is PREG_SPLIT_NO_EMPTY enabled?
     emitter.instruction(&format!("jz {keep}"));                                 // keep empty strings when no-empty filtering is disabled
     emitter.instruction("test rdx, rdx");                                       // is this split piece empty?
     emitter.instruction(&format!("jz {done}"));                                 // skip empty pieces when no-empty filtering removes them
     emitter.label(&keep);
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); // reload preg_split flags for result-shape selection
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); //reload preg_split flags for result-shape selection
     emitter.instruction(&format!("test r9, {}", PREG_SPLIT_OFFSET_CAPTURE));    // does this piece need an offset-capture row?
     emitter.instruction(&format!("jnz {offset}"));                              // build [string, offset] when offset capture is enabled
-    emitter.instruction(&format!("mov r10, {}", PREG_SPLIT_FORCE_MIXED_RESULT)); // materialize the internal force-Mixed bit
+    emitter.instruction(&format!("mov r10, {}", PREG_SPLIT_FORCE_MIXED_RESULT)); //materialize the internal force-Mixed bit
     emitter.instruction("test r9, r10");                                        // do dynamic flags require boxed string pieces?
     emitter.instruction(&format!("jnz {boxed}"));                               // box plain strings for Mixed-layout result arrays
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", array_ptr_off)); // reload string result array pointer
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", piece_ptr_off)); // reload split piece pointer
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", piece_len_off)); // reload split piece length
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", array_ptr_off)); //reload string result array pointer
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", piece_ptr_off)); //reload split piece pointer
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", piece_len_off)); //reload split piece length
     emitter.instruction("call __rt_array_push_str");                            // append a plain string piece
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", array_ptr_off)); // save possibly-grown result array pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", array_ptr_off)); //save possibly-grown result array pointer
     emitter.instruction(&format!("jmp {done}"));                                // finish this append
 
     emitter.label(&boxed);
@@ -845,7 +845,7 @@ fn emit_preg_split_push_piece_x86_64(
         mixed_ptr_off,
     );
     emit_push_saved_mixed_piece_x86_64(emitter, array_ptr_off, mixed_ptr_off);
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", pair_ptr_off)); // reload temporary offset-capture row array
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", pair_ptr_off)); //reload temporary offset-capture row array
     emitter.instruction("call __rt_decref_array");                              // drop the helper's owner now that the boxed row retained it
     emitter.label(&done);
 }
@@ -858,10 +858,10 @@ fn emit_box_saved_piece_string_x86_64(
     mixed_ptr_off: usize,
 ) {
     emitter.instruction("mov rax, 1");                                          // runtime value tag 1 = string
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", piece_ptr_off)); // load string payload pointer for boxing
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", piece_len_off)); // load string payload length for boxing
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", piece_ptr_off)); //load string payload pointer for boxing
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", piece_len_off)); //load string payload length for boxing
     emitter.instruction("call __rt_mixed_from_value");                          // persist and box the string piece
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", mixed_ptr_off)); // save boxed string Mixed pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", mixed_ptr_off)); //save boxed string Mixed pointer
 }
 
 /// Emits x86_64 code that appends a saved Mixed pointer to the result array.
@@ -870,11 +870,11 @@ fn emit_push_saved_mixed_piece_x86_64(
     array_ptr_off: usize,
     mixed_ptr_off: usize,
 ) {
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", array_ptr_off)); // reload Mixed result array pointer
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", mixed_ptr_off)); // reload boxed Mixed piece pointer
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", array_ptr_off)); //reload Mixed result array pointer
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", mixed_ptr_off)); //reload boxed Mixed piece pointer
     emitter.instruction("call __rt_array_push_refcounted");                     // append and retain the boxed Mixed piece
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", array_ptr_off)); // save possibly-grown result array pointer
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", mixed_ptr_off)); // reload helper-owned boxed Mixed piece
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", array_ptr_off)); //save possibly-grown result array pointer
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", mixed_ptr_off)); //reload helper-owned boxed Mixed piece
     emitter.instruction("call __rt_decref_mixed");                              // drop helper ownership after the array retained the Mixed cell
 }
 
@@ -891,30 +891,30 @@ fn emit_build_offset_capture_row_x86_64(
     emitter.instruction("mov esi, 8");                                          // row stores boxed Mixed pointers
     emitter.instruction("call __rt_array_new");                                 // allocate offset-capture row
     emit_stamp_indexed_array_mixed_x86_64(emitter, "rax");
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pair_ptr_off)); // save row array pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pair_ptr_off)); //save row array pointer
     emit_box_saved_piece_string_x86_64(emitter, piece_ptr_off, piece_len_off, mixed_ptr_off);
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", pair_ptr_off)); // reload row array pointer for string cell store
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", mixed_ptr_off)); // reload boxed string cell
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", pair_ptr_off)); //reload row array pointer for string cell store
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", mixed_ptr_off)); //reload boxed string cell
     emitter.instruction("mov QWORD PTR [r9 + 24], r10");                        // store row[0] = boxed string
     emitter.instruction("mov QWORD PTR [r9], 1");                               // publish row length 1
     emitter.instruction("xor eax, eax");                                        // runtime value tag 0 = integer
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", piece_offset_off)); // load absolute byte offset for boxing
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", piece_offset_off)); //load absolute byte offset for boxing
     emitter.instruction("xor esi, esi");                                        // integer payload has no high word
     emitter.instruction("call __rt_mixed_from_value");                          // box the integer offset
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", pair_ptr_off)); // reload row array pointer for offset cell store
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", pair_ptr_off)); //reload row array pointer for offset cell store
     emitter.instruction("mov QWORD PTR [r9 + 32], rax");                        // store row[1] = boxed offset
     emitter.instruction("mov QWORD PTR [r9], 2");                               // publish row length 2
     emitter.instruction("mov rax, 4");                                          // runtime value tag 4 = indexed array
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", pair_ptr_off)); // load row array pointer for boxing
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", pair_ptr_off)); //load row array pointer for boxing
     emitter.instruction("xor esi, esi");                                        // indexed-array payload has no high word
     emitter.instruction("call __rt_mixed_from_value");                          // box the row array as Mixed
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", mixed_ptr_off)); // save boxed row Mixed pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", mixed_ptr_off)); //save boxed row Mixed pointer
 }
 
 /// Emits x86_64 code that stamps an indexed array as boxed-Mixed slots.
 fn emit_stamp_indexed_array_mixed_x86_64(emitter: &mut Emitter, array_reg: &str) {
     emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg));    // load indexed-array packed kind word
-    emitter.instruction(&format!("mov r8, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 0x80ff)); // preserve heap magic, indexed kind, and COW flag
+    emitter.instruction(&format!("mov r8, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 0x80ff)); //preserve heap magic, indexed kind, and COW flag
     emitter.instruction("and r10, r8");                                         // clear stale value_type bits
     emitter.instruction("or r10, 0x700");                                       // stamp runtime value_type 7 = boxed Mixed
     emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg));    // store boxed-Mixed indexed-array metadata
@@ -938,17 +938,17 @@ fn emit_preg_split_capture_loop_x86_64(
     mixed_ptr_off: usize,
     capture_idx_off: usize,
 ) {
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); // reload preg_split flags before capture appends
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); //reload preg_split flags before capture appends
     emitter.instruction(&format!("test r9, {}", PREG_SPLIT_DELIM_CAPTURE));     // is PREG_SPLIT_DELIM_CAPTURE enabled?
     emitter.instruction("jz __rt_preg_split_captures_done_linux_x86_64");       // skip delimiter captures when the flag is absent
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 1", capture_idx_off)); // start at capture group 1, after the full match
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 1", capture_idx_off)); //start at capture group 1, after the full match
     emitter.label("__rt_preg_split_capture_loop_linux_x86_64");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", capture_idx_off)); // reload current capture-group index
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", capture_idx_off)); //reload current capture-group index
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", nmatch_off));  // reload dynamic regmatch slot count
     emitter.instruction("cmp r10, r9");                                         // stop after all compiled capture groups
     emitter.instruction("jge __rt_preg_split_captures_done_linux_x86_64");      // finish capture processing
     emitter.instruction(&format!("imul r10, {}", regmatch_size));               // scale capture index to native regmatch_t stride
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic regmatch buffer base
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //load dynamic regmatch buffer base
     emitter.instruction("add r10, r12");                                        // address this capture group's regmatch_t slot
     emit_x86_load_regoff_from_ptr(emitter, "r11", "r10", 0, regmatch_size);
     emitter.instruction("cmp r11, 0");                                          // unmatched captures have negative rm_so
@@ -962,10 +962,10 @@ fn emit_preg_split_capture_loop_x86_64(
     );
     emitter.instruction("mov rdx, r9");                                         // seed captured delimiter end offset
     emitter.instruction("sub rdx, r11");                                        // compute captured delimiter length
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_elephc_off)); // load current elephc cursor
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_elephc_off)); //load current elephc cursor
     emitter.instruction("add rsi, r11");                                        // compute captured delimiter pointer
-    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", current_elephc_off)); // reload current elephc cursor
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", subject_ptr_off)); // load original subject start
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", current_elephc_off)); //reload current elephc cursor
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", subject_ptr_off)); //load original subject start
     emitter.instruction("sub rcx, r10");                                        // compute current cursor absolute offset
     emitter.instruction("add rcx, r11");                                        // add capture-local rm_so to get capture offset
     emit_preg_split_push_piece_x86_64(
@@ -980,9 +980,9 @@ fn emit_preg_split_capture_loop_x86_64(
         mixed_ptr_off,
     );
     emitter.label("__rt_preg_split_capture_next_linux_x86_64");
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", capture_idx_off)); // reload capture-group index
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", capture_idx_off)); //reload capture-group index
     emitter.instruction("add r9, 1");                                           // advance to next capture group
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", capture_idx_off)); // save next capture-group index
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", capture_idx_off)); //save next capture-group index
     emitter.instruction("jmp __rt_preg_split_capture_loop_linux_x86_64");       // continue capture processing
     emitter.label("__rt_preg_split_captures_done_linux_x86_64");
 }
@@ -1003,6 +1003,6 @@ fn emit_x86_load_regoff_from_ptr(
     if regmatch_size == 16 {
         emitter.instruction(&format!("mov {dst}, QWORD PTR [{addr}{suffix}]")); // load native 64-bit regoff_t from computed regmatch slot
     } else {
-        emitter.instruction(&format!("movsxd {dst}, DWORD PTR [{addr}{suffix}]")); // sign-extend native 32-bit regoff_t from computed slot
+        emitter.instruction(&format!("movsxd {dst}, DWORD PTR [{addr}{suffix}]")); //sign-extend native 32-bit regoff_t from computed slot
     }
 }

@@ -127,7 +127,7 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // per-class user-wrapper vtable for the resolved class
-    emitter.instruction(&format!("ldr x11, [x10, #{}]", VTABLE_URL_STAT_OFFSET)); // load the url_stat method pointer (slot 9)
+    emitter.instruction(&format!("ldr x11, [x10, #{}]", VTABLE_URL_STAT_OFFSET)); //load the url_stat method pointer (slot 9)
     emitter.instruction("cbz x11, __rt_uus_false_obj");                         // class did not implement url_stat → boxed false
 
     // -- call url_stat($this, $path, $flags) → x0 = raw return --
@@ -249,7 +249,7 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r10", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // per-class user-wrapper vtable for the resolved class
-    emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {}]", VTABLE_URL_STAT_OFFSET)); // load the url_stat method pointer (slot 9)
+    emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {}]", VTABLE_URL_STAT_OFFSET)); //load the url_stat method pointer (slot 9)
     emitter.instruction("test r11, r11");                                       // class did not implement url_stat?
     emitter.instruction("jz __rt_uus_false_obj_x86");                           // no url_stat → boxed false
 

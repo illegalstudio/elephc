@@ -88,12 +88,12 @@ pub fn emit_pop_float_reg(emitter: &mut Emitter, reg: &str) {
 pub fn emit_push_reg_pair(emitter: &mut Emitter, lo_reg: &str, hi_reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("stp {}, {}, [sp, #-16]!", lo_reg, hi_reg)); // push the requested register pair into one temporary 16-byte stack slot
+            emitter.instruction(&format!("stp {}, {}, [sp, #-16]!", lo_reg, hi_reg)); //push the requested register pair into one temporary 16-byte stack slot
         }
         Arch::X86_64 => {
             emitter.instruction("sub rsp, 16");                                 // reserve one temporary stack slot for the pushed register pair
             emitter.instruction(&format!("mov QWORD PTR [rsp], {}", lo_reg));   // store the first register into the low half of the temporary slot
-            emitter.instruction(&format!("mov QWORD PTR [rsp + 8], {}", hi_reg)); // store the second register into the high half of the temporary slot
+            emitter.instruction(&format!("mov QWORD PTR [rsp + 8], {}", hi_reg)); //store the second register into the high half of the temporary slot
         }
     }
 }
@@ -106,11 +106,11 @@ pub fn emit_push_reg_pair(emitter: &mut Emitter, lo_reg: &str, hi_reg: &str) {
 pub fn emit_pop_reg_pair(emitter: &mut Emitter, lo_reg: &str, hi_reg: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldp {}, {}, [sp], #16", lo_reg, hi_reg)); // pop the requested register pair from one temporary 16-byte stack slot
+            emitter.instruction(&format!("ldp {}, {}, [sp], #16", lo_reg, hi_reg)); //pop the requested register pair from one temporary 16-byte stack slot
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", lo_reg));   // reload the first register from the low half of the temporary stack slot
-            emitter.instruction(&format!("mov {}, QWORD PTR [rsp + 8]", hi_reg)); // reload the second register from the high half of the temporary stack slot
+            emitter.instruction(&format!("mov {}, QWORD PTR [rsp + 8]", hi_reg)); //reload the second register from the high half of the temporary stack slot
             emitter.instruction("add rsp, 16");                                 // release the temporary stack slot after the register-pair pop
         }
     }
@@ -190,7 +190,7 @@ pub fn emit_load_temporary_stack_slot(emitter: &mut Emitter, reg: &str, offset: 
             if offset == 0 {
                 emitter.instruction(&format!("ldr {}, [sp]", reg));             // load directly from the top of the temporary argument stack
             } else if offset <= 4095 {
-                emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset)); // load from a nearby temporary argument slot with an immediate offset
+                emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset)); //load from a nearby temporary argument slot with an immediate offset
             } else {
                 emit_sp_address(emitter, "x9", offset);
                 emitter.instruction(&format!("ldr {}, [x9]", reg));             // load from a distant temporary argument slot through a scratch address
@@ -203,9 +203,9 @@ pub fn emit_load_temporary_stack_slot(emitter: &mut Emitter, reg: &str, offset: 
                 format!("[rsp + {}]", offset)
             };
             if reg.starts_with('d') || reg.starts_with("xmm") {
-                emitter.instruction(&format!("movsd {}, QWORD PTR {}", reg, slot)); // load the floating-point payload from the temporary outgoing-arg stack
+                emitter.instruction(&format!("movsd {}, QWORD PTR {}", reg, slot)); //load the floating-point payload from the temporary outgoing-arg stack
             } else {
-                emitter.instruction(&format!("mov {}, QWORD PTR {}", reg, slot)); // load the integer or pointer payload from the temporary outgoing-arg stack
+                emitter.instruction(&format!("mov {}, QWORD PTR {}", reg, slot)); //load the integer or pointer payload from the temporary outgoing-arg stack
             }
         }
     }
@@ -224,7 +224,7 @@ pub fn emit_store_to_sp(emitter: &mut Emitter, reg: &str, offset: usize) {
             if offset == 0 {
                 emitter.instruction(&format!("str {}, [sp]", reg));             // store directly to the top of the outgoing stack-argument area
             } else if offset <= 4095 {
-                emitter.instruction(&format!("str {}, [sp, #{}]", reg, offset)); // store to a nearby outgoing stack-argument slot with an immediate offset
+                emitter.instruction(&format!("str {}, [sp, #{}]", reg, offset)); //store to a nearby outgoing stack-argument slot with an immediate offset
             } else {
                 emit_sp_address(emitter, "x9", offset);
                 emitter.instruction(&format!("str {}, [x9]", reg));             // store to a distant outgoing stack-argument slot through a scratch address
@@ -237,9 +237,9 @@ pub fn emit_store_to_sp(emitter: &mut Emitter, reg: &str, offset: usize) {
                 format!("[rsp + {}]", offset)
             };
             if reg.starts_with('d') || reg.starts_with("xmm") {
-                emitter.instruction(&format!("movsd QWORD PTR {}, {}", slot, reg)); // store the floating-point payload into the outgoing stack-argument area
+                emitter.instruction(&format!("movsd QWORD PTR {}, {}", slot, reg)); //store the floating-point payload into the outgoing stack-argument area
             } else {
-                emitter.instruction(&format!("mov QWORD PTR {}, {}", slot, reg)); // store the integer or pointer payload into the outgoing stack-argument area
+                emitter.instruction(&format!("mov QWORD PTR {}, {}", slot, reg)); //store the integer or pointer payload into the outgoing stack-argument area
             }
         }
     }

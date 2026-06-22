@@ -372,7 +372,7 @@ fn emit_runtime_descriptor_with_callable_array_receiver(
     emitter.comment("fiber callable-array descriptor capture");
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), total_bytes as i64);
     abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction(&format!("mov {}, {}", descriptor_reg, abi::int_result_reg(emitter))); // keep the Fiber descriptor pointer while copying its static header
+    emitter.instruction(&format!("mov {}, {}", descriptor_reg, abi::int_result_reg(emitter))); //keep the Fiber descriptor pointer while copying its static header
     callable_descriptor::emit_copy_static_descriptor_to_runtime(
         emitter,
         descriptor_reg,
@@ -403,7 +403,7 @@ fn emit_runtime_descriptor_with_callable_array_receiver(
         receiver_ty,
     );
     if descriptor_reg != abi::int_result_reg(emitter) {
-        emitter.instruction(&format!("mov {}, {}", abi::int_result_reg(emitter), descriptor_reg)); // return the receiver-bound Fiber callable descriptor
+        emitter.instruction(&format!("mov {}, {}", abi::int_result_reg(emitter), descriptor_reg)); //return the receiver-bound Fiber callable descriptor
     }
 }
 
@@ -450,7 +450,7 @@ fn emit_runtime_descriptor_with_saved_receiver(
     emitter.comment("fiber receiver-bound descriptor capture");
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), total_bytes as i64);
     abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction(&format!("mov {}, {}", descriptor_reg, abi::int_result_reg(emitter))); // keep the Fiber descriptor pointer while copying its static header
+    emitter.instruction(&format!("mov {}, {}", descriptor_reg, abi::int_result_reg(emitter))); //keep the Fiber descriptor pointer while copying its static header
     callable_descriptor::emit_copy_static_descriptor_to_runtime(
         emitter,
         descriptor_reg,
@@ -467,7 +467,7 @@ fn emit_runtime_descriptor_with_saved_receiver(
     abi::emit_pop_reg(emitter, descriptor_reg);                                 // restore the runtime descriptor after receiver capture storage
     abi::emit_release_temporary_stack(emitter, 16);                             // discard the saved receiver after it has been copied into the descriptor
     if descriptor_reg != abi::int_result_reg(emitter) {
-        emitter.instruction(&format!("mov {}, {}", abi::int_result_reg(emitter), descriptor_reg)); // return the receiver-bound Fiber callable descriptor
+        emitter.instruction(&format!("mov {}, {}", abi::int_result_reg(emitter), descriptor_reg)); //return the receiver-bound Fiber callable descriptor
     }
 }
 

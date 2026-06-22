@@ -80,7 +80,7 @@ pub(super) fn emit_property_reference_bind(
     };
 
     let object_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); // keep the object pointer while binding the promoted reference property slot
+    emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); //keep the object pointer while binding the promoted reference property slot
     storage::store_property_reference_address(emitter, object_reg, target.offset);
 }
 
@@ -115,7 +115,7 @@ pub(super) fn emit_property_reference_write(
 
     let object_reg = abi::symbol_scratch_reg(emitter);
     let pointer_reg = abi::temp_int_reg(emitter.target);
-    emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); // keep the object pointer while resolving the referenced property slot
+    emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); //keep the object pointer while resolving the referenced property slot
     abi::emit_load_from_address(emitter, pointer_reg, object_reg, target.offset);
     storage::release_previous_referenced_value(emitter, pointer_reg, &target.prop_ty, &val_ty);
     storage::store_referenced_value(emitter, pointer_reg, &val_ty);

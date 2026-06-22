@@ -188,7 +188,7 @@ pub(crate) fn emit_property_assign_stmt(
     }
 
     let object_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); // keep the object pointer in a scratch register while property storage is updated
+    emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); //keep the object pointer in a scratch register while property storage is updated
     if !target.needs_deref {
         storage::release_previous_property_value(emitter, object_reg, &target.prop_ty, target.offset);
     }
@@ -377,7 +377,7 @@ fn emit_nullable_property_assign_stmt(
     };
 
     let object_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); // keep the unboxed object pointer while property storage is updated
+    emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); //keep the unboxed object pointer while property storage is updated
     if target.is_reference {
         let pointer_reg = abi::temp_int_reg(emitter.target);
         abi::emit_load_from_address(emitter, pointer_reg, object_reg, target.offset);

@@ -90,11 +90,11 @@ pub(crate) fn emit_tagged_scalar_null(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             super::abi::emit_load_int_immediate(emitter, "x0", NULL_SENTINEL);
-            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_NULL)); // runtime tag 8 marks the tagged scalar as PHP null
+            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_NULL)); //runtime tag 8 marks the tagged scalar as PHP null
         }
         Arch::X86_64 => {
             super::abi::emit_load_int_immediate(emitter, "rax", NULL_SENTINEL);
-            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_NULL)); // runtime tag 8 marks the tagged scalar as PHP null
+            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_NULL)); //runtime tag 8 marks the tagged scalar as PHP null
         }
     }
 }
@@ -104,10 +104,10 @@ pub(crate) fn emit_tagged_scalar_null(emitter: &mut Emitter) {
 pub(crate) fn emit_tagged_scalar_from_int_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_INT)); // runtime tag 0 marks the tagged scalar payload as an int
+            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_INT)); //runtime tag 0 marks the tagged scalar payload as an int
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_INT)); // runtime tag 0 marks the tagged scalar payload as an int
+            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_INT)); //runtime tag 0 marks the tagged scalar payload as an int
         }
     }
 }
@@ -117,11 +117,11 @@ pub(crate) fn emit_tagged_scalar_from_int_result(emitter: &mut Emitter) {
 pub(crate) fn emit_branch_if_tagged_scalar_null(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp x1, #{}", TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
+            emitter.instruction(&format!("cmp x1, #{}", TAGGED_SCALAR_TAG_NULL)); //does the tagged scalar carry the runtime null tag?
             emitter.instruction(&format!("b.eq {}", label));                    // branch when the tagged scalar is PHP null
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp rdx, {}", TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
+            emitter.instruction(&format!("cmp rdx, {}", TAGGED_SCALAR_TAG_NULL)); //does the tagged scalar carry the runtime null tag?
             emitter.instruction(&format!("je {}", label));                      // branch when the tagged scalar is PHP null
         }
     }
@@ -131,11 +131,11 @@ pub(crate) fn emit_branch_if_tagged_scalar_null(emitter: &mut Emitter, label: &s
 pub(crate) fn emit_branch_if_tagged_scalar_not_null(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp x1, #{}", TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
+            emitter.instruction(&format!("cmp x1, #{}", TAGGED_SCALAR_TAG_NULL)); //does the tagged scalar carry the runtime null tag?
             emitter.instruction(&format!("b.ne {}", label));                    // branch when the tagged scalar holds a real value
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp rdx, {}", TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
+            emitter.instruction(&format!("cmp rdx, {}", TAGGED_SCALAR_TAG_NULL)); //does the tagged scalar carry the runtime null tag?
             emitter.instruction(&format!("jne {}", label));                     // branch when the tagged scalar holds a real value
         }
     }
@@ -146,12 +146,12 @@ pub(crate) fn emit_branch_if_tagged_scalar_not_null(emitter: &mut Emitter, label
 pub(crate) fn emit_tagged_scalar_to_int_null_as_zero(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp x1, #{}", TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
+            emitter.instruction(&format!("cmp x1, #{}", TAGGED_SCALAR_TAG_NULL)); //does the tagged scalar carry the runtime null tag?
             emitter.instruction("csel x0, xzr, x0, eq");                        // replace the payload with zero when the tagged scalar is null
         }
         Arch::X86_64 => {
             emitter.instruction("xor r11, r11");                                // materialize the zero replacement for a null tagged scalar payload
-            emitter.instruction(&format!("cmp rdx, {}", TAGGED_SCALAR_TAG_NULL)); // does the tagged scalar carry the runtime null tag?
+            emitter.instruction(&format!("cmp rdx, {}", TAGGED_SCALAR_TAG_NULL)); //does the tagged scalar carry the runtime null tag?
             emitter.instruction("cmove rax, r11");                              // replace the payload with zero when the tagged scalar is null
         }
     }

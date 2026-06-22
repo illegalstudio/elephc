@@ -73,11 +73,11 @@ pub(crate) fn emit_array_access_with_loaded_base(
         let uaf_ok = ctx.next_label("buf_uaf_ok");
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("cbnz {}, {}", buffer_reg, uaf_ok)); // skip the fatal helper when the buffer header pointer is still live
+                emitter.instruction(&format!("cbnz {}, {}", buffer_reg, uaf_ok)); //skip the fatal helper when the buffer header pointer is still live
                 emitter.instruction("b __rt_buffer_use_after_free");            // abort immediately when the buffer local was nulled by buffer_free()
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("test {}, {}", buffer_reg, buffer_reg)); // check whether the restored buffer header pointer is null
+                emitter.instruction(&format!("test {}, {}", buffer_reg, buffer_reg)); //check whether the restored buffer header pointer is null
                 emitter.instruction(&format!("jne {}", uaf_ok));                // continue only when the buffer header pointer is still live
                 emitter.instruction("jmp __rt_buffer_use_after_free");          // abort immediately when the buffer local was nulled by buffer_free()
             }
@@ -93,14 +93,14 @@ pub(crate) fn emit_array_access_with_loaded_base(
                 emitter.instruction("b __rt_buffer_bounds_fail");               // abort immediately on negative buffer indexes
                 emitter.label(&oob_ok);
                 abi::emit_load_from_address(emitter, len_reg, buffer_reg, 0);            // load the logical buffer length from the header
-                emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg)); // compare the requested index against the logical buffer length
+                emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg)); //compare the requested index against the logical buffer length
                 emitter.instruction(&format!("b.lo {}", bounds_ok));            // continue once the requested index is still in bounds
                 emitter.instruction(&format!("mov x1, {}", len_reg));           // pass the logical buffer length to the fatal helper for parity with the ARM path
                 emitter.instruction("bl __rt_buffer_bounds_fail");              // abort with the dedicated buffer-bounds diagnostic
                 emitter.label(&bounds_ok);
                 abi::emit_load_from_address(emitter, stride_reg, buffer_reg, 8);         // load the element stride from the buffer header
-                emitter.instruction(&format!("add {}, {}, #16", buffer_reg, buffer_reg)); // skip the buffer header to reach the contiguous payload base
-                emitter.instruction(&format!("madd {}, {}, {}, {}", buffer_reg, result_reg, stride_reg, buffer_reg)); // compute payload base + index*stride for the addressed buffer element
+                emitter.instruction(&format!("add {}, {}, #16", buffer_reg, buffer_reg)); //skip the buffer header to reach the contiguous payload base
+                emitter.instruction(&format!("madd {}, {}, {}, {}", buffer_reg, result_reg, stride_reg, buffer_reg)); //compute payload base + index*stride for the addressed buffer element
             }
             Arch::X86_64 => {
                 emitter.instruction(&format!("cmp {}, 0", result_reg));         // reject negative buffer indexes before touching the payload
@@ -108,14 +108,14 @@ pub(crate) fn emit_array_access_with_loaded_base(
                 emitter.instruction("jmp __rt_buffer_bounds_fail");             // abort immediately on negative buffer indexes
                 emitter.label(&oob_ok);
                 abi::emit_load_from_address(emitter, len_reg, buffer_reg, 0);            // load the logical buffer length from the header
-                emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg)); // compare the requested index against the logical buffer length
+                emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg)); //compare the requested index against the logical buffer length
                 emitter.instruction(&format!("jl {}", bounds_ok));              // continue once the requested index is still in bounds
                 emitter.instruction("jmp __rt_buffer_bounds_fail");             // abort with the dedicated buffer-bounds diagnostic
                 emitter.label(&bounds_ok);
                 abi::emit_load_from_address(emitter, stride_reg, buffer_reg, 8);         // load the element stride from the buffer header
                 emitter.instruction(&format!("add {}, 16", buffer_reg));        // skip the buffer header to reach the contiguous payload base
-                emitter.instruction(&format!("imul {}, {}", result_reg, stride_reg)); // scale the requested index by the element stride in bytes
-                emitter.instruction(&format!("add {}, {}", buffer_reg, result_reg)); // advance the payload base to the addressed buffer element
+                emitter.instruction(&format!("imul {}, {}", result_reg, stride_reg)); //scale the requested index by the element stride in bytes
+                emitter.instruction(&format!("add {}, {}", buffer_reg, result_reg)); //advance the payload base to the addressed buffer element
             }
         }
         match &elem_ty {
@@ -124,7 +124,7 @@ pub(crate) fn emit_array_access_with_loaded_base(
                 return PhpType::Float;
             }
             PhpType::Packed(name) => {
-                emitter.instruction(&format!("mov {}, {}", result_reg, buffer_reg)); // expose the packed element address as a typed pointer result
+                emitter.instruction(&format!("mov {}, {}", result_reg, buffer_reg)); //expose the packed element address as a typed pointer result
                 return PhpType::Pointer(Some(name.clone()));
             }
             _ => {
@@ -452,38 +452,38 @@ pub(crate) fn emit_array_access_with_loaded_base(
         PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Resource(_) => {
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip 24-byte array header to reach data
-                    emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, result_reg)); // load element at array + index*8
+                    emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); //skip 24-byte array header to reach data
+                    emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, result_reg)); //load element at array + index*8
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip 24-byte array header to reach data
-                    emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, result_reg)); // load element at array + index*8
+                    emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); //skip 24-byte array header to reach data
+                    emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, result_reg)); //load element at array + index*8
                 }
             }
         }
         PhpType::Float => match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip 24-byte array header to reach the contiguous float payload
-                emitter.instruction(&format!("ldr d0, [{}, {}, lsl #3]", array_reg, result_reg)); // load the float payload from data[index]
+                emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); //skip 24-byte array header to reach the contiguous float payload
+                emitter.instruction(&format!("ldr d0, [{}, {}, lsl #3]", array_reg, result_reg)); //load the float payload from data[index]
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip 24-byte array header to reach the contiguous float payload
-                emitter.instruction(&format!("movsd xmm0, QWORD PTR [{} + {} * 8]", array_reg, result_reg)); // load the float payload from data[index]
+                emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); //skip 24-byte array header to reach the contiguous float payload
+                emitter.instruction(&format!("movsd xmm0, QWORD PTR [{} + {} * 8]", array_reg, result_reg)); //load the float payload from data[index]
             }
         },
         PhpType::Str => {
             let (ptr_reg, len_result_reg) = abi::string_result_regs(emitter);
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction(&format!("lsl {}, {}, #4", result_reg, result_reg)); // multiply index by 16 (string = ptr+len pair)
-                    emitter.instruction(&format!("add {}, {}, {}", array_reg, array_reg, result_reg)); // add scaled index offset to array base
-                    emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip 24-byte array header to reach data
+                    emitter.instruction(&format!("lsl {}, {}, #4", result_reg, result_reg)); //multiply index by 16 (string = ptr+len pair)
+                    emitter.instruction(&format!("add {}, {}, {}", array_reg, array_reg, result_reg)); //add scaled index offset to array base
+                    emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); //skip 24-byte array header to reach data
                     abi::emit_load_from_address(emitter, ptr_reg, array_reg, 0); // load string pointer from element slot
                     abi::emit_load_from_address(emitter, len_result_reg, array_reg, 8); // load string length from element slot
                 }
                 Arch::X86_64 => {
                     emitter.instruction(&format!("shl {}, 4", result_reg));     // multiply index by 16 (string = ptr+len pair)
-                    emitter.instruction(&format!("add {}, {}", array_reg, result_reg)); // add scaled index offset to array base
+                    emitter.instruction(&format!("add {}, {}", array_reg, result_reg)); //add scaled index offset to array base
                     emitter.instruction(&format!("add {}, 24", array_reg));     // skip 24-byte array header to reach data
                     abi::emit_load_from_address(emitter, ptr_reg, array_reg, 0); // load string pointer from element slot
                     abi::emit_load_from_address(emitter, len_result_reg, array_reg, 8); // load string length from element slot
@@ -493,12 +493,12 @@ pub(crate) fn emit_array_access_with_loaded_base(
         PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip 24-byte array header to reach data
-                    emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, result_reg)); // load pointer at index
+                    emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); //skip 24-byte array header to reach data
+                    emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", result_reg, array_reg, result_reg)); //load pointer at index
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip 24-byte array header to reach data
-                    emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, result_reg)); // load pointer at index
+                    emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); //skip 24-byte array header to reach data
+                    emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", result_reg, array_reg, result_reg)); //load pointer at index
                 }
             }
         }
@@ -579,8 +579,8 @@ fn emit_typed_null_fallback(emitter: &mut Emitter, ty: &PhpType) {
             let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
             abi::emit_symbol_address(emitter, ptr_reg, "_empty_str"); // valid readable pointer for a 0-length string
             match emitter.target.arch {
-                Arch::AArch64 => emitter.instruction(&format!("mov {}, #0", len_reg)), // string length = 0
-                Arch::X86_64 => emitter.instruction(&format!("xor {}, {}", len_reg, len_reg)), // string length = 0
+                Arch::AArch64 => emitter.instruction(&format!("mov {}, #0", len_reg)), //string length = 0
+                Arch::X86_64 => emitter.instruction(&format!("xor {}, {}", len_reg, len_reg)), //string length = 0
             }
         }
         PhpType::Float => match emitter.target.arch {

@@ -69,10 +69,10 @@ pub(crate) fn emit_dispatch_instance_method(
         abi::emit_symbol_address(emitter, dispatch_reg, "_class_vtable_ptrs");
         match emitter.target.arch {
             crate::codegen::platform::Arch::AArch64 => {
-                emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_reg, dispatch_reg, class_id_reg)); // load the class-specific instance-vtable pointer from the global table
+                emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_reg, dispatch_reg, class_id_reg)); //load the class-specific instance-vtable pointer from the global table
             }
             crate::codegen::platform::Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_reg, dispatch_reg, class_id_reg)); // load the class-specific instance-vtable pointer from the global table
+                emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_reg, dispatch_reg, class_id_reg)); //load the class-specific instance-vtable pointer from the global table
             }
         }
         abi::emit_load_from_address(emitter, dispatch_reg, dispatch_reg, slot * 8); // load the selected method entry from the class-specific instance vtable

@@ -120,7 +120,7 @@ pub fn emit(
             let callback_ty = emit_expr(&args[1], emitter, ctx, data);
             debug_assert!(matches!(callback_ty.codegen_repr(), PhpType::Callable));
             callback_env::retain_borrowed_descriptor_callback_result(&args[1], emitter);
-            emitter.instruction(&format!("mov {}, {}", call_reg, abi::int_result_reg(emitter))); // keep the selected callable descriptor while initializing the counter
+            emitter.instruction(&format!("mov {}, {}", call_reg, abi::int_result_reg(emitter))); //keep the selected callable descriptor while initializing the counter
             abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
             abi::emit_push_reg(emitter, abi::int_result_reg(emitter));          // save iterator_apply()'s callback-invocation counter
             abi::emit_push_reg(emitter, call_reg);                              // save the selected callable descriptor beneath the loop receiver

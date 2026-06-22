@@ -127,8 +127,8 @@ fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
     let skip_label = ctx.next_label("release_empty_str");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz {}, {}", len_reg, skip_label)); // skip release for zero-length strings without owned heap storage
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the loaded string pointer to the heap-free helper
+            ctx.emitter.instruction(&format!("cbz {}, {}", len_reg, skip_label)); //skip release for zero-length strings without owned heap storage
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); //pass the loaded string pointer to the heap-free helper
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
             ctx.emitter.label(&skip_label);
         }
@@ -136,7 +136,7 @@ fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("test {}, {}", len_reg, len_reg)); // check whether the loaded string has any owned bytes
             ctx.emitter.instruction(&format!("je {}", skip_label));             // skip release for zero-length strings without owned heap storage
             if ptr_reg != result_reg {
-                ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the loaded string pointer to the heap-free helper
+                ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); //pass the loaded string pointer to the heap-free helper
             }
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
             ctx.emitter.label(&skip_label);

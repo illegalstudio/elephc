@@ -415,7 +415,7 @@ fn emit_enum_object_allocation(ctx: &mut FunctionContext<'_>, class_id: u64, pro
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("mov rax, {}", payload_size));     // request enum singleton object payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the x86_64 object heap kind word
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); //materialize the x86_64 object heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the enum singleton payload
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the enum class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the enum class id at payload offset zero

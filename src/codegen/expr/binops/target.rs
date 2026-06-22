@@ -77,7 +77,7 @@ pub(super) fn emit_promote_int_to_float(emitter: &mut Emitter, float_reg: &str, 
             emitter.instruction(&format!("scvtf {}, {}", float_reg, int_reg));  // promote the integer operand into a floating-point register
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cvtsi2sd {}, {}", float_reg, int_reg)); // promote the integer operand into a floating-point register
+            emitter.instruction(&format!("cvtsi2sd {}, {}", float_reg, int_reg)); //promote the integer operand into a floating-point register
         }
     }
 }

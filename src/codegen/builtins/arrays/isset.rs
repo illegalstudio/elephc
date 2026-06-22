@@ -200,12 +200,12 @@ fn emit_indexed_array_isset(
 fn load_indexed_array_element_pointer(array_reg: &str, index_reg: &str, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed array header to reach element storage
-            emitter.instruction(&format!("ldr x0, [{}, {}, lsl #3]", array_reg, index_reg)); // load the boxed Mixed element pointer for null inspection
+            emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); //skip the indexed array header to reach element storage
+            emitter.instruction(&format!("ldr x0, [{}, {}, lsl #3]", array_reg, index_reg)); //load the boxed Mixed element pointer for null inspection
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed array header to reach element storage
-            emitter.instruction(&format!("mov rax, QWORD PTR [{} + {} * 8]", array_reg, index_reg)); // load the boxed Mixed element pointer for null inspection
+            emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); //skip the indexed array header to reach element storage
+            emitter.instruction(&format!("mov rax, QWORD PTR [{} + {} * 8]", array_reg, index_reg)); //load the boxed Mixed element pointer for null inspection
         }
     }
 }
@@ -355,10 +355,10 @@ fn emit_scalar_result_not_null(emitter: &mut Emitter) {
 fn emit_bool_result(value: bool, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(if value { "mov x0, #1" } else { "mov x0, #0" }); // materialize the isset boolean result on AArch64
+            emitter.instruction(if value { "mov x0, #1" } else { "mov x0, #0" }); //materialize the isset boolean result on AArch64
         }
         Arch::X86_64 => {
-            emitter.instruction(if value { "mov rax, 1" } else { "xor eax, eax" }); // materialize the isset boolean result on x86_64
+            emitter.instruction(if value { "mov rax, 1" } else { "xor eax, eax" }); //materialize the isset boolean result on x86_64
         }
     }
 }

@@ -68,7 +68,7 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_get_line_read_ok")); // continue when the read succeeded
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_get_line_read_ok")); //continue when the read succeeded
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction(&format!("cmn x0, #{}", plat.would_block_errno())); // Linux: compare read result with -EAGAIN/-EWOULDBLOCK
     } else {

@@ -349,35 +349,35 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving regex compilation scratch storage
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the regex object, regmatch buffer, and subject spill slots
     emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve aligned local storage for regex_t, regmatch_t, and the helper spill fields
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); // preserve the elephc subject pointer across delimiter stripping and regex compilation helper calls
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length across delimiter stripping and regex compilation helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); //preserve the elephc subject pointer across delimiter stripping and regex compilation helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); //preserve the elephc subject length across delimiter stripping and regex compilation helper calls
     emitter.instruction("mov rax, rdi");                                        // move the elephc pattern pointer into the preg-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move the elephc pattern length into the preg-strip helper input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and collect supported regex flags from the elephc pattern payload
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", flags_off));  // preserve the regex flag word returned by the delimiter-strip helper for the later regcomp() call
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a null-terminated C string
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // preserve the null-terminated PCRE pattern pointer for the upcoming regcomp() call
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); //preserve the null-terminated PCRE pattern pointer for the upcoming regcomp() call
     super::emit_prepare_regex_locale(emitter);
     emitter.instruction("lea rdi, [rsp]");                                      // pass the local regex_t storage as the first regcomp() argument
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass the null-terminated PCRE pattern C string as the second regcomp() argument
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); //pass the null-terminated PCRE pattern C string as the second regcomp() argument
     emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
     emitter.bl_c("pcre2_regcomp");                                              // compile the PCRE pattern into the local regex_t storage
     emitter.instruction("test eax, eax");                                       // did regcomp() succeed and produce a compiled regex object?
     emitter.instruction("jnz __rt_preg_match_no_linux_x86_64");                 // failed regex compilation maps to a PHP false-style no-match result
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload the elephc subject pointer before null-terminating it in the secondary scratch buffer
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // reload the elephc subject length before null-terminating it in the secondary scratch buffer
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); //reload the elephc subject pointer before null-terminating it in the secondary scratch buffer
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); //reload the elephc subject length before null-terminating it in the secondary scratch buffer
     emitter.instruction("call __rt_cstr2");                                     // materialize a null-terminated C version of the subject string for PCRE2 regex execution
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // preserve the subject C string pointer for the regexec() call and later cleanup path
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); //preserve the subject C string pointer for the regexec() call and later cleanup path
     emitter.instruction("lea rdi, [rsp]");                                      // pass the compiled regex_t storage as the first regexec() argument
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass the null-terminated subject C string as the second regexec() argument
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); //pass the null-terminated subject C string as the second regexec() argument
     emitter.instruction("mov edx, 1");                                          // request exactly one regmatch_t capture because preg_match() only needs match/no-match
     emitter.instruction(&format!("lea rcx, [rsp + {}]", regmatch_off));         // pass the local regmatch_t buffer as the match output slot for regexec()
     emitter.instruction("xor r8d, r8d");                                        // pass eflags = 0 so PCRE2 regex execution performs a normal match from the subject start
     emitter.bl_c("pcre2_regexec");                                                    // execute the compiled PCRE2 regex against the null-terminated subject string
-    emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // preserve the regexec() result code across the mandatory regfree() cleanup call
+    emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); //preserve the regexec() result code across the mandatory regfree() cleanup call
     emitter.instruction("lea rdi, [rsp]");                                      // reload the compiled regex_t storage before freeing it with regfree()
     emitter.bl_c("pcre2_regfree");                                                    // release any internal PCRE2 regex resources held by the local regex_t object
-    emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", regexec_result_off)); // reload the saved regexec() status code after regfree() clobbered caller-saved registers
+    emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", regexec_result_off)); //reload the saved regexec() status code after regfree() clobbered caller-saved registers
     emitter.instruction("test eax, eax");                                       // interpret a zero regexec() result as a successful regex match
     emitter.instruction("jnz __rt_preg_match_no_linux_x86_64");                 // return zero when PCRE2 regex execution reports no match
     emitter.instruction("mov eax, 1");                                          // return one when PCRE2 regex execution reports a successful match
@@ -418,22 +418,22 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving capture helper storage
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for regex and capture spill slots
     emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve local storage for regex_t, regmatch buffer, and matches array state
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); // preserve the elephc subject pointer across pattern helper calls
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length across pattern helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); //preserve the elephc subject pointer across pattern helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); //preserve the elephc subject length across pattern helper calls
     emitter.instruction("mov rax, rdi");                                        // move pattern pointer into preg-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move pattern length into preg-strip helper input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and collect supported regex flags
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", flags_off));  // save stripped regex flags for regcomp
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a C string
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // save null-terminated PCRE pattern for regcomp
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); //save null-terminated PCRE pattern for regcomp
     super::emit_prepare_regex_locale(emitter);
     emitter.instruction("lea rdi, [rsp]");                                      // pass local regex_t storage to regcomp
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass null-terminated PCRE pattern to regcomp
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); //pass null-terminated PCRE pattern to regcomp
     emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
     emitter.bl_c("pcre2_regcomp");                                              // compile regex through PCRE2
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?
     emitter.instruction("jnz __rt_preg_match_capture_empty_linux_x86_64");      // compile failure returns no match and an empty matches array
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", regex_re_nsub_off)); // load regex_t.re_nsub after successful compilation
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", regex_re_nsub_off)); //load regex_t.re_nsub after successful compilation
     emitter.instruction("add r9, 1");                                           // include the full-match slot in the regmatch count
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", nmatch_off));  // save dynamic regmatch count for loops and array sizing
     emitter.instruction("mov rdi, r9");                                         // copy nmatch before scaling it to a malloc byte count
@@ -445,22 +445,22 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.bl_c("malloc");                                                     // allocate the regmatch_t vector for all capture groups
     emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
     emitter.instruction("jz __rt_preg_match_capture_malloc_fail_linux_x86_64"); // allocation failure frees regex_t and returns no match
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic regmatch_t buffer pointer
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload subject pointer before C-string conversion
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // reload subject length before C-string conversion
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); //save dynamic regmatch_t buffer pointer
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); //reload subject pointer before C-string conversion
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); //reload subject length before C-string conversion
     emitter.instruction("call __rt_cstr2");                                     // materialize null-terminated subject for regexec
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // save subject C string across regexec and pushes
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); //save subject C string across regexec and pushes
     emit_preg_match_init_regmatches_x86_64(emitter, regmatches_ptr_off, nmatch_off, regmatch_size);
     emitter.instruction("lea rdi, [rsp]");                                      // pass compiled regex_t storage to regexec
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass subject C string to regexec
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); //pass subject C string to regexec
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every capture group
-    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic regmatch_t capture buffer
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //pass dynamic regmatch_t capture buffer
     emitter.instruction("xor r8d, r8d");                                        // use default regexec execution flags
     emitter.bl_c("pcre2_regexec");                                                    // execute regex and fill capture offsets
-    emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // save regexec status across regfree
+    emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); //save regexec status across regfree
     emitter.instruction("lea rdi, [rsp]");                                      // reload regex_t storage for regfree
     emitter.bl_c("pcre2_regfree");                                                    // release compiled regex resources
-    emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", regexec_result_off)); // reload saved regexec status
+    emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", regexec_result_off)); //reload saved regexec status
     emitter.instruction("test eax, eax");                                       // was there a successful regex match?
     emitter.instruction("jnz __rt_preg_match_capture_no_match_linux_x86_64");   // no match frees capture storage and returns an empty array
 
@@ -469,7 +469,7 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_match_capture_scan_linux_x86_64");
     emitter.instruction("mov r10, r9");                                         // copy capture index before scaling
     emitter.instruction(&format!("imul r10, {}", regmatch_size));               // scale capture index to native regmatch_t stride
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic capture buffer base
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //load dynamic capture buffer base
     emitter.instruction("add r10, r12");                                        // compute address of this regmatch_t slot
     emit_x86_load_regoff_from_index(emitter, "r11", "r10", 0, regmatch_size);
     emitter.instruction("cmp r11, 0");                                          // check whether this capture participated
@@ -479,21 +479,21 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r9, 1");                                           // move to the previous capture slot
     emitter.instruction("jmp __rt_preg_match_capture_scan_linux_x86_64");       // continue searching for the highest populated capture
     emitter.label("__rt_preg_match_capture_scan_found_linux_x86_64");
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", max_group_off)); // save highest capture index to materialize
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", max_group_off)); //save highest capture index to materialize
 
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // allocate enough slots for every compiled capture
     emitter.instruction("mov rsi, 16");                                         // string arrays use pointer/length payload slots
     emitter.instruction("call __rt_array_new");                                 // allocate indexed string matches array
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save matches array pointer across pushes
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); // start with capture index zero
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); //save matches array pointer across pushes
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); //start with capture index zero
     emitter.label("__rt_preg_match_capture_group_loop_linux_x86_64");
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload current capture index
-    emitter.instruction(&format!("mov r8, QWORD PTR [rsp + {}]", max_group_off)); // reload highest capture index
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); //reload current capture index
+    emitter.instruction(&format!("mov r8, QWORD PTR [rsp + {}]", max_group_off)); //reload highest capture index
     emitter.instruction("cmp r9, r8");                                          // have all required captures been materialized?
     emitter.instruction("jg __rt_preg_match_capture_success_linux_x86_64");     // finish after the highest populated capture
     emitter.instruction("mov r10, r9");                                         // copy capture index before scaling
     emitter.instruction(&format!("imul r10, {}", regmatch_size));               // scale capture index to native regmatch_t stride
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic capture buffer base
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //load dynamic capture buffer base
     emitter.instruction("add r10, r12");                                        // compute address of this regmatch_t slot
     emit_x86_load_regoff_from_index(emitter, "r11", "r10", 0, regmatch_size);
     emit_x86_load_regoff_from_index(
@@ -504,8 +504,8 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
         regmatch_size,
     );
     emitter.instruction("cmp r11, 0");                                          // detect unmatched captures before the highest populated slot
-    emitter.instruction("jl __rt_preg_match_capture_empty_string_linux_x86_64"); // emit PHP's empty string for an interior unmatched capture
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // reload subject C string base
+    emitter.instruction("jl __rt_preg_match_capture_empty_string_linux_x86_64"); //emit PHP's empty string for an interior unmatched capture
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); //reload subject C string base
     emitter.instruction("add rsi, r11");                                        // compute capture string pointer
     emitter.instruction("mov rdx, rcx");                                        // copy capture end offset before subtracting start
     emitter.instruction("sub rdx, r11");                                        // capture length = rm_eo - rm_so
@@ -514,23 +514,23 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // empty unmatched capture has a null pointer
     emitter.instruction("xor edx, edx");                                        // empty unmatched capture has zero length
     emitter.label("__rt_preg_match_capture_push_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); // reload matches array pointer
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); //reload matches array pointer
     emitter.instruction("call __rt_array_push_str");                            // append capture string to matches array
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save possibly-grown matches array pointer
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload capture index after helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); //save possibly-grown matches array pointer
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); //reload capture index after helper calls
     emitter.instruction("add r9, 1");                                           // advance to next capture index
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save next capture index
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); //save next capture index
     emitter.instruction("jmp __rt_preg_match_capture_group_loop_linux_x86_64"); // continue materializing captures
 
     emitter.label("__rt_preg_match_capture_success_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //reload dynamic capture buffer for cleanup
     emitter.bl_c("free");                                                       // free the dynamic regmatch_t vector before returning matches
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", matches_array_off)); // return matches array pointer in rdx
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", matches_array_off)); //return matches array pointer in rdx
     emitter.instruction("mov eax, 1");                                          // report that preg_match found a match
     emitter.instruction("jmp __rt_preg_match_capture_ret_linux_x86_64");        // share helper epilogue
 
     emitter.label("__rt_preg_match_capture_no_match_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for the no-match cleanup path
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //reload dynamic capture buffer for the no-match cleanup path
     emitter.bl_c("free");                                                       // free the dynamic regmatch_t vector before returning an empty matches array
     emitter.instruction("jmp __rt_preg_match_capture_empty_linux_x86_64");      // allocate and return the empty matches array
 
@@ -559,7 +559,7 @@ fn emit_preg_match_init_regmatches_x86_64(
     regmatch_size: usize,
 ) {
     emitter.instruction("mov r9, -1");                                          // prepare unmatched sentinel for capture slots
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic regmatch_t buffer base
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //load dynamic regmatch_t buffer base
     emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", nmatch_off)); // load dynamic regmatch slot count
     emitter.instruction("xor r12d, r12d");                                      // initialize regmatch initialization index
     emitter.label("__rt_preg_match_capture_init_loop_linux_x86_64");
@@ -588,8 +588,8 @@ fn emit_x86_load_regoff_from_index(
         format!(" + {field_off}")
     };
     if regmatch_size == 16 {
-        emitter.instruction(&format!("mov {dst}, QWORD PTR [{addr_reg}{suffix}]")); // load native 64-bit regoff_t from computed regmatch slot
+        emitter.instruction(&format!("mov {dst}, QWORD PTR [{addr_reg}{suffix}]")); //load native 64-bit regoff_t from computed regmatch slot
     } else {
-        emitter.instruction(&format!("movsxd {dst}, DWORD PTR [{addr_reg}{suffix}]")); // sign-extend native 32-bit regoff_t from computed slot
+        emitter.instruction(&format!("movsxd {dst}, DWORD PTR [{addr_reg}{suffix}]")); //sign-extend native 32-bit regoff_t from computed slot
     }
 }

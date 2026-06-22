@@ -132,7 +132,7 @@ pub(super) fn box_file_get_contents_result(emitter: &mut Emitter, ctx: &mut Cont
             abi::emit_push_reg_pair(emitter, "rax", "rdx");                    // preserve the successful file payload while allocating the mixed box
             emitter.instruction("mov rax, 24");                                 // mixed cells store tag plus two payload words
             abi::emit_call_label(emitter, "__rt_heap_alloc");                   // allocate the mixed result cell for a successful string payload
-            emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the mixed-cell heap kind word with the x86_64 heap marker
+            emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); //materialize the mixed-cell heap kind word with the x86_64 heap marker
             emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the allocated payload as a mixed cell
             emitter.instruction("mov r10, 1");                                  // runtime tag 1 = string
             emitter.instruction("mov QWORD PTR [rax], r10");                    // store the string tag in the mixed result

@@ -232,7 +232,7 @@ fn emit_mixed_numeric_binops_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_numeric_float_sub_loaded_linux_x86_64"); // use floating-point subtraction for an overflowing integer subtraction
     emitter.instruction("cmp QWORD PTR [rbp - 24], 2");                         // is this overflow fallback for multiplication?
     emitter.instruction("je __rt_mixed_numeric_float_mul_loaded_linux_x86_64"); // use floating-point multiplication for an overflowing integer multiplication
-    emitter.instruction("jmp __rt_mixed_numeric_float_add_loaded_linux_x86_64"); // use floating-point addition for an overflowing integer addition
+    emitter.instruction("jmp __rt_mixed_numeric_float_add_loaded_linux_x86_64"); //use floating-point addition for an overflowing integer addition
 
     // -- float path: cast both operands to double, then box the double result --
     emitter.label("__rt_mixed_numeric_float_path_linux_x86_64");

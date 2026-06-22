@@ -120,7 +120,7 @@ pub(super) fn emit_new_object_core(
         Arch::X86_64 => {
             emitter.instruction(&format!("mov rax, {}", obj_size));             // object size in bytes
             abi::emit_call_label(emitter, "__rt_heap_alloc");                   // allocate object -> rax = pointer
-            emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the x86_64 object heap kind word with the uniform heap marker
+            emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); //materialize the x86_64 object heap kind word with the uniform heap marker
             emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the allocation as an object instance in the x86_64 uniform heap header
             emitter.instruction(&format!("mov r10, {}", class_info.class_id));  // load the compile-time class id for the allocated object instance
             emitter.instruction("mov QWORD PTR [rax], r10");                    // store the class id in the first field of the object payload
@@ -138,12 +138,12 @@ pub(super) fn emit_new_object_core(
             Arch::AArch64 => {
                 emitter.instruction("ldr x9, [sp]");                            // peek object pointer
                 emitter.instruction(&format!("str xzr, [x9, #{}]", offset));    // zero-init property lo
-                emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); // zero-init property hi
+                emitter.instruction(&format!("str xzr, [x9, #{}]", offset + 8)); //zero-init property hi
             }
             Arch::X86_64 => {
                 emitter.instruction("mov r11, QWORD PTR [rsp]");                // peek the allocated object pointer from the temporary stack slot
-                emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", offset)); // zero-initialize the low word of the property storage slot
-                emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", offset + 8)); // zero-initialize the high word / runtime metadata slot
+                emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", offset)); //zero-initialize the low word of the property storage slot
+                emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", offset + 8)); //zero-initialize the high word / runtime metadata slot
             }
         }
         if starts_uninitialized {
@@ -182,7 +182,7 @@ pub(super) fn emit_new_object_core(
                 emitter.instruction("mov rsi, 7");                              // value type tag = mixed
                 emitter.instruction("call __rt_hash_new");                      // allocate empty hashtable -> rax = hashtable pointer
                 emitter.instruction("mov r11, QWORD PTR [rsp]");                // peek object pointer for dyn_props slot store
-                emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", offset)); // store the hashtable pointer in the dyn_props slot
+                emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", offset)); //store the hashtable pointer in the dyn_props slot
             }
         }
     }
@@ -225,7 +225,7 @@ pub(super) fn emit_new_object_core(
                     emitter.instruction(&format!("ldr {}, [sp]", object_reg));  // peek object pointer from the temporary stack slot on AArch64
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", object_reg)); // peek object pointer from the temporary stack slot on x86_64
+                    emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", object_reg)); //peek object pointer from the temporary stack slot on x86_64
                 }
             }
             match &prop_ty {
@@ -335,10 +335,10 @@ pub(super) fn emit_new_object_core(
         } else {
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction(&format!("ldr x0, [sp, #{}]", receiver_offset)); // skip argument temporaries to reload the saved object pointer as $this on AArch64
+                    emitter.instruction(&format!("ldr x0, [sp, #{}]", receiver_offset)); //skip argument temporaries to reload the saved object pointer as $this on AArch64
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", receiver_offset)); // skip argument temporaries to reload the saved object pointer as $this in the first SysV integer argument register on x86_64
+                    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", receiver_offset)); //skip argument temporaries to reload the saved object pointer as $this in the first SysV integer argument register on x86_64
                 }
             }
         }
@@ -1151,7 +1151,7 @@ fn emit_branch_if_saved_traversable_implements(
 ) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldr x0, [sp, #{}]", candidate_stack_offset)); // load the saved Traversable candidate as matcher argument 1
+            emitter.instruction(&format!("ldr x0, [sp, #{}]", candidate_stack_offset)); //load the saved Traversable candidate as matcher argument 1
             abi::emit_load_int_immediate(emitter, "x1", interface_id as i64);
             abi::emit_load_int_immediate(emitter, "x2", 1);
             abi::emit_call_label(emitter, "__rt_exception_matches");            // test whether the candidate implements the requested Traversable interface
@@ -1159,7 +1159,7 @@ fn emit_branch_if_saved_traversable_implements(
             emitter.instruction(&format!("b.ne {}", target_label));             // branch to the matching normalization path
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", candidate_stack_offset)); // load the saved Traversable candidate as matcher argument 1
+            emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", candidate_stack_offset)); //load the saved Traversable candidate as matcher argument 1
             abi::emit_load_int_immediate(emitter, "rsi", interface_id as i64);
             abi::emit_load_int_immediate(emitter, "rdx", 1);
             abi::emit_call_label(emitter, "__rt_exception_matches");            // test whether the candidate implements the requested Traversable interface
@@ -1235,7 +1235,7 @@ fn emit_throw_iterator_iterator_downcast_logic_exception(emitter: &mut Emitter) 
             emitter.instruction("str x9, [x0]");                                // store class id at object header
             abi::emit_symbol_address(emitter, "x9", "_iterator_iterator_downcast_msg");
             emitter.instruction("str x9, [x0, #8]");                            // store static exception message pointer
-            emitter.instruction(&format!("mov x9, #{}", ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len())); // load static exception message length
+            emitter.instruction(&format!("mov x9, #{}", ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len())); //load static exception message length
             emitter.instruction("str x9, [x0, #16]");                           // store exception message length
             emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
             abi::emit_symbol_address(emitter, "x9", "_exc_value");
@@ -1254,7 +1254,7 @@ fn emit_throw_iterator_iterator_downcast_logic_exception(emitter: &mut Emitter) 
             emitter.instruction("mov QWORD PTR [rax], r10");                    // store class id at object header
             abi::emit_symbol_address(emitter, "r10", "_iterator_iterator_downcast_msg"); // materialize static exception message pointer
             emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store static exception message pointer
-            emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len())); // store static exception message length
+            emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len())); //store static exception message length
             emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
             abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);     // publish the active exception object
             emitter.instruction("mov rsp, rbp");                                // release helper frame before throwing
@@ -1278,12 +1278,12 @@ fn store_iterator_inner_property_from_result(emitter: &mut Emitter, inner_offset
             emitter.instruction("ldr x9, [sp]");                                // reload the IteratorIterator object pointer
             emitter.instruction(&format!("str x0, [x9, #{}]", inner_offset));   // store the normalized inner Iterator object
             emitter.instruction("mov x10, #6");                                 // runtime property tag 6 = object
-            emitter.instruction(&format!("str x10, [x9, #{}]", inner_offset + 8)); // stamp the inner property as an object
+            emitter.instruction(&format!("str x10, [x9, #{}]", inner_offset + 8)); //stamp the inner property as an object
         }
         Arch::X86_64 => {
             emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the IteratorIterator object pointer
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", inner_offset)); // store the normalized inner Iterator object
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 6", inner_offset + 8)); // stamp the inner property as an object
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", inner_offset)); //store the normalized inner Iterator object
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 6", inner_offset + 8)); //stamp the inner property as an object
         }
     }
 }
@@ -1309,13 +1309,13 @@ fn store_callable_property_from_result_at_stack_offset(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("ldr x9, [sp]");                                // reload the object pointer that owns the callable property
-            emitter.instruction(&format!("str x0, [x9, #{}]", property_offset)); // store the callable descriptor pointer
-            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset + 8)); // clear the unused inline property metadata slot for callable descriptors
+            emitter.instruction(&format!("str x0, [x9, #{}]", property_offset)); //store the callable descriptor pointer
+            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset + 8)); //clear the unused inline property metadata slot for callable descriptors
         }
         Arch::X86_64 => {
             emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the object pointer that owns the callable property
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", property_offset)); // store the callable descriptor pointer
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset + 8)); // clear the unused inline property metadata slot for callable descriptors
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", property_offset)); //store the callable descriptor pointer
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset + 8)); //clear the unused inline property metadata slot for callable descriptors
         }
     }
 }
@@ -1341,13 +1341,13 @@ fn store_pointer_property_from_result_at_stack_offset(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("ldr x9, [sp]");                                // reload the object pointer that owns the raw pointer property
-            emitter.instruction(&format!("str x0, [x9, #{}]", property_offset)); // store the raw pointer payload
-            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset + 8)); // clear pointer property metadata because it is not PHP-owned
+            emitter.instruction(&format!("str x0, [x9, #{}]", property_offset)); //store the raw pointer payload
+            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset + 8)); //clear pointer property metadata because it is not PHP-owned
         }
         Arch::X86_64 => {
             emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the object pointer that owns the raw pointer property
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", property_offset)); // store the raw pointer payload
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset + 8)); // clear pointer property metadata because it is not PHP-owned
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", property_offset)); //store the raw pointer payload
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset + 8)); //clear pointer property metadata because it is not PHP-owned
         }
     }
 }
@@ -1357,13 +1357,13 @@ fn store_pointer_property_zero(emitter: &mut Emitter, property_offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("ldr x9, [sp]");                                // reload the object pointer that owns the raw pointer property
-            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset)); // initialize the raw pointer payload as null
-            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset + 8)); // clear pointer property metadata because it is not PHP-owned
+            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset)); //initialize the raw pointer payload as null
+            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset + 8)); //clear pointer property metadata because it is not PHP-owned
         }
         Arch::X86_64 => {
             emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the object pointer that owns the raw pointer property
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset)); // initialize the raw pointer payload as null
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset + 8)); // clear pointer property metadata because it is not PHP-owned
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset)); //initialize the raw pointer payload as null
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset + 8)); //clear pointer property metadata because it is not PHP-owned
         }
     }
 }
@@ -1423,15 +1423,15 @@ fn store_storage_array_property_from_result(
 ) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldr x9, [sp, #{}]", object_stack_offset)); // reload the SPL storage object pointer
-            emitter.instruction(&format!("str x0, [x9, #{}]", property_offset)); // store the initialized storage array pointer
+            emitter.instruction(&format!("ldr x9, [sp, #{}]", object_stack_offset)); //reload the SPL storage object pointer
+            emitter.instruction(&format!("str x0, [x9, #{}]", property_offset)); //store the initialized storage array pointer
             emitter.instruction("mov x10, #4");                                 // runtime property tag 4 = indexed array
-            emitter.instruction(&format!("str x10, [x9, #{}]", property_offset + 8)); // stamp the property as an indexed array
+            emitter.instruction(&format!("str x10, [x9, #{}]", property_offset + 8)); //stamp the property as an indexed array
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", object_stack_offset)); // reload the SPL storage object pointer
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", property_offset)); // store the initialized storage array pointer
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 4", property_offset + 8)); // stamp the property as an indexed array
+            emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", object_stack_offset)); //reload the SPL storage object pointer
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", property_offset)); //store the initialized storage array pointer
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 4", property_offset + 8)); //stamp the property as an indexed array
         }
     }
 }
@@ -1445,16 +1445,16 @@ fn store_storage_int_property_from_stack(
 ) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldr x9, [sp, #{}]", object_stack_offset)); // reload the SPL storage object pointer
-            emitter.instruction(&format!("ldr x10, [sp, #{}]", value_stack_offset)); // reload the preserved integer property value
-            emitter.instruction(&format!("str x10, [x9, #{}]", property_offset)); // store the integer property value
-            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset + 8)); // clear scalar property metadata
+            emitter.instruction(&format!("ldr x9, [sp, #{}]", object_stack_offset)); //reload the SPL storage object pointer
+            emitter.instruction(&format!("ldr x10, [sp, #{}]", value_stack_offset)); //reload the preserved integer property value
+            emitter.instruction(&format!("str x10, [x9, #{}]", property_offset)); //store the integer property value
+            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset + 8)); //clear scalar property metadata
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", object_stack_offset)); // reload the SPL storage object pointer
-            emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", value_stack_offset)); // reload the preserved integer property value
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], r10", property_offset)); // store the integer property value
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset + 8)); // clear scalar property metadata
+            emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", object_stack_offset)); //reload the SPL storage object pointer
+            emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", value_stack_offset)); //reload the preserved integer property value
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], r10", property_offset)); //store the integer property value
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset + 8)); //clear scalar property metadata
         }
     }
 }
@@ -1467,14 +1467,14 @@ fn store_storage_zero_property(
 ) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldr x9, [sp, #{}]", object_stack_offset)); // reload the SPL storage object pointer
-            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset)); // initialize the integer property to zero
-            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset + 8)); // clear scalar property metadata
+            emitter.instruction(&format!("ldr x9, [sp, #{}]", object_stack_offset)); //reload the SPL storage object pointer
+            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset)); //initialize the integer property to zero
+            emitter.instruction(&format!("str xzr, [x9, #{}]", property_offset + 8)); //clear scalar property metadata
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", object_stack_offset)); // reload the SPL storage object pointer
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset)); // initialize the integer property to zero
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset + 8)); // clear scalar property metadata
+            emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", object_stack_offset)); //reload the SPL storage object pointer
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset)); //initialize the integer property to zero
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", property_offset + 8)); //clear scalar property metadata
         }
     }
 }

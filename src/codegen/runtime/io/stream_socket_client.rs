@@ -154,7 +154,7 @@ pub fn emit_stream_socket_client(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative descriptor means failure
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_socket_client_sock_ok")); // continue when socket succeeded
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_socket_client_sock_ok")); //continue when socket succeeded
     emitter.instruction("b __rt_stream_socket_client_fail");                    // socket() failed
     emitter.label("__rt_stream_socket_client_sock_ok");
     emitter.instruction("str x0, [sp, #32]");                                   // save the socket descriptor
@@ -193,7 +193,7 @@ pub fn emit_stream_socket_client(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_socket_client_ok")); // continue when connect succeeded
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_socket_client_ok")); //continue when connect succeeded
     emitter.instruction("b __rt_stream_socket_client_fail_close");              // connect() failed
 
     emitter.label("__rt_stream_socket_client_ok");

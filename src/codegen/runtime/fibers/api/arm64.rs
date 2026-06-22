@@ -89,45 +89,45 @@ pub(super) fn emit_construct(emitter: &mut Emitter) {
 
     // -- zero-initialise every Fiber field before populating the meaningful ones --
     emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_STATE_OFFSET));   // state placeholder (overwritten below with NotStarted)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_STACK_BASE_OFFSET)); // stack_base placeholder (overwritten after stack alloc)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_STACK_TOP_OFFSET)); // stack_top placeholder (overwritten after stack alloc)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_STACK_SIZE_OFFSET)); // stack_size placeholder (overwritten after stack alloc)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_SAVED_SP_OFFSET)); // saved_sp placeholder (overwritten after fake-frame setup)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_CALLABLE_OFFSET)); // callable.lo placeholder (overwritten with x19 below)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_CALLABLE_WRAPPER_OFFSET)); // callable wrapper placeholder (overwritten with x22 below)
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_STACK_BASE_OFFSET)); //stack_base placeholder (overwritten after stack alloc)
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_STACK_TOP_OFFSET)); //stack_top placeholder (overwritten after stack alloc)
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_STACK_SIZE_OFFSET)); //stack_size placeholder (overwritten after stack alloc)
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_SAVED_SP_OFFSET)); //saved_sp placeholder (overwritten after fake-frame setup)
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_CALLABLE_OFFSET)); //callable.lo placeholder (overwritten with x19 below)
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_CALLABLE_WRAPPER_OFFSET)); //callable wrapper placeholder (overwritten with x22 below)
     emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_CALLER_OFFSET));  // caller starts NULL (no resumer until start/resume)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // transfer_value.lo cleared
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); // transfer_value.hi cleared
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_PENDING_THROW_OFFSET)); // pending_throw cleared
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_EXC_HEAD_OFFSET)); // own_exc_head cleared (no installed handlers yet)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_CALL_FRAME_OFFSET)); // own_call_frame cleared (no activation records on the fresh fiber stack yet)
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); //transfer_value.lo cleared
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); //transfer_value.hi cleared
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_PENDING_THROW_OFFSET)); //pending_throw cleared
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_EXC_HEAD_OFFSET)); //own_exc_head cleared (no installed handlers yet)
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_CALL_FRAME_OFFSET)); //own_call_frame cleared (no activation records on the fresh fiber stack yet)
     for i in 0..FIBER_START_ARGS_MAX {
-        emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_START_ARGS_OFFSET + i * 8)); // start_args[i] cleared
+        emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_START_ARGS_OFFSET + i * 8)); //start_args[i] cleared
     }
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_START_ARG_COUNT_OFFSET)); // start_arg_count cleared until Fiber::start() copies values
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_START_ARG_COUNT_OFFSET)); //start_arg_count cleared until Fiber::start() copies values
     for i in 0..FIBER_FLOAT_ARGS_MAX {
-        emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_FLOAT_ARGS_OFFSET + i * 8)); // clear reserved legacy float slot storage
+        emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_FLOAT_ARGS_OFFSET + i * 8)); //clear reserved legacy float slot storage
     }
     // user_arg_max defaults to FIBER_START_ARGS_MAX so start() may fill every
     // visible start_args slot. Captures now live in callable descriptors.
     emitter.instruction(&format!("mov x9, #{}", FIBER_START_ARGS_MAX));         // default user_arg_max = full slot count
-    emitter.instruction(&format!("str x9, [x21, #{}]", FIBER_USER_ARG_MAX_OFFSET)); // user_arg_max stored on the freshly built fiber
+    emitter.instruction(&format!("str x9, [x21, #{}]", FIBER_USER_ARG_MAX_OFFSET)); //user_arg_max stored on the freshly built fiber
 
     // -- record the captured callable --
-    emitter.instruction(&format!("str x19, [x21, #{}]", FIBER_CALLABLE_OFFSET)); // callable.lo = descriptor pointer
-    emitter.instruction(&format!("str x22, [x21, #{}]", FIBER_CALLABLE_WRAPPER_OFFSET)); // callable wrapper = Fiber entry ABI adapter
+    emitter.instruction(&format!("str x19, [x21, #{}]", FIBER_CALLABLE_OFFSET)); //callable.lo = descriptor pointer
+    emitter.instruction(&format!("str x22, [x21, #{}]", FIBER_CALLABLE_WRAPPER_OFFSET)); //callable wrapper = Fiber entry ABI adapter
 
     // -- allocate the per-fiber stack via mmap; alloc returns base/top/total --
     emitter.instruction(&format!("mov x0, #{}", FIBER_DEFAULT_STACK_SIZE));     // request the default usable fiber stack size in bytes
     emitter.instruction("bl __rt_fiber_alloc_stack");                           // x0 = stack_base (mapping start), x1 = stack_top, x2 = total mapped length
     emitter.instruction("cbz x0, __rt_fiber_construct_stack_failed");           // abort construction if mmap failed instead of writing a fake frame at NULL
-    emitter.instruction(&format!("str x0, [x21, #{}]", FIBER_STACK_BASE_OFFSET)); // stack_base = mmap mapping start (includes the guard page)
-    emitter.instruction(&format!("str x1, [x21, #{}]", FIBER_STACK_TOP_OFFSET)); // stack_top = initial SP target (16-byte aligned high address)
-    emitter.instruction(&format!("str x2, [x21, #{}]", FIBER_STACK_SIZE_OFFSET)); // stack_size = total mapped length, needed verbatim by munmap on free
+    emitter.instruction(&format!("str x0, [x21, #{}]", FIBER_STACK_BASE_OFFSET)); //stack_base = mmap mapping start (includes the guard page)
+    emitter.instruction(&format!("str x1, [x21, #{}]", FIBER_STACK_TOP_OFFSET)); //stack_top = initial SP target (16-byte aligned high address)
+    emitter.instruction(&format!("str x2, [x21, #{}]", FIBER_STACK_SIZE_OFFSET)); //stack_size = total mapped length, needed verbatim by munmap on free
 
     // -- carve out a fake initial frame at the very top of the stack --
     emitter.instruction(&format!("sub x10, x1, #{}", initial_frame_bytes));     // x10 = initial saved_sp (room for the switch save area)
-    emitter.instruction(&format!("str x10, [x21, #{}]", FIBER_SAVED_SP_OFFSET)); // saved_sp points at the bottom of the fake frame
+    emitter.instruction(&format!("str x10, [x21, #{}]", FIBER_SAVED_SP_OFFSET)); //saved_sp points at the bottom of the fake frame
 
     // -- zero the fake frame so callee-saved registers come back as zero on first switch --
     emitter.instruction("mov x11, x10");                                        // x11 = cursor through the fake frame
@@ -196,9 +196,9 @@ pub(super) fn emit_start(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = current fiber state
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_TERMINATED));       // is the fiber terminated?
     emitter.instruction("b.ne __rt_fiber_start_no_escape");                     // skip the re-raise path when the fiber is still alive
-    emitter.instruction(&format!("ldr x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // x10 = parked Throwable (NULL when termination was clean)
+    emitter.instruction(&format!("ldr x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); //x10 = parked Throwable (NULL when termination was clean)
     emitter.instruction("cbz x10, __rt_fiber_start_no_escape");                 // skip the re-raise path when no exception escaped
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // clear pending_throw so subsequent inspections see the clean terminated state
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); //clear pending_throw so subsequent inspections see the clean terminated state
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_value", 0);             // _exc_value = the escaped Throwable, ready for __rt_throw_current
     emitter.instruction("bl __rt_throw_current");                               // re-raise on the caller's stack chain (no return)
     emitter.instruction("brk #0xfffe");                                         // defensive trap if __rt_throw_current ever returns
@@ -211,9 +211,9 @@ pub(super) fn emit_start(emitter: &mut Emitter) {
     emit_box_null_mixed(emitter);
     emitter.instruction("b __rt_fiber_start_return_ready");                     // skip the yielded-value load after boxing PHP null
     emitter.label("__rt_fiber_start_return_yield");
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (suspend yield value)
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
+    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); //x0 = fiber->transfer_value.lo (suspend yield value)
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); //clear transfer_value.lo because ownership moves to the caller
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); //clear transfer_value.hi to leave no stale yielded payload
     emitter.label("__rt_fiber_start_return_ready");
 
     // -- epilogue --
@@ -253,7 +253,7 @@ pub(super) fn emit_resume(emitter: &mut Emitter) {
     emitter.instruction("ldp x20, x21, [sp], #16");                             // restore caller's x20/x21 now that the state check is done
 
     // -- deliver the new value into the fiber's transfer slot --
-    emitter.instruction(&format!("str x1, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // fiber->transfer_value.lo = $value passed to resume
+    emitter.instruction(&format!("str x1, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); //fiber->transfer_value.lo = $value passed to resume
 
     // -- record the resumer as the fiber's caller, then switch in --
     abi::emit_load_symbol_to_reg(emitter, "x9", "_fiber_current", 0);           // x9 = current execution context to remember as the caller
@@ -265,9 +265,9 @@ pub(super) fn emit_resume(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = current fiber state
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_TERMINATED));       // is the fiber terminated?
     emitter.instruction("b.ne __rt_fiber_resume_no_escape");                    // skip the re-raise path when the fiber is still alive
-    emitter.instruction(&format!("ldr x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // x10 = parked Throwable (NULL when termination was clean)
+    emitter.instruction(&format!("ldr x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); //x10 = parked Throwable (NULL when termination was clean)
     emitter.instruction("cbz x10, __rt_fiber_resume_no_escape");                // skip the re-raise path when no exception escaped
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // clear pending_throw so subsequent inspections see the clean terminated state
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); //clear pending_throw so subsequent inspections see the clean terminated state
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_value", 0);             // _exc_value = the escaped Throwable, ready for __rt_throw_current
     emitter.instruction("bl __rt_throw_current");                               // re-raise on the caller's stack chain (no return)
     emitter.instruction("brk #0xfffe");                                         // defensive trap if __rt_throw_current ever returns
@@ -280,9 +280,9 @@ pub(super) fn emit_resume(emitter: &mut Emitter) {
     emit_box_null_mixed(emitter);
     emitter.instruction("b __rt_fiber_resume_return_ready");                    // skip the yielded-value load after boxing PHP null
     emitter.label("__rt_fiber_resume_return_yield");
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (next yield value)
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
+    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); //x0 = fiber->transfer_value.lo (next yield value)
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); //clear transfer_value.lo because ownership moves to the caller
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); //clear transfer_value.hi to leave no stale yielded payload
     emitter.label("__rt_fiber_resume_return_ready");
 
     emitter.instruction("ldr x19, [sp]");                                       // restore caller's x19
@@ -318,7 +318,7 @@ pub(super) fn emit_suspend(emitter: &mut Emitter) {
     emitter.instruction("ldp x20, x21, [sp], #16");                             // restore caller's x20/x21 now that the state check is done
 
     // -- store the value being yielded and mark the fiber Suspended --
-    emitter.instruction(&format!("str x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // fiber->transfer_value.lo = the yielded value
+    emitter.instruction(&format!("str x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); //fiber->transfer_value.lo = the yielded value
     emitter.instruction(&format!("mov x9, #{}", FIBER_STATE_SUSPENDED));        // FIBER_STATE_SUSPENDED constant
     emitter.instruction(&format!("str x9, [x19, #{}]", FIBER_STATE_OFFSET));    // fiber->state = Suspended
 
@@ -334,16 +334,16 @@ pub(super) fn emit_suspend(emitter: &mut Emitter) {
     // Important: hold the Throwable in x10 (caller-saved scratch). Cannot use x9
     // because emit_store_reg_to_symbol uses x9 internally to materialise the
     // symbol address, which would clobber the value we want to write.
-    emitter.instruction(&format!("ldr x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // x10 = pending Throwable* (NULL if no throw was scheduled)
+    emitter.instruction(&format!("ldr x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); //x10 = pending Throwable* (NULL if no throw was scheduled)
     emitter.instruction("cbz x10, __rt_fiber_suspend_no_throw");                // skip the raise path when no exception is pending
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // clear pending_throw before re-raising so resume() can fire again
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); //clear pending_throw before re-raising so resume() can fire again
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_value", 0);             // _exc_value = the Throwable to raise; matches normal `throw` runtime contract
     emitter.instruction("bl __rt_throw_current");                               // unwind into the active try/catch on the fiber's stack (no return)
 
     emitter.label("__rt_fiber_suspend_no_throw");
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (the value the resumer passed)
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because the fiber body now owns the resume value
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale resume payload
+    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); //x0 = fiber->transfer_value.lo (the value the resumer passed)
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); //clear transfer_value.lo because the fiber body now owns the resume value
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); //clear transfer_value.hi to leave no stale resume payload
 
     emitter.label("__rt_fiber_suspend_done");
     emitter.instruction("ldr x19, [sp]");                                       // restore caller's x19
@@ -384,7 +384,7 @@ pub(super) fn emit_throw(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x20");                                         // restore the Throwable into the second argument register
     emitter.instruction("ldp x20, x21, [sp], #16");                             // restore caller's x20/x21 now that the state check is done
 
-    emitter.instruction(&format!("str x1, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // fiber->pending_throw = Throwable* to raise on resume
+    emitter.instruction(&format!("str x1, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); //fiber->pending_throw = Throwable* to raise on resume
     abi::emit_load_symbol_to_reg(emitter, "x9", "_fiber_current", 0);           // x9 = current execution context
     emitter.instruction(&format!("str x9, [x19, #{}]", FIBER_CALLER_OFFSET));   // fiber->caller = current context
 
@@ -395,9 +395,9 @@ pub(super) fn emit_throw(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = current fiber state
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_TERMINATED));       // is the fiber terminated?
     emitter.instruction("b.ne __rt_fiber_throw_no_escape");                     // skip the re-raise path when the fiber is still alive
-    emitter.instruction(&format!("ldr x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // x10 = parked Throwable (NULL when termination was clean)
+    emitter.instruction(&format!("ldr x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); //x10 = parked Throwable (NULL when termination was clean)
     emitter.instruction("cbz x10, __rt_fiber_throw_no_escape");                 // skip the re-raise path when no exception escaped
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // clear pending_throw so subsequent inspections see the clean terminated state
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); //clear pending_throw so subsequent inspections see the clean terminated state
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_value", 0);             // _exc_value = the escaped Throwable, ready for __rt_throw_current
     emitter.instruction("bl __rt_throw_current");                               // re-raise on the caller's stack chain (no return)
     emitter.instruction("brk #0xfffe");                                         // defensive trap if __rt_throw_current ever returns
@@ -410,9 +410,9 @@ pub(super) fn emit_throw(emitter: &mut Emitter) {
     emit_box_null_mixed(emitter);
     emitter.instruction("b __rt_fiber_throw_return_ready");                     // skip the yielded-value load after boxing PHP null
     emitter.label("__rt_fiber_throw_return_yield");
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (next yield value)
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
+    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); //x0 = fiber->transfer_value.lo (next yield value)
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); //clear transfer_value.lo because ownership moves to the caller
+    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); //clear transfer_value.hi to leave no stale yielded payload
     emitter.label("__rt_fiber_throw_return_ready");
 
     emitter.instruction("ldr x19, [sp]");                                       // restore caller's x19
@@ -467,7 +467,7 @@ pub(super) fn emit_get_return(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_fiber_throw_state_error");                     // raise FiberError; this call does not return
 
     emitter.label("__rt_fiber_get_return_state_ok");
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (the closure's return value)
+    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); //x0 = fiber->transfer_value.lo (the closure's return value)
     emitter.instruction("bl __rt_incref");                                      // retain the return Mixed so the caller owns it independently of the Fiber
     emitter.instruction("b __rt_fiber_get_return_done");                        // skip the NULL-receiver fallback once the return value is loaded
 

@@ -317,12 +317,12 @@ fn emit_assoc_value_match_aarch64(
         PhpType::Str => {
             ctx.emitter.instruction("mov x1, x3");                              // move the entry string pointer into the comparison argument
             ctx.emitter.instruction("mov x2, x4");                              // move the entry string length into the comparison argument
-            ctx.emitter.instruction(&format!("ldp x3, x4, [sp, #{}]", needle_offset)); // reload the searched string needle from the stack
+            ctx.emitter.instruction(&format!("ldp x3, x4, [sp, #{}]", needle_offset)); //reload the searched string needle from the stack
             abi::emit_call_label(ctx.emitter, "__rt_str_eq");
             ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));      // branch when the entry string matches the needle
         }
         PhpType::Int | PhpType::Bool => {
-            ctx.emitter.instruction(&format!("ldr x6, [sp, #{}]", needle_offset)); // reload the searched scalar needle from the stack
+            ctx.emitter.instruction(&format!("ldr x6, [sp, #{}]", needle_offset)); //reload the searched scalar needle from the stack
             ctx.emitter.instruction("cmp x3, x6");                              // compare the entry scalar payload against the needle
             ctx.emitter.instruction(&format!("b.eq {}", found_label));          // branch when the scalar entry matches the needle
         }
@@ -351,14 +351,14 @@ fn emit_assoc_value_match_x86_64(
         PhpType::Str => {
             ctx.emitter.instruction("mov rdi, rcx");                            // move the entry string pointer into the comparison argument
             ctx.emitter.instruction("mov rsi, r8");                             // move the entry string length into the comparison argument
-            ctx.emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", needle_offset)); // reload the searched string needle pointer
-            ctx.emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", needle_offset + 8)); // reload the searched string needle length
+            ctx.emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", needle_offset)); //reload the searched string needle pointer
+            ctx.emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", needle_offset + 8)); //reload the searched string needle length
             abi::emit_call_label(ctx.emitter, "__rt_str_eq");
             ctx.emitter.instruction("test rax, rax");                           // check whether the entry string matched the needle
             ctx.emitter.instruction(&format!("jne {}", found_label));           // branch when the entry string matches the needle
         }
         PhpType::Int | PhpType::Bool => {
-            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", needle_offset)); // reload the searched scalar needle from the stack
+            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", needle_offset)); //reload the searched scalar needle from the stack
             ctx.emitter.instruction("cmp rcx, r10");                            // compare the entry scalar payload against the needle
             ctx.emitter.instruction(&format!("je {}", found_label));            // branch when the scalar entry matches the needle
         }
@@ -397,12 +397,12 @@ fn emit_mixed_assoc_value_match_aarch64(
     ctx.emitter.instruction(&format!("b.ne {}", mismatch_label));               // skip entries whose concrete type differs from the needle
     match needle_ty {
         PhpType::Str => {
-            ctx.emitter.instruction(&format!("ldp x3, x4, [sp, #{}]", needle_offset)); // reload the searched string needle from the stack
+            ctx.emitter.instruction(&format!("ldp x3, x4, [sp, #{}]", needle_offset)); //reload the searched string needle from the stack
             abi::emit_call_label(ctx.emitter, "__rt_str_eq");
             ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));      // branch when the unboxed string entry matches the needle
         }
         PhpType::Int | PhpType::Bool => {
-            ctx.emitter.instruction(&format!("ldr x6, [sp, #{}]", needle_offset)); // reload the searched scalar needle from the stack
+            ctx.emitter.instruction(&format!("ldr x6, [sp, #{}]", needle_offset)); //reload the searched scalar needle from the stack
             ctx.emitter.instruction("cmp x1, x6");                              // compare the unboxed scalar payload against the needle
             ctx.emitter.instruction(&format!("b.eq {}", found_label));          // branch when the unboxed scalar entry matches the needle
         }
@@ -419,12 +419,12 @@ fn emit_mixed_assoc_value_match_aarch64(
         PhpType::Str => {
             ctx.emitter.instruction("mov x1, x3");                              // move the concrete entry string pointer into the comparison argument
             ctx.emitter.instruction("mov x2, x4");                              // move the concrete entry string length into the comparison argument
-            ctx.emitter.instruction(&format!("ldp x3, x4, [sp, #{}]", needle_offset)); // reload the searched string needle from the stack
+            ctx.emitter.instruction(&format!("ldp x3, x4, [sp, #{}]", needle_offset)); //reload the searched string needle from the stack
             abi::emit_call_label(ctx.emitter, "__rt_str_eq");
             ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));      // branch when the concrete string entry matches the needle
         }
         PhpType::Int | PhpType::Bool => {
-            ctx.emitter.instruction(&format!("ldr x6, [sp, #{}]", needle_offset)); // reload the searched scalar needle from the stack
+            ctx.emitter.instruction(&format!("ldr x6, [sp, #{}]", needle_offset)); //reload the searched scalar needle from the stack
             ctx.emitter.instruction("cmp x3, x6");                              // compare the concrete scalar payload against the needle
             ctx.emitter.instruction(&format!("b.eq {}", found_label));          // branch when the concrete scalar entry matches the needle
         }
@@ -462,14 +462,14 @@ fn emit_mixed_assoc_value_match_x86_64(
     match needle_ty {
         PhpType::Str => {
             ctx.emitter.instruction("mov rsi, rdx");                            // move the unboxed entry string length into the comparison argument
-            ctx.emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", needle_offset)); // reload the searched string needle pointer
-            ctx.emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", needle_offset + 8)); // reload the searched string needle length
+            ctx.emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", needle_offset)); //reload the searched string needle pointer
+            ctx.emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", needle_offset + 8)); //reload the searched string needle length
             abi::emit_call_label(ctx.emitter, "__rt_str_eq");
             ctx.emitter.instruction("test rax, rax");                           // check whether the unboxed string entry matched the needle
             ctx.emitter.instruction(&format!("jne {}", found_label));           // branch when the unboxed string entry matches the needle
         }
         PhpType::Int | PhpType::Bool => {
-            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", needle_offset)); // reload the searched scalar needle from the stack
+            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", needle_offset)); //reload the searched scalar needle from the stack
             ctx.emitter.instruction("cmp rdi, r10");                            // compare the unboxed scalar payload against the needle
             ctx.emitter.instruction(&format!("je {}", found_label));            // branch when the unboxed scalar entry matches the needle
         }
@@ -486,14 +486,14 @@ fn emit_mixed_assoc_value_match_x86_64(
         PhpType::Str => {
             ctx.emitter.instruction("mov rdi, rcx");                            // move the concrete entry string pointer into the comparison argument
             ctx.emitter.instruction("mov rsi, r8");                             // move the concrete entry string length into the comparison argument
-            ctx.emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", needle_offset)); // reload the searched string needle pointer
-            ctx.emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", needle_offset + 8)); // reload the searched string needle length
+            ctx.emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", needle_offset)); //reload the searched string needle pointer
+            ctx.emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", needle_offset + 8)); //reload the searched string needle length
             abi::emit_call_label(ctx.emitter, "__rt_str_eq");
             ctx.emitter.instruction("test rax, rax");                           // check whether the concrete string entry matched the needle
             ctx.emitter.instruction(&format!("jne {}", found_label));           // branch when the concrete string entry matches the needle
         }
         PhpType::Int | PhpType::Bool => {
-            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", needle_offset)); // reload the searched scalar needle from the stack
+            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", needle_offset)); //reload the searched scalar needle from the stack
             ctx.emitter.instruction("cmp rcx, r10");                            // compare the concrete scalar payload against the needle
             ctx.emitter.instruction(&format!("je {}", found_label));            // branch when the concrete scalar entry matches the needle
         }

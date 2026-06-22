@@ -154,7 +154,7 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x12, [x13]");                                      // make __rt_fread append at the compact tail
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd for __rt_fread
     emitter.instruction("bl __rt_fread");                                       // x1=chunk ptr, x2=chunk len
-    emitter.instruction("cbz x2, __rt_stream_get_contents_bounded_release_done"); // empty read stops the bounded loop
+    emitter.instruction("cbz x2, __rt_stream_get_contents_bounded_release_done"); //empty read stops the bounded loop
     emitter.instruction("ldr x9, [sp, #32]");                                   // running result length
     emitter.instruction("ldr x10, [sp, #8]");                                   // requested byte cap
     emitter.instruction("sub x10, x10, x9");                                    // remaining bytes allowed
@@ -318,7 +318,7 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd for __rt_fread
     emitter.instruction("call __rt_fread");                                     // rax=chunk ptr, rdx=chunk len
     emitter.instruction("test rdx, rdx");                                       // empty chunk?
-    emitter.instruction("jz __rt_stream_get_contents_bounded_release_done_x86"); // empty read stops the bounded loop
+    emitter.instruction("jz __rt_stream_get_contents_bounded_release_done_x86"); //empty read stops the bounded loop
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // running result length
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // requested byte cap
     emitter.instruction("sub r9, r8");                                          // remaining bytes allowed

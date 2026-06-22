@@ -205,8 +205,8 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x10, [sp, #{}]", callback_ptr_off));      // reload callback entry point
     emitter.instruction("blr x10");                                             // call callback and receive replacement string in x1/x2
     emitter.instruction("bl __rt_str_persist");                                 // copy callback result away from volatile concat-buffer scratch space
-    emitter.instruction(&format!("str x1, [sp, #{}]", callback_result_ptr_off)); // save persisted callback result pointer across prefix copying
-    emitter.instruction(&format!("str x2, [sp, #{}]", callback_result_len_off)); // save persisted callback result length across prefix copying
+    emitter.instruction(&format!("str x1, [sp, #{}]", callback_result_ptr_off)); //save persisted callback result pointer across prefix copying
+    emitter.instruction(&format!("str x2, [sp, #{}]", callback_result_len_off)); //save persisted callback result length across prefix copying
 
     // -- restore output already emitted before the callback clobbered concat_buf --
     emitter.instruction(&format!("ldr x1, [sp, #{}]", output_backup_ptr_off));  // reload backed-up output prefix pointer
@@ -238,8 +238,8 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
 
     // -- append callback string result --
     emitter.label("__rt_preg_replace_callback_copy_repl_start");
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", callback_result_ptr_off)); // reload persisted callback result pointer
-    emitter.instruction(&format!("ldr x2, [sp, #{}]", callback_result_len_off)); // reload persisted callback result length
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", callback_result_ptr_off)); //reload persisted callback result pointer
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", callback_result_len_off)); //reload persisted callback result length
     emitter.instruction("mov x12, #0");                                         // initialize callback-result copy index
     emitter.label("__rt_preg_replace_callback_copy_repl");
     emitter.instruction("cmp x12, x2");                                         // compare copied bytes against callback result length
@@ -417,12 +417,12 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub rsp, {}", stack_size));                   // reserve aligned local storage for regex_t, regmatch_t, and callback bookkeeping
 
     // -- save all inputs --
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdi", pattern_ptr_off)); // preserve pattern pointer across regex helper calls
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", pattern_len_off)); // preserve pattern length across regex helper calls
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", callback_ptr_off)); // preserve callback entry point across regex helper calls
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", callback_env_off)); // preserve optional callback capture environment
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r8", subject_ptr_off)); // preserve subject pointer for fallback and C-string conversion
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", subject_len_off)); // preserve subject length for fallback and C-string conversion
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdi", pattern_ptr_off)); //preserve pattern pointer across regex helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", pattern_len_off)); //preserve pattern length across regex helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", callback_ptr_off)); //preserve callback entry point across regex helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", callback_env_off)); //preserve optional callback capture environment
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r8", subject_ptr_off)); //preserve subject pointer for fallback and C-string conversion
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", subject_len_off)); //preserve subject length for fallback and C-string conversion
 
     // -- strip delimiters and compile PCRE regex --
     emitter.instruction("mov rax, rdi");                                        // move pattern pointer into the delimiter-strip helper input register
@@ -430,15 +430,15 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and gather supported regex flags
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", flags_off));  // preserve delimiter-strip flags for regcomp
     emitter.instruction("call __rt_pcre_to_posix");                             // materialize PCRE pattern as a C string
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); // preserve null-terminated PCRE pattern across compilation
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pattern_cstr_off)); //preserve null-terminated PCRE pattern across compilation
     emitter.instruction("lea rdi, [rsp]");                                      // pass local regex_t storage to regcomp
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); // pass null-terminated PCRE pattern to regcomp
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", pattern_cstr_off)); //pass null-terminated PCRE pattern to regcomp
     emitter.instruction(&format!("mov edx, DWORD PTR [rsp + {}]", flags_off));  // pass PCRE2 POSIX compile flags from delimiter parsing
     emitter.bl_c("pcre2_regcomp");                                              // compile regex through PCRE2
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?
     emitter.instruction("jnz __rt_preg_replace_callback_fail_linux_x86_64");    // return original subject when regex compilation fails
 
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", regex_re_nsub_off)); // load regex_t.re_nsub after successful compilation
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", regex_re_nsub_off)); //load regex_t.re_nsub after successful compilation
     emitter.instruction("add r9, 1");                                           // include the full-match slot in the regmatch count
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", nmatch_off));  // save dynamic regmatch count for loops and array sizing
     emitter.instruction("mov rdi, r9");                                         // copy nmatch before scaling it to a malloc byte count
@@ -449,71 +449,71 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     }
     emitter.bl_c("malloc");                                                     // allocate the regmatch_t vector for all capture groups
     emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
-    emitter.instruction("jz __rt_preg_replace_callback_malloc_fail_linux_x86_64"); // allocation failure frees regex_t and returns the subject
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic regmatch_t buffer pointer
+    emitter.instruction("jz __rt_preg_replace_callback_malloc_fail_linux_x86_64"); //allocation failure frees regex_t and returns the subject
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); //save dynamic regmatch_t buffer pointer
 
     // -- materialize subject as a C string for repeated regexec calls --
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload subject pointer for C-string conversion
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // reload subject length for C-string conversion
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); //reload subject pointer for C-string conversion
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); //reload subject length for C-string conversion
     emitter.instruction("call __rt_cstr2");                                     // copy subject to a null-terminated buffer
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // save null-terminated subject pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); //save null-terminated subject pointer
 
     // -- set up output buffer in concat_buf --
     abi::emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load current concat-buffer offset
     abi::emit_symbol_address(emitter, "rax", "_concat_buf");
     emitter.instruction("add rax, r11");                                        // compute the replacement output start pointer
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_start_off)); // save final output start pointer
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_write_off)); // initialize final output write pointer
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_cstr_off)); // load subject C-string start
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_pos_off)); // initialize current regex search cursor
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_start_off)); //save final output start pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_write_off)); //initialize final output write pointer
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_cstr_off)); //load subject C-string start
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_pos_off)); //initialize current regex search cursor
 
     // -- replacement loop --
     emitter.label("__rt_preg_replace_callback_loop_linux_x86_64");
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_pos_off)); // reload current subject cursor for regexec
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_pos_off)); //reload current subject cursor for regexec
     emitter.instruction("movzx r9d, BYTE PTR [rsi]");                           // read the current subject byte
     emitter.instruction("test r9d, r9d");                                       // check whether the cursor reached the null terminator
     emitter.instruction("jz __rt_preg_replace_callback_done_linux_x86_64");     // finish when the full subject has been consumed
     emit_init_dynamic_regmatches_x86_64(emitter, regmatches_ptr_off, nmatch_off, regmatch_size);
     emitter.instruction("lea rdi, [rsp]");                                      // pass regex_t storage to regexec
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every compiled capture group
-    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic regmatch_t capture buffer
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //pass dynamic regmatch_t capture buffer
     emitter.instruction("xor r8d, r8d");                                        // use default regexec execution flags
     emitter.bl_c("pcre2_regexec");                                                    // execute regex at the current subject cursor
     emitter.instruction("test eax, eax");                                       // did regexec find another match?
     emitter.instruction("jnz __rt_preg_replace_callback_tail_linux_x86_64");    // copy the remaining subject once no more matches exist
 
     // -- remember unmatched prefix length before this match --
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic capture buffer base before reading full-match offsets
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //load dynamic capture buffer base before reading full-match offsets
     emit_x86_load_regoff_from_ptr(emitter, "r9", "r10", 0, regmatch_size);
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", prefix_len_off)); // save prefix byte count until callback scratch work is done
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", prefix_len_off)); //save prefix byte count until callback scratch work is done
 
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", nmatch_off));  // reload dynamic regmatch count
     emitter.instruction("sub r9, 1");                                           // start scanning from the last compiled capture slot
     emitter.label("__rt_preg_replace_callback_scan_linux_x86_64");
     emitter.instruction("mov r10, r9");                                         // copy capture index before scaling
     emitter.instruction(&format!("imul r10, {}", regmatch_size));               // scale capture index to native regmatch_t stride
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic capture buffer base
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //load dynamic capture buffer base
     emitter.instruction("add r10, r12");                                        // compute address of this capture slot
     emit_x86_load_regoff_from_ptr(emitter, "r11", "r10", 0, regmatch_size);
     emitter.instruction("cmp r11, 0");                                          // check whether this capture participated
-    emitter.instruction("jge __rt_preg_replace_callback_scan_found_linux_x86_64"); // use this as the highest emitted capture
+    emitter.instruction("jge __rt_preg_replace_callback_scan_found_linux_x86_64"); //use this as the highest emitted capture
     emitter.instruction("test r9, r9");                                         // have we reached the full-match slot?
-    emitter.instruction("jz __rt_preg_replace_callback_scan_found_linux_x86_64"); // keep at least the full match after successful regexec
+    emitter.instruction("jz __rt_preg_replace_callback_scan_found_linux_x86_64"); //keep at least the full match after successful regexec
     emitter.instruction("sub r9, 1");                                           // move to the previous capture slot
     emitter.instruction("jmp __rt_preg_replace_callback_scan_linux_x86_64");    // continue searching for the highest populated capture
     emitter.label("__rt_preg_replace_callback_scan_found_linux_x86_64");
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", max_group_off)); // save highest capture index to materialize
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", max_group_off)); //save highest capture index to materialize
 
     // -- build callback matches array from capture slots --
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // allocate enough slots for every compiled capture
     emitter.instruction("mov rsi, 16");                                         // string array slots store pointer and length pairs
     emitter.instruction("call __rt_array_new");                                 // allocate indexed string matches array
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save matches array pointer across pushes
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); // start with $matches[0]
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); //save matches array pointer across pushes
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); //start with $matches[0]
     emitter.label("__rt_preg_replace_callback_group_loop_linux_x86_64");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", group_idx_off)); // reload current capture index
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", max_group_off)); // reload highest capture index
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", group_idx_off)); //reload current capture index
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", max_group_off)); //reload highest capture index
     emitter.instruction("cmp r10, r9");                                         // have all required captures been materialized?
     emitter.instruction("jg __rt_preg_replace_callback_call_linux_x86_64");     // invoke callback after highest populated capture
     if regmatch_size == 16 {
@@ -521,73 +521,73 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     } else {
         emitter.instruction("shl r10, 3");                                      // scale capture index by compact regmatch_t size
     }
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic capture buffer base
+    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //load dynamic capture buffer base
     emitter.instruction("add r10, r12");                                        // compute address of this capture slot
     emit_x86_load_regoff_from_ptr(emitter, "r11", "r10", 0, regmatch_size);
     emit_x86_load_regoff_from_ptr(emitter, "rcx", "r10", regmatch_rm_eo_off, regmatch_size);
     emitter.instruction("cmp r11, 0");                                          // check whether this capture was populated
-    emitter.instruction("jl __rt_preg_replace_callback_empty_capture_linux_x86_64"); // emit an empty string for interior unmatched captures
+    emitter.instruction("jl __rt_preg_replace_callback_empty_capture_linux_x86_64"); //emit an empty string for interior unmatched captures
     emitter.instruction("sub rcx, r11");                                        // compute capture byte length
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_pos_off)); // reload current subject cursor
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_pos_off)); //reload current subject cursor
     emitter.instruction("add rsi, r11");                                        // compute capture byte pointer
-    emitter.instruction("jmp __rt_preg_replace_callback_push_capture_linux_x86_64"); // append matched capture text
+    emitter.instruction("jmp __rt_preg_replace_callback_push_capture_linux_x86_64"); //append matched capture text
     emitter.label("__rt_preg_replace_callback_empty_capture_linux_x86_64");
     emitter.instruction("xor esi, esi");                                        // empty unmatched capture has a null pointer
     emitter.instruction("xor edx, edx");                                        // empty unmatched capture has zero length
     emitter.label("__rt_preg_replace_callback_push_capture_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); // reload matches array pointer
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); //reload matches array pointer
     emitter.instruction("test r11, r11");                                       // was the current capture matched?
     emitter.instruction("cmovge rdx, rcx");                                     // pass capture byte length for matched captures
     emitter.instruction("call __rt_array_push_str");                            // append owned capture string to matches array
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save possibly grown matches array pointer
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", group_idx_off)); // reload current capture index after helper call
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); //save possibly grown matches array pointer
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", group_idx_off)); //reload current capture index after helper call
     emitter.instruction("add r10, 1");                                          // advance to next capture slot
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", group_idx_off)); // save next capture index
-    emitter.instruction("jmp __rt_preg_replace_callback_group_loop_linux_x86_64"); // continue materializing capture strings
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", group_idx_off)); //save next capture index
+    emitter.instruction("jmp __rt_preg_replace_callback_group_loop_linux_x86_64"); //continue materializing capture strings
 
     // -- invoke callback and append its string result --
     emitter.label("__rt_preg_replace_callback_call_linux_x86_64");
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_start_off)); // load current output start before callback scratch can overwrite it
-    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); // load current output write pointer before callback invocation
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_start_off)); //load current output start before callback scratch can overwrite it
+    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); //load current output write pointer before callback invocation
     emitter.instruction("mov rdx, r11");                                        // copy output write pointer for emitted-byte calculation
     emitter.instruction("sub rdx, rax");                                        // compute bytes already emitted before the current replacement
     emitter.instruction("call __rt_str_persist");                               // back up already-emitted output outside callback scratch space
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_backup_ptr_off)); // save output backup pointer across callback invocation
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", output_backup_len_off)); // save output backup length across callback invocation
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_backup_ptr_off)); //save output backup pointer across callback invocation
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", output_backup_len_off)); //save output backup length across callback invocation
     publish_concat_offset_x86_64(emitter, output_write_off);
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); // pass matches array as the callback's first argument
-    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", callback_env_off)); // check whether callback has a capture environment
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); //pass matches array as the callback's first argument
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", callback_env_off)); //check whether callback has a capture environment
     emitter.instruction("je __rt_preg_replace_callback_direct_linux_x86_64");   // omit env argument for direct callbacks
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", callback_env_off)); // pass capture environment after visible callback args
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", callback_env_off)); //pass capture environment after visible callback args
     emitter.label("__rt_preg_replace_callback_direct_linux_x86_64");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", callback_ptr_off)); // reload callback entry point
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", callback_ptr_off)); //reload callback entry point
     emitter.instruction("call r10");                                            // call callback and receive replacement string in rax/rdx
     emitter.instruction("call __rt_str_persist");                               // copy callback result away from volatile concat-buffer scratch space
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", callback_result_ptr_off)); // save persisted callback result pointer across prefix copying
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", callback_result_len_off)); // save persisted callback result length across prefix copying
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", callback_result_ptr_off)); //save persisted callback result pointer across prefix copying
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", callback_result_len_off)); //save persisted callback result length across prefix copying
 
     // -- restore output already emitted before the callback clobbered concat_buf --
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_backup_ptr_off)); // reload backed-up output prefix pointer
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", output_backup_len_off)); // reload backed-up output prefix length
-    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_start_off)); // reload final output start for prefix restoration
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_backup_ptr_off)); //reload backed-up output prefix pointer
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", output_backup_len_off)); //reload backed-up output prefix length
+    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_start_off)); //reload final output start for prefix restoration
     emitter.instruction("xor ecx, ecx");                                        // initialize output restoration index
     emitter.label("__rt_preg_replace_callback_restore_output_linux_x86_64");
     emitter.instruction("cmp rcx, rdx");                                        // check whether all previous output bytes have been restored
-    emitter.instruction("jge __rt_preg_replace_callback_restore_done_linux_x86_64"); // continue once pre-callback output is back in place
+    emitter.instruction("jge __rt_preg_replace_callback_restore_done_linux_x86_64"); //continue once pre-callback output is back in place
     emitter.instruction("mov r8b, BYTE PTR [rax + rcx]");                       // load one backed-up output byte
     emitter.instruction("mov BYTE PTR [r11 + rcx], r8b");                       // restore the output byte to its original concat-buffer slot
     emitter.instruction("add rcx, 1");                                          // advance the output restoration index
-    emitter.instruction("jmp __rt_preg_replace_callback_restore_output_linux_x86_64"); // keep restoring previously emitted output bytes
+    emitter.instruction("jmp __rt_preg_replace_callback_restore_output_linux_x86_64"); //keep restoring previously emitted output bytes
     emitter.label("__rt_preg_replace_callback_restore_done_linux_x86_64");
     emitter.instruction("add r11, rdx");                                        // resume appending at the end of the restored output
 
     // -- copy unmatched prefix after callback scratch has been persisted --
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", prefix_len_off)); // reload unmatched prefix byte count
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_pos_off)); // reload current subject cursor for prefix copy
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", prefix_len_off)); //reload unmatched prefix byte count
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_pos_off)); //reload current subject cursor for prefix copy
     emitter.instruction("xor ecx, ecx");                                        // initialize prefix copy index
     emitter.label("__rt_preg_replace_callback_pre_linux_x86_64");
     emitter.instruction("cmp rcx, r9");                                         // compare prefix copy index with rm_so
-    emitter.instruction("jge __rt_preg_replace_callback_copy_repl_start_linux_x86_64"); // switch to callback result once prefix is copied
+    emitter.instruction("jge __rt_preg_replace_callback_copy_repl_start_linux_x86_64"); //switch to callback result once prefix is copied
     emitter.instruction("mov r8b, BYTE PTR [r10 + rcx]");                       // load next unmatched prefix byte
     emitter.instruction("mov BYTE PTR [r11], r8b");                             // append unmatched prefix byte to output
     emitter.instruction("add r11, 1");                                          // advance output write pointer
@@ -596,8 +596,8 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
 
     // -- append callback string result --
     emitter.label("__rt_preg_replace_callback_copy_repl_start_linux_x86_64");
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", callback_result_ptr_off)); // reload persisted callback result pointer
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", callback_result_len_off)); // reload persisted callback result length
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", callback_result_ptr_off)); //reload persisted callback result pointer
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", callback_result_len_off)); //reload persisted callback result length
     emitter.instruction("xor ecx, ecx");                                        // initialize callback-result copy index
     emitter.label("__rt_preg_replace_callback_copy_repl_linux_x86_64");
     emitter.instruction("cmp rcx, rdx");                                        // compare copied bytes against callback result length
@@ -606,27 +606,27 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11], r8b");                             // append callback result byte to output
     emitter.instruction("add r11, 1");                                          // advance output write pointer
     emitter.instruction("add rcx, 1");                                          // advance callback-result copy index
-    emitter.instruction("jmp __rt_preg_replace_callback_copy_repl_linux_x86_64"); // continue copying callback result bytes
+    emitter.instruction("jmp __rt_preg_replace_callback_copy_repl_linux_x86_64"); //continue copying callback result bytes
 
     // -- advance past this match --
     emitter.label("__rt_preg_replace_callback_advance_linux_x86_64");
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // save output write pointer after callback copy
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); //save output write pointer after callback copy
     publish_concat_offset_x86_64(emitter, output_write_off);
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic full-match slot before advancing cursor
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //load dynamic full-match slot before advancing cursor
     emit_x86_load_regoff_from_ptr(emitter, "r9", "r10", regmatch_rm_eo_off, regmatch_size);
     emitter.instruction("cmp r9, 0");                                           // detect zero-length regex matches
-    emitter.instruction("jg __rt_preg_replace_callback_advance_ok_linux_x86_64"); // use native rm_eo when the match consumed bytes
+    emitter.instruction("jg __rt_preg_replace_callback_advance_ok_linux_x86_64"); //use native rm_eo when the match consumed bytes
     emitter.instruction("mov r9, 1");                                           // force progress for zero-length matches
     emitter.label("__rt_preg_replace_callback_advance_ok_linux_x86_64");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_pos_off)); // reload current subject cursor
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_pos_off)); //reload current subject cursor
     emitter.instruction("add r10, r9");                                         // move cursor past the current match
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", current_pos_off)); // save next regex search cursor
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", current_pos_off)); //save next regex search cursor
     emitter.instruction("jmp __rt_preg_replace_callback_loop_linux_x86_64");    // continue replacing further matches
 
     // -- copy trailing subject after the last match --
     emitter.label("__rt_preg_replace_callback_tail_linux_x86_64");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_pos_off)); // reload current subject cursor for tail copy
-    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); // reload output write pointer for tail copy
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_pos_off)); //reload current subject cursor for tail copy
+    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); //reload output write pointer for tail copy
     emitter.label("__rt_preg_replace_callback_tail_loop_linux_x86_64");
     emitter.instruction("mov r8b, BYTE PTR [r10]");                             // load next tail byte
     emitter.instruction("test r8b, r8b");                                       // check whether tail reached the null terminator
@@ -634,32 +634,32 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11], r8b");                             // append tail byte to output
     emitter.instruction("add r10, 1");                                          // advance tail source pointer
     emitter.instruction("add r11, 1");                                          // advance output write pointer
-    emitter.instruction("jmp __rt_preg_replace_callback_tail_loop_linux_x86_64"); // continue copying tail bytes
+    emitter.instruction("jmp __rt_preg_replace_callback_tail_loop_linux_x86_64"); //continue copying tail bytes
 
     // -- free regex and return final output slice --
     emitter.label("__rt_preg_replace_callback_done_linux_x86_64");
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // save final output pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); //save final output pointer
     emitter.instruction("lea rdi, [rsp]");                                      // pass regex_t storage to regfree
     emitter.bl_c("pcre2_regfree");                                                    // release compiled regex resources
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //reload dynamic capture buffer for cleanup
     emitter.bl_c("free");                                                       // release the reusable regmatch_t vector
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_start_off)); // return output start pointer
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", output_write_off)); // reload output end pointer
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_start_off)); //return output start pointer
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", output_write_off)); //reload output end pointer
     emitter.instruction("sub rdx, rax");                                        // compute output byte length
     publish_concat_offset_x86_64(emitter, output_write_off);
     emitter.instruction("jmp __rt_preg_replace_callback_ret_linux_x86_64");     // share common epilogue
 
     // -- failure: return original subject --
     emitter.label("__rt_preg_replace_callback_fail_linux_x86_64");
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // return original subject pointer on regex compilation failure
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // return original subject length on regex compilation failure
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); //return original subject pointer on regex compilation failure
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); //return original subject length on regex compilation failure
     emitter.instruction("jmp __rt_preg_replace_callback_ret_linux_x86_64");     // return through the common epilogue
 
     emitter.label("__rt_preg_replace_callback_malloc_fail_linux_x86_64");
     emitter.instruction("lea rdi, [rsp]");                                      // reload regex_t storage after capture-buffer allocation failed
     emitter.bl_c("pcre2_regfree");                                                    // free compiled regex resources before returning the subject
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // return original subject pointer after allocation failure
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // return original subject length after allocation failure
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); //return original subject pointer after allocation failure
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); //return original subject length after allocation failure
 
     emitter.label("__rt_preg_replace_callback_ret_linux_x86_64");
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release preg_replace_callback stack frame
@@ -670,7 +670,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
 /// x86_64 variant of `publish_concat_offset`. Publishes the current output write
 /// pointer as the `_concat_off` global offset before a nested callback invocation.
 fn publish_concat_offset_x86_64(emitter: &mut Emitter, output_write_off: usize) {
-    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); // reload current output write pointer for concat publication
+    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); //reload current output write pointer for concat publication
     abi::emit_symbol_address(emitter, "r9", "_concat_buf");
     emitter.instruction("mov r10, r11");                                        // copy output pointer before converting it into an absolute offset
     emitter.instruction("sub r10, r9");                                         // compute current absolute concat-buffer offset
@@ -686,18 +686,18 @@ fn emit_init_dynamic_regmatches_x86_64(
     regmatch_size: usize,
 ) {
     emitter.instruction("mov r9, -1");                                          // prepare unmatched sentinel for capture slots
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic regmatch_t buffer base
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); //load dynamic regmatch_t buffer base
     emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", nmatch_off)); // load dynamic regmatch slot count
     emitter.instruction("xor r12d, r12d");                                      // initialize regmatch initialization index
     emitter.label("__rt_preg_replace_callback_init_loop_linux_x86_64");
     emitter.instruction("cmp r12, r11");                                        // have all dynamic regmatch slots been initialized?
-    emitter.instruction("jge __rt_preg_replace_callback_init_done_linux_x86_64"); // stop once every slot has an unmatched sentinel
+    emitter.instruction("jge __rt_preg_replace_callback_init_done_linux_x86_64"); //stop once every slot has an unmatched sentinel
     emitter.instruction("mov r13, r12");                                        // copy index before scaling to native regmatch_t size
     emitter.instruction(&format!("imul r13, {}", regmatch_size));               // scale index by the target regmatch_t stride
     emitter.instruction("add r13, r10");                                        // compute the current dynamic regmatch slot address
     emitter.instruction("mov QWORD PTR [r13], r9");                             // mark capture start offset as unmatched before regexec
     emitter.instruction("add r12, 1");                                          // advance to the next capture slot
-    emitter.instruction("jmp __rt_preg_replace_callback_init_loop_linux_x86_64"); // continue initializing dynamic capture slots
+    emitter.instruction("jmp __rt_preg_replace_callback_init_loop_linux_x86_64"); //continue initializing dynamic capture slots
     emitter.label("__rt_preg_replace_callback_init_done_linux_x86_64");
 }
 
@@ -717,6 +717,6 @@ fn emit_x86_load_regoff_from_ptr(
     if regmatch_size == 16 {
         emitter.instruction(&format!("mov {dst}, QWORD PTR [{addr}{suffix}]")); // load native 64-bit regoff_t from computed regmatch slot
     } else {
-        emitter.instruction(&format!("movsxd {dst}, DWORD PTR [{addr}{suffix}]")); // sign-extend native 32-bit regoff_t from computed slot
+        emitter.instruction(&format!("movsxd {dst}, DWORD PTR [{addr}{suffix}]")); //sign-extend native 32-bit regoff_t from computed slot
     }
 }

@@ -417,11 +417,11 @@ fn emit_php_filter_table_stamps(ctx: &mut FunctionContext<'_>, mode_bits: u8, fi
             ctx.emitter.instruction("mov rcx, QWORD PTR [rax + 8]");            // load the descriptor payload from the boxed resource
             if mode_bits & 1 != 0 {
                 abi::emit_symbol_address(ctx.emitter, "r8", "_stream_read_filters"); // read-filter table base
-                ctx.emitter.instruction(&format!("mov BYTE PTR [r8 + rcx], {}", filter_id)); // attach the read filter to this descriptor
+                ctx.emitter.instruction(&format!("mov BYTE PTR [r8 + rcx], {}", filter_id)); //attach the read filter to this descriptor
             }
             if mode_bits & 2 != 0 {
                 abi::emit_symbol_address(ctx.emitter, "r8", "_stream_write_filters"); // write-filter table base
-                ctx.emitter.instruction(&format!("mov BYTE PTR [r8 + rcx], {}", filter_id)); // attach the write filter to this descriptor
+                ctx.emitter.instruction(&format!("mov BYTE PTR [r8 + rcx], {}", filter_id)); //attach the write filter to this descriptor
             }
             ctx.emitter.label(&done_label);
         }
@@ -854,12 +854,12 @@ fn emit_phar_write_open_for_literal(ctx: &mut FunctionContext<'_>, url: &str) ->
             abi::emit_symbol_address(ctx.emitter, "r10", "_phar_write_path_ptr");
             ctx.emitter.instruction("mov QWORD PTR [r10], r9");                 // record the archive path pointer for finalize
             abi::emit_symbol_address(ctx.emitter, "r10", "_phar_write_path_len");
-            ctx.emitter.instruction(&format!("mov QWORD PTR [r10], {}", path_len)); // record the archive path length for finalize
+            ctx.emitter.instruction(&format!("mov QWORD PTR [r10], {}", path_len)); //record the archive path length for finalize
             abi::emit_symbol_address(ctx.emitter, "r9", &entry_label);
             abi::emit_symbol_address(ctx.emitter, "r10", "_phar_write_entry_ptr");
             ctx.emitter.instruction("mov QWORD PTR [r10], r9");                 // record the archive entry name pointer for finalize
             abi::emit_symbol_address(ctx.emitter, "r10", "_phar_write_entry_len");
-            ctx.emitter.instruction(&format!("mov QWORD PTR [r10], {}", entry_len)); // record the archive entry name length for finalize
+            ctx.emitter.instruction(&format!("mov QWORD PTR [r10], {}", entry_len)); //record the archive entry name length for finalize
             abi::emit_symbol_address(ctx.emitter, "rdi", &template_label);
             ctx.emitter.instruction(&format!("mov rsi, {}", template_len));     // pass the single-entry PHAR template length
             abi::emit_call_label(ctx.emitter, "__rt_phar_write_open");
@@ -1939,7 +1939,7 @@ pub(super) fn lower_stream_set_blocking(
             ctx.emitter.instruction(&format!("b {}", after));                   // skip wrapper dispatch after the native fd update
             ctx.emitter.label(&wrapper);
             ctx.emitter.instruction("mov x2, x1");                              // pass the blocking flag as wrapper option arg1
-            ctx.emitter.instruction(&format!("mov x1, #{}", STREAM_OPTION_BLOCKING)); // select STREAM_OPTION_BLOCKING
+            ctx.emitter.instruction(&format!("mov x1, #{}", STREAM_OPTION_BLOCKING)); //select STREAM_OPTION_BLOCKING
             ctx.emitter.instruction("mov x3, #0");                              // pass zero as wrapper option arg2
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_set_option");
             ctx.emitter.label(&after);
@@ -1954,7 +1954,7 @@ pub(super) fn lower_stream_set_blocking(
             ctx.emitter.instruction(&format!("jmp {}", after));                 // skip wrapper dispatch after the native fd update
             ctx.emitter.label(&wrapper);
             ctx.emitter.instruction("mov rdx, rsi");                            // pass the blocking flag as wrapper option arg1
-            ctx.emitter.instruction(&format!("mov rsi, {}", STREAM_OPTION_BLOCKING)); // select STREAM_OPTION_BLOCKING
+            ctx.emitter.instruction(&format!("mov rsi, {}", STREAM_OPTION_BLOCKING)); //select STREAM_OPTION_BLOCKING
             ctx.emitter.instruction("xor ecx, ecx");                            // pass zero as wrapper option arg2
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_set_option");
             ctx.emitter.label(&after);
@@ -2645,7 +2645,7 @@ pub(super) fn lower_fprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     load_string_to_result(ctx, format, "fprintf format")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov x0, #{}", inst.operands.len() - 2)); // pass the number of packed fprintf operands
+            ctx.emitter.instruction(&format!("mov x0, #{}", inst.operands.len() - 2)); //pass the number of packed fprintf operands
         }
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rdi", (inst.operands.len() - 2) as i64);
@@ -2825,7 +2825,7 @@ fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&loop_label);
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the wrapper fd for EOF probing
             abi::emit_call_label(ctx.emitter, "__rt_feof");
-            ctx.emitter.instruction(&format!("cbnz x0, {}", wrapper_done_label)); // stop streaming when stream_eof reports EOF
+            ctx.emitter.instruction(&format!("cbnz x0, {}", wrapper_done_label)); //stop streaming when stream_eof reports EOF
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the wrapper fd for reading
             ctx.emitter.instruction("mov x1, #4096");                           // request a bounded wrapper read chunk
             abi::emit_call_label(ctx.emitter, "__rt_fread");
@@ -4274,8 +4274,8 @@ fn lower_chmod_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the boxed mode value
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // pass wrapper path pointer
             ctx.emitter.instruction("ldr x1, [sp, #8]");                        // pass wrapper path length
-            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_METADATA_SLOT)); // select stream_metadata vtable slot
-            ctx.emitter.instruction(&format!("mov x3, #{}", STREAM_META_ACCESS)); // select STREAM_META_ACCESS
+            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_METADATA_SLOT)); //select stream_metadata vtable slot
+            ctx.emitter.instruction(&format!("mov x3, #{}", STREAM_META_ACCESS)); //select STREAM_META_ACCESS
             ctx.emitter.instruction("ldr x4, [sp, #16]");                       // pass boxed mode as mixed value
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
             ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve stream_metadata result across value release
@@ -4309,8 +4309,8 @@ fn lower_chmod_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the boxed mode value
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // pass wrapper path pointer
             ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // pass wrapper path length
-            ctx.emitter.instruction(&format!("mov rdx, {}", STREAM_METADATA_SLOT)); // select stream_metadata vtable slot
-            ctx.emitter.instruction(&format!("mov rcx, {}", STREAM_META_ACCESS)); // select STREAM_META_ACCESS
+            ctx.emitter.instruction(&format!("mov rdx, {}", STREAM_METADATA_SLOT)); //select stream_metadata vtable slot
+            ctx.emitter.instruction(&format!("mov rcx, {}", STREAM_META_ACCESS)); //select STREAM_META_ACCESS
             ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 16]");            // pass boxed mode as mixed value
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve stream_metadata result across value release
@@ -4355,7 +4355,7 @@ fn emit_owner_group_name_wrapper_dispatch(
             ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve the boxed principal value
             ctx.emitter.instruction("ldr x0, [sp, #16]");                       // pass wrapper path pointer
             ctx.emitter.instruction("ldr x1, [sp, #24]");                       // pass wrapper path length
-            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_METADATA_SLOT)); // select stream_metadata vtable slot
+            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_METADATA_SLOT)); //select stream_metadata vtable slot
             ctx.emitter.instruction(&format!("mov x3, #{}", option));           // pass owner/group metadata option
             ctx.emitter.instruction("ldr x4, [sp, #0]");                        // pass boxed principal as mixed value
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
@@ -4389,7 +4389,7 @@ fn emit_owner_group_name_wrapper_dispatch(
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the boxed principal value
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // pass wrapper path pointer
             ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");           // pass wrapper path length
-            ctx.emitter.instruction(&format!("mov rdx, {}", STREAM_METADATA_SLOT)); // select stream_metadata vtable slot
+            ctx.emitter.instruction(&format!("mov rdx, {}", STREAM_METADATA_SLOT)); //select stream_metadata vtable slot
             ctx.emitter.instruction(&format!("mov rcx, {}", option));           // pass owner/group metadata option
             ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 0]");             // pass boxed principal as mixed value
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
@@ -4438,7 +4438,7 @@ fn emit_owner_group_wrapper_dispatch(ctx: &mut FunctionContext<'_>, option: usiz
             ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the boxed principal value
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // pass wrapper path pointer
             ctx.emitter.instruction("ldr x1, [sp, #8]");                        // pass wrapper path length
-            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_METADATA_SLOT)); // select stream_metadata vtable slot
+            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_METADATA_SLOT)); //select stream_metadata vtable slot
             ctx.emitter.instruction(&format!("mov x3, #{}", option));           // pass owner/group metadata option
             ctx.emitter.instruction("ldr x4, [sp, #16]");                       // pass boxed principal as mixed value
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
@@ -4479,7 +4479,7 @@ fn emit_owner_group_wrapper_dispatch(ctx: &mut FunctionContext<'_>, option: usiz
             ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the boxed principal value
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // pass wrapper path pointer
             ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // pass wrapper path length
-            ctx.emitter.instruction(&format!("mov rdx, {}", STREAM_METADATA_SLOT)); // select stream_metadata vtable slot
+            ctx.emitter.instruction(&format!("mov rdx, {}", STREAM_METADATA_SLOT)); //select stream_metadata vtable slot
             ctx.emitter.instruction(&format!("mov rcx, {}", option));           // pass owner/group metadata option
             ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 16]");            // pass boxed principal as mixed value
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
@@ -4525,8 +4525,8 @@ fn emit_touch_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the boxed touch metadata value
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // pass wrapper path pointer
             ctx.emitter.instruction("ldr x1, [sp, #8]");                        // pass wrapper path length
-            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_METADATA_SLOT)); // select stream_metadata vtable slot
-            ctx.emitter.instruction(&format!("mov x3, #{}", STREAM_META_TOUCH)); // select STREAM_META_TOUCH
+            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_METADATA_SLOT)); //select stream_metadata vtable slot
+            ctx.emitter.instruction(&format!("mov x3, #{}", STREAM_META_TOUCH)); //select STREAM_META_TOUCH
             ctx.emitter.instruction("ldr x4, [sp, #16]");                       // pass boxed touch metadata value
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
             ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve stream_metadata result across value release
@@ -4564,8 +4564,8 @@ fn emit_touch_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the boxed touch metadata value
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // pass wrapper path pointer
             ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // pass wrapper path length
-            ctx.emitter.instruction(&format!("mov rdx, {}", STREAM_METADATA_SLOT)); // select stream_metadata vtable slot
-            ctx.emitter.instruction(&format!("mov rcx, {}", STREAM_META_TOUCH)); // select STREAM_META_TOUCH
+            ctx.emitter.instruction(&format!("mov rdx, {}", STREAM_METADATA_SLOT)); //select stream_metadata vtable slot
+            ctx.emitter.instruction(&format!("mov rcx, {}", STREAM_META_TOUCH)); //select STREAM_META_TOUCH
             ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 16]");            // pass boxed touch metadata value
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve stream_metadata result across value release
@@ -5628,7 +5628,7 @@ fn lower_stream_timeout_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&wrapper);
             ctx.emitter.instruction("mov x3, x2");                              // pass microseconds as wrapper option arg2
             ctx.emitter.instruction("mov x2, x1");                              // pass seconds as wrapper option arg1
-            ctx.emitter.instruction(&format!("mov x1, #{}", STREAM_OPTION_READ_TIMEOUT)); // select STREAM_OPTION_READ_TIMEOUT
+            ctx.emitter.instruction(&format!("mov x1, #{}", STREAM_OPTION_READ_TIMEOUT)); //select STREAM_OPTION_READ_TIMEOUT
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_set_option");
             ctx.emitter.label(&after);
         }
@@ -5641,7 +5641,7 @@ fn lower_stream_timeout_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&wrapper);
             ctx.emitter.instruction("mov rcx, rdx");                            // pass microseconds as wrapper option arg2
             ctx.emitter.instruction("mov rdx, rsi");                            // pass seconds as wrapper option arg1
-            ctx.emitter.instruction(&format!("mov rsi, {}", STREAM_OPTION_READ_TIMEOUT)); // select STREAM_OPTION_READ_TIMEOUT
+            ctx.emitter.instruction(&format!("mov rsi, {}", STREAM_OPTION_READ_TIMEOUT)); //select STREAM_OPTION_READ_TIMEOUT
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_set_option");
             ctx.emitter.label(&after);
         }
@@ -5978,12 +5978,12 @@ fn lower_builtin_stream_filter_attach(
             ctx.emitter.instruction("test rax, 1");                             // test whether STREAM_FILTER_READ is enabled
             ctx.emitter.instruction(&format!("jz {}", skip_read));              // skip the read-filter table when the read bit is clear
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters"); // read-filter table base
-            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", id)); // record the read filter for this descriptor
+            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", id)); //record the read filter for this descriptor
             ctx.emitter.label(&skip_read);
             ctx.emitter.instruction("test rax, 2");                             // test whether STREAM_FILTER_WRITE is enabled
             ctx.emitter.instruction(&format!("jz {}", skip_write));             // skip the write-filter table when the write bit is clear
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters"); // write-filter table base
-            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", id)); // record the write filter for this descriptor
+            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", id)); //record the write filter for this descriptor
             ctx.emitter.label(&skip_write);
             ctx.emitter.instruction("mov rax, rcx");                            // move the descriptor into the resource payload register
         }
@@ -6721,7 +6721,7 @@ fn lower_stream_get_contents_seek(
             if ctx.emitter.platform.needs_cmp_before_error_branch() {
                 ctx.emitter.instruction("cmp x0, #0");                          // Linux reports lseek failure as a negative result
             }
-            ctx.emitter.instruction(&ctx.emitter.platform.branch_on_syscall_success(skip_seek)); // continue only when lseek succeeded
+            ctx.emitter.instruction(&ctx.emitter.platform.branch_on_syscall_success(skip_seek)); //continue only when lseek succeeded
             ctx.emitter.instruction(&format!("b {}", seek_failed));             // failed seek makes stream_get_contents return false
             ctx.emitter.label(wrap_seek);
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
@@ -6792,13 +6792,13 @@ fn emit_branch_if_unlimited_length(
     abi::emit_load_int_immediate(ctx.emitter, scratch_reg, NULL_SENTINEL);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", length_reg, scratch_reg)); // test whether length is PHP null
+            ctx.emitter.instruction(&format!("cmp {}, {}", length_reg, scratch_reg)); //test whether length is PHP null
             ctx.emitter.instruction(&format!("b.eq {}", target_label));         // null length means read until EOF
             ctx.emitter.instruction(&format!("cmp {}, #0", length_reg));        // test whether length is negative
             ctx.emitter.instruction(&format!("b.lt {}", target_label));         // negative length means read until EOF
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", length_reg, scratch_reg)); // test whether length is PHP null
+            ctx.emitter.instruction(&format!("cmp {}, {}", length_reg, scratch_reg)); //test whether length is PHP null
             ctx.emitter.instruction(&format!("je {}", target_label));           // null length means read until EOF
             ctx.emitter.instruction(&format!("cmp {}, 0", length_reg));         // test whether length is negative
             ctx.emitter.instruction(&format!("jl {}", target_label));           // negative length means read until EOF
@@ -6887,7 +6887,7 @@ fn lower_stream_copy_seek(
             if ctx.emitter.platform.needs_cmp_before_error_branch() {
                 ctx.emitter.instruction("cmp x0, #0");                          // Linux reports lseek failure as a negative result
             }
-            ctx.emitter.instruction(&ctx.emitter.platform.branch_on_syscall_success(skip_seek)); // continue only when lseek succeeded
+            ctx.emitter.instruction(&ctx.emitter.platform.branch_on_syscall_success(skip_seek)); //continue only when lseek succeeded
             ctx.emitter.instruction(&format!("b {}", seek_failed));             // failed native seek returns PHP false
             ctx.emitter.label(wrap_seek);
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
@@ -7564,7 +7564,7 @@ fn lower_fseek_aarch64(
     if ctx.emitter.platform.needs_cmp_before_error_branch() {
         ctx.emitter.instruction("cmp x0, #0");                                  // Linux reports lseek failure as a negative result
     }
-    ctx.emitter.instruction(&ctx.emitter.platform.branch_on_syscall_success(success_label)); // continue only when lseek succeeds
+    ctx.emitter.instruction(&ctx.emitter.platform.branch_on_syscall_success(success_label)); //continue only when lseek succeeds
     abi::emit_pop_reg(ctx.emitter, "x9");
     ctx.emitter.instruction("mov x0, #-1");                                     // fseek returns -1 when lseek fails
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip EOF reset after a failed seek
@@ -7632,7 +7632,7 @@ fn lower_rewind_aarch64(
     if ctx.emitter.platform.needs_cmp_before_error_branch() {
         ctx.emitter.instruction("cmp x0, #0");                                  // Linux reports lseek failure as a negative result
     }
-    ctx.emitter.instruction(&ctx.emitter.platform.branch_on_syscall_success(success_label)); // continue only when rewind succeeds
+    ctx.emitter.instruction(&ctx.emitter.platform.branch_on_syscall_success(success_label)); //continue only when rewind succeeds
     abi::emit_pop_reg(ctx.emitter, "x9");
     ctx.emitter.instruction("mov x0, #0");                                      // rewind returns false when lseek fails
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip EOF reset after a failed rewind
@@ -7942,7 +7942,7 @@ pub(super) fn box_owned_string_or_false_result(ctx: &mut FunctionContext<'_>, la
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
             ctx.emitter.instruction("mov rax, 24");                             // request a mixed cell payload with tag and two value words
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the x86_64 Mixed heap kind word
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); //materialize the x86_64 Mixed heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a Mixed cell
             ctx.emitter.instruction("mov r10, 1");                              // select runtime tag 1 for a string Mixed payload
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the string tag in the Mixed cell
@@ -8056,7 +8056,7 @@ fn box_owned_pathinfo_array_as_mixed(ctx: &mut FunctionContext<'_>) {
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rax, 24");                             // request a mixed cell payload with tag and two value words
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the x86_64 Mixed heap kind word
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); //materialize the x86_64 Mixed heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a Mixed cell
             ctx.emitter.instruction("mov QWORD PTR [rax], 5");                  // select runtime tag 5 for an associative-array Mixed payload
             abi::emit_pop_reg(ctx.emitter, "r10");
@@ -8134,7 +8134,7 @@ fn box_stat_array_or_false_result(ctx: &mut FunctionContext<'_>) {
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rax, 24");                             // request a mixed cell payload with tag and two value words
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the x86_64 Mixed heap kind word
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); //materialize the x86_64 Mixed heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a Mixed cell
             ctx.emitter.instruction("mov QWORD PTR [rax], 5");                  // select runtime tag 5 for an associative-array Mixed payload
             abi::emit_pop_reg(ctx.emitter, "r10");

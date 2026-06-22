@@ -204,7 +204,7 @@ fn emit_bounded_copy(
         emit_expr(&args[2], emitter, ctx, data); // evaluate $length first (source order)
         match emitter.target.arch {
             Arch::AArch64 => emitter.instruction("str x0, [sp, #32]"),          // save the requested max byte count
-            Arch::X86_64 => emitter.instruction("mov QWORD PTR [rsp + 32], rax"),// save the requested max byte count
+            Arch::X86_64 => emitter.instruction("mov QWORD PTR [rsp + 32], rax"), //save the requested max byte count
         }
     }
     // $offset: seek the source before copying.
@@ -225,7 +225,7 @@ fn emit_bounded_copy(
                 if emitter.platform.needs_cmp_before_error_branch() {
                     emitter.instruction("cmp x0, #0");                          // Linux reports lseek failure as a negative result
                 }
-                emitter.instruction(&emitter.platform.branch_on_syscall_success(&skip_seek)); // continue only when lseek succeeded
+                emitter.instruction(&emitter.platform.branch_on_syscall_success(&skip_seek)); //continue only when lseek succeeded
                 emitter.instruction(&format!("b {}", seek_failed_label));       // seek failure makes stream_copy_to_stream() return false
                 emitter.label(&wrap_seek);
                 abi::emit_call_label(emitter, "__rt_user_wrapper_fseek");       // wrapper stream_seek(offset, SEEK_SET)
@@ -394,8 +394,8 @@ fn emit_bounded_copy(
     }
     emit_box_current_value_as_mixed(emitter, &PhpType::Int);
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("b {}", boxed_done_label)), // successful copy skips the seek-failure boxing path
-        Arch::X86_64 => emitter.instruction(&format!("jmp {}", boxed_done_label)), // successful copy skips the seek-failure boxing path
+        Arch::AArch64 => emitter.instruction(&format!("b {}", boxed_done_label)), //successful copy skips the seek-failure boxing path
+        Arch::X86_64 => emitter.instruction(&format!("jmp {}", boxed_done_label)), //successful copy skips the seek-failure boxing path
     }
     emitter.label(&seek_failed_label);
     match emitter.target.arch {

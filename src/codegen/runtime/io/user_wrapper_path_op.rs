@@ -478,7 +478,7 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r10", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // per-class user-wrapper vtable for the resolved class
-    emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {}]", VTABLE_RENAME_OFFSET)); // load the rename method pointer (slot 16)
+    emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {}]", VTABLE_RENAME_OFFSET)); //load the rename method pointer (slot 16)
     emitter.instruction("test r11, r11");                                       // class did not implement rename?
     emitter.instruction("jz __rt_uwrn_false_obj_x86");                          // missing method → false
 

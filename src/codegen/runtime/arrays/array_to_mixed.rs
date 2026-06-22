@@ -53,7 +53,7 @@ pub fn emit_array_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_array_to_mixed_stamp");                      // stamp the array once every live slot is boxed
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the unique indexed-array pointer
     emitter.instruction("ldr x12, [sp, #0]");                                   // reload the source value_type tag
-    emitter.instruction(&format!("cmp x12, #{}", TAGGED_SCALAR_ARRAY_VALUE_TYPE)); // do source slots contain inline tagged scalars?
+    emitter.instruction(&format!("cmp x12, #{}", TAGGED_SCALAR_ARRAY_VALUE_TYPE)); //do source slots contain inline tagged scalars?
     emitter.instruction("b.eq __rt_array_to_mixed_load_tagged_scalar");         // tagged-scalar slots need payload-plus-tag loads
     emitter.instruction("cmp x12, #1");                                         // do source slots contain string pointer/length pairs?
     emitter.instruction("b.eq __rt_array_to_mixed_load_string");                // string slots need a 16-byte load
@@ -155,7 +155,7 @@ fn emit_array_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_array_to_mixed_x86_stamp");                   // stamp the array once every live slot is boxed
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the unique indexed-array pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source value_type tag
-    emitter.instruction(&format!("cmp rax, {}", TAGGED_SCALAR_ARRAY_VALUE_TYPE)); // do source slots contain inline tagged scalars?
+    emitter.instruction(&format!("cmp rax, {}", TAGGED_SCALAR_ARRAY_VALUE_TYPE)); //do source slots contain inline tagged scalars?
     emitter.instruction("je __rt_array_to_mixed_x86_load_tagged_scalar");       // tagged-scalar slots need payload-plus-tag loads
     emitter.instruction("cmp rax, 1");                                          // do source slots contain string pointer/length pairs?
     emitter.instruction("je __rt_array_to_mixed_x86_load_string");              // string slots need a 16-byte load
@@ -211,7 +211,7 @@ fn emit_array_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the high payload word
     emitter.instruction("mov rax, 24");                                         // Mixed cells store tag plus two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate the boxed Mixed cell
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the x86_64 Mixed heap kind word
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); //materialize the x86_64 Mixed heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap allocation as a Mixed cell
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the saved runtime value tag
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the runtime value tag in the Mixed cell

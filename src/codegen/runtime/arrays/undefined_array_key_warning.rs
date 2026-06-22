@@ -38,7 +38,7 @@ pub fn emit_undefined_array_key_warning(emitter: &mut Emitter) {
 
     // -- emit prefix --
     abi::emit_symbol_address(emitter, "x1", "_diag_undefined_array_key_prefix");
-    emitter.instruction(&format!("mov x2, #{}", UNDEFINED_ARRAY_KEY_PREFIX_LEN)); // pass the undefined-key warning prefix length
+    emitter.instruction(&format!("mov x2, #{}", UNDEFINED_ARRAY_KEY_PREFIX_LEN)); //pass the undefined-key warning prefix length
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the undefined-key warning prefix
 
     // -- emit formatted key --
@@ -51,7 +51,7 @@ pub fn emit_undefined_array_key_warning(emitter: &mut Emitter) {
 
     // -- emit suffix --
     abi::emit_symbol_address(emitter, "x1", "_diag_undefined_array_key_suffix");
-    emitter.instruction(&format!("mov x2, #{}", UNDEFINED_ARRAY_KEY_SUFFIX_LEN)); // pass the undefined-key warning suffix length
+    emitter.instruction(&format!("mov x2, #{}", UNDEFINED_ARRAY_KEY_SUFFIX_LEN)); //pass the undefined-key warning suffix length
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the undefined-key warning suffix
 
     // -- restore stack frame --
@@ -76,7 +76,7 @@ fn emit_undefined_array_key_warning_x86_64(emitter: &mut Emitter) {
 
     // -- emit prefix --
     abi::emit_symbol_address(emitter, "rdi", "_diag_undefined_array_key_prefix");
-    emitter.instruction(&format!("mov esi, {}", UNDEFINED_ARRAY_KEY_PREFIX_LEN)); // pass the undefined-key warning prefix length
+    emitter.instruction(&format!("mov esi, {}", UNDEFINED_ARRAY_KEY_PREFIX_LEN)); //pass the undefined-key warning prefix length
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the undefined-key warning prefix
 
     // -- emit formatted key --
@@ -90,7 +90,7 @@ fn emit_undefined_array_key_warning_x86_64(emitter: &mut Emitter) {
 
     // -- emit suffix --
     abi::emit_symbol_address(emitter, "rdi", "_diag_undefined_array_key_suffix");
-    emitter.instruction(&format!("mov esi, {}", UNDEFINED_ARRAY_KEY_SUFFIX_LEN)); // pass the undefined-key warning suffix length
+    emitter.instruction(&format!("mov esi, {}", UNDEFINED_ARRAY_KEY_SUFFIX_LEN)); //pass the undefined-key warning suffix length
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the undefined-key warning suffix
 
     // -- restore stack frame --

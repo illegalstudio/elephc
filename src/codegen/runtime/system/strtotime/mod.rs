@@ -274,7 +274,7 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdx, 10");                                         // kind 9 = bare "ago" → fail
     emitter.instruction("jl __rt_strtotime_fail_linux_x86_64");                 // below 10 → fail
     emitter.instruction("cmp rdx, 16");                                         // weekday name ?
-    emitter.instruction("jle __rt_strtotime_alpha_direct_weekday_linux_x86_64"); // yes → direct weekday strategy
+    emitter.instruction("jle __rt_strtotime_alpha_direct_weekday_linux_x86_64"); //yes → direct weekday strategy
     emitter.instruction("cmp rdx, 18");                                         // kind 17..18 = a/an relative magnitude ?
     emitter.instruction("jle __rt_strtotime_offsets_entry_linux_x86_64");       // let the offsets strategy parse the full relative expression
     emitter.instruction("jmp __rt_strtotime_fail_linux_x86_64");                // unknown kind → fail

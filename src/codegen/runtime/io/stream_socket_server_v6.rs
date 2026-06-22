@@ -201,7 +201,7 @@ pub fn emit_stream_socket_server_v6(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_sssv6_listen_ok")); // continue when listen succeeded
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_sssv6_listen_ok")); //continue when listen succeeded
     emitter.instruction("b __rt_sssv6_fail_close");                             // listen() failed
 
     emitter.label("__rt_sssv6_listen_ok");

@@ -123,7 +123,7 @@ pub fn emit_user_wrapper_opendir(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0]");                                        // class_id at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // per-class user-wrapper vtable
-    emitter.instruction(&format!("ldr x11, [x10, #{}]", VTABLE_DIR_OPENDIR_OFFSET)); // load the dir_opendir method pointer (slot 19)
+    emitter.instruction(&format!("ldr x11, [x10, #{}]", VTABLE_DIR_OPENDIR_OFFSET)); //load the dir_opendir method pointer (slot 19)
     emitter.instruction("cbz x11, __rt_uwod_fail");                             // class did not implement dir_opendir → false
 
     // -- call dir_opendir($this, path_ptr, path_len, options=0) → x0 = bool --
@@ -246,7 +246,7 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable
-    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_DIR_OPENDIR_OFFSET)); // load the dir_opendir method pointer (slot 19)
+    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_DIR_OPENDIR_OFFSET)); //load the dir_opendir method pointer (slot 19)
     emitter.instruction("test r11, r11");                                       // class did not implement dir_opendir?
     emitter.instruction("jz __rt_uwod_fail_x86");                               // missing dir_opendir → free obj, false
 
@@ -324,7 +324,7 @@ pub fn emit_user_wrapper_dir_readdir(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x0]");                                       // class_id at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable
-    emitter.instruction(&format!("ldr x11, [x11, #{}]", VTABLE_DIR_READDIR_OFFSET)); // load the dir_readdir method pointer (slot 20)
+    emitter.instruction(&format!("ldr x11, [x11, #{}]", VTABLE_DIR_READDIR_OFFSET)); //load the dir_readdir method pointer (slot 20)
     emitter.instruction("cbz x11, __rt_uwrd_empty");                            // class did not implement dir_readdir → end of directory
 
     // -- call dir_readdir($this) → returns string in x1/x2 --
@@ -363,7 +363,7 @@ fn emit_user_wrapper_dir_readdir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable
-    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_DIR_READDIR_OFFSET)); // load the dir_readdir method pointer (slot 20)
+    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_DIR_READDIR_OFFSET)); //load the dir_readdir method pointer (slot 20)
     emitter.instruction("test r11, r11");                                       // class did not implement dir_readdir?
     emitter.instruction("jz __rt_uwrd_empty_x86");                              // missing dir_readdir → end of directory
 
@@ -414,7 +414,7 @@ pub fn emit_user_wrapper_dir_closedir(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x0]");                                       // class_id at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable
-    emitter.instruction(&format!("ldr x11, [x11, #{}]", VTABLE_DIR_CLOSEDIR_OFFSET)); // load the dir_closedir method pointer (slot 21)
+    emitter.instruction(&format!("ldr x11, [x11, #{}]", VTABLE_DIR_CLOSEDIR_OFFSET)); //load the dir_closedir method pointer (slot 21)
     emitter.instruction("cbz x11, __rt_uwcd_clear");                            // class did not implement dir_closedir → just clear
     emitter.instruction("blr x11");                                             // invoke dir_closedir on the wrapper object
 
@@ -454,7 +454,7 @@ fn emit_user_wrapper_dir_closedir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable
-    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_DIR_CLOSEDIR_OFFSET)); // load the dir_closedir method pointer (slot 21)
+    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_DIR_CLOSEDIR_OFFSET)); //load the dir_closedir method pointer (slot 21)
     emitter.instruction("test r11, r11");                                       // class did not implement dir_closedir?
     emitter.instruction("jz __rt_uwcd_clear_x86");                              // missing dir_closedir → just clear
     emitter.instruction("call r11");                                            // invoke dir_closedir on the wrapper object
@@ -502,7 +502,7 @@ pub fn emit_user_wrapper_dir_rewinddir(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x0]");                                       // class_id at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-wrapper vtable
-    emitter.instruction(&format!("ldr x11, [x11, #{}]", VTABLE_DIR_REWINDDIR_OFFSET)); // load the dir_rewinddir method pointer (slot 22)
+    emitter.instruction(&format!("ldr x11, [x11, #{}]", VTABLE_DIR_REWINDDIR_OFFSET)); //load the dir_rewinddir method pointer (slot 22)
     emitter.instruction("cbz x11, __rt_uwrw_false");                            // class did not implement dir_rewinddir → false
 
     // -- call dir_rewinddir($this) → bool in x0 --
@@ -539,7 +539,7 @@ fn emit_user_wrapper_dir_rewinddir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable
-    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_DIR_REWINDDIR_OFFSET)); // load the dir_rewinddir method pointer (slot 22)
+    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_DIR_REWINDDIR_OFFSET)); //load the dir_rewinddir method pointer (slot 22)
     emitter.instruction("test r11, r11");                                       // class did not implement dir_rewinddir?
     emitter.instruction("jz __rt_uwrw_false_x86");                              // missing dir_rewinddir → false
 

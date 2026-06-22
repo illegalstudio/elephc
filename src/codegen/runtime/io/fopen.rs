@@ -105,14 +105,14 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.label("__rt_fopen_check_w");
     emitter.instruction("cmp w9, #0x77");                                       // compare with 'w'
     emitter.instruction("b.ne __rt_fopen_check_a");                             // if not 'w', check for 'a'
-    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_trunc())); // O_WRONLY|O_CREAT|O_TRUNC
+    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_trunc())); //O_WRONLY|O_CREAT|O_TRUNC
     emitter.instruction("b __rt_fopen_check_plus");                             // proceed to check for '+' modifier
 
     // -- check for 'a' mode (append) --
     emitter.label("__rt_fopen_check_a");
     emitter.instruction("cmp w9, #0x61");                                       // compare with 'a'
     emitter.instruction("b.ne __rt_fopen_fail");                                // reject unsupported fopen() mode letters
-    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_append())); // O_WRONLY|O_CREAT|O_APPEND
+    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_append())); //O_WRONLY|O_CREAT|O_APPEND
     // fall through to check_plus
 
     // -- check if second char is '+' to enable read+write --
@@ -136,7 +136,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     if emitter.platform.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: check if return value is negative
     }
-    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fopen_opened")); // branch if syscall succeeded
+    emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fopen_opened")); //branch if syscall succeeded
     emitter.label("__rt_fopen_fail");
     emit_fopen_failed_warning(emitter);
     emitter.instruction("mov x0, #-1");                                         // return -1 to indicate failure
@@ -326,13 +326,13 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fopen_check_w_x86");
     emitter.instruction("cmp r11b, 0x77");                                      // does the mode string start with 'w' for truncate-on-open writes?
     emitter.instruction("jne __rt_fopen_check_a_x86");                          // if not, fall through to the append-mode check
-    emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat_trunc())); // select O_WRONLY|O_CREAT|O_TRUNC for the Linux write-mode fopen() path
+    emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat_trunc())); //select O_WRONLY|O_CREAT|O_TRUNC for the Linux write-mode fopen() path
     emitter.instruction("jmp __rt_fopen_check_plus_x86");                       // continue with the optional '+' upgrade after selecting the base flags
 
     emitter.label("__rt_fopen_check_a_x86");
     emitter.instruction("cmp r11b, 0x61");                                      // does the mode string start with 'a' for append writes?
     emitter.instruction("jne __rt_fopen_fail_x86");                             // reject unsupported fopen() mode letters
-    emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat_append())); // select O_WRONLY|O_CREAT|O_APPEND for the Linux append-mode fopen() path
+    emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat_append())); //select O_WRONLY|O_CREAT|O_APPEND for the Linux append-mode fopen() path
 
     emitter.label("__rt_fopen_check_plus_x86");
     emitter.instruction("cmp BYTE PTR [r10 + 1], 0x2B");                        // does the mode string request the read-write '+' fopen() upgrade?
@@ -464,12 +464,12 @@ fn emit_fopen_failed_warning(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(emitter, "x1", "_diag_fopen_failed_msg");  // pass the fopen() warning text pointer to the diagnostic helper
-            emitter.instruction(&format!("mov x2, #{}", FOPEN_FAILED_WARNING.len())); // pass the fopen() warning byte length to the diagnostic helper
+            emitter.instruction(&format!("mov x2, #{}", FOPEN_FAILED_WARNING.len())); //pass the fopen() warning byte length to the diagnostic helper
             emitter.instruction("bl __rt_diag_warning");                        // emit or suppress the fopen() failure warning
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(emitter, "rdi", "_diag_fopen_failed_msg"); // pass the fopen() warning text pointer to the diagnostic helper
-            emitter.instruction(&format!("mov esi, {}", FOPEN_FAILED_WARNING.len())); // pass the fopen() warning byte length to the diagnostic helper
+            emitter.instruction(&format!("mov esi, {}", FOPEN_FAILED_WARNING.len())); //pass the fopen() warning byte length to the diagnostic helper
             emitter.instruction("call __rt_diag_warning");                      // emit or suppress the fopen() failure warning
         }
     }

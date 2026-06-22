@@ -746,7 +746,7 @@ fn emit_mixed_prefix_as_hash_or_abort(
 fn emit_branch_if_mixed_tag(tag_reg: &str, expected_tag: u8, label: &str, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #{}", tag_reg, expected_tag)); // compare the mixed prefix payload tag with the expected container shape
+            emitter.instruction(&format!("cmp {}, #{}", tag_reg, expected_tag)); //compare the mixed prefix payload tag with the expected container shape
             emitter.instruction(&format!("b.eq {}", label));                    // handle this prefix container shape when the tag matches
         }
         Arch::X86_64 => {

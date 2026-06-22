@@ -116,8 +116,8 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // hit slice end?
     emitter.instruction("b.ge __rt_json_decode_array_real_scan_done");          // unterminated value → end
     emitter.instruction("ldrb w15, [x11, x9]");                                 // load or prepare JSON decoder state
-    emitter.instruction("cbnz x14, __rt_json_decode_array_real_scan_after_escape"); // branch on the current JSON decoder condition
-    emitter.instruction("cbnz x13, __rt_json_decode_array_real_scan_in_string"); // branch on the current JSON decoder condition
+    emitter.instruction("cbnz x14, __rt_json_decode_array_real_scan_after_escape"); //branch on the current JSON decoder condition
+    emitter.instruction("cbnz x13, __rt_json_decode_array_real_scan_in_string"); //branch on the current JSON decoder condition
     // Outside string state.
     emitter.instruction("cmp w15, #34");                                        // '"'
     emitter.instruction("b.eq __rt_json_decode_array_real_scan_enter_string");  // branch on the current JSON decoder condition

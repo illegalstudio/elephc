@@ -78,7 +78,7 @@ pub fn emit(
         abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
         let reg = abi::int_result_reg(emitter);
         match emitter.target.arch {
-            Arch::AArch64 => emitter.instruction(&format!("sub {reg}, {reg}, #1")), // strict-semantic offset for json_validate
+            Arch::AArch64 => emitter.instruction(&format!("sub {reg}, {reg}, #1")), //strict-semantic offset for json_validate
             Arch::X86_64 => emitter.instruction(&format!("sub {reg}, 1")),      // strict-semantic offset for json_validate
         }
         abi::emit_store_reg_to_symbol(emitter, reg, "_json_depth_limit", 0);

@@ -139,11 +139,11 @@ pub(super) fn emit_enum_singleton_initializers(
             abi::emit_load_int_immediate(emitter, temp_reg, 4);                 // heap kind 4 = object instance
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction(&format!("str {}, [{}, #-8]", temp_reg, result_reg)); // store object kind in the uniform heap header just before the payload pointer
+                    emitter.instruction(&format!("str {}, [{}, #-8]", temp_reg, result_reg)); //store object kind in the uniform heap header just before the payload pointer
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("mov {}, 0x{:x}", temp_reg, (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the x86_64 object heap kind word with the uniform heap marker
-                    emitter.instruction(&format!("mov QWORD PTR [{} - 8], {}", result_reg, temp_reg)); // store object kind in the x86_64 uniform heap header just before the payload pointer
+                    emitter.instruction(&format!("mov {}, 0x{:x}", temp_reg, (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); //materialize the x86_64 object heap kind word with the uniform heap marker
+                    emitter.instruction(&format!("mov QWORD PTR [{} - 8], {}", result_reg, temp_reg)); //store object kind in the x86_64 uniform heap header just before the payload pointer
                 }
             }
             abi::emit_load_int_immediate(emitter, temp_reg, class_info.class_id as i64); // load compile-time enum class id
@@ -506,7 +506,7 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
             Arch::AArch64 => {
                 emitter.instruction("mov x1, x0");                              // move the current scalar payload into the mixed helper argument register
                 emitter.instruction("mov x2, xzr");                             // scalar mixed payloads do not use a second word
-                emitter.instruction(&format!("mov x0, #{}", runtime_value_tag(ty))); // materialize the static value tag for this scalar
+                emitter.instruction(&format!("mov x0, #{}", runtime_value_tag(ty))); //materialize the static value tag for this scalar
                 emitter.instruction("bl __rt_mixed_from_value");                // box the scalar payload into a mixed cell
             }
             Arch::X86_64 => {
@@ -547,7 +547,7 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
                 Arch::AArch64 => {
                     emitter.instruction("mov x1, x0");                          // move the current heap pointer into the mixed helper payload register
                     emitter.instruction("mov x2, xzr");                         // heap-backed payloads only use the low word
-                    emitter.instruction(&format!("mov x0, #{}", runtime_value_tag(ty))); // materialize the heap payload tag for the mixed helper
+                    emitter.instruction(&format!("mov x0, #{}", runtime_value_tag(ty))); //materialize the heap payload tag for the mixed helper
                     emitter.instruction("bl __rt_mixed_from_value");            // retain the heap child and box it into a mixed cell
                 }
                 Arch::X86_64 => {

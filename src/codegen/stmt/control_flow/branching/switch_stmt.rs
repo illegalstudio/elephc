@@ -63,7 +63,7 @@ pub(super) fn emit_switch_stmt(
                             emitter.instruction("mov rcx, rdx");                // move the case-pattern string length into the SysV fourth argument register expected by __rt_str_eq
                             emitter.instruction("mov rdx, rax");                // move the case-pattern string pointer into the SysV third argument register expected by __rt_str_eq
                             emitter.instruction("mov rdi, QWORD PTR [rsp]");    // reload the saved switch subject string pointer into the SysV first argument register
-                            emitter.instruction("mov rsi, QWORD PTR [rsp + 8]"); // reload the saved switch subject string length into the SysV second argument register
+                            emitter.instruction("mov rsi, QWORD PTR [rsp + 8]"); //reload the saved switch subject string length into the SysV second argument register
                             abi::emit_call_label(emitter, "__rt_str_eq");       // compare the switch subject and case pattern strings through the shared runtime helper
                         }
                     }

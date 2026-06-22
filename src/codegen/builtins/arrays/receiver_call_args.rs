@@ -384,7 +384,7 @@ fn emit_new_receiver_prefixed_hash(source_stack_offset: usize, emitter: &mut Emi
     abi::emit_load_from_address(emitter, capacity_reg, source_reg, 8);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("add {}, {}, #1", capacity_reg, capacity_reg)); // reserve one extra hash slot for the synthetic receiver argument
+            emitter.instruction(&format!("add {}, {}, #1", capacity_reg, capacity_reg)); //reserve one extra hash slot for the synthetic receiver argument
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("add {}, 1", capacity_reg));           // reserve one extra hash slot for the synthetic receiver argument

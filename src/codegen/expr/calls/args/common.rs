@@ -175,7 +175,7 @@ pub(crate) fn push_non_variable_ref_arg_address(
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 16);
     abi::emit_call_label(emitter, "__rt_heap_alloc");                         // allocate a stable 16-byte by-reference cell for a default or temporary argument
     let cell_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!("mov {}, {}", cell_reg, abi::int_result_reg(emitter))); // keep the allocated reference cell address while storing the initial value
+    emitter.instruction(&format!("mov {}, {}", cell_reg, abi::int_result_reg(emitter))); //keep the allocated reference cell address while storing the initial value
     store_pushed_value_to_ref_cell(emitter, cell_reg, &pushed_ty);
     abi::emit_push_reg(emitter, cell_reg);
     PhpType::Int
@@ -199,7 +199,7 @@ pub(crate) fn push_current_result_ref_arg_address(
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 16);
     abi::emit_call_label(emitter, "__rt_heap_alloc");                         // allocate a stable 16-byte by-reference cell for a dynamic callback argument
     let cell_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!("mov {}, {}", cell_reg, abi::int_result_reg(emitter))); // keep the allocated callback reference cell while storing the loaded argument
+    emitter.instruction(&format!("mov {}, {}", cell_reg, abi::int_result_reg(emitter))); //keep the allocated callback reference cell while storing the loaded argument
     store_pushed_value_to_ref_cell(emitter, cell_reg, &pushed_ty);
     abi::emit_push_reg(emitter, cell_reg);
     PhpType::Int

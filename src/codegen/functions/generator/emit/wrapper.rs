@@ -91,23 +91,23 @@ pub(in crate::codegen::functions::generator) fn emit_wrapper(
     emitter.instruction(&format!("mov x0, #{}", frame_size));                   // total frame size including parameter and local slots
     emitter.instruction("bl __rt_heap_alloc");                                  // x0 = pointer to fresh GeneratorFrame
 
-    emitter.instruction(&format!("mov x9, #{}", gen_frame::HEAP_KIND_GENERATOR)); // heap kind = object instance for Generator frames
+    emitter.instruction(&format!("mov x9, #{}", gen_frame::HEAP_KIND_GENERATOR)); //heap kind = object instance for Generator frames
     emitter.instruction("str x9, [x0, #-8]");                                   // write kind into the uniform heap header
 
     emitter.instruction(&format!("mov x9, #{}", class_id));                     // load Generator's compile-time class id
-    emitter.instruction(&format!("str x9, [x0, #{}]", gen_frame::OFF_CLASS_ID)); // class_id at OFF_CLASS_ID
+    emitter.instruction(&format!("str x9, [x0, #{}]", gen_frame::OFF_CLASS_ID)); //class_id at OFF_CLASS_ID
 
     emitter.instruction(&format!("adr x9, {}", resume_label));                  // load address of the resume function symbol
-    emitter.instruction(&format!("str x9, [x0, #{}]", gen_frame::OFF_RESUME_FN)); // resume_fn at OFF_RESUME_FN
+    emitter.instruction(&format!("str x9, [x0, #{}]", gen_frame::OFF_RESUME_FN)); //resume_fn at OFF_RESUME_FN
 
-    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_STATE_IDX)); // state_idx + flags
-    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_AUTO_KEY_COUNTER)); // auto_key_counter
-    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_LAST_KEY)); // last_key (Mixed pointer, NULL until first yield)
-    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_LAST_VALUE)); // last_value (Mixed pointer)
-    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_RETURN_VALUE)); // return_value (Mixed pointer)
-    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_SENT_VALUE)); // sent_value (Mixed pointer)
-    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_DELEGATED_ITER)); // delegated_iter
-    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_LAYOUT_ID)); // layout_id
+    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_STATE_IDX)); //state_idx + flags
+    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_AUTO_KEY_COUNTER)); //auto_key_counter
+    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_LAST_KEY)); //last_key (Mixed pointer, NULL until first yield)
+    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_LAST_VALUE)); //last_value (Mixed pointer)
+    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_RETURN_VALUE)); //return_value (Mixed pointer)
+    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_SENT_VALUE)); //sent_value (Mixed pointer)
+    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_DELEGATED_ITER)); //delegated_iter
+    emitter.instruction(&format!("str xzr, [x0, #{}]", gen_frame::OFF_LAYOUT_ID)); //layout_id
 
     for i in 0..int_param_count {
         let frame_off = slot_offset(i);
@@ -184,44 +184,44 @@ fn emit_wrapper_x86_64(
 
     for i in 0..int_param_count {
         if i < arg_regs.len() {
-            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], {}", (i + 1) * 8, arg_regs[i])); // park register parameter i in its spill slot
+            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], {}", (i + 1) * 8, arg_regs[i])); //park register parameter i in its spill slot
         } else {
             let caller_off = 16 + (i - arg_regs.len()) * 8;
-            emitter.instruction(&format!("mov r10, QWORD PTR [rbp + {}]", caller_off)); // load stack-passed parameter i from the caller frame
-            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", (i + 1) * 8)); // park stack-passed parameter i in its spill slot
+            emitter.instruction(&format!("mov r10, QWORD PTR [rbp + {}]", caller_off)); //load stack-passed parameter i from the caller frame
+            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", (i + 1) * 8)); //park stack-passed parameter i in its spill slot
         }
     }
 
     emitter.instruction(&format!("mov rax, {}", frame_size));                   // total frame size including parameter and local slots
     emitter.instruction("call __rt_heap_alloc");                                // rax = pointer to fresh GeneratorFrame
 
-    emitter.instruction(&format!("mov r10, 0x{:x}", (super::X86_64_HEAP_MAGIC_HI32 << 32) | u64::from(gen_frame::HEAP_KIND_GENERATOR))); // heap kind = object instance with x86 heap marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", (super::X86_64_HEAP_MAGIC_HI32 << 32) | u64::from(gen_frame::HEAP_KIND_GENERATOR))); //heap kind = object instance with x86 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // write kind into the uniform heap header
 
     emitter.instruction(&format!("mov r10, {}", class_id));                     // load Generator's compile-time class id
-    emitter.instruction(&format!("mov QWORD PTR [rax + {}], r10", gen_frame::OFF_CLASS_ID)); // class_id at OFF_CLASS_ID
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], r10", gen_frame::OFF_CLASS_ID)); //class_id at OFF_CLASS_ID
 
     crate::codegen::abi::emit_symbol_address(emitter, "r10", resume_label);
-    emitter.instruction(&format!("mov QWORD PTR [rax + {}], r10", gen_frame::OFF_RESUME_FN)); // resume_fn at OFF_RESUME_FN
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], r10", gen_frame::OFF_RESUME_FN)); //resume_fn at OFF_RESUME_FN
 
-    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_STATE_IDX)); // state_idx + flags
-    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_AUTO_KEY_COUNTER)); // auto_key_counter
-    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_LAST_KEY)); // last_key (Mixed pointer, NULL until first yield)
-    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_LAST_VALUE)); // last_value (Mixed pointer)
-    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_RETURN_VALUE)); // return_value (Mixed pointer)
-    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_SENT_VALUE)); // sent_value (Mixed pointer)
-    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_DELEGATED_ITER)); // delegated_iter
-    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_LAYOUT_ID)); // layout_id
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_STATE_IDX)); //state_idx + flags
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_AUTO_KEY_COUNTER)); //auto_key_counter
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_LAST_KEY)); //last_key (Mixed pointer, NULL until first yield)
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_LAST_VALUE)); //last_value (Mixed pointer)
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_RETURN_VALUE)); //return_value (Mixed pointer)
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_SENT_VALUE)); //sent_value (Mixed pointer)
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_DELEGATED_ITER)); //delegated_iter
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", gen_frame::OFF_LAYOUT_ID)); //layout_id
 
     for i in 0..int_param_count {
         let frame_off = slot_offset(i);
-        emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", (i + 1) * 8)); // reload saved parameter i from the spill slot
-        emitter.instruction(&format!("mov QWORD PTR [rax + {}], r10", frame_off)); // store parameter i in its frame slot
+        emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", (i + 1) * 8)); //reload saved parameter i from the spill slot
+        emitter.instruction(&format!("mov QWORD PTR [rax + {}], r10", frame_off)); //store parameter i in its frame slot
     }
 
     for i in 0..int_local_count {
         let frame_off = slot_offset(int_param_count + i);
-        emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", frame_off)); // zero-initialize local i's frame slot
+        emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", frame_off)); //zero-initialize local i's frame slot
     }
 
     if param_save_bytes > 0 {

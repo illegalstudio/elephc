@@ -193,7 +193,7 @@ pub(super) fn emit_increment_saved_count_at_offset(offset: usize, emitter: &mut 
             emitter.instruction(&format!("str x9, [sp, #{}]", offset));         // persist the updated iterator helper counter
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("add QWORD PTR [rsp + {}], 1", offset)); // count this valid iterator position beneath the receiver slot
+            emitter.instruction(&format!("add QWORD PTR [rsp + {}], 1", offset)); //count this valid iterator position beneath the receiver slot
         }
     }
 }

@@ -2162,17 +2162,17 @@ fn emit_eval_called_class_name_result_aarch64(ctx: &mut FunctionContext<'_>) -> 
     let done = ctx.next_label("eval_called_class_done");
     emit_eval_late_static_class_id_to_reg(ctx, "x12")?;
     abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_name_count", 0);
-    ctx.emitter.instruction("cmp x12, x10"); // reject called-class ids outside the class-name table
-    ctx.emitter.instruction(&format!("b.hs {}", missing)); // fall back to the lexical eval class when metadata is missing
+    ctx.emitter.instruction("cmp x12, x10");                                    // reject called-class ids outside the class-name table
+    ctx.emitter.instruction(&format!("b.hs {}", missing));                      // fall back to the lexical eval class when metadata is missing
     abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_entries");
-    ctx.emitter.instruction("lsl x12, x12, #4"); // convert class id to a 16-byte class-name table offset
-    ctx.emitter.instruction("add x11, x11, x12"); // select the called-class metadata row
-    ctx.emitter.instruction("ldr x1, [x11]"); // load the called-class name pointer
-    ctx.emitter.instruction("ldr x2, [x11, #8]"); // load the called-class name length
-    ctx.emitter.instruction(&format!("b {}", done)); // skip the missing-metadata fallback
+    ctx.emitter.instruction("lsl x12, x12, #4");                                // convert class id to a 16-byte class-name table offset
+    ctx.emitter.instruction("add x11, x11, x12");                               // select the called-class metadata row
+    ctx.emitter.instruction("ldr x1, [x11]");                                   // load the called-class name pointer
+    ctx.emitter.instruction("ldr x2, [x11, #8]");                               // load the called-class name length
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip the missing-metadata fallback
     ctx.emitter.label(&missing);
     abi::emit_symbol_address(ctx.emitter, "x1", "_class_name_missing");
-    ctx.emitter.instruction("mov x2, #0"); // empty called-class name triggers lexical fallback in eval
+    ctx.emitter.instruction("mov x2, #0");                                      // empty called-class name triggers lexical fallback in eval
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -2183,17 +2183,17 @@ fn emit_eval_called_class_name_result_x86_64(ctx: &mut FunctionContext<'_>) -> R
     let done = ctx.next_label("eval_called_class_done");
     emit_eval_late_static_class_id_to_reg(ctx, "r8")?;
     abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_class_name_count", 0);
-    ctx.emitter.instruction("cmp r8, r9"); // reject called-class ids outside the class-name table
-    ctx.emitter.instruction(&format!("jae {}", missing)); // fall back to the lexical eval class when metadata is missing
+    ctx.emitter.instruction("cmp r8, r9");                                      // reject called-class ids outside the class-name table
+    ctx.emitter.instruction(&format!("jae {}", missing));                       // fall back to the lexical eval class when metadata is missing
     abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
-    ctx.emitter.instruction("shl r8, 4"); // convert class id to a 16-byte class-name table offset
-    ctx.emitter.instruction("add r10, r8"); // select the called-class metadata row
-    ctx.emitter.instruction("mov rax, QWORD PTR [r10]"); // load the called-class name pointer
-    ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + 8]"); // load the called-class name length
-    ctx.emitter.instruction(&format!("jmp {}", done)); // skip the missing-metadata fallback
+    ctx.emitter.instruction("shl r8, 4");                                       // convert class id to a 16-byte class-name table offset
+    ctx.emitter.instruction("add r10, r8");                                     // select the called-class metadata row
+    ctx.emitter.instruction("mov rax, QWORD PTR [r10]");                        // load the called-class name pointer
+    ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                    // load the called-class name length
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the missing-metadata fallback
     ctx.emitter.label(&missing);
     abi::emit_symbol_address(ctx.emitter, "rax", "_class_name_missing");
-    ctx.emitter.instruction("mov rdx, 0"); // empty called-class name triggers lexical fallback in eval
+    ctx.emitter.instruction("mov rdx, 0");                                      // empty called-class name triggers lexical fallback in eval
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -2622,12 +2622,12 @@ fn emit_branch_if_scope_entry_missing(ctx: &mut FunctionContext<'_>, label: &str
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
-            ctx.emitter.instruction(&format!("b.eq {}", label)); // skip reload when eval unset or omitted the local
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // skip reload when eval unset or omitted the local
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_PRESENT)); // check whether eval left the local visible
-            ctx.emitter.instruction(&format!("je {}", label)); // skip reload when eval unset or omitted the local
+            ctx.emitter.instruction(&format!("je {}", label));                  // skip reload when eval unset or omitted the local
         }
     }
 }
@@ -2739,12 +2739,12 @@ fn emit_retain_scope_cell_if_owned(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("tst {}, #{}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("b.eq {}", skip)); // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("b.eq {}", skip));                 // borrowed scope entries can be copied back without retaining
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("test {}, {}", flags_reg, EVAL_SCOPE_FLAG_OWNED)); // check whether the scope keeps its own Mixed-cell owner
-            ctx.emitter.instruction(&format!("je {}", skip)); // borrowed scope entries can be copied back without retaining
+            ctx.emitter.instruction(&format!("je {}", skip));                   // borrowed scope entries can be copied back without retaining
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_incref");
@@ -2865,12 +2865,12 @@ fn emit_branch_if_eval_status(ctx: &mut FunctionContext<'_>, status: i64, label:
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, #{}", result_reg, status)); // compare the eval bridge status against the handled code
-            ctx.emitter.instruction(&format!("b.eq {}", label)); // branch to the matching eval status handler
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch to the matching eval status handler
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("cmp {}, {}", result_reg, status)); // compare the eval bridge status against the handled code
-            ctx.emitter.instruction(&format!("je {}", label)); // branch to the matching eval status handler
+            ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching eval status handler
         }
     }
 }
@@ -2898,7 +2898,7 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2"); // write the eval runtime diagnostic to stderr
+            ctx.emitter.instruction("mov x0, #2");                              // write the eval runtime diagnostic to stderr
             ctx.emitter.adrp("x1", &message_label);
             ctx.emitter.add_lo12("x1", "x1", &message_label);
             ctx.emitter
@@ -2907,12 +2907,12 @@ fn emit_eval_fatal_message(ctx: &mut FunctionContext<'_>, message: &str) {
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2"); // write the eval runtime diagnostic to Linux stderr
+            ctx.emitter.instruction("mov edi, 2");                              // write the eval runtime diagnostic to Linux stderr
             abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
             ctx.emitter
                 .instruction(&format!("mov edx, {}", message_len)); // pass the eval runtime diagnostic byte length
-            ctx.emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall"); // emit the eval runtime diagnostic before exiting
+            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
+            ctx.emitter.instruction("syscall");                                 // emit the eval runtime diagnostic before exiting
             abi::emit_exit(ctx.emitter, 1);
         }
     }

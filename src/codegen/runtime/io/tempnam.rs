@@ -134,7 +134,7 @@ fn emit_tempnam_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, QWORD PTR [rbp - 16]");                       // include the prefix string length in the mutable mkstemp() template buffer size
     emitter.instruction("add rax, 8");                                          // include '/', the six X template bytes, and the trailing null terminator in the mutable buffer size
     emitter.instruction("call __rt_heap_alloc");                                // allocate a mutable owned buffer for the mkstemp() template path
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the owned-string heap kind word with the x86_64 heap marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); //materialize the owned-string heap kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the template buffer as a persisted elephc string in the uniform heap header
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the mutable template buffer pointer across the mkstemp() and close() calls
     emitter.instruction("mov r8, rax");                                         // keep a running destination cursor while copying the directory and prefix components into the template

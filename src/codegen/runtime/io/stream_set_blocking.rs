@@ -37,7 +37,7 @@ pub fn emit_stream_set_blocking(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_set_blocking_getfl_ok")); // continue when F_GETFL succeeded
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_set_blocking_getfl_ok")); //continue when F_GETFL succeeded
     emitter.instruction("b __rt_stream_set_blocking_fail");                     // F_GETFL failed
 
     emitter.label("__rt_stream_set_blocking_getfl_ok");
@@ -58,7 +58,7 @@ pub fn emit_stream_set_blocking(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_set_blocking_ok")); // continue when F_SETFL succeeded
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_set_blocking_ok")); //continue when F_SETFL succeeded
     emitter.instruction("b __rt_stream_set_blocking_fail");                     // F_SETFL failed
 
     emitter.label("__rt_stream_set_blocking_ok");

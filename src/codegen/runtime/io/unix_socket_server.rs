@@ -53,7 +53,7 @@ pub fn emit_unix_socket_server(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative descriptor means failure
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_unix_socket_server_sock_ok")); // continue when socket succeeded
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_unix_socket_server_sock_ok")); //continue when socket succeeded
     emitter.instruction("b __rt_unix_socket_server_fail");                      // socket() failed
     emitter.label("__rt_unix_socket_server_sock_ok");
     emitter.instruction("str x0, [sp, #0]");                                    // save the socket descriptor
@@ -70,7 +70,7 @@ pub fn emit_unix_socket_server(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_unix_socket_server_bind_ok")); // continue when bind succeeded
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_unix_socket_server_bind_ok")); //continue when bind succeeded
     emitter.instruction("b __rt_unix_socket_server_fail_close");                // bind() failed
     emitter.label("__rt_unix_socket_server_bind_ok");
 
@@ -89,7 +89,7 @@ pub fn emit_unix_socket_server(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_unix_socket_server_ok")); // continue when listen succeeded
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_unix_socket_server_ok")); //continue when listen succeeded
     emitter.instruction("b __rt_unix_socket_server_fail_close");                // listen() failed
 
     emitter.label("__rt_unix_socket_server_ok");

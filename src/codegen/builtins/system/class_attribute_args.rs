@@ -69,12 +69,12 @@ pub fn emit(
     // -- allocate an empty indexed array of mixed-cell pointers --
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov x0, #{}", attr_args.len().max(1))); // initial capacity (≥1 to avoid grow on first push)
+            emitter.instruction(&format!("mov x0, #{}", attr_args.len().max(1))); //initial capacity (≥1 to avoid grow on first push)
             emitter.instruction("mov x1, #8");                                  // element stride: one heap pointer per slot
             emitter.instruction("bl __rt_array_new");                           // x0 = freshly allocated array pointer
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rdi, {}", attr_args.len().max(1))); // initial capacity (≥1)
+            emitter.instruction(&format!("mov rdi, {}", attr_args.len().max(1))); //initial capacity (≥1)
             emitter.instruction("mov rsi, 8");                                  // element stride: one heap pointer per slot
             emitter.instruction("call __rt_array_new");                         // rax = array pointer
         }

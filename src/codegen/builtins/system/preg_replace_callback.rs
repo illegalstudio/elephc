@@ -505,7 +505,7 @@ fn callable_array_descriptor_preg_callback_env(
         ctx,
     );
     if let Some(ty) = receiver_ty {
-        emitter.instruction(&format!("mov {}, {}", abi::int_result_reg(emitter), receiver_reg)); // restore callable-array receiver for regex descriptor prefix storage
+        emitter.instruction(&format!("mov {}, {}", abi::int_result_reg(emitter), receiver_reg)); //restore callable-array receiver for regex descriptor prefix storage
         callback_env::store_descriptor_callback_prefix_result(&wrapper, 0, ty, emitter);
     }
     callback_env::store_descriptor_callback_array_reg(&wrapper, dummy_array_reg, emitter);
@@ -630,7 +630,7 @@ fn materialize_callback_address(
         }
         _ => {
             emit_expr(callback, emitter, ctx, data);
-            emitter.instruction(&format!("mov {}, {}", call_reg, abi::int_result_reg(emitter))); // keep the evaluated callback descriptor in the nested-call scratch register
+            emitter.instruction(&format!("mov {}, {}", call_reg, abi::int_result_reg(emitter))); //keep the evaluated callback descriptor in the nested-call scratch register
             crate::codegen::callable_descriptor::emit_load_entry_from_descriptor(
                 emitter,
                 call_reg,
@@ -661,7 +661,7 @@ fn materialize_capture_env(
     ctx: &mut Context,
 ) -> usize {
     if captures.is_empty() {
-        emitter.instruction(&format!("mov {}, {}", runtime_callback_reg, callback_reg)); // pass the direct callback address to the regex runtime
+        emitter.instruction(&format!("mov {}, {}", runtime_callback_reg, callback_reg)); //pass the direct callback address to the regex runtime
         abi::emit_load_int_immediate(emitter, runtime_env_reg, 0);
         return 0;
     }

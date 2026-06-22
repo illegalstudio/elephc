@@ -486,7 +486,7 @@ fn emit_append_string_key_aarch64(ctx: &mut FunctionContext<'_>, ptr_reg: &str, 
 fn emit_append_word_key_x86_64(ctx: &mut FunctionContext<'_>, value_reg: &str) {
     ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                   // load the result keys array pointer from the fixed stack layout
     ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the current result keys array length before appending
-    ctx.emitter.instruction(&format!("mov QWORD PTR [r10 + r11 * 8 + 24], {}", value_reg)); // store the key payload into the next result keys slot
+    ctx.emitter.instruction(&format!("mov QWORD PTR [r10 + r11 * 8 + 24], {}", value_reg)); //store the key payload into the next result keys slot
     ctx.emitter.instruction("add r11, 1");                                      // increment the result keys length after the append
     ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // persist the updated result keys length in the array header
 }

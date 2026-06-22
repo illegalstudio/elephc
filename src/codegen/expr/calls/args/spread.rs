@@ -50,7 +50,7 @@ pub(crate) fn emit_spread_into_named_params(
         crate::codegen::platform::Arch::AArch64 => "x20",
         crate::codegen::platform::Arch::X86_64 => "r12",
     };
-    emitter.instruction(&format!("mov {}, {}", array_base_reg, abi::int_result_reg(emitter))); // preserve the spread array pointer across boxing or incref helper calls
+    emitter.instruction(&format!("mov {}, {}", array_base_reg, abi::int_result_reg(emitter))); //preserve the spread array pointer across boxing or incref helper calls
     let min_required = (0..remaining)
         .filter(|idx| {
             sig.and_then(|sig| sig.defaults.get(spread_at_index + idx))
@@ -121,7 +121,7 @@ fn emit_spread_required_length_check(
             emitter.instruction(&format!("b.ge {}", ok_label));                 // continue when all required spread slots are available
         }
         crate::codegen::platform::Arch::X86_64 => {
-            emitter.instruction(&format!("mov r10, QWORD PTR [{}]", array_base_reg)); // load spread length before reading required unpacked parameters
+            emitter.instruction(&format!("mov r10, QWORD PTR [{}]", array_base_reg)); //load spread length before reading required unpacked parameters
             abi::emit_load_int_immediate(emitter, "r11", min_len as i64);
             emitter.instruction("cmp r10, r11");                                // ensure the spread provides every required positional parameter
             emitter.instruction(&format!("jge {}", ok_label));                  // continue when all required spread slots are available
@@ -268,7 +268,7 @@ fn emit_branch_if_spread_element_missing(
             emitter.instruction(&format!("b.le {}", label));                    // use the default when the spread is too short for this slot
         }
         crate::codegen::platform::Arch::X86_64 => {
-            emitter.instruction(&format!("mov r10, QWORD PTR [{}]", array_base_reg)); // load spread length before choosing spread element or default
+            emitter.instruction(&format!("mov r10, QWORD PTR [{}]", array_base_reg)); //load spread length before choosing spread element or default
             abi::emit_load_int_immediate(emitter, "r11", element_idx as i64);
             emitter.instruction("cmp r10, r11");                                // check whether this optional spread element exists
             emitter.instruction(&format!("jle {}", label));                     // use the default when the spread is too short for this slot
@@ -358,7 +358,7 @@ fn emit_assoc_spread_tail_variadic_array_arg(
         crate::codegen::platform::Arch::AArch64 => "x20",
         crate::codegen::platform::Arch::X86_64 => "r13",
     };
-    emitter.instruction(&format!("mov {}, {}", source_hash_reg, abi::int_result_reg(emitter))); // preserve the spread source hash while building the variadic tail
+    emitter.instruction(&format!("mov {}, {}", source_hash_reg, abi::int_result_reg(emitter))); //preserve the spread source hash while building the variadic tail
 
     let fallback_sig;
     let effective_sig = if let Some(sig) = sig {

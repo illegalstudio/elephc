@@ -42,7 +42,7 @@ pub fn emit_protoent_load(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // compare the Linux open result against the success sentinel
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_protoent_load_opened")); // continue only when open succeeded
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_protoent_load_opened")); //continue only when open succeeded
     emitter.instruction("b __rt_protoent_load_fail");                           // a missing file returns an empty buffer
     emitter.label("__rt_protoent_load_opened");
     emitter.instruction("mov x19, x0");                                         // x19 = open file descriptor

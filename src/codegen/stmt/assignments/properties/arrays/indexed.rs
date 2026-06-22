@@ -122,7 +122,7 @@ pub(crate) fn emit_property_array_assign_stmt(
         ));
     }
     let object_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); // preserve the owning object pointer while the indexed write evaluates the index/value and may reallocate the array
+    emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); //preserve the owning object pointer while the indexed write evaluates the index/value and may reallocate the array
     abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), object_reg, target.offset);
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -262,7 +262,7 @@ fn emit_property_assoc_array_assign_stmt(
             };
             emitter.instruction(&format!("mov x3, {}", val_lo));                // place the low payload word into the hash-set helper value register
             emitter.instruction(&format!("mov x4, {}", val_hi));                // place the high payload word into the hash-set helper value register
-            emitter.instruction(&format!("mov x5, #{}", runtime_value_tag(&val_ty))); // materialize the runtime value tag for the inserted hash payload
+            emitter.instruction(&format!("mov x5, #{}", runtime_value_tag(&val_ty))); //materialize the runtime value tag for the inserted hash payload
             abi::emit_pop_reg_pair(emitter, "x1", "x2");                       // restore the normalized key into the hash-set helper argument registers
             abi::emit_pop_reg(emitter, "x0");                                   // restore the property-backed hash table pointer
         }

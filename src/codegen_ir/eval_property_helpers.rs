@@ -461,7 +461,7 @@ fn emit_x86_64_property_name_compare(
     abi::emit_load_int_immediate(emitter, "rcx", len as i64);
     emitter.instruction("call __rt_str_eq");                                    // compare requested property name with this declared property
     emitter.instruction("test rax, rax");                                       // check whether the property names matched
-    emitter.instruction(&format!("jne {}", slot_body_label(module, slot, mode))); // dispatch to the property body when the names match
+    emitter.instruction(&format!("jne {}", slot_body_label(module, slot, mode))); //dispatch to the property body when the names match
 }
 
 /// Emits ARM64 property-get bodies for every bridge-supported property slot.
@@ -541,7 +541,7 @@ fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot
         }
         PhpType::Str => {
             emitter.instruction(&format!("ldr x1, [x9, #{}]", slot.offset));    // load the string property pointer
-            emitter.instruction(&format!("ldr x2, [x9, #{}]", slot.offset + 8)); // load the string property length
+            emitter.instruction(&format!("ldr x2, [x9, #{}]", slot.offset + 8)); //load the string property length
             emitter.instruction("mov x0, #1");                                  // runtime tag 1 = string
             emitter.instruction("bl __rt_mixed_from_value");                    // persist and box the string property payload
         }
@@ -569,28 +569,28 @@ fn emit_x86_64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot)
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer
     match slot.ty.codegen_repr() {
         PhpType::Int | PhpType::Bool | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            emitter.instruction(&format!("mov rdi, QWORD PTR [r11 + {}]", slot.offset)); // load the property payload low word
+            emitter.instruction(&format!("mov rdi, QWORD PTR [r11 + {}]", slot.offset)); //load the property payload low word
             emitter.instruction("xor esi, esi");                                // heap/scalar property payloads do not use a high word here
             abi::emit_load_int_immediate(emitter, "rax", runtime_value_tag(&slot.ty) as i64);
             emitter.instruction("call __rt_mixed_from_value");                  // box the property payload as a Mixed cell
         }
         PhpType::Float => {
-            emitter.instruction(&format!("movsd xmm0, QWORD PTR [r11 + {}]", slot.offset)); // load the floating property payload
+            emitter.instruction(&format!("movsd xmm0, QWORD PTR [r11 + {}]", slot.offset)); //load the floating property payload
             emitter.instruction("movq rdi, xmm0");                              // move float bits into the Mixed low payload word
             emitter.instruction("xor esi, esi");                                // float payloads do not use a high word
             emitter.instruction("mov eax, 2");                                  // runtime tag 2 = float
             emitter.instruction("call __rt_mixed_from_value");                  // box the floating property payload as Mixed
         }
         PhpType::Str => {
-            emitter.instruction(&format!("mov rdi, QWORD PTR [r11 + {}]", slot.offset)); // load the string property pointer
-            emitter.instruction(&format!("mov rsi, QWORD PTR [r11 + {}]", slot.offset + 8)); // load the string property length
+            emitter.instruction(&format!("mov rdi, QWORD PTR [r11 + {}]", slot.offset)); //load the string property pointer
+            emitter.instruction(&format!("mov rsi, QWORD PTR [r11 + {}]", slot.offset + 8)); //load the string property length
             emitter.instruction("mov eax, 1");                                  // runtime tag 1 = string
             emitter.instruction("call __rt_mixed_from_value");                  // persist and box the string property payload
         }
         PhpType::Mixed | PhpType::Union(_) => {
             let null_label = format!("{}_mixed_null_x", label_fragment(&slot_body_label_raw(slot, "get")));
             let done_label = format!("{}_mixed_done_x", label_fragment(&slot_body_label_raw(slot, "get")));
-            emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)); // load the stored Mixed property cell
+            emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)); //load the stored Mixed property cell
             emitter.instruction("test rax, rax");                               // check whether the property storage is initialized
             emitter.instruction(&format!("jz {}", null_label));                 // null property storage reads as PHP null
             emitter.instruction("call __rt_incref");                            // retain the stored Mixed cell for the eval caller
@@ -623,14 +623,14 @@ fn emit_aarch64_store_property_slot(emitter: &mut Emitter, slot: &EvalPropertySl
             emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval value to a PHP string pair
             emitter.instruction("ldr x9, [sp, #16]");                           // reload the unboxed object pointer for the store
             emitter.instruction(&format!("str x1, [x9, #{}]", slot.offset));    // store the coerced string pointer into the property slot
-            emitter.instruction(&format!("str x2, [x9, #{}]", slot.offset + 8)); // store the coerced string length into the property slot
+            emitter.instruction(&format!("str x2, [x9, #{}]", slot.offset + 8)); //store the coerced string length into the property slot
         }
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("ldr x0, [sp, #24]");                           // reload the boxed eval value being assigned
             emitter.instruction("bl __rt_incref");                              // retain the Mixed cell for property ownership
             emitter.instruction("ldr x9, [sp, #16]");                           // reload the unboxed object pointer for the store
             emitter.instruction(&format!("str x0, [x9, #{}]", slot.offset));    // store the retained Mixed cell into the property slot
-            emitter.instruction(&format!("str xzr, [x9, #{}]", slot.offset + 8)); // clear the unused property high word
+            emitter.instruction(&format!("str xzr, [x9, #{}]", slot.offset + 8)); //clear the unused property high word
         }
         _ => {}
     }
@@ -645,21 +645,21 @@ fn emit_x86_64_store_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlo
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value for float coercion
             emitter.instruction("call __rt_mixed_cast_float");                  // coerce the eval value to a PHP float
             emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
-            emitter.instruction(&format!("movsd QWORD PTR [r11 + {}], xmm0", slot.offset)); // store the coerced float into the property slot
+            emitter.instruction(&format!("movsd QWORD PTR [r11 + {}], xmm0", slot.offset)); //store the coerced float into the property slot
         }
         PhpType::Str => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value for string coercion
             emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval value to a PHP string pair
             emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset)); // store the coerced string pointer into the property slot
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)); // store the coerced string length into the property slot
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset)); //store the coerced string pointer into the property slot
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)); //store the coerced string length into the property slot
         }
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value being assigned
             emitter.instruction("call __rt_incref");                            // retain the Mixed cell for property ownership
             emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset)); // store the retained Mixed cell into the property slot
-            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)); // clear the unused property high word
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset)); //store the retained Mixed cell into the property slot
+            emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)); //clear the unused property high word
         }
         _ => {}
     }
@@ -675,7 +675,7 @@ fn emit_aarch64_store_cast_scalar(
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed eval value for scalar coercion
     emitter.instruction(&format!("bl {}", helper));                             // coerce the eval value to the declared property type
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for the store
-    emitter.instruction(&format!("str {}, [x9, #{}]", result_reg, slot.offset)); // store the coerced scalar into the property slot
+    emitter.instruction(&format!("str {}, [x9, #{}]", result_reg, slot.offset)); //store the coerced scalar into the property slot
 }
 
 /// Emits an x86_64 scalar property store after Mixed coercion.
@@ -688,7 +688,7 @@ fn emit_x86_64_store_cast_scalar(
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed eval value for scalar coercion
     emitter.instruction(&format!("call {}", helper));                           // coerce the eval value to the declared property type
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the store
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], {}", slot.offset, result_reg)); // store the coerced scalar into the property slot
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], {}", slot.offset, result_reg)); //store the coerced scalar into the property slot
 }
 
 /// Groups property slots by class id while preserving sorted class order.

@@ -170,7 +170,7 @@ fn emit_write(
                     abi::emit_symbol_address(emitter, "r10", "_phar_write_path_ptr");
                     emitter.instruction("mov QWORD PTR [r10], r9");             // record the on-disk archive path pointer
                     abi::emit_symbol_address(emitter, "r10", "_phar_write_path_len");
-                    emitter.instruction(&format!("mov QWORD PTR [r10], {}", path_len)); // record the archive path length
+                    emitter.instruction(&format!("mov QWORD PTR [r10], {}", path_len)); //record the archive path length
                     abi::emit_symbol_address(emitter, "rdi", &tpl_sym);
                     emitter.instruction(&format!("mov rsi, {}", tpl_len));      // template prefix length
                     abi::emit_call_label(emitter, "__rt_phar_write_open");

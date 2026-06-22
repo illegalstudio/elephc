@@ -166,7 +166,7 @@ pub fn emit_fire_notification(emitter: &mut Emitter) {
     // -- invoke the callback through its descriptor's invoker (offset 56) --
     emitter.instruction("ldr x0, [sp, #56]");                                   // arg0 = callback descriptor pointer
     emitter.instruction("ldr x1, [sp, #64]");                                   // arg1 = the boxed Mixed argument cell
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the per-callable invoker function pointer
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", CALLABLE_DESC_INVOKER_OFFSET)); //load the per-callable invoker function pointer
     emitter.instruction("cbz x9, __rt_hfn_free");                               // no invoker (shouldn't happen) → just release the args
     emitter.instruction("blr x9");                                              // invoke notification($code, …) → boxed Mixed result in x0
     emitter.instruction("bl __rt_decref_mixed");                                // release the ignored boxed void/return value (pointer in x0)
@@ -301,7 +301,7 @@ fn emit_fire_notification_linux_x86_64(emitter: &mut Emitter) {
     // -- invoke the callback through its descriptor's invoker (offset 56) --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // arg0 = callback descriptor pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // arg1 = the boxed Mixed argument cell
-    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the per-callable invoker function pointer
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", CALLABLE_DESC_INVOKER_OFFSET)); //load the per-callable invoker function pointer
     emitter.instruction("test r10, r10");                                       // no invoker (shouldn't happen)?
     emitter.instruction("jz __rt_hfn_free_x86");                                // just release the args when absent
     emitter.instruction("call r10");                                            // invoke notification($code, …) → boxed Mixed result in rax

@@ -96,7 +96,7 @@ fn emit_hash_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("imul rax, 64");                                        // compute the total bytes needed for the 64-byte hash entry array
     emitter.instruction("add rax, 40");                                         // include the fixed 40-byte hash header in the allocation size
     emitter.instruction("call __rt_heap_alloc");                                // allocate the hash-table storage through the shared x86_64 heap wrapper
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 0x8003)); // materialize the copy-on-write hash-table heap kind word with the x86_64 heap marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 0x8003)); //materialize the copy-on-write hash-table heap kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated payload as an associative-array heap object in the uniform header
     emitter.instruction("mov QWORD PTR [rax], 0");                              // header[0]: initialize the live-entry count to zero
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the requested capacity after heap_alloc clobbered caller-saved registers

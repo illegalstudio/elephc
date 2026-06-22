@@ -79,10 +79,10 @@ pub fn emit(
         match emitter.target.arch {
             Arch::AArch64 => {
                 let sentinel = NULL_SENTINEL as u64;
-                emitter.instruction(&format!("movz x9, #0x{:X}", sentinel & 0xFFFF)); // load null sentinel bits [15:0]
-                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #16", (sentinel >> 16) & 0xFFFF)); // load null sentinel bits [31:16]
-                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #32", (sentinel >> 32) & 0xFFFF)); // load null sentinel bits [47:32]
-                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #48", (sentinel >> 48) & 0xFFFF)); // load null sentinel bits [63:48]
+                emitter.instruction(&format!("movz x9, #0x{:X}", sentinel & 0xFFFF)); //load null sentinel bits [15:0]
+                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #16", (sentinel >> 16) & 0xFFFF)); //load null sentinel bits [31:16]
+                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #32", (sentinel >> 32) & 0xFFFF)); //load null sentinel bits [47:32]
+                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #48", (sentinel >> 48) & 0xFFFF)); //load null sentinel bits [63:48]
                 emitter.instruction("cmp x0, x9");                              // compare value against null sentinel
                 emitter.instruction("cset x0, eq");                             // x0 = 1 if value is null, 0 otherwise
             }

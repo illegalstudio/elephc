@@ -252,7 +252,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // Honor the json_decode `$associative` flag: 0 → stdClass, non-zero → assoc.
     crate::codegen::abi::emit_symbol_address(emitter, "x9", "_json_decode_assoc");
     emitter.instruction("ldr x9, [x9]");                                        // load the assoc flag
-    emitter.instruction("cbz x9, __rt_json_decode_mixed_object_empty_stdclass"); // 0 → wrap in a stdClass instance
+    emitter.instruction("cbz x9, __rt_json_decode_mixed_object_empty_stdclass"); //0 → wrap in a stdClass instance
     emitter.instruction("mov x0, #5");                                          // tag = associative array
     emitter.instruction("mov x2, #0");                                          // mixed_from_value high word unused for assoc payload
     emitter.instruction("bl __rt_mixed_from_value");                            // box as Mixed(assoc)

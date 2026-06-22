@@ -28,7 +28,7 @@ pub fn emit_stream_socket_shutdown(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_socket_shutdown_ok")); // branch on success
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_socket_shutdown_ok")); //branch on success
     emitter.instruction("mov x0, #0");                                          // shutdown() failed: report false
     emitter.instruction("ret");                                                 // return the failure result
     emitter.label("__rt_stream_socket_shutdown_ok");

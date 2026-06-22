@@ -100,11 +100,11 @@ fn emit_duplicate_warning(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(emitter, "x1", "_diag_define_already_defined_msg");
-            emitter.instruction(&format!("mov x2, #{}", DEFINE_ALREADY_DEFINED_WARNING.len())); // pass the warning byte length to the diagnostic helper
+            emitter.instruction(&format!("mov x2, #{}", DEFINE_ALREADY_DEFINED_WARNING.len())); //pass the warning byte length to the diagnostic helper
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(emitter, "rdi", "_diag_define_already_defined_msg"); // pass the define() duplicate warning pointer to the diagnostic helper
-            emitter.instruction(&format!("mov esi, {}", DEFINE_ALREADY_DEFINED_WARNING.len())); // pass the warning byte length to the diagnostic helper
+            emitter.instruction(&format!("mov esi, {}", DEFINE_ALREADY_DEFINED_WARNING.len())); //pass the warning byte length to the diagnostic helper
         }
     }
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the duplicate define() runtime warning

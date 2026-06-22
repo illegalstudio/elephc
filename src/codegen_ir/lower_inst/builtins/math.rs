@@ -638,11 +638,11 @@ fn emit_throw_value_error_x86_64(
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the ValueError object payload
     ctx.emitter.instruction("mov r10, 0x4548504c00000006");                     // materialize the x86_64 object heap-kind header
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the allocation header as a runtime object
-    ctx.emitter.instruction("mov r10, QWORD PTR [rip + _spl_value_error_class_id]"); // load ValueError's runtime class id for this program
+    ctx.emitter.instruction("mov r10, QWORD PTR [rip + _spl_value_error_class_id]"); //load ValueError's runtime class id for this program
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store the ValueError class id in the Throwable header
     ctx.emitter.instruction(&format!("lea r10, [rip + {}]", message_symbol));   // materialize the static ValueError message pointer
     ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");                    // store the static ValueError message pointer
-    ctx.emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store the exception message length
+    ctx.emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); //store the exception message length
     ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");                     // store the default zero exception code
     ctx.emitter.instruction("mov QWORD PTR [rip + _exc_value], rax");           // publish the active ValueError object
     ctx.emitter.instruction("mov rsp, rbp");                                    // release the helper frame before throwing
@@ -660,7 +660,7 @@ fn load_float_literal_to_reg(ctx: &mut FunctionContext<'_>, reg: &str, value: f6
             ctx.emitter.instruction(&format!("ldr {}, [{}]", reg, scratch));    // load the floating-point comparison constant through the symbol scratch register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", reg, scratch)); // load the floating-point comparison constant through the symbol scratch register
+            ctx.emitter.instruction(&format!("movsd {}, QWORD PTR [{}]", reg, scratch)); //load the floating-point comparison constant through the symbol scratch register
         }
     }
 }
@@ -681,7 +681,7 @@ fn lower_float_rounding_builtin(
             ctx.emitter.instruction(&format!("{} d0, d0", aarch64_op));         // round the floating-point argument with the builtin's direction
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("roundsd xmm0, xmm0, {}", x86_round_mode)); // round the floating-point argument with the builtin's direction
+            ctx.emitter.instruction(&format!("roundsd xmm0, xmm0, {}", x86_round_mode)); //round the floating-point argument with the builtin's direction
         }
     }
     store_if_result(ctx, inst)

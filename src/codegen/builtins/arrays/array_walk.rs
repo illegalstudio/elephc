@@ -152,7 +152,7 @@ pub fn emit(
         return Some(PhpType::Void);
     } else {
         abi::emit_pop_reg(emitter, array_arg_reg);                               // pop the source array pointer into the second runtime argument register
-        emitter.instruction(&format!("mov {}, {}", callback_arg_reg, call_reg)); // move the callback function address into the first runtime argument register
+        emitter.instruction(&format!("mov {}, {}", callback_arg_reg, call_reg)); //move the callback function address into the first runtime argument register
     }
     abi::emit_load_int_immediate(emitter, env_arg_reg, 0);
     abi::emit_call_label(emitter, "__rt_array_walk");                           // call the callback-driven walk runtime helper

@@ -333,7 +333,7 @@ fn emit_runtime_closure_descriptor_with_captures(
         callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + captures.len() * 16;
     abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter.instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the runtime closure descriptor while storing captures
+    ctx.emitter.instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); //keep the runtime closure descriptor while storing captures
     callable_descriptor::emit_copy_static_descriptor_to_runtime(
         ctx.emitter,
         descriptor_reg,
@@ -369,7 +369,7 @@ fn emit_runtime_closure_descriptor_with_captures(
         );
     }
     if descriptor_reg != result_reg {
-        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); // return the runtime closure descriptor pointer
+        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); //return the runtime closure descriptor pointer
     }
     Ok(())
 }
@@ -405,7 +405,7 @@ fn promote_local_slot_for_ref_capture(
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
     let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
-    ctx.emitter.instruction(&format!("mov {}, {}", cell_reg, abi::int_result_reg(ctx.emitter))); // keep the promoted closure capture cell while restoring its value
+    ctx.emitter.instruction(&format!("mov {}, {}", cell_reg, abi::int_result_reg(ctx.emitter))); //keep the promoted closure capture cell while restoring its value
     pop_result_value(ctx, &local_ty);
     store_current_result_to_ref_cell(ctx, cell_reg, &local_ty);
     if release_replaced_value {
@@ -1377,7 +1377,7 @@ pub(super) fn emit_runtime_descriptor_with_receiver_capture(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter.instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the runtime callable descriptor while copying its static header
+    ctx.emitter.instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); //keep the runtime callable descriptor while copying its static header
     callable_descriptor::emit_copy_static_descriptor_to_runtime(
         ctx.emitter,
         descriptor_reg,
@@ -1391,7 +1391,7 @@ pub(super) fn emit_runtime_descriptor_with_receiver_capture(
         receiver_ty,
     );
     if descriptor_reg != result_reg {
-        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); // return the receiver-bound callable descriptor
+        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); //return the receiver-bound callable descriptor
     }
     Ok(())
 }
@@ -1409,7 +1409,7 @@ fn emit_runtime_descriptor_with_called_class_capture(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter.instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the runtime callable descriptor while copying its static header
+    ctx.emitter.instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); //keep the runtime callable descriptor while copying its static header
     callable_descriptor::emit_copy_static_descriptor_to_runtime(
         ctx.emitter,
         descriptor_reg,
@@ -1423,7 +1423,7 @@ fn emit_runtime_descriptor_with_called_class_capture(
         &PhpType::Int,
     );
     if descriptor_reg != result_reg {
-        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); // return the called-class-bound callable descriptor
+        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); //return the called-class-bound callable descriptor
     }
     Ok(())
 }
@@ -2678,7 +2678,7 @@ fn emit_mixed_method_class_dispatch(
             }
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov r11, QWORD PTR [{}]", receiver_reg)); // load the receiver class id for Mixed method dispatch
+            ctx.emitter.instruction(&format!("mov r11, QWORD PTR [{}]", receiver_reg)); //load the receiver class id for Mixed method dispatch
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
                 ctx.emitter.instruction("cmp r11, r10");                        // compare the receiver class id against this method candidate
@@ -3419,7 +3419,7 @@ fn emit_store_fiber_start_args_aarch64(
     supplied_arg_count: usize,
 ) -> Result<()> {
     let skip_label = ctx.next_label("fiber_start_args_done");
-    ctx.emitter.instruction(&format!("ldr x9, [x0, #{}]", runtime::FIBER_USER_ARG_MAX_OFFSET)); // x9 = writable Fiber start_args slot count
+    ctx.emitter.instruction(&format!("ldr x9, [x0, #{}]", runtime::FIBER_USER_ARG_MAX_OFFSET)); //x9 = writable Fiber start_args slot count
     for (idx, assignment) in assignments.iter().take(supplied_arg_count).enumerate() {
         if !assignment.in_register() {
             return Err(CodegenIrError::unsupported(
@@ -3430,11 +3430,11 @@ fn emit_store_fiber_start_args_aarch64(
         let offset = runtime::FIBER_START_ARGS_OFFSET + (idx as i32) * 8;
         ctx.emitter.instruction(&format!("cmp x9, #{}", idx + 1));              // is this start() slot allowed for user arguments?
         ctx.emitter.instruction(&format!("b.lt {}", skip_label));               // stop once wrapper-reserved slots would be overwritten
-        ctx.emitter.instruction(&format!("str {}, [x0, #{}]", source_reg, offset)); // store the boxed Mixed start() argument
+        ctx.emitter.instruction(&format!("str {}, [x0, #{}]", source_reg, offset)); //store the boxed Mixed start() argument
     }
     ctx.emitter.label(&skip_label);
     ctx.emitter.instruction(&format!("mov x9, #{}", supplied_arg_count));       // materialize the visible start() argument count
-    ctx.emitter.instruction(&format!("str x9, [x0, #{}]", runtime::FIBER_START_ARG_COUNT_OFFSET)); // publish start() arity for Fiber wrappers
+    ctx.emitter.instruction(&format!("str x9, [x0, #{}]", runtime::FIBER_START_ARG_COUNT_OFFSET)); //publish start() arity for Fiber wrappers
     Ok(())
 }
 
@@ -3445,7 +3445,7 @@ fn emit_store_fiber_start_args_x86_64(
     supplied_arg_count: usize,
 ) {
     let skip_label = ctx.next_label("fiber_start_args_done");
-    ctx.emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", runtime::FIBER_USER_ARG_MAX_OFFSET)); // r11 = writable Fiber start_args slot count
+    ctx.emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", runtime::FIBER_USER_ARG_MAX_OFFSET)); //r11 = writable Fiber start_args slot count
     let mut overflow_slot = 0usize;
     for (idx, assignment) in assignments.iter().take(supplied_arg_count).enumerate() {
         let offset = runtime::FIBER_START_ARGS_OFFSET + (idx as i32) * 8;
@@ -3453,20 +3453,20 @@ fn emit_store_fiber_start_args_x86_64(
         ctx.emitter.instruction(&format!("jl {}", skip_label));                 // stop once wrapper-reserved slots would be overwritten
         if assignment.in_register() {
             let source_reg = abi::int_arg_reg_name(ctx.emitter.target, assignment.start_reg);
-            ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + {}], {}", offset, source_reg)); // store the boxed Mixed register argument
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + {}], {}", offset, source_reg)); //store the boxed Mixed register argument
         } else {
             let stack_offset = overflow_slot * 16;
             if stack_offset == 0 {
                 ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");            // load the first stack-passed boxed Mixed start() argument
             } else {
-                ctx.emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", stack_offset)); // load this stack-passed boxed Mixed start() argument
+                ctx.emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", stack_offset)); //load this stack-passed boxed Mixed start() argument
             }
-            ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r10", offset)); // store the boxed Mixed stack argument
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r10", offset)); //store the boxed Mixed stack argument
             overflow_slot += 1;
         }
     }
     ctx.emitter.label(&skip_label);
-    ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + {}], {}", runtime::FIBER_START_ARG_COUNT_OFFSET, supplied_arg_count)); // publish start() arity for Fiber wrappers
+    ctx.emitter.instruction(&format!("mov QWORD PTR [rdi + {}], {}", runtime::FIBER_START_ARG_COUNT_OFFSET, supplied_arg_count)); //publish start() arity for Fiber wrappers
 }
 
 /// Lowers no-argument Fiber instance methods that delegate to one runtime helper.
@@ -3921,10 +3921,10 @@ fn emit_dynamic_instance_method_call(ctx: &mut FunctionContext<'_>, slot: usize)
     abi::emit_symbol_address(ctx.emitter, dispatch_reg, "_class_vtable_ptrs");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_reg, dispatch_reg, class_id_reg)); // load the class-specific instance-vtable pointer
+            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_reg, dispatch_reg, class_id_reg)); //load the class-specific instance-vtable pointer
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_reg, dispatch_reg, class_id_reg)); // load the class-specific instance-vtable pointer
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_reg, dispatch_reg, class_id_reg)); //load the class-specific instance-vtable pointer
         }
     }
     abi::emit_load_from_address(ctx.emitter, dispatch_reg, dispatch_reg, slot * 8);
@@ -4136,19 +4136,19 @@ fn emit_dynamic_static_method_call(ctx: &mut FunctionContext<'_>, slot: usize) {
     let dispatch_scratch = abi::symbol_scratch_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); // preserve the forwarded called-class id across static-vtable address materialization
+            ctx.emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); //preserve the forwarded called-class id across static-vtable address materialization
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); // preserve the forwarded called-class id across static-vtable address materialization
+            ctx.emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); //preserve the forwarded called-class id across static-vtable address materialization
         }
     }
     abi::emit_symbol_address(ctx.emitter, dispatch_scratch, "_class_static_vtable_ptrs");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
+            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_scratch, dispatch_scratch, class_id_scratch)); //load the class-specific static-vtable pointer from the global table
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_scratch, dispatch_scratch, class_id_scratch)); //load the class-specific static-vtable pointer from the global table
         }
     }
     abi::emit_load_from_address(ctx.emitter, dispatch_scratch, dispatch_scratch, slot * 8);
@@ -4874,11 +4874,11 @@ fn emit_branch_if_cleanup_temp_aliases_result(
     ctx.load_value_to_reg(result, result_reg)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", cleanup_reg, result_reg));  // compare the temporary Mixed cell with the saved call result
+            ctx.emitter.instruction(&format!("cmp {}, {}", cleanup_reg, result_reg)); //compare the temporary Mixed cell with the saved call result
             ctx.emitter.instruction(&format!("b.eq {}", skip_label));           // keep the temp alive when ownership moved to the result
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", cleanup_reg, result_reg));  // compare the temporary Mixed cell with the saved call result
+            ctx.emitter.instruction(&format!("cmp {}, {}", cleanup_reg, result_reg)); //compare the temporary Mixed cell with the saved call result
             ctx.emitter.instruction(&format!("je {}", skip_label));             // keep the temp alive when ownership moved to the result
         }
     }
@@ -5336,10 +5336,10 @@ fn move_reg_to_int_result(ctx: &mut FunctionContext<'_>, source_reg: &str) {
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, source_reg)); // move the unboxed receiver pointer into the normal argument staging register
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, source_reg)); //move the unboxed receiver pointer into the normal argument staging register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, source_reg)); // move the unboxed receiver pointer into the normal argument staging register
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, source_reg)); //move the unboxed receiver pointer into the normal argument staging register
         }
     }
 }
@@ -5363,10 +5363,10 @@ fn move_int_result_to_first_arg(ctx: &mut FunctionContext<'_>) {
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg)); // move the loaded value into the runtime helper argument register
+            ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg)); //move the loaded value into the runtime helper argument register
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg)); // move the loaded value into the runtime helper argument register
+            ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg)); //move the loaded value into the runtime helper argument register
         }
     }
 }
@@ -5390,12 +5390,12 @@ fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     require_integer_like(ctx.load_value_to_reg(rhs, rhs_reg)?, inst)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, rhs_reg)); // compare signed integer operands for the EIR predicate
-            ctx.emitter.instruction(&format!("cset {}, {}", result_reg, aarch64_condition(predicate)?)); // materialize the predicate result as 0 or 1
+            ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, rhs_reg)); //compare signed integer operands for the EIR predicate
+            ctx.emitter.instruction(&format!("cset {}, {}", result_reg, aarch64_condition(predicate)?)); //materialize the predicate result as 0 or 1
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, rhs_reg)); // compare signed integer operands for the EIR predicate
-            ctx.emitter.instruction(&format!("set{} al", x86_64_condition(predicate)?)); // materialize the predicate result in the low byte
+            ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, rhs_reg)); //compare signed integer operands for the EIR predicate
+            ctx.emitter.instruction(&format!("set{} al", x86_64_condition(predicate)?)); //materialize the predicate result in the low byte
             ctx.emitter.instruction(&format!("movzx {}, al", result_reg));      // widen the predicate byte into the integer result register
         }
     }
@@ -6109,11 +6109,11 @@ fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> R
             abi::emit_load_int_immediate(ctx.emitter, sentinel_reg, crate::codegen::sentinels::NULL_SENTINEL);
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(ctx.emitter), sentinel_reg)); // compare integer value against the runtime null sentinel
+                    ctx.emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(ctx.emitter), sentinel_reg)); //compare integer value against the runtime null sentinel
                     ctx.emitter.instruction(&format!("b.eq {}", skip_label));   // skip integer echo when the value represents null
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(ctx.emitter), sentinel_reg)); // compare integer value against the runtime null sentinel
+                    ctx.emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(ctx.emitter), sentinel_reg)); //compare integer value against the runtime null sentinel
                     ctx.emitter.instruction(&format!("je {}", skip_label));     // skip integer echo when the value represents null
                 }
             }

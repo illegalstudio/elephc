@@ -56,7 +56,7 @@ pub(in crate::codegen::functions::generator) fn emit_resume(
     emitter.instruction("add x29, sp, #16");                                    // establish the resume function's frame pointer
     emitter.instruction("mov x19, x0");                                         // x19 = generator frame pointer
 
-    emitter.instruction(&format!("ldr w10, [x19, #{}]", gen_frame::OFF_STATE_IDX)); // load resume state index
+    emitter.instruction(&format!("ldr w10, [x19, #{}]", gen_frame::OFF_STATE_IDX)); //load resume state index
 
     let term_label = format!("{}_terminated", label);
     let end_label = format!("{}_end", label);
@@ -89,7 +89,7 @@ pub(in crate::codegen::functions::generator) fn emit_resume(
     // that cell when the generator terminates. The flag is set first so
     // a re-entry via `next()` returns immediately without re-running.
     emitter.instruction(&format!("ldr w10, [x19, #{}]", gen_frame::OFF_FLAGS)); // load generator flags
-    emitter.instruction(&format!("orr w10, w10, #{}", gen_frame::FLAG_TERMINATED)); // set TERMINATED bit
+    emitter.instruction(&format!("orr w10, w10, #{}", gen_frame::FLAG_TERMINATED)); //set TERMINATED bit
     emitter.instruction(&format!("str w10, [x19, #{}]", gen_frame::OFF_FLAGS)); // store updated flags
     for &idx in mixed_slot_indices {
         let off = slot_offset(idx);
@@ -130,7 +130,7 @@ fn emit_resume_x86_64(
     emitter.instruction("sub rsp, 8");                                          // keep the stack 16-byte aligned across nested calls
     emitter.instruction("mov r12, rdi");                                        // r12 = generator frame pointer
 
-    emitter.instruction(&format!("mov r10d, DWORD PTR [r12 + {}]", gen_frame::OFF_STATE_IDX)); // load resume state index
+    emitter.instruction(&format!("mov r10d, DWORD PTR [r12 + {}]", gen_frame::OFF_STATE_IDX)); //load resume state index
 
     let term_label = format!("{}_terminated", label);
     let end_label = format!("{}_end", label);
@@ -158,9 +158,9 @@ fn emit_resume_x86_64(
     emitter.instruction(&format!("jmp {}", term_label));                        // body fell off the end -> terminate
 
     emitter.label(&term_label);
-    emitter.instruction(&format!("mov r10d, DWORD PTR [r12 + {}]", gen_frame::OFF_FLAGS)); // load generator flags
+    emitter.instruction(&format!("mov r10d, DWORD PTR [r12 + {}]", gen_frame::OFF_FLAGS)); //load generator flags
     emitter.instruction(&format!("or r10d, {}", gen_frame::FLAG_TERMINATED));   // set TERMINATED bit
-    emitter.instruction(&format!("mov DWORD PTR [r12 + {}], r10d", gen_frame::OFF_FLAGS)); // store updated flags
+    emitter.instruction(&format!("mov DWORD PTR [r12 + {}], r10d", gen_frame::OFF_FLAGS)); //store updated flags
     for &idx in mixed_slot_indices {
         let off = slot_offset(idx);
         emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", off));    // load the Mixed pointer parked in the local slot

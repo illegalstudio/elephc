@@ -258,20 +258,20 @@ pub fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
         match emitter.target.arch {
             Arch::AArch64 => {
                 let sentinel = NULL_SENTINEL as u64;
-                emitter.instruction(&format!("movz x9, #0x{:X}", sentinel & 0xFFFF)); // build null sentinel in x9: bits 0-15
-                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #16", (sentinel >> 16) & 0xFFFF)); // null sentinel bits 16-31
-                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #32", (sentinel >> 32) & 0xFFFF)); // null sentinel bits 32-47
-                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #48", (sentinel >> 48) & 0xFFFF)); // null sentinel bits 48-63, completing value
+                emitter.instruction(&format!("movz x9, #0x{:X}", sentinel & 0xFFFF)); //build null sentinel in x9: bits 0-15
+                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #16", (sentinel >> 16) & 0xFFFF)); //null sentinel bits 16-31
+                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #32", (sentinel >> 32) & 0xFFFF)); //null sentinel bits 32-47
+                emitter.instruction(&format!("movk x9, #0x{:X}, lsl #48", (sentinel >> 48) & 0xFFFF)); //null sentinel bits 48-63, completing value
                 emitter.instruction("cmp x0, x9");                              // compare value against null sentinel
                 emitter.instruction("csel x0, xzr, x0, eq");                    // if x0 == sentinel, replace with zero
             }
             Arch::X86_64 => {
                 let sentinel_reg = abi::temp_int_reg(emitter.target);
                 let zero_reg = abi::symbol_scratch_reg(emitter);
-                emitter.instruction(&format!("mov {}, {}", sentinel_reg, NULL_SENTINEL)); // materialize the runtime null sentinel in a scratch register
-                emitter.instruction(&format!("xor {}, {}", zero_reg, zero_reg)); // materialize an integer zero in a second scratch register
-                emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); // compare the current integer result against the runtime null sentinel
-                emitter.instruction(&format!("cmove {}, {}", abi::int_result_reg(emitter), zero_reg)); // replace the sentinel with zero while leaving ordinary integers unchanged
+                emitter.instruction(&format!("mov {}, {}", sentinel_reg, NULL_SENTINEL)); //materialize the runtime null sentinel in a scratch register
+                emitter.instruction(&format!("xor {}, {}", zero_reg, zero_reg)); //materialize an integer zero in a second scratch register
+                emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), sentinel_reg)); //compare the current integer result against the runtime null sentinel
+                emitter.instruction(&format!("cmove {}, {}", abi::int_result_reg(emitter), zero_reg)); //replace the sentinel with zero while leaving ordinary integers unchanged
             }
         }
     }
@@ -299,17 +299,17 @@ pub fn coerce_to_truthiness(emitter: &mut Emitter, ctx: &mut Context, ty: &PhpTy
         let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("cbz {}, {falsy_label}", len_reg)); // empty string is falsy
+                emitter.instruction(&format!("cbz {}, {falsy_label}", len_reg)); //empty string is falsy
                 emitter.instruction(&format!("cmp {}, #1", len_reg));           // check if length is 1
                 emitter.instruction(&format!("b.ne {truthy_label}"));           // length != 1 means truthy
                 emitter.instruction(&format!("ldrb w9, [{}]", ptr_reg));        // load first byte of string
                 emitter.instruction("cmp w9, #48");                             // compare with ASCII '0'
                 emitter.instruction(&format!("b.eq {falsy_label}"));            // string "0" is falsy
                 emitter.label(&truthy_label);
-                emitter.instruction(&format!("mov {}, #1", abi::int_result_reg(emitter))); // truthy: set result = 1
+                emitter.instruction(&format!("mov {}, #1", abi::int_result_reg(emitter))); //truthy: set result = 1
                 emitter.instruction(&format!("b {done_label}"));                // skip falsy path
                 emitter.label(&falsy_label);
-                emitter.instruction(&format!("mov {}, #0", abi::int_result_reg(emitter))); // falsy: set result = 0
+                emitter.instruction(&format!("mov {}, #0", abi::int_result_reg(emitter))); //falsy: set result = 0
                 emitter.label(&done_label);
             }
             Arch::X86_64 => {
@@ -318,14 +318,14 @@ pub fn coerce_to_truthiness(emitter: &mut Emitter, ctx: &mut Context, ty: &PhpTy
                 emitter.instruction(&format!("je {}", falsy_label));            // branch to falsy path when the string length is zero
                 emitter.instruction(&format!("cmp {}, 1", len_reg));            // check if length is 1
                 emitter.instruction(&format!("jne {}", truthy_label));          // any other non-empty length is truthy
-                emitter.instruction(&format!("movzx {}d, BYTE PTR [{}]", scratch, ptr_reg)); // load the first byte of the one-character string
+                emitter.instruction(&format!("movzx {}d, BYTE PTR [{}]", scratch, ptr_reg)); //load the first byte of the one-character string
                 emitter.instruction(&format!("cmp {}d, 48", scratch));          // compare against ASCII '0'
                 emitter.instruction(&format!("je {}", falsy_label));            // the string \"0\" is falsy in PHP
                 emitter.label(&truthy_label);
-                emitter.instruction(&format!("mov {}, 1", abi::int_result_reg(emitter))); // truthy: set result = 1
+                emitter.instruction(&format!("mov {}, 1", abi::int_result_reg(emitter))); //truthy: set result = 1
                 emitter.instruction(&format!("jmp {}", done_label));            // skip the falsy path once the result is known
                 emitter.label(&falsy_label);
-                emitter.instruction(&format!("mov {}, 0", abi::int_result_reg(emitter))); // falsy: set result = 0
+                emitter.instruction(&format!("mov {}, 0", abi::int_result_reg(emitter))); //falsy: set result = 0
                 emitter.label(&done_label);
             }
         }
@@ -364,7 +364,7 @@ pub fn coerce_to_truthiness(emitter: &mut Emitter, ctx: &mut Context, ty: &PhpTy
             }
             Arch::X86_64 => {
                 let result_reg = abi::int_result_reg(emitter);
-                emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // compare the normalized scalar/pointer value against zero
+                emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); //compare the normalized scalar/pointer value against zero
                 emitter.instruction("setne al");                                // produce a boolean byte when the scalar/pointer value is non-zero
                 emitter.instruction("movzx rax, al");                           // widen the boolean byte into the canonical integer result register
             }

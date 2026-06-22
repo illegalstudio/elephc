@@ -107,7 +107,7 @@ fn emit_getcwd_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rax, 1024");                                       // request a fixed 1024-byte owned buffer for the current working directory path
     emitter.instruction("call __rt_heap_alloc");                                // allocate owned heap storage for the getcwd() destination buffer
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the owned-string heap kind word with the x86_64 heap marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); //materialize the owned-string heap kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated buffer as a persisted elephc string in the uniform heap header
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the owned buffer pointer across the libc getcwd() and length-scan calls
 

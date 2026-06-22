@@ -135,9 +135,9 @@ pub fn emit(
     } else {
         let sentinel = NULL_SENTINEL as u64;
         emitter.instruction(&format!("movz x0, #0x{:X}", sentinel & 0xFFFF));   // load null sentinel bits [15:0]
-        emitter.instruction(&format!("movk x0, #0x{:X}, lsl #16", (sentinel >> 16) & 0xFFFF)); // load null sentinel bits [31:16]
-        emitter.instruction(&format!("movk x0, #0x{:X}, lsl #32", (sentinel >> 32) & 0xFFFF)); // load null sentinel bits [47:32]
-        emitter.instruction(&format!("movk x0, #0x{:X}, lsl #48", (sentinel >> 48) & 0xFFFF)); // load null sentinel bits [63:48] = 0x7FFFFFFFFFFFFFFE
+        emitter.instruction(&format!("movk x0, #0x{:X}, lsl #16", (sentinel >> 16) & 0xFFFF)); //load null sentinel bits [31:16]
+        emitter.instruction(&format!("movk x0, #0x{:X}, lsl #32", (sentinel >> 32) & 0xFFFF)); //load null sentinel bits [47:32]
+        emitter.instruction(&format!("movk x0, #0x{:X}, lsl #48", (sentinel >> 48) & 0xFFFF)); //load null sentinel bits [63:48] = 0x7FFFFFFFFFFFFFFE
     }
 
     emitter.label(&end_label);

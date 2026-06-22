@@ -72,7 +72,7 @@ pub(super) fn emit_dynamic_property_set(
                         emitter.instruction("ldr d0, [sp, #16]");               // reload the saved float for Mixed boxing
                     }
                     Arch::X86_64 => {
-                        emitter.instruction("movsd xmm0, QWORD PTR [rsp + 16]"); // reload the saved float for Mixed boxing
+                        emitter.instruction("movsd xmm0, QWORD PTR [rsp + 16]"); //reload the saved float for Mixed boxing
                     }
                 }
                 crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
@@ -116,7 +116,7 @@ pub(super) fn emit_dynamic_property_set(
         Arch::AArch64 => {
             // x0 = hash_ptr (loaded from object slot)
             // x1 = key_ptr, x2 = key_len, x3 = val_lo (mixed_ptr), x4 = val_hi (0), x5 = val_tag (7)
-            emitter.instruction(&format!("ldr x0, [{}, #{}]", object_reg, dyn_slot_offset)); // load the dyn_props hashtable pointer from the receiver
+            emitter.instruction(&format!("ldr x0, [{}, #{}]", object_reg, dyn_slot_offset)); //load the dyn_props hashtable pointer from the receiver
             // Stash $this so we can update the slot after hash_set returns the
             // (possibly realloc'd) hashtable pointer in x0.
             abi::emit_push_reg(emitter, object_reg);                             // save $this for the post-call slot store
@@ -127,10 +127,10 @@ pub(super) fn emit_dynamic_property_set(
             emitter.instruction("mov x5, #7");                                  // x5 = value tag = 7 (mixed)
             emitter.instruction("bl __rt_hash_set");                            // store entry; x0 = (possibly realloc'd) hashtable pointer
             abi::emit_pop_reg(emitter, object_reg);                              // restore $this for the dyn_props slot update
-            emitter.instruction(&format!("str x0, [{}, #{}]", object_reg, dyn_slot_offset)); // write the (possibly realloc'd) hashtable pointer back into the slot
+            emitter.instruction(&format!("str x0, [{}, #{}]", object_reg, dyn_slot_offset)); //write the (possibly realloc'd) hashtable pointer back into the slot
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rdi, QWORD PTR [{} + {}]", object_reg, dyn_slot_offset)); // rdi = hashtable pointer from the receiver slot
+            emitter.instruction(&format!("mov rdi, QWORD PTR [{} + {}]", object_reg, dyn_slot_offset)); //rdi = hashtable pointer from the receiver slot
             abi::emit_push_reg(emitter, object_reg);                             // save $this for the post-call slot store
             abi::emit_symbol_address(emitter, "rsi", &label);                    // rsi = property-name string address
             emitter.instruction(&format!("mov rdx, {}", key_len));              // rdx = property-name length
@@ -139,7 +139,7 @@ pub(super) fn emit_dynamic_property_set(
             emitter.instruction("mov r9, 7");                                   // r9  = value tag = 7 (mixed)
             emitter.instruction("call __rt_hash_set");                          // store entry; rax = (possibly realloc'd) hashtable pointer
             abi::emit_pop_reg(emitter, object_reg);                              // restore $this for the dyn_props slot update
-            emitter.instruction(&format!("mov QWORD PTR [{} + {}], rax", object_reg, dyn_slot_offset)); // write the (possibly realloc'd) hashtable pointer back into the slot
+            emitter.instruction(&format!("mov QWORD PTR [{} + {}], rax", object_reg, dyn_slot_offset)); //write the (possibly realloc'd) hashtable pointer back into the slot
         }
     }
     let _ = ctx; // hash_set call inherits ABI conventions; no extra context needed yet
@@ -165,7 +165,7 @@ pub(crate) fn emit_dynamic_property_get(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("mov {}, x0", object_reg));            // copy $this into the scratch register so we can clobber x0 for hash_get args
-            emitter.instruction(&format!("ldr x0, [{}, #{}]", object_reg, dyn_slot_offset)); // x0 = hashtable pointer from the receiver slot
+            emitter.instruction(&format!("ldr x0, [{}, #{}]", object_reg, dyn_slot_offset)); //x0 = hashtable pointer from the receiver slot
             abi::emit_symbol_address(emitter, "x1", &label);                     // x1 = property-name string address
             emitter.instruction(&format!("mov x2, #{}", key_len));              // x2 = property-name length
             emitter.instruction("bl __rt_hash_get");                            // x0 = found flag; x1=value_lo, x2=value_hi, x3=value_tag
@@ -188,7 +188,7 @@ pub(crate) fn emit_dynamic_property_get(
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov {}, rax", object_reg));           // copy $this into the scratch register so we can clobber rax for hash_get args
-            emitter.instruction(&format!("mov rdi, QWORD PTR [{} + {}]", object_reg, dyn_slot_offset)); // rdi = hashtable pointer from the receiver slot
+            emitter.instruction(&format!("mov rdi, QWORD PTR [{} + {}]", object_reg, dyn_slot_offset)); //rdi = hashtable pointer from the receiver slot
             abi::emit_symbol_address(emitter, "rsi", &label);                    // rsi = property-name string address
             emitter.instruction(&format!("mov rdx, {}", key_len));              // rdx = property-name length
             emitter.instruction("call __rt_hash_get");                          // rax = found flag; rdi=value_lo, rsi=value_hi, rcx=value_tag

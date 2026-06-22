@@ -212,22 +212,22 @@ pub(super) fn emit_numeric_binop(
             BinOp::Add => match emitter.target.arch {
                 Arch::AArch64 => emitter.instruction("add x0, x1, x0"),         // x0 = left (x1) + right (x0)
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("add {}, {}", left_reg, result_reg)); // left_reg += result_reg (right operand)
-                    emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the sum back into the result register
+                    emitter.instruction(&format!("add {}, {}", left_reg, result_reg)); //left_reg += result_reg (right operand)
+                    emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); //move the sum back into the result register
                 }
             },
             BinOp::Sub => match emitter.target.arch {
                 Arch::AArch64 => emitter.instruction("sub x0, x1, x0"),         // x0 = left (x1) - right (x0)
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("sub {}, {}", left_reg, result_reg)); // left_reg -= result_reg (right operand)
-                    emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the difference back into the result register
+                    emitter.instruction(&format!("sub {}, {}", left_reg, result_reg)); //left_reg -= result_reg (right operand)
+                    emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); //move the difference back into the result register
                 }
             },
             BinOp::Mul => match emitter.target.arch {
                 Arch::AArch64 => emitter.instruction("mul x0, x1, x0"),         // x0 = left (x1) * right (x0)
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("imul {}, {}", left_reg, result_reg)); // left_reg *= result_reg (right operand)
-                    emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the product back into the result register
+                    emitter.instruction(&format!("imul {}, {}", left_reg, result_reg)); //left_reg *= result_reg (right operand)
+                    emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); //move the product back into the result register
                 }
             },
             BinOp::Div => {
@@ -496,22 +496,22 @@ pub(super) fn emit_bitwise_binop(
         BinOp::BitAnd => match emitter.target.arch {
             Arch::AArch64 => emitter.instruction("and x0, x1, x0"),             // x0 = left (x1) & right (x0)
             Arch::X86_64 => {
-                emitter.instruction(&format!("and {}, {}", left_reg, result_reg)); // left_reg &= result_reg (right operand)
-                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the AND result back into the result register
+                emitter.instruction(&format!("and {}, {}", left_reg, result_reg)); //left_reg &= result_reg (right operand)
+                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); //move the AND result back into the result register
             }
         },
         BinOp::BitOr => match emitter.target.arch {
             Arch::AArch64 => emitter.instruction("orr x0, x1, x0"),             // x0 = left (x1) | right (x0)
             Arch::X86_64 => {
-                emitter.instruction(&format!("or {}, {}", left_reg, result_reg)); // left_reg |= result_reg (right operand)
-                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the OR result back into the result register
+                emitter.instruction(&format!("or {}, {}", left_reg, result_reg)); //left_reg |= result_reg (right operand)
+                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); //move the OR result back into the result register
             }
         },
         BinOp::BitXor => match emitter.target.arch {
             Arch::AArch64 => emitter.instruction("eor x0, x1, x0"),             // x0 = left (x1) ^ right (x0)
             Arch::X86_64 => {
-                emitter.instruction(&format!("xor {}, {}", left_reg, result_reg)); // left_reg ^= result_reg (right operand)
-                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the XOR result back into the result register
+                emitter.instruction(&format!("xor {}, {}", left_reg, result_reg)); //left_reg ^= result_reg (right operand)
+                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); //move the XOR result back into the result register
             }
         },
         BinOp::ShiftLeft => match emitter.target.arch {
@@ -519,7 +519,7 @@ pub(super) fn emit_bitwise_binop(
             Arch::X86_64 => {
                 emitter.instruction("mov rcx, rax");                            // x86 shifts require count in cl -- move right operand into rcx
                 emitter.instruction(&format!("shl {}, cl", left_reg));          // left_reg <<= cl (logical shift left)
-                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the shifted value back into the result register
+                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); //move the shifted value back into the result register
             }
         },
         BinOp::ShiftRight => match emitter.target.arch {
@@ -527,7 +527,7 @@ pub(super) fn emit_bitwise_binop(
             Arch::X86_64 => {
                 emitter.instruction("mov rcx, rax");                            // x86 shifts require count in cl -- move right operand into rcx
                 emitter.instruction(&format!("sar {}, cl", left_reg));          // left_reg >>= cl (arithmetic shift right)
-                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); // move the shifted value back into the result register
+                emitter.instruction(&format!("mov {}, {}", result_reg, left_reg)); //move the shifted value back into the result register
             }
         },
         _ => unreachable!(),
@@ -563,7 +563,7 @@ fn emit_int_mod(emitter: &mut Emitter, ctx: &mut Context, left_reg: &str, result
             emitter.label(&skip);
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // test whether divisor is zero
+            emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); //test whether divisor is zero
             emitter.instruction(&format!("je {}", zero));                       // jump to divisor-zero case when flag set
             emitter.instruction(&format!("mov r11, {}", result_reg));           // stash divisor in r11 before overwriting rax with the dividend
             emitter.instruction(&format!("mov {}, {}", result_reg, left_reg));  // move the dividend (left operand) into rax for idiv

@@ -71,7 +71,7 @@ pub(crate) fn emit_property_array_push_stmt(
     }
 
     let object_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); // preserve the owning object pointer while the append helper evaluates the value and may reallocate the array
+    emitter.instruction(&format!("mov {}, {}", object_reg, abi::int_result_reg(emitter))); //preserve the owning object pointer while the append helper evaluates the value and may reallocate the array
     abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), object_reg, target.offset);
     abi::emit_push_reg(emitter, object_reg);
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));

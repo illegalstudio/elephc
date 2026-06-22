@@ -262,14 +262,14 @@ pub(in crate::codegen::expr::objects) fn emit_static_method_call(
     save_concat_offset_before_nested_call(emitter, ctx);
     if dynamic_static_dispatch {
         let slot = static_slot.expect("codegen bug: dynamic static dispatch without slot");
-        emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); // preserve the forwarded called-class id across static-vtable address materialization
+        emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); //preserve the forwarded called-class id across static-vtable address materialization
         abi::emit_symbol_address(emitter, dispatch_scratch, "_class_static_vtable_ptrs");
         match emitter.target.arch {
             crate::codegen::platform::Arch::AArch64 => {
-                emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
+                emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_scratch, dispatch_scratch, class_id_scratch)); //load the class-specific static-vtable pointer from the global table
             }
             crate::codegen::platform::Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
+                emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_scratch, dispatch_scratch, class_id_scratch)); //load the class-specific static-vtable pointer from the global table
             }
         }
         abi::emit_load_from_address(emitter, dispatch_scratch, dispatch_scratch, slot * 8); // load the selected static method entry from the class-specific vtable

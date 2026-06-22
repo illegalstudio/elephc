@@ -175,7 +175,7 @@ pub fn emit_stream_socket_client_v6(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_sscv6_connect_ok")); // continue when connect succeeded
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_sscv6_connect_ok")); //continue when connect succeeded
     emitter.instruction("b __rt_sscv6_fail_close");                             // connect() failed
 
     emitter.label("__rt_sscv6_connect_ok");

@@ -47,11 +47,11 @@ pub(super) fn emit_body_stmt(
             match emitter.target.arch {
                 Arch::AArch64 => {
                     emit_load_int_source(emitter, "x1", src);
-                    emitter.instruction(&format!("str x1, [x19, #{}]", slot_offset(*idx))); // store the computed int into the local's slot
+                    emitter.instruction(&format!("str x1, [x19, #{}]", slot_offset(*idx))); //store the computed int into the local's slot
                 }
                 Arch::X86_64 => {
                     emit_load_int_source(emitter, "r10", src);
-                    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", slot_offset(*idx))); // store the computed int into the local's slot
+                    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", slot_offset(*idx))); //store the computed int into the local's slot
                 }
             }
         }
@@ -67,28 +67,28 @@ pub(super) fn emit_body_stmt(
         BodyStmt::PostIncrement(idx) => {
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction(&format!("ldr x1, [x19, #{}]", slot_offset(*idx))); // load the local's current value
+                    emitter.instruction(&format!("ldr x1, [x19, #{}]", slot_offset(*idx))); //load the local's current value
                     emitter.instruction("add x1, x1, #1");                      // increment the value by 1
-                    emitter.instruction(&format!("str x1, [x19, #{}]", slot_offset(*idx))); // write the incremented value back to the slot
+                    emitter.instruction(&format!("str x1, [x19, #{}]", slot_offset(*idx))); //write the incremented value back to the slot
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", slot_offset(*idx))); // load the local's current value
+                    emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", slot_offset(*idx))); //load the local's current value
                     emitter.instruction("add r10, 1");                          // increment the value by 1
-                    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", slot_offset(*idx))); // write the incremented value back to the slot
+                    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", slot_offset(*idx))); //write the incremented value back to the slot
                 }
             }
         }
         BodyStmt::PostDecrement(idx) => {
             match emitter.target.arch {
                 Arch::AArch64 => {
-                    emitter.instruction(&format!("ldr x1, [x19, #{}]", slot_offset(*idx))); // load the local's current value
+                    emitter.instruction(&format!("ldr x1, [x19, #{}]", slot_offset(*idx))); //load the local's current value
                     emitter.instruction("sub x1, x1, #1");                      // decrement the value by 1
-                    emitter.instruction(&format!("str x1, [x19, #{}]", slot_offset(*idx))); // write the decremented value back to the slot
+                    emitter.instruction(&format!("str x1, [x19, #{}]", slot_offset(*idx))); //write the decremented value back to the slot
                 }
                 Arch::X86_64 => {
-                    emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", slot_offset(*idx))); // load the local's current value
+                    emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", slot_offset(*idx))); //load the local's current value
                     emitter.instruction("sub r10, 1");                          // decrement the value by 1
-                    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", slot_offset(*idx))); // write the decremented value back to the slot
+                    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", slot_offset(*idx))); //write the decremented value back to the slot
                 }
             }
         }

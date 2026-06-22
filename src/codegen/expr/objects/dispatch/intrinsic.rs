@@ -287,7 +287,7 @@ fn emit_fiber_start_intrinsic(
             }
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", max_arg_off)); // r11 = how many start_args slots start() may write
+            emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", max_arg_off)); //r11 = how many start_args slots start() may write
             let mut overflow_slot = 0usize;
             for (i, assignment) in assignments.iter().take(supplied_arg_count).enumerate() {
                 let off = crate::codegen::runtime::FIBER_START_ARGS_OFFSET + (i as i32) * 8;
@@ -295,15 +295,15 @@ fn emit_fiber_start_intrinsic(
                 emitter.instruction(&format!("jl {}", skip_label));             // stop spilling once we hit the capture-reserved tail
                 if assignment.in_register() {
                     let src = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
-                    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], {}", off, src)); // start_args[i] = caller-supplied Mixed value
+                    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], {}", off, src)); //start_args[i] = caller-supplied Mixed value
                 } else {
                     let stack_offset = overflow_slot * 16;
                     if stack_offset == 0 {
                         emitter.instruction("mov r10, QWORD PTR [rsp]");        // load stack-passed start() Mixed argument from the top overflow slot
                     } else {
-                        emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", stack_offset)); // load stack-passed start() Mixed argument from its overflow slot
+                        emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", stack_offset)); //load stack-passed start() Mixed argument from its overflow slot
                     }
-                    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r10", off)); // start_args[i] = caller-supplied stack-passed Mixed value
+                    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r10", off)); //start_args[i] = caller-supplied stack-passed Mixed value
                     overflow_slot += 1;
                 }
             }
@@ -313,10 +313,10 @@ fn emit_fiber_start_intrinsic(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("mov x9, #{}", supplied_arg_count));   // materialize how many boxed start() values were supplied
-            emitter.instruction(&format!("str x9, [x0, #{}]", crate::codegen::runtime::FIBER_START_ARG_COUNT_OFFSET)); // record start() arity for descriptor-backed Fiber invokers
+            emitter.instruction(&format!("str x9, [x0, #{}]", crate::codegen::runtime::FIBER_START_ARG_COUNT_OFFSET)); //record start() arity for descriptor-backed Fiber invokers
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov QWORD PTR [rdi + {}], {}", crate::codegen::runtime::FIBER_START_ARG_COUNT_OFFSET, supplied_arg_count)); // record start() arity for descriptor-backed Fiber invokers
+            emitter.instruction(&format!("mov QWORD PTR [rdi + {}], {}", crate::codegen::runtime::FIBER_START_ARG_COUNT_OFFSET, supplied_arg_count)); //record start() arity for descriptor-backed Fiber invokers
         }
     }
     abi::emit_call_label(
@@ -420,8 +420,8 @@ fn emit_callback_filter_accept_intrinsic(
     save_concat_offset_before_nested_call(emitter, ctx);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldr x9, [x0, #{}]", callback_offset)); // load the stored callback descriptor pointer
-            emitter.instruction(&format!("ldr x10, [x0, #{}]", callback_env_offset)); // load the optional persistent callback environment
+            emitter.instruction(&format!("ldr x9, [x0, #{}]", callback_offset)); //load the stored callback descriptor pointer
+            emitter.instruction(&format!("ldr x10, [x0, #{}]", callback_env_offset)); //load the optional persistent callback environment
             crate::codegen::callable_descriptor::emit_load_entry_from_descriptor(
                 emitter,
                 "x9",
@@ -439,8 +439,8 @@ fn emit_callback_filter_accept_intrinsic(
             emitter.label(&done);
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", callback_offset)); // load the stored callback descriptor pointer
-            emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", callback_env_offset)); // load the optional persistent callback environment
+            emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", callback_offset)); //load the stored callback descriptor pointer
+            emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", callback_env_offset)); //load the optional persistent callback environment
             crate::codegen::callable_descriptor::emit_load_entry_from_descriptor(
                 emitter,
                 "r10",

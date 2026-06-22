@@ -188,7 +188,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     // -- allocate the object payload --
     emitter.instruction("mov rax, rdx");                                        // allocation size
     emitter.instruction("call __rt_heap_alloc");                                // rax = object pointer
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // object heap-kind word with the x86_64 marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); //object heap-kind word with the x86_64 marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform heap header
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload class_id
     emitter.instruction("mov QWORD PTR [rax], rcx");                            // class_id at offset 0

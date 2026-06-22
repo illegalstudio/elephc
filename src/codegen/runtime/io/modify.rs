@@ -345,7 +345,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: negative return = error
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_touch_close_fd")); // success: go close the fresh fd
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_touch_close_fd")); //success: go close the fresh fd
     emitter.instruction("b __rt_touch_set_times");                              // failure: skip close, still try to stamp existing file
     emitter.label("__rt_touch_close_fd");
     emitter.syscall(6);                                                         // sys_close: release the freshly created fd

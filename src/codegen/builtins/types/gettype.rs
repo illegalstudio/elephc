@@ -102,11 +102,11 @@ pub fn emit(
         abi::emit_symbol_address(emitter, ptr_reg, &array_label);               // materialize the array type-name literal in the active string-pointer result register
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("mov {}, #{}", len_reg, array_len)); // load the array type-name byte length into the active AArch64 string-length result register
+                emitter.instruction(&format!("mov {}, #{}", len_reg, array_len)); //load the array type-name byte length into the active AArch64 string-length result register
                 emitter.instruction(&format!("b {}", done));                    // finish after selecting the array type string on AArch64
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, {}", len_reg, array_len)); // load the array type-name byte length into the active x86_64 string-length result register
+                emitter.instruction(&format!("mov {}, {}", len_reg, array_len)); //load the array type-name byte length into the active x86_64 string-length result register
                 emitter.instruction(&format!("jmp {}", done));                  // finish after selecting the array type string on x86_64
             }
         }
@@ -115,11 +115,11 @@ pub fn emit(
         abi::emit_symbol_address(emitter, ptr_reg, &object_label);              // materialize the object type-name literal in the active string-pointer result register
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("mov {}, #{}", len_reg, object_len)); // load the object type-name byte length into the active AArch64 string-length result register
+                emitter.instruction(&format!("mov {}, #{}", len_reg, object_len)); //load the object type-name byte length into the active AArch64 string-length result register
                 emitter.instruction(&format!("b {}", done));                    // finish after selecting the object type string on AArch64
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, {}", len_reg, object_len)); // load the object type-name byte length into the active x86_64 string-length result register
+                emitter.instruction(&format!("mov {}, {}", len_reg, object_len)); //load the object type-name byte length into the active x86_64 string-length result register
                 emitter.instruction(&format!("jmp {}", done));                  // finish after selecting the object type string on x86_64
             }
         }
@@ -128,10 +128,10 @@ pub fn emit(
         abi::emit_symbol_address(emitter, ptr_reg, &unknown_label);             // materialize the unknown type-name literal in the active string-pointer result register
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("mov {}, #{}", len_reg, unknown_len)); // load the unknown type-name byte length into the active AArch64 string-length result register
+                emitter.instruction(&format!("mov {}, #{}", len_reg, unknown_len)); //load the unknown type-name byte length into the active AArch64 string-length result register
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, {}", len_reg, unknown_len)); // load the unknown type-name byte length into the active x86_64 string-length result register
+                emitter.instruction(&format!("mov {}, {}", len_reg, unknown_len)); //load the unknown type-name byte length into the active x86_64 string-length result register
             }
         }
         emitter.label(&done);
@@ -204,11 +204,11 @@ pub fn emit(
         abi::emit_symbol_address(emitter, ptr_reg, &integer_label);             // materialize the integer type-name literal in the active string-pointer result register
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("mov {}, #{}", len_reg, integer_len)); // load the integer type-name byte length into the active AArch64 string-length result register
+                emitter.instruction(&format!("mov {}, #{}", len_reg, integer_len)); //load the integer type-name byte length into the active AArch64 string-length result register
                 emitter.instruction(&format!("b {}", done));                    // finish after selecting the integer type string on AArch64
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, {}", len_reg, integer_len)); // load the integer type-name byte length into the active x86_64 string-length result register
+                emitter.instruction(&format!("mov {}, {}", len_reg, integer_len)); //load the integer type-name byte length into the active x86_64 string-length result register
                 emitter.instruction(&format!("jmp {}", done));                  // finish after selecting the integer type string on x86_64
             }
         }
@@ -217,11 +217,11 @@ pub fn emit(
         abi::emit_symbol_address(emitter, ptr_reg, &double_label);              // materialize the double type-name literal in the active string-pointer result register
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("mov {}, #{}", len_reg, double_len)); // load the double type-name byte length into the active AArch64 string-length result register
+                emitter.instruction(&format!("mov {}, #{}", len_reg, double_len)); //load the double type-name byte length into the active AArch64 string-length result register
                 emitter.instruction(&format!("b {}", done));                    // finish after selecting the double type string on AArch64
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, {}", len_reg, double_len)); // load the double type-name byte length into the active x86_64 string-length result register
+                emitter.instruction(&format!("mov {}, {}", len_reg, double_len)); //load the double type-name byte length into the active x86_64 string-length result register
                 emitter.instruction(&format!("jmp {}", done));                  // finish after selecting the double type string on x86_64
             }
         }
@@ -230,11 +230,11 @@ pub fn emit(
         abi::emit_symbol_address(emitter, ptr_reg, &string_label);              // materialize the string type-name literal in the active string-pointer result register
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("mov {}, #{}", len_reg, string_len)); // load the string type-name byte length into the active AArch64 string-length result register
+                emitter.instruction(&format!("mov {}, #{}", len_reg, string_len)); //load the string type-name byte length into the active AArch64 string-length result register
                 emitter.instruction(&format!("b {}", done));                    // finish after selecting the string type string on AArch64
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, {}", len_reg, string_len)); // load the string type-name byte length into the active x86_64 string-length result register
+                emitter.instruction(&format!("mov {}, {}", len_reg, string_len)); //load the string type-name byte length into the active x86_64 string-length result register
                 emitter.instruction(&format!("jmp {}", done));                  // finish after selecting the string type string on x86_64
             }
         }
@@ -243,11 +243,11 @@ pub fn emit(
         abi::emit_symbol_address(emitter, ptr_reg, &boolean_label);             // materialize the boolean type-name literal in the active string-pointer result register
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("mov {}, #{}", len_reg, boolean_len)); // load the boolean type-name byte length into the active AArch64 string-length result register
+                emitter.instruction(&format!("mov {}, #{}", len_reg, boolean_len)); //load the boolean type-name byte length into the active AArch64 string-length result register
                 emitter.instruction(&format!("b {}", done));                    // finish after selecting the boolean type string on AArch64
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, {}", len_reg, boolean_len)); // load the boolean type-name byte length into the active x86_64 string-length result register
+                emitter.instruction(&format!("mov {}, {}", len_reg, boolean_len)); //load the boolean type-name byte length into the active x86_64 string-length result register
                 emitter.instruction(&format!("jmp {}", done));                  // finish after selecting the boolean type string on x86_64
             }
         }
@@ -256,7 +256,7 @@ pub fn emit(
         abi::emit_symbol_address(emitter, ptr_reg, &null_label);                // materialize the NULL type-name literal in the active string-pointer result register
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("mov {}, #{}", len_reg, null_len)); // load the NULL type-name byte length into the active AArch64 string-length result register
+                emitter.instruction(&format!("mov {}, #{}", len_reg, null_len)); //load the NULL type-name byte length into the active AArch64 string-length result register
                 emitter.instruction(&format!("b {}", done));                    // finish after selecting the NULL type string on AArch64
             }
             Arch::X86_64 => {
@@ -269,11 +269,11 @@ pub fn emit(
         abi::emit_symbol_address(emitter, ptr_reg, &array_label);               // materialize the array type-name literal in the active string-pointer result register
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("mov {}, #{}", len_reg, array_len)); // load the array type-name byte length into the active AArch64 string-length result register
+                emitter.instruction(&format!("mov {}, #{}", len_reg, array_len)); //load the array type-name byte length into the active AArch64 string-length result register
                 emitter.instruction(&format!("b {}", done));                    // finish after selecting the array type string on AArch64
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, {}", len_reg, array_len)); // load the array type-name byte length into the active x86_64 string-length result register
+                emitter.instruction(&format!("mov {}, {}", len_reg, array_len)); //load the array type-name byte length into the active x86_64 string-length result register
                 emitter.instruction(&format!("jmp {}", done));                  // finish after selecting the array type string on x86_64
             }
         }
@@ -282,11 +282,11 @@ pub fn emit(
         abi::emit_symbol_address(emitter, ptr_reg, &object_label);              // materialize the object type-name literal in the active string-pointer result register
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("mov {}, #{}", len_reg, object_len)); // load the object type-name byte length into the active AArch64 string-length result register
+                emitter.instruction(&format!("mov {}, #{}", len_reg, object_len)); //load the object type-name byte length into the active AArch64 string-length result register
                 emitter.instruction(&format!("b {}", done));                    // finish after selecting the object type string on AArch64
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, {}", len_reg, object_len)); // load the object type-name byte length into the active x86_64 string-length result register
+                emitter.instruction(&format!("mov {}, {}", len_reg, object_len)); //load the object type-name byte length into the active x86_64 string-length result register
                 emitter.instruction(&format!("jmp {}", done));                  // finish after selecting the object type string on x86_64
             }
         }
@@ -295,10 +295,10 @@ pub fn emit(
         abi::emit_symbol_address(emitter, ptr_reg, &resource_label);            // materialize the resource type-name literal in the active string-pointer result register
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("mov {}, #{}", len_reg, resource_len)); // load the resource type-name byte length into the active AArch64 string-length result register
+                emitter.instruction(&format!("mov {}, #{}", len_reg, resource_len)); //load the resource type-name byte length into the active AArch64 string-length result register
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, {}", len_reg, resource_len)); // load the resource type-name byte length into the active x86_64 string-length result register
+                emitter.instruction(&format!("mov {}, {}", len_reg, resource_len)); //load the resource type-name byte length into the active x86_64 string-length result register
             }
         }
         emitter.label(&done);

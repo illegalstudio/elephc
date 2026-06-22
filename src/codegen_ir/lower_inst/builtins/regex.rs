@@ -309,7 +309,7 @@ fn reserve_runtime_string_descriptor_callback_env(
             ctx.emitter.instruction(&format!("str {descriptor_reg}, [sp]"));    // store the runtime string descriptor for the regex callback wrapper
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp], {descriptor_reg}")); // store the runtime string descriptor for the regex callback wrapper
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp], {descriptor_reg}")); //store the runtime string descriptor for the regex callback wrapper
         }
     }
     Ok(16)
@@ -337,7 +337,7 @@ fn reserve_callable_array_descriptor_callback_env(
             ctx.emitter.instruction(&format!("str {descriptor_reg}, [sp]"));    // store the callable-array descriptor for the regex callback wrapper
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp], {descriptor_reg}")); // store the callable-array descriptor for the regex callback wrapper
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp], {descriptor_reg}")); //store the callable-array descriptor for the regex callback wrapper
         }
     }
     Ok(16)
@@ -386,14 +386,14 @@ pub(super) fn lower_preg_split(
             load_string_arg(ctx, subject, "x3", "x4", "preg_split subject")?;
             load_limit_arg(ctx, limit, "x5")?;
             load_flags_arg(ctx, flags, "x6")?;
-            ctx.emitter.instruction(&format!("orr x6, x6, #{}", PREG_SPLIT_FORCE_MIXED_RESULT)); // force boxed-Mixed split slots for EIR result layout
+            ctx.emitter.instruction(&format!("orr x6, x6, #{}", PREG_SPLIT_FORCE_MIXED_RESULT)); //force boxed-Mixed split slots for EIR result layout
         }
         Arch::X86_64 => {
             load_string_arg(ctx, pattern, "rdi", "rsi", "preg_split pattern")?;
             load_string_arg(ctx, subject, "rdx", "rcx", "preg_split subject")?;
             load_limit_arg(ctx, limit, "r8")?;
             load_flags_arg(ctx, flags, "r9")?;
-            ctx.emitter.instruction(&format!("or r9, {}", PREG_SPLIT_FORCE_MIXED_RESULT)); // force boxed-Mixed split slots for EIR result layout
+            ctx.emitter.instruction(&format!("or r9, {}", PREG_SPLIT_FORCE_MIXED_RESULT)); //force boxed-Mixed split slots for EIR result layout
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_split");

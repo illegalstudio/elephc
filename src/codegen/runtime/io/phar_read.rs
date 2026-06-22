@@ -145,7 +145,7 @@ pub fn emit_phar_read(emitter: &mut Emitter) {
     for ch in [0x20u32, 0x3f, 0x3e, 0x0d, 0x0a] {
         emitter.instruction("ldrb w10, [x19, x9]");                             // peek the next byte
         emitter.instruction(&format!("cmp w10, #{:#x}", ch));                   // is it the expected stub-tail byte?
-        emitter.instruction(&format!("b.ne __rt_phar_read_skip_done_{:x}", ch)); // not present → stop skipping
+        emitter.instruction(&format!("b.ne __rt_phar_read_skip_done_{:x}", ch)); //not present → stop skipping
         emitter.instruction("add x9, x9, #1");                                  // consume the stub-tail byte
         emitter.label(&format!("__rt_phar_read_skip_done_{:x}", ch));
     }
@@ -605,7 +605,7 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     // -- skip the optional "; ?>\r\n" tail bytes in order, when present --
     for ch in [0x20u32, 0x3f, 0x3e, 0x0d, 0x0a] {
         emitter.instruction(&format!("cmp BYTE PTR [r12 + r8], {:#x}", ch));    // is it the expected stub-tail byte?
-        emitter.instruction(&format!("jne __rt_phar_read_skip_done_{:x}_x86", ch)); // not present → stop skipping
+        emitter.instruction(&format!("jne __rt_phar_read_skip_done_{:x}_x86", ch)); //not present → stop skipping
         emitter.instruction("inc r8");                                          // consume the stub-tail byte
         emitter.label(&format!("__rt_phar_read_skip_done_{:x}_x86", ch));
     }
@@ -844,7 +844,7 @@ fn emit_phar_decompress_helpers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, 1");                                          // empty entries still need a non-null buffer sentinel
     emitter.label("__rt_phar_inflate_alloc_x86");
     emitter.instruction("call __rt_heap_alloc");                                // allocate the decompressed entry buffer
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the owned-string heap kind word
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); //materialize the owned-string heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the decompressed buffer as an owned string
     emitter.instruction("mov QWORD PTR [rsp + 136], rax");                      // save the destination buffer pointer
 
@@ -923,7 +923,7 @@ fn emit_phar_decompress_helpers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, 1");                                          // empty entries still need a non-null buffer sentinel
     emitter.label("__rt_phar_bzip2_alloc_x86");
     emitter.instruction("call __rt_heap_alloc");                                // allocate the decompressed entry buffer
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the owned-string heap kind word
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); //materialize the owned-string heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the decompressed buffer as an owned string
     emitter.instruction("mov QWORD PTR [rsp + 24], rax");                       // save the destination buffer pointer
     emitter.instruction("mov r9, QWORD PTR [rsp + 16]");                        // reload expected decompressed length

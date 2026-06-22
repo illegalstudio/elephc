@@ -91,8 +91,8 @@ pub(super) fn emit_buffer_array_assign(
             emitter.instruction(&format!("ldr {}, [sp, #32]", buffer_reg));     // reload the buffer header pointer without disturbing the saved value slot
         }
         crate::codegen::platform::Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, QWORD PTR [rsp + 16]", index_reg)); // reload the target index without disturbing the saved value slot
-            emitter.instruction(&format!("mov {}, QWORD PTR [rsp + 32]", buffer_reg)); // reload the buffer header pointer without disturbing the saved value slot
+            emitter.instruction(&format!("mov {}, QWORD PTR [rsp + 16]", index_reg)); //reload the target index without disturbing the saved value slot
+            emitter.instruction(&format!("mov {}, QWORD PTR [rsp + 32]", buffer_reg)); //reload the buffer header pointer without disturbing the saved value slot
         }
     }
     let uaf_ok = ctx.next_label("buf_st_uaf_ok");
@@ -102,7 +102,7 @@ pub(super) fn emit_buffer_array_assign(
             emitter.instruction("b __rt_buffer_use_after_free");                // abort immediately when the buffer local was nulled by buffer_free()
         }
         crate::codegen::platform::Arch::X86_64 => {
-            emitter.instruction(&format!("test {}, {}", buffer_reg, buffer_reg)); // check whether the restored buffer header pointer is null
+            emitter.instruction(&format!("test {}, {}", buffer_reg, buffer_reg)); //check whether the restored buffer header pointer is null
             emitter.instruction(&format!("jne {}", uaf_ok));                    // continue only when the buffer header pointer is still live
             emitter.instruction("jmp __rt_buffer_use_after_free");              // abort immediately when the buffer local was nulled by buffer_free()
         }
@@ -124,8 +124,8 @@ pub(super) fn emit_buffer_array_assign(
             emitter.instruction("bl __rt_buffer_bounds_fail");                  // abort the program on invalid buffer writes
             emitter.label(&bounds_ok);
             abi::emit_load_from_address(emitter, len_reg, buffer_reg, 8);             // load the element stride from the buffer header
-            emitter.instruction(&format!("add {}, {}, #16", buffer_reg, buffer_reg)); // skip the buffer header to reach the payload base
-            emitter.instruction(&format!("madd {}, {}, {}, {}", buffer_reg, index_reg, len_reg, buffer_reg)); // compute payload base + index*stride for the target element
+            emitter.instruction(&format!("add {}, {}, #16", buffer_reg, buffer_reg)); //skip the buffer header to reach the payload base
+            emitter.instruction(&format!("madd {}, {}, {}, {}", buffer_reg, index_reg, len_reg, buffer_reg)); //compute payload base + index*stride for the target element
         }
         crate::codegen::platform::Arch::X86_64 => {
             emitter.instruction(&format!("cmp {}, 0", index_reg));              // reject negative buffer indexes before touching the payload

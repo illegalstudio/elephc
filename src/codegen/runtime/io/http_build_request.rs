@@ -512,7 +512,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     // future enforcement passes (see the ARM64 comment block for details).
     let lookup_str_x = |emitter: &mut Emitter, sym: &str, len: i64, ptr_off: i64| {
         emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", ptr_off));  // store runtime value
-        emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", ptr_off + 8)); // store runtime value
+        emitter.instruction(&format!("mov QWORD PTR [rbp - {}], 0", ptr_off + 8)); //store runtime value
         abi::emit_symbol_address(emitter, "rdi", "_http_key_str");              // load runtime data address
         emitter.instruction("mov rsi, 4");                                      // prepare SysV call argument
         abi::emit_symbol_address(emitter, "rdx", sym);                          // load runtime data address

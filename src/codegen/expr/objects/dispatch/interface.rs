@@ -130,7 +130,7 @@ pub(crate) fn emit_dispatch_interface_method(
             if slot == 0 {
                 emitter.instruction("mov r11, QWORD PTR [r11]");                // load the first method implementation pointer from the interface table
             } else {
-                emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", slot * 8)); // load the selected method implementation pointer from the interface table
+                emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", slot * 8)); //load the selected method implementation pointer from the interface table
             }
             emitter.instruction("call r11");                                    // call the resolved interface method implementation
             emitter.instruction(&format!("jmp {}", done));                      // skip the defensive missing-interface fallback

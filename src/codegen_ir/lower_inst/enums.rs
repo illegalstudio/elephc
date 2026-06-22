@@ -241,11 +241,11 @@ fn emit_int_enum_from_scan(
         abi::emit_load_int_immediate(ctx.emitter, case_value_reg, *value);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_value_reg)); // compare the input integer with this enum backing value
+                ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_value_reg)); //compare the input integer with this enum backing value
                 ctx.emitter.instruction(&format!("b.ne {}", next_label));       // continue scanning when this enum case does not match
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_value_reg)); // compare the input integer with this enum backing value
+                ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_value_reg)); //compare the input integer with this enum backing value
                 ctx.emitter.instruction(&format!("jne {}", next_label));        // continue scanning when this enum case does not match
             }
         }

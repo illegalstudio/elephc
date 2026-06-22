@@ -61,13 +61,13 @@ pub(super) fn emit_branch_if_unlimited_length(
     abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, {}", length_reg, scratch_reg)); // is the requested length PHP null?
+            emitter.instruction(&format!("cmp {}, {}", length_reg, scratch_reg)); //is the requested length PHP null?
             emitter.instruction(&format!("b.eq {}", target_label));             // null length means read/copy until EOF
             emitter.instruction(&format!("cmp {}, #0", length_reg));            // is the requested length negative?
             emitter.instruction(&format!("b.lt {}", target_label));             // negative length means read/copy until EOF
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, {}", length_reg, scratch_reg)); // is the requested length PHP null?
+            emitter.instruction(&format!("cmp {}, {}", length_reg, scratch_reg)); //is the requested length PHP null?
             emitter.instruction(&format!("je {}", target_label));               // null length means read/copy until EOF
             emitter.instruction(&format!("cmp {}, 0", length_reg));             // is the requested length negative?
             emitter.instruction(&format!("jl {}", target_label));               // negative length means read/copy until EOF
@@ -116,7 +116,7 @@ pub fn emit(
         emit_expr(&args[1], emitter, ctx, data); // evaluate $length first (source order)
         match emitter.target.arch {
             Arch::AArch64 => emitter.instruction("str x0, [sp, #8]"),           // save the requested max byte count
-            Arch::X86_64 => emitter.instruction("mov QWORD PTR [rsp + 8], rax"), // save the requested max byte count
+            Arch::X86_64 => emitter.instruction("mov QWORD PTR [rsp + 8], rax"), //save the requested max byte count
         }
     }
     if has_off {
@@ -136,7 +136,7 @@ pub fn emit(
                 if emitter.platform.needs_cmp_before_error_branch() {
                     emitter.instruction("cmp x0, #0");                          // Linux reports lseek failure as a negative result
                 }
-                emitter.instruction(&emitter.platform.branch_on_syscall_success(&skip_seek)); // continue only when lseek succeeded
+                emitter.instruction(&emitter.platform.branch_on_syscall_success(&skip_seek)); //continue only when lseek succeeded
                 emitter.instruction(&format!("b {}", seek_failed));             // seek failure makes stream_get_contents() return false
                 emitter.label(&wrap_seek);
                 abi::emit_call_label(emitter, "__rt_user_wrapper_fseek");       // wrapper stream_seek(offset, SEEK_SET)

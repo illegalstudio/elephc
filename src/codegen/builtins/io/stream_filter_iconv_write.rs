@@ -119,7 +119,7 @@ where
     abi::emit_symbol_address(emitter, "x9", "_stream_grow_scratch");
     emitter.instruction("str x9, [sp, #32]");                                   // iconv outbuf = scratch window base
     emitter.instruction(&format!("mov w10, #{}", ICONV_SCRATCH & 0xFFFF));      // low half of the scratch capacity
-    emitter.instruction(&format!("movk w10, #{}, lsl #16", ICONV_SCRATCH >> 16)); // high half of the scratch capacity
+    emitter.instruction(&format!("movk w10, #{}, lsl #16", ICONV_SCRATCH >> 16)); //high half of the scratch capacity
     emitter.instruction("str x10, [sp, #40]");                                  // iconv outbytesleft = scratch capacity
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the descriptor to index the handle table
     abi::emit_symbol_address(emitter, "x9", "_iconv_handles");
@@ -131,7 +131,7 @@ where
     emitter.bl_c("iconv");                                                      // transcode a chunk of the payload
     // produced = scratch capacity - remaining outbytesleft
     emitter.instruction(&format!("mov w10, #{}", ICONV_SCRATCH & 0xFFFF));      // low half of the scratch capacity
-    emitter.instruction(&format!("movk w10, #{}, lsl #16", ICONV_SCRATCH >> 16)); // high half of the scratch capacity
+    emitter.instruction(&format!("movk w10, #{}, lsl #16", ICONV_SCRATCH >> 16)); //high half of the scratch capacity
     emitter.instruction("ldr x11, [sp, #40]");                                  // remaining outbytesleft after iconv
     emitter.instruction("sub x12, x10, x11");                                   // produced = capacity - remaining
     emitter.instruction(&format!("cbz x12, {}", after_write));                  // nothing produced: skip the write
@@ -241,7 +241,7 @@ where
     emitter.label(&loop_label);
     abi::emit_symbol_address(emitter, "r9", "_stream_grow_scratch");            // scratch window base
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // iconv outbuf = scratch window base
-    emitter.instruction(&format!("mov QWORD PTR [rbp - 48], {}", ICONV_SCRATCH)); // iconv outbytesleft = scratch capacity
+    emitter.instruction(&format!("mov QWORD PTR [rbp - 48], {}", ICONV_SCRATCH)); //iconv outbytesleft = scratch capacity
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the descriptor to index the handle table
     abi::emit_symbol_address(emitter, "r9", "_iconv_handles");                  // iconv handle table base
     emitter.instruction("mov rdi, QWORD PTR [r9 + rdi*8]");                     // arg 0 = the iconv_t for this descriptor

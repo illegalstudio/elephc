@@ -32,7 +32,7 @@ pub fn emit_enable_heap_debug_flag(emitter: &mut Emitter) {
 
 /// Copy the current frame pointer into the destination scratch register.
 pub fn emit_copy_frame_pointer(emitter: &mut Emitter, dest: &str) {
-    emitter.instruction(&format!("mov {}, {}", dest, super::registers::frame_pointer_reg(emitter))); // copy the current frame pointer into the requested scratch register
+    emitter.instruction(&format!("mov {}, {}", dest, super::registers::frame_pointer_reg(emitter))); //copy the current frame pointer into the requested scratch register
 }
 
 /// Emit a process-exit sequence for the current target, then return control to the OS.

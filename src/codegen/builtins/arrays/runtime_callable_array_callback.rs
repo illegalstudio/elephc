@@ -316,7 +316,7 @@ where
     abi::emit_reserve_temporary_stack(emitter, SAVED_ARRAY_BYTES);
     emit_mixed_selector_slots(var_name, emitter, ctx, data);
     crate::codegen::expr::emit_expr(array, emitter, ctx, data);
-    emitter.instruction(&format!("mov {}, {}", array_reg, abi::int_result_reg(emitter))); // preserve the mapped array pointer before descriptor-case selection
+    emitter.instruction(&format!("mov {}, {}", array_reg, abi::int_result_reg(emitter))); //preserve the mapped array pointer before descriptor-case selection
     emit_store_saved_array_reg(array_reg, MIXED_SELECTOR_BYTES, emitter);
     emit_mixed_dispatch(
         &instance_cases,
@@ -394,7 +394,7 @@ where
     abi::emit_reserve_temporary_stack(emitter, SAVED_ARRAY_BYTES);
     emit_string_selector_slots(var_name, emitter, ctx, data);
     crate::codegen::expr::emit_expr(array, emitter, ctx, data);
-    emitter.instruction(&format!("mov {}, {}", array_reg, abi::int_result_reg(emitter))); // preserve the mapped array pointer before descriptor-case selection
+    emitter.instruction(&format!("mov {}, {}", array_reg, abi::int_result_reg(emitter))); //preserve the mapped array pointer before descriptor-case selection
     emit_store_saved_array_reg(array_reg, STRING_SELECTOR_BYTES, emitter);
     emit_string_dispatch(
         &static_cases,
@@ -828,7 +828,7 @@ where
         emitter,
         ctx,
     );
-    emitter.instruction(&format!("mov {}, {}", abi::int_result_reg(emitter), call_reg)); // restore the runtime callable-array receiver for descriptor prefix storage
+    emitter.instruction(&format!("mov {}, {}", abi::int_result_reg(emitter), call_reg)); //restore the runtime callable-array receiver for descriptor prefix storage
     callback_env::store_descriptor_callback_prefix_result(&wrapper, 0, &receiver_ty, emitter);
     callback_env::store_descriptor_callback_array_reg(&wrapper, array_reg, emitter);
     emit_runtime_call(&wrapper, emitter, ctx, data);

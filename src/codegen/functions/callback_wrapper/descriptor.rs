@@ -49,8 +49,8 @@ fn emit_aarch64_descriptor_callback_wrapper(
     emitter.raw(".align 2");
     emitter.label_global(&wrapper.label);
     abi::emit_frame_prologue(emitter, frame_size);
-    emitter.instruction(&format!("stp x19, x20, [sp, #{}]", saved_descriptor_offset)); // preserve descriptor-wrapper callee-saved registers
-    emitter.instruction(&format!("stp x21, x22, [sp, #{}]", saved_runtime_offset)); // preserve runtime-loop callee-saved registers across descriptor invocation
+    emitter.instruction(&format!("stp x19, x20, [sp, #{}]", saved_descriptor_offset)); //preserve descriptor-wrapper callee-saved registers
+    emitter.instruction(&format!("stp x21, x22, [sp, #{}]", saved_runtime_offset)); //preserve runtime-loop callee-saved registers across descriptor invocation
 
     let env_reg = incoming_env_reg(emitter, &wrapper.visible_arg_types);
     emitter.instruction(&format!("mov x20, {}", env_reg));                      // keep the descriptor callback environment pointer across nested calls
@@ -62,8 +62,8 @@ fn emit_aarch64_descriptor_callback_wrapper(
     emit_call_descriptor_invoker_from_wrapper(emitter, "x19");
     emit_cast_descriptor_mixed_result_for_callback(emitter, return_ty);
 
-    emitter.instruction(&format!("ldp x21, x22, [sp, #{}]", saved_runtime_offset)); // restore runtime-loop callee-saved registers after descriptor invocation
-    emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_descriptor_offset)); // restore descriptor-wrapper callee-saved registers
+    emitter.instruction(&format!("ldp x21, x22, [sp, #{}]", saved_runtime_offset)); //restore runtime-loop callee-saved registers after descriptor invocation
+    emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_descriptor_offset)); //restore descriptor-wrapper callee-saved registers
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
 }
@@ -139,8 +139,8 @@ fn emit_aarch64_extern_callback_trampoline(
     emitter.raw(".align 2");
     emitter.label_global(&trampoline.label);
     abi::emit_frame_prologue(emitter, frame_size);
-    emitter.instruction(&format!("stp x19, x20, [sp, #{}]", saved_descriptor_offset)); // preserve descriptor trampoline registers across invoker dispatch
-    emitter.instruction(&format!("stp x21, x22, [sp, #{}]", saved_runtime_offset)); // preserve runtime-loop registers across descriptor invocation
+    emitter.instruction(&format!("stp x19, x20, [sp, #{}]", saved_descriptor_offset)); //preserve descriptor trampoline registers across invoker dispatch
+    emitter.instruction(&format!("stp x21, x22, [sp, #{}]", saved_runtime_offset)); //preserve runtime-loop registers across descriptor invocation
 
     abi::emit_load_symbol_to_reg(
         emitter,
@@ -154,8 +154,8 @@ fn emit_aarch64_extern_callback_trampoline(
     emit_call_descriptor_invoker_from_wrapper(emitter, "x19");
     emit_cast_descriptor_mixed_result_for_callback(emitter, &trampoline.return_type);
 
-    emitter.instruction(&format!("ldp x21, x22, [sp, #{}]", saved_runtime_offset)); // restore runtime-loop registers after descriptor invocation
-    emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_descriptor_offset)); // restore descriptor trampoline registers
+    emitter.instruction(&format!("ldp x21, x22, [sp, #{}]", saved_runtime_offset)); //restore runtime-loop registers after descriptor invocation
+    emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_descriptor_offset)); //restore descriptor trampoline registers
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
 }
@@ -374,7 +374,7 @@ fn emit_call_descriptor_invoker_from_wrapper(emitter: &mut Emitter, descriptor_r
     let invoker_reg = abi::symbol_scratch_reg(emitter);
 
     if descriptor_reg != descriptor_arg_reg {
-        emitter.instruction(&format!("mov {}, {}", descriptor_arg_reg, descriptor_reg)); // pass the selected callable descriptor to the uniform invoker
+        emitter.instruction(&format!("mov {}, {}", descriptor_arg_reg, descriptor_reg)); //pass the selected callable descriptor to the uniform invoker
     }
     callable_descriptor::emit_load_invoker_from_descriptor(
         emitter,

@@ -340,8 +340,8 @@ fn emit_isset_array_in_bounds_missing_aarch64(
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
         }
         PhpType::Mixed => {
-            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach boxed Mixed elements
-            ctx.emitter.instruction(&format!("ldr x0, [{}, {}, lsl #3]", array_reg, index_reg)); // load the boxed Mixed element pointer for null inspection
+            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); //skip the indexed-array header to reach boxed Mixed elements
+            ctx.emitter.instruction(&format!("ldr x0, [{}, {}, lsl #3]", array_reg, index_reg)); //load the boxed Mixed element pointer for null inspection
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 means the indexed-array element is PHP null
             ctx.emitter.instruction("cset x0, eq");                             // return missing when the in-bounds Mixed element is null
@@ -365,8 +365,8 @@ fn emit_isset_array_in_bounds_missing_x86_64(
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
         }
         PhpType::Mixed => {
-            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach boxed Mixed elements
-            ctx.emitter.instruction(&format!("mov rax, QWORD PTR [{} + {} * 8]", array_reg, index_reg)); // load the boxed Mixed element pointer for null inspection
+            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); //skip the indexed-array header to reach boxed Mixed elements
+            ctx.emitter.instruction(&format!("mov rax, QWORD PTR [{} + {} * 8]", array_reg, index_reg)); //load the boxed Mixed element pointer for null inspection
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 means the indexed-array element is PHP null
             ctx.emitter.instruction("sete al");                                 // return missing when the in-bounds Mixed element is null

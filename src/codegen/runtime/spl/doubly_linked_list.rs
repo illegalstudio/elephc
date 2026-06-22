@@ -113,8 +113,8 @@ fn emit_new_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x0, #-8]");                                   // persist the Mixed value_type tag on internal storage
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the object pointer
     emitter.instruction(&format!("str x0, [x9, #{}]", SPL_DLL_STORAGE_OFFSET)); // object.storage = internal Mixed array
-    emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // iterator index starts at zero
-    emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // iterator mode starts FIFO/KEEP
+    emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //iterator index starts at zero
+    emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); //iterator mode starts FIFO/KEEP
     emitter.instruction("mov x0, x9");                                          // return the initialized SPL object
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release constructor spill slots
@@ -247,7 +247,7 @@ fn emit_insert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.le __rt_spl_dll_insert_index_in_range");             // keep indexes within the append boundary
     emitter.instruction("b __rt_spl_dll_insert_range_throw");                   // indexes past the end are out of range
     emitter.label("__rt_spl_dll_insert_index_in_range");
-    emitter.instruction(&format!("ldr x13, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits for logical index mapping
+    emitter.instruction(&format!("ldr x13, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); //load iterator mode bits for logical index mapping
     emitter.instruction(&format!("tst x13, #{}", ITER_MODE_LIFO));              // does logical indexing run in LIFO order?
     emitter.instruction("b.eq __rt_spl_dll_insert_physical_index_ready");       // FIFO indexes already match physical storage
     emitter.instruction("cmp x12, x10");                                        // does LIFO insertion target the logical end?
@@ -353,10 +353,10 @@ fn emit_peek_index_aarch64(emitter: &mut Emitter, null_label: &str, last: bool) 
 /// Get: receiver in x0; returns iterator mode bits in x0.
 fn emit_iterator_mode_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_set_iterator_mode");
-    emitter.instruction(&format!("str x1, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // store iterator mode bits on the receiver
+    emitter.instruction(&format!("str x1, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); //store iterator mode bits on the receiver
     emitter.instruction("ret");                                                 // return void
     emitter.label_global("__rt_spl_dll_get_iterator_mode");
-    emitter.instruction(&format!("ldr x0, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // return iterator mode bits
+    emitter.instruction(&format!("ldr x0, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); //return iterator mode bits
     emitter.instruction("ret");                                                 // return integer mode
 }
 
@@ -418,7 +418,7 @@ fn emit_serialize_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_from_value");                            // box empty properties array
     emitter.instruction("str x0, [sp, #48]");                                   // save boxed properties value
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver for iterator flags
-    emitter.instruction(&format!("ldr x1, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode flags
+    emitter.instruction(&format!("ldr x1, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); //load iterator mode flags
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
     emitter.instruction("mov x2, xzr");                                         // integer mixed payload uses one word
     emitter.instruction("bl __rt_mixed_from_value");                            // box iterator flags
@@ -466,7 +466,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov w13, #58");                                        // ASCII ':' separates type and payload
     emitter.instruction("strb w13, [x12], #1");                                 // write ':' after the integer tag
     emitter.instruction("str x12, [sp, #40]");                                  // save cursor before decimal writer call
-    emitter.instruction(&format!("ldr x0, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode flags for the legacy payload
+    emitter.instruction(&format!("ldr x0, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); //load iterator mode flags for the legacy payload
     emitter.instruction("ldr x1, [sp, #40]");                                   // pass current cursor to decimal writer
     emitter.instruction("bl __rt_spl_dll_write_dec");                           // append decimal flags text
     emitter.instruction("str x1, [sp, #40]");                                   // save cursor returned by decimal writer
@@ -669,7 +669,7 @@ fn emit_unserialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #16]");                                   // pass input end pointer to decimal parser
     emitter.instruction("bl __rt_spl_dll_parse_dec");                           // parse iterator mode flags
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver for mode update
-    emitter.instruction(&format!("str x0, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // restore serialized iterator mode
+    emitter.instruction(&format!("str x0, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); //restore serialized iterator mode
     emitter.instruction("mov x10, x1");                                         // move parser cursor to scratch
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload input end pointer
     emitter.instruction("cmp x10, x11");                                        // is there a semicolon after flags?
@@ -839,17 +839,17 @@ fn emit_rewind_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
     emitter.instruction("ldr x10, [x9]");                                       // read storage length
     emitter.instruction("cbz x10, __rt_spl_dll_rewind_empty");                  // empty storage rewinds to zero
-    emitter.instruction(&format!("ldr x11, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits
+    emitter.instruction(&format!("ldr x11, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); //load iterator mode bits
     emitter.instruction(&format!("tst x11, #{}", ITER_MODE_LIFO));              // is LIFO traversal requested?
     emitter.instruction("b.eq __rt_spl_dll_rewind_fifo");                       // FIFO traversal starts at index zero
     emitter.instruction("sub x10, x10, #1");                                    // LIFO traversal starts at the last element
-    emitter.instruction(&format!("str x10, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // store starting LIFO index
+    emitter.instruction(&format!("str x10, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //store starting LIFO index
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_dll_rewind_fifo");
-    emitter.instruction(&format!("str xzr, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // store starting FIFO index
+    emitter.instruction(&format!("str xzr, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //store starting FIFO index
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_dll_rewind_empty");
-    emitter.instruction(&format!("str xzr, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // reset empty iterators to index zero
+    emitter.instruction(&format!("str xzr, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //reset empty iterators to index zero
     emitter.instruction("ret");                                                 // return void
 }
 
@@ -883,8 +883,8 @@ fn emit_iterator_step_aarch64(emitter: &mut Emitter, forward: bool) {
     } else {
         "__rt_spl_dll_prev_done"
     };
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // load current iterator index
-    emitter.instruction(&format!("ldr x10, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //load current iterator index
+    emitter.instruction(&format!("ldr x10, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); //load iterator mode bits
     if forward {
         emitter.instruction(&format!("tst x10, #{}", ITER_MODE_DELETE));        // does next() need to delete the current element?
         emitter.instruction(&format!("b.ne {}", delete_label));                 // delete-mode foreach advances by removing the current slot
@@ -894,16 +894,16 @@ fn emit_iterator_step_aarch64(emitter: &mut Emitter, forward: bool) {
     if forward {
         emitter.instruction("cbz x9, __rt_spl_dll_next_lifo_exhaust");          // moving forward in LIFO from zero exhausts the iterator
         emitter.instruction("sub x9, x9, #1");                                  // otherwise move to the previous numeric index
-        emitter.instruction(&format!("str x9, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // persist decremented LIFO iterator index
+        emitter.instruction(&format!("str x9, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //persist decremented LIFO iterator index
         emitter.instruction("ret");                                             // return void
         emitter.label("__rt_spl_dll_next_lifo_exhaust");
-        emitter.instruction(&format!("ldr x10, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load storage to compute exhausted sentinel
+        emitter.instruction(&format!("ldr x10, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); //load storage to compute exhausted sentinel
         emitter.instruction("ldr x10, [x10]");                                  // storage length is the invalid sentinel
-        emitter.instruction(&format!("str x10, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // store exhausted LIFO sentinel
+        emitter.instruction(&format!("str x10, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //store exhausted LIFO sentinel
         emitter.instruction("ret");                                             // return void
     } else {
         emitter.instruction("add x9, x9, #1");                                  // moving prev in LIFO increases the numeric index
-        emitter.instruction(&format!("str x9, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // persist incremented LIFO iterator index
+        emitter.instruction(&format!("str x9, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //persist incremented LIFO iterator index
         emitter.instruction("ret");                                             // return void
     }
     emitter.label(fifo_label);
@@ -913,7 +913,7 @@ fn emit_iterator_step_aarch64(emitter: &mut Emitter, forward: bool) {
         emitter.instruction("cbz x9, __rt_spl_dll_prev_fifo_done");             // moving before zero leaves the iterator exhausted at zero
         emitter.instruction("sub x9, x9, #1");                                  // otherwise move one FIFO slot backward
     }
-    emitter.instruction(&format!("str x9, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // persist updated FIFO iterator index
+    emitter.instruction(&format!("str x9, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //persist updated FIFO iterator index
     emitter.label(done_label);
     if !forward {
         emitter.label("__rt_spl_dll_prev_fifo_done");
@@ -939,20 +939,20 @@ fn emit_iterator_delete_step_aarch64(emitter: &mut Emitter, delete_label: &str) 
     emitter.instruction("bl __rt_spl_dll_shift");                               // FIFO delete removes the head element and compacts storage
     emitter.instruction("bl __rt_decref_mixed");                                // release the removed storage-owned Mixed cell
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver after deletion
-    emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // FIFO delete keeps iteration at the new head
+    emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //FIFO delete keeps iteration at the new head
     emitter.instruction("b __rt_spl_dll_next_delete_done");                     // finish delete-mode next()
     emitter.label("__rt_spl_dll_next_delete_lifo");
     emitter.instruction("bl __rt_spl_dll_pop");                                 // LIFO delete removes the current tail element
     emitter.instruction("bl __rt_decref_mixed");                                // release the removed storage-owned Mixed cell
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver after deletion
-    emitter.instruction(&format!("ldr x10, [x9, #{}]", SPL_DLL_STORAGE_OFFSET)); // load storage to find the new tail
+    emitter.instruction(&format!("ldr x10, [x9, #{}]", SPL_DLL_STORAGE_OFFSET)); //load storage to find the new tail
     emitter.instruction("ldr x10, [x10]");                                      // read storage length after deletion
     emitter.instruction("cbz x10, __rt_spl_dll_next_delete_empty");             // empty storage rewinds to index zero
     emitter.instruction("sub x10, x10, #1");                                    // new LIFO current index is the new tail
-    emitter.instruction(&format!("str x10, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // persist new LIFO delete cursor
+    emitter.instruction(&format!("str x10, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //persist new LIFO delete cursor
     emitter.instruction("b __rt_spl_dll_next_delete_done");                     // finish non-empty LIFO delete
     emitter.label("__rt_spl_dll_next_delete_empty");
-    emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // reset exhausted delete-mode iterator to zero
+    emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //reset exhausted delete-mode iterator to zero
     emitter.label("__rt_spl_dll_next_delete_done");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release delete-mode iterator frame
@@ -965,7 +965,7 @@ fn emit_valid_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_valid");
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
     emitter.instruction("ldr x9, [x9]");                                        // read storage length
-    emitter.instruction(&format!("ldr x10, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // read current iterator index
+    emitter.instruction(&format!("ldr x10, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //read current iterator index
     emitter.instruction("cmp x10, x9");                                         // valid when index is below length
     emitter.instruction("cset x0, lo");                                         // return boolean validity
     emitter.instruction("ret");                                                 // return boolean result
@@ -981,7 +981,7 @@ fn emit_current_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // establish a frame for nested incref
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
     emitter.instruction("ldr x10, [x9]");                                       // read storage length
-    emitter.instruction(&format!("ldr x11, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // read iterator index
+    emitter.instruction(&format!("ldr x11, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //read iterator index
     emitter.instruction("cmp x11, x10");                                        // is the iterator index inside storage?
     emitter.instruction("b.hs __rt_spl_dll_current_null");                      // invalid current() returns null
     emitter.instruction("add x12, x9, #24");                                    // point at first storage element
@@ -1003,7 +1003,7 @@ fn emit_key_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_key");
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
     emitter.instruction("ldr x9, [x9]");                                        // read storage length
-    emitter.instruction(&format!("ldr x1, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // read iterator index as integer key payload
+    emitter.instruction(&format!("ldr x1, [x0, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); //read iterator index as integer key payload
     emitter.instruction("cmp x1, x9");                                          // is iterator index valid?
     emitter.instruction("b.hs __rt_spl_dll_key_null");                          // invalid key() returns null
     emitter.instruction(&format!("mov x0, #{}", INT_TAG));                      // runtime tag 0 = int key
@@ -1117,7 +1117,7 @@ fn emit_offset_index_prefix_aarch64(
     emitter.instruction("ldr x11, [x9]");                                       // read storage length
     emitter.instruction("cmp x10, x11");                                        // compare offset with length
     emitter.instruction(&format!("b.hs {}", range_label));                      // offsets past the end are invalid
-    emitter.instruction(&format!("ldr x12, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits for logical indexing
+    emitter.instruction(&format!("ldr x12, [x0, #{}]", SPL_DLL_ITER_MODE_OFFSET)); //load iterator mode bits for logical indexing
     emitter.instruction(&format!("tst x12, #{}", ITER_MODE_LIFO));              // does the list expose offsets in LIFO order?
     emitter.instruction(&format!("b.eq {}", ready_label));                      // FIFO offsets already match physical storage
     emitter.instruction("sub x10, x11, x10");                                   // convert logical LIFO offset to one-based physical offset
@@ -1153,7 +1153,7 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, #0");                                         // reject negative offsets
     emitter.instruction("b.lt __rt_spl_dll_offset_set_range_throw");            // negative offsets are out of range
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver
-    emitter.instruction(&format!("ldr x14, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits for logical index mapping
+    emitter.instruction(&format!("ldr x14, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); //load iterator mode bits for logical index mapping
     emitter.instruction(&format!("ldr x9, [x9, #{}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
     emitter.instruction("ldr x11, [x9]");                                       // read storage length
     emitter.instruction("cmp x10, x11");                                        // compare explicit offset with current length
@@ -1315,7 +1315,7 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save concrete SPL class id
     emitter.instruction(&format!("mov rax, {}", SPL_DLL_OBJECT_SIZE));          // request fixed SPL list object payload size
     emitter.instruction("call __rt_heap_alloc");                                // allocate the SPL list object payload
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize object heap kind with x86 marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); //materialize object heap kind with x86 marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as an object instance
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload concrete SPL class id
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at object header
@@ -1327,9 +1327,9 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("or r10, 0x700");                                       // mark internal storage as an array of Mixed cells
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // persist Mixed value_type tag on storage
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload object pointer
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", SPL_DLL_STORAGE_OFFSET)); // object.storage = internal Mixed array
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); // iterator index starts at zero
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", SPL_DLL_ITER_MODE_OFFSET)); // iterator mode starts FIFO/KEEP
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", SPL_DLL_STORAGE_OFFSET)); //object.storage = internal Mixed array
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); //iterator index starts at zero
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", SPL_DLL_ITER_MODE_OFFSET)); //iterator mode starts FIFO/KEEP
     emitter.instruction("mov rax, r11");                                        // return initialized SPL object
     emitter.instruction("add rsp, 16");                                         // release constructor spills
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -1340,7 +1340,7 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
 /// and returns its length as an integer in rax.
 fn emit_count_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_count");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //load internal storage
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // return internal storage length
     emitter.instruction("ret");                                                 // return count
 }
@@ -1349,7 +1349,7 @@ fn emit_count_x86_64(emitter: &mut Emitter) {
 /// to zero, and returns a widened boolean (1 when empty, 0 when non-empty) in rax.
 fn emit_is_empty_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_is_empty");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //load internal storage
     emitter.instruction("cmp QWORD PTR [r10], 0");                              // compare storage length with zero
     emitter.instruction("sete al");                                             // set low byte when list is empty
     emitter.instruction("movzx rax, al");                                       // widen boolean result
@@ -1364,10 +1364,10 @@ fn emit_push_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish append frame
     emitter.instruction("sub rsp, 16");                                         // reserve receiver spill
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver while appending
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // pass internal storage as array_push receiver
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //pass internal storage as array_push receiver
     emitter.instruction("call __rt_array_push_int");                            // append owned Mixed pointer without retaining it again
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload receiver after append
-    emitter.instruction(&format!("mov QWORD PTR [r10 + {}], rax", SPL_DLL_STORAGE_OFFSET)); // store possibly-grown storage
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {}], rax", SPL_DLL_STORAGE_OFFSET)); //store possibly-grown storage
     emitter.instruction("add rsp, 16");                                         // release append spill
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return void
@@ -1377,7 +1377,7 @@ fn emit_push_x86_64(emitter: &mut Emitter) {
 /// Mixed cell, transferring ownership to the caller. Throws RuntimeException on an empty list.
 fn emit_pop_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_pop");
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //load internal storage
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read current storage length
     emitter.instruction("test r10, r10");                                       // is the list empty?
     emitter.instruction("jz __rt_spl_dll_pop_empty");                           // empty list raises PHP's RuntimeException
@@ -1401,7 +1401,7 @@ fn emit_pop_x86_64(emitter: &mut Emitter) {
 /// to the caller. Throws RuntimeException on an empty list.
 fn emit_shift_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_shift");
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //load internal storage
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read current storage length
     emitter.instruction("test r10, r10");                                       // is the list empty?
     emitter.instruction("jz __rt_spl_dll_shift_empty");                         // empty list raises PHP's RuntimeException
@@ -1456,7 +1456,7 @@ fn emit_insert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rsi, 0");                                          // is requested index negative?
     emitter.instruction("jl __rt_spl_dll_insert_range_throw");                  // negative indexes are out of range in PHP
     emitter.label("__rt_spl_dll_insert_index_nonnegative");
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //load internal storage
     emitter.instruction("mov QWORD PTR [rbp - 32], r9");                        // save current storage pointer
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read current storage length
     emitter.instruction("mov r11, QWORD PTR [r9 + 8]");                         // read current storage capacity
@@ -1465,7 +1465,7 @@ fn emit_insert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jle __rt_spl_dll_insert_index_in_range");              // keep indexes within append boundary
     emitter.instruction("jmp __rt_spl_dll_insert_range_throw");                 // indexes past the end are out of range
     emitter.label("__rt_spl_dll_insert_index_in_range");
-    emitter.instruction(&format!("mov r13, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits for logical index mapping
+    emitter.instruction(&format!("mov r13, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); //load iterator mode bits for logical index mapping
     emitter.instruction(&format!("test r13, {}", ITER_MODE_LIFO));              // does logical indexing run in LIFO order?
     emitter.instruction("jz __rt_spl_dll_insert_physical_index_ready");         // FIFO indexes already match physical storage
     emitter.instruction("cmp r12, r10");                                        // does LIFO insertion target the logical end?
@@ -1480,7 +1480,7 @@ fn emit_insert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, r9");                                         // pass current storage to array_grow
     emitter.instruction("call __rt_array_grow");                                // grow internal storage
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver after growth
-    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], rax", SPL_DLL_STORAGE_OFFSET)); // store possibly-grown storage
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], rax", SPL_DLL_STORAGE_OFFSET)); //store possibly-grown storage
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save grown storage
     emitter.label("__rt_spl_dll_insert_have_capacity");
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload storage pointer
@@ -1539,7 +1539,7 @@ fn emit_bottom_x86_64(emitter: &mut Emitter) {
 /// the selected Mixed cell with `__rt_incref` before returning it. Jumps to null_label when
 /// storage is empty, which throws RuntimeException via `emit_throw_exception_x86_64`.
 fn emit_peek_index_x86_64(emitter: &mut Emitter, null_label: &str, last: bool) {
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //load internal storage
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read storage length
     emitter.instruction("test r10, r10");                                       // is storage empty?
     emitter.instruction(&format!("jz {}", null_label));                         // empty storage returns null
@@ -1566,10 +1566,10 @@ fn emit_peek_index_x86_64(emitter: &mut Emitter, null_label: &str, last: bool) {
 /// Get: receiver in rdi; returns iterator mode bits in rax.
 fn emit_iterator_mode_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_set_iterator_mode");
-    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], rsi", SPL_DLL_ITER_MODE_OFFSET)); // store iterator mode bits on receiver
+    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], rsi", SPL_DLL_ITER_MODE_OFFSET)); //store iterator mode bits on receiver
     emitter.instruction("ret");                                                 // return void
     emitter.label_global("__rt_spl_dll_get_iterator_mode");
-    emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); // return iterator mode bits
+    emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); //return iterator mode bits
     emitter.instruction("ret");                                                 // return integer mode
 }
 
@@ -1583,7 +1583,7 @@ fn emit_serialize_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish serialization frame
     emitter.instruction("sub rsp, 80");                                         // reserve receiver, arrays, boxed values, and cursor spills
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal Mixed storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //load internal Mixed storage
     emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save internal storage pointer
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load list length
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save list length
@@ -1628,7 +1628,7 @@ fn emit_serialize_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // box empty properties array
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save boxed properties value
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver for iterator flags
-    emitter.instruction(&format!("mov rdi, QWORD PTR [r9 + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode flags
+    emitter.instruction(&format!("mov rdi, QWORD PTR [r9 + {}]", SPL_DLL_ITER_MODE_OFFSET)); //load iterator mode flags
     emitter.instruction("xor esi, esi");                                        // integer mixed payload uses one word
     emitter.instruction("xor eax, eax");                                        // runtime tag 0 = integer
     emitter.instruction("call __rt_mixed_from_value");                          // box iterator flags
@@ -1673,14 +1673,14 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r12], 58");                              // write ASCII ':' after flags tag
     emitter.instruction("add r12, 1");                                          // advance output cursor after flags separator
     emitter.instruction("mov QWORD PTR [rbp - 40], r12");                       // save cursor before decimal writer
-    emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode flags
+    emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); //load iterator mode flags
     emitter.instruction("mov rdi, r12");                                        // pass cursor to decimal writer
     emitter.instruction("call __rt_spl_dll_write_dec_x86");                     // append decimal flags text
     emitter.instruction("mov BYTE PTR [rdi], 59");                              // write ASCII ';' after flags value
     emitter.instruction("add rdi, 1");                                          // advance cursor after flags terminator
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save cursor after flags field
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver for storage access
-    emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal Mixed storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_DLL_STORAGE_OFFSET)); //load internal Mixed storage
     emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save storage pointer
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read list length
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save list length
@@ -1850,7 +1850,7 @@ fn emit_unserialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver
     emitter.instruction("lea r9, [rsi + rdx]");                                 // compute input end pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // save input end pointer
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load current internal storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //load current internal storage
     emitter.instruction("mov QWORD PTR [rbp - 32], r9");                        // save current storage pointer for clearing
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read current list length
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save current list length
@@ -1879,7 +1879,7 @@ fn emit_unserialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass input end pointer to decimal parser
     emitter.instruction("call __rt_spl_dll_parse_dec_x86");                     // parse iterator mode flags
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver for mode update
-    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], rax", SPL_DLL_ITER_MODE_OFFSET)); // restore serialized iterator mode
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], rax", SPL_DLL_ITER_MODE_OFFSET)); //restore serialized iterator mode
     emitter.instruction("mov r10, rdi");                                        // move parser cursor to scratch
     emitter.instruction("cmp r10, QWORD PTR [rbp - 24]");                       // can parser inspect the flags terminator?
     emitter.instruction("jae __rt_spl_dll_unserialize_store_cursor_x86");       // avoid reading past input
@@ -2043,21 +2043,21 @@ fn emit_parse_dec_x86_64(emitter: &mut Emitter) {
 /// element). Empty storage resets index to zero. Returns void.
 fn emit_rewind_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_rewind");
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //load internal storage
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read storage length
     emitter.instruction("test r10, r10");                                       // is storage empty?
     emitter.instruction("jz __rt_spl_dll_rewind_empty");                        // empty storage rewinds to zero
-    emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits
+    emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); //load iterator mode bits
     emitter.instruction(&format!("test r11, {}", ITER_MODE_LIFO));              // is LIFO traversal requested?
     emitter.instruction("jz __rt_spl_dll_rewind_fifo");                         // FIFO traversal starts at zero
     emitter.instruction("sub r10, 1");                                          // LIFO traversal starts at last element
-    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r10", SPL_DLL_ITER_INDEX_OFFSET)); // store starting LIFO index
+    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r10", SPL_DLL_ITER_INDEX_OFFSET)); //store starting LIFO index
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_dll_rewind_fifo");
-    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); // store starting FIFO index
+    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); //store starting FIFO index
     emitter.instruction("ret");                                                 // return void
     emitter.label("__rt_spl_dll_rewind_empty");
-    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); // reset empty iterator to zero
+    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); //reset empty iterator to zero
     emitter.instruction("ret");                                                 // return void
 }
 
@@ -2091,8 +2091,8 @@ fn emit_iterator_step_x86_64(emitter: &mut Emitter, forward: bool) {
     } else {
         "__rt_spl_dll_prev_done"
     };
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_ITER_INDEX_OFFSET)); // load current iterator index
-    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_ITER_INDEX_OFFSET)); //load current iterator index
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); //load iterator mode bits
     if forward {
         emitter.instruction(&format!("test r10, {}", ITER_MODE_DELETE));        // does next() need to delete the current element?
         emitter.instruction(&format!("jnz {}", delete_label));                  // delete-mode foreach advances by removing the current slot
@@ -2103,16 +2103,16 @@ fn emit_iterator_step_x86_64(emitter: &mut Emitter, forward: bool) {
         emitter.instruction("test r9, r9");                                     // is LIFO traversal at numeric index zero?
         emitter.instruction("jz __rt_spl_dll_next_lifo_exhaust");               // moving forward from zero exhausts the iterator
         emitter.instruction("sub r9, 1");                                       // otherwise move to previous numeric index
-        emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r9", SPL_DLL_ITER_INDEX_OFFSET)); // persist decremented LIFO iterator index
+        emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r9", SPL_DLL_ITER_INDEX_OFFSET)); //persist decremented LIFO iterator index
         emitter.instruction("ret");                                             // return void
         emitter.label("__rt_spl_dll_next_lifo_exhaust");
-        emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load storage to compute exhausted sentinel
+        emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //load storage to compute exhausted sentinel
         emitter.instruction("mov r10, QWORD PTR [r10]");                        // storage length is the invalid sentinel
-        emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r10", SPL_DLL_ITER_INDEX_OFFSET)); // store exhausted LIFO sentinel
+        emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r10", SPL_DLL_ITER_INDEX_OFFSET)); //store exhausted LIFO sentinel
         emitter.instruction("ret");                                             // return void
     } else {
         emitter.instruction("add r9, 1");                                       // moving prev in LIFO increases numeric index
-        emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r9", SPL_DLL_ITER_INDEX_OFFSET)); // persist incremented LIFO iterator index
+        emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r9", SPL_DLL_ITER_INDEX_OFFSET)); //persist incremented LIFO iterator index
         emitter.instruction("ret");                                             // return void
     }
     emitter.label(fifo_label);
@@ -2123,7 +2123,7 @@ fn emit_iterator_step_x86_64(emitter: &mut Emitter, forward: bool) {
         emitter.instruction("jz __rt_spl_dll_prev_fifo_done");                  // moving before zero leaves iterator at zero
         emitter.instruction("sub r9, 1");                                       // otherwise move one FIFO slot backward
     }
-    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r9", SPL_DLL_ITER_INDEX_OFFSET)); // persist updated FIFO iterator index
+    emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r9", SPL_DLL_ITER_INDEX_OFFSET)); //persist updated FIFO iterator index
     emitter.label(done_label);
     if !forward {
         emitter.label("__rt_spl_dll_prev_fifo_done");
@@ -2149,21 +2149,21 @@ fn emit_iterator_delete_step_x86_64(emitter: &mut Emitter, delete_label: &str) {
     emitter.instruction("call __rt_spl_dll_shift");                             // FIFO delete removes the head element and compacts storage
     emitter.instruction("call __rt_decref_mixed");                              // release the removed storage-owned Mixed cell
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver after deletion
-    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); // FIFO delete keeps iteration at the new head
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); //FIFO delete keeps iteration at the new head
     emitter.instruction("jmp __rt_spl_dll_next_delete_done");                   // finish delete-mode next()
     emitter.label("__rt_spl_dll_next_delete_lifo");
     emitter.instruction("call __rt_spl_dll_pop");                               // LIFO delete removes the current tail element
     emitter.instruction("call __rt_decref_mixed");                              // release the removed storage-owned Mixed cell
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver after deletion
-    emitter.instruction(&format!("mov r10, QWORD PTR [r9 + {}]", SPL_DLL_STORAGE_OFFSET)); // load storage to find the new tail
+    emitter.instruction(&format!("mov r10, QWORD PTR [r9 + {}]", SPL_DLL_STORAGE_OFFSET)); //load storage to find the new tail
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // read storage length after deletion
     emitter.instruction("test r10, r10");                                       // did deletion empty the storage?
     emitter.instruction("jz __rt_spl_dll_next_delete_empty");                   // empty storage rewinds to index zero
     emitter.instruction("sub r10, 1");                                          // new LIFO current index is the new tail
-    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], r10", SPL_DLL_ITER_INDEX_OFFSET)); // persist new LIFO delete cursor
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], r10", SPL_DLL_ITER_INDEX_OFFSET)); //persist new LIFO delete cursor
     emitter.instruction("jmp __rt_spl_dll_next_delete_done");                   // finish non-empty LIFO delete
     emitter.label("__rt_spl_dll_next_delete_empty");
-    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); // reset exhausted delete-mode iterator to zero
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); //reset exhausted delete-mode iterator to zero
     emitter.label("__rt_spl_dll_next_delete_done");
     emitter.instruction("add rsp, 16");                                         // release receiver spill slot
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -2174,9 +2174,9 @@ fn emit_iterator_delete_step_x86_64(emitter: &mut Emitter, delete_label: &str) {
 /// length, returns a widened boolean in rax (1 when index < length, 0 otherwise).
 fn emit_valid_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_valid");
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //load internal storage
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // read storage length
-    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_ITER_INDEX_OFFSET)); // read current iterator index
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_DLL_ITER_INDEX_OFFSET)); //read current iterator index
     emitter.instruction("cmp r10, r9");                                         // valid when index is below length
     emitter.instruction("setb al");                                             // set boolean for unsigned index < length
     emitter.instruction("movzx rax, al");                                       // widen boolean result
@@ -2188,9 +2188,9 @@ fn emit_valid_x86_64(emitter: &mut Emitter) {
 /// null (via `emit_tail_boxed_null_x86_64`) when the index is out of range.
 fn emit_current_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_current");
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //load internal storage
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // read storage length
-    emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", SPL_DLL_ITER_INDEX_OFFSET)); // read iterator index
+    emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", SPL_DLL_ITER_INDEX_OFFSET)); //read iterator index
     emitter.instruction("cmp r11, r10");                                        // is iterator index inside storage?
     emitter.instruction("jae __rt_spl_dll_current_null");                       // invalid current returns null
     emitter.instruction("lea r12, [r9 + 24]");                                  // point at first storage element
@@ -2206,9 +2206,9 @@ fn emit_current_x86_64(emitter: &mut Emitter) {
 /// (via `emit_tail_boxed_null_x86_64`) when the index is out of range.
 fn emit_key_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_dll_key");
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //load internal storage
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // read storage length
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rdi + {}]", SPL_DLL_ITER_INDEX_OFFSET)); // read iterator index as integer key payload
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rdi + {}]", SPL_DLL_ITER_INDEX_OFFSET)); //read iterator index as integer key payload
     emitter.instruction("cmp rdi, r9");                                         // is iterator index valid?
     emitter.instruction("jae __rt_spl_dll_key_null");                           // invalid key returns null
     emitter.instruction(&format!("mov rax, {}", INT_TAG));                      // runtime tag 0 = int key
@@ -2318,11 +2318,11 @@ fn emit_offset_index_prefix_x86_64(
     emitter.instruction("cmp r10, 0");                                          // reject negative offsets
     emitter.instruction(&format!("jl {}", range_label));                        // negative offsets are invalid
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload receiver
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); //load internal storage
     emitter.instruction("mov r11, QWORD PTR [r9]");                             // read storage length
     emitter.instruction("cmp r10, r11");                                        // compare offset with length
     emitter.instruction(&format!("jae {}", range_label));                       // offsets past end are invalid
-    emitter.instruction(&format!("mov r12, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits for logical indexing
+    emitter.instruction(&format!("mov r12, QWORD PTR [rdi + {}]", SPL_DLL_ITER_MODE_OFFSET)); //load iterator mode bits for logical indexing
     emitter.instruction(&format!("test r12, {}", ITER_MODE_LIFO));              // does the list expose offsets in LIFO order?
     emitter.instruction(&format!("jz {}", ready_label));                        // FIFO offsets already match physical storage
     emitter.instruction("mov r10, r11");                                        // start converting logical LIFO offset to physical offset
@@ -2359,8 +2359,8 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 0");                                          // reject negative offsets
     emitter.instruction("jl __rt_spl_dll_offset_set_range_throw");              // negative offsets are out of range
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver
-    emitter.instruction(&format!("mov r14, QWORD PTR [r9 + {}]", SPL_DLL_ITER_MODE_OFFSET)); // load iterator mode bits for logical index mapping
-    emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal storage
+    emitter.instruction(&format!("mov r14, QWORD PTR [r9 + {}]", SPL_DLL_ITER_MODE_OFFSET)); //load iterator mode bits for logical index mapping
+    emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_DLL_STORAGE_OFFSET)); //load internal storage
     emitter.instruction("mov r11, QWORD PTR [r9]");                             // read storage length
     emitter.instruction("cmp r10, r11");                                        // compare explicit offset with length
     emitter.instruction("jae __rt_spl_dll_offset_set_range_throw");             // explicit offsets at/past length are out of range

@@ -95,7 +95,7 @@ fn emit_new_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_spl_fixed_new_zero_loop");                      // continue zeroing storage slots
     emitter.label("__rt_spl_fixed_new_done");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload object pointer
-    emitter.instruction(&format!("str x0, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); // object.storage = fixed-array storage
+    emitter.instruction(&format!("str x0, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); //object.storage = fixed-array storage
     emitter.instruction("mov x0, x9");                                          // return initialized SplFixedArray object
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release constructor frame
@@ -115,7 +115,7 @@ fn emit_new_aarch64(emitter: &mut Emitter) {
 /// x0 = receiver SplFixedArray object. Returns the fixed size in x0.
 fn emit_count_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_count");
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); //load fixed-array storage
     emitter.instruction("ldr x0, [x9]");                                        // return logical fixed size
     emitter.instruction("ret");                                                 // return count/getSize result
 }
@@ -133,7 +133,7 @@ fn emit_set_size_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x1, #0");                                          // reject negative sizes
     emitter.instruction("b.lt __rt_spl_fixed_set_size_throw");                  // negative sizes raise ValueError
     emitter.instruction("str x1, [sp, #8]");                                    // save requested new size
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load current storage
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); //load current storage
     emitter.instruction("str x9, [sp, #16]");                                   // save current storage pointer
     emitter.instruction("ldr x10, [x9]");                                       // load old size
     emitter.instruction("str x10, [sp, #24]");                                  // save old size
@@ -147,7 +147,7 @@ fn emit_set_size_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_array_grow");                                  // grow fixed-array storage
     emitter.instruction("str x0, [sp, #16]");                                   // save grown storage pointer
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver
-    emitter.instruction(&format!("str x0, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); // publish grown storage on receiver
+    emitter.instruction(&format!("str x0, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); //publish grown storage on receiver
     emitter.instruction("b __rt_spl_fixed_set_size_grow_check");                // grow again if requested size still exceeds capacity
     emitter.label("__rt_spl_fixed_set_size_release_tail");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload storage pointer
@@ -295,7 +295,7 @@ fn emit_offset_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, #0");                                         // reject negative offsets
     emitter.instruction("b.lt __rt_spl_fixed_offset_set_range_throw");          // negative offsets are out of range
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload receiver
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); //load fixed-array storage
     emitter.instruction("ldr x11, [x9]");                                       // load fixed size
     emitter.instruction("cmp x10, x11");                                        // compare offset against fixed size
     emitter.instruction("b.hs __rt_spl_fixed_offset_set_range_throw");          // reject offsets outside fixed range
@@ -400,7 +400,7 @@ fn emit_offset_prefix_aarch64(emitter: &mut Emitter, type_label: &str, range_lab
     emitter.instruction("cmp x10, #0");                                         // reject negative offsets
     emitter.instruction(&format!("b.lt {}", range_label));                      // negative offsets are invalid
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload receiver
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); //load fixed-array storage
     emitter.instruction("ldr x11, [x9]");                                       // load fixed size
     emitter.instruction("cmp x10, x11");                                        // compare offset against fixed size
     emitter.instruction(&format!("b.hs {}", range_label));                      // reject offsets outside fixed range
@@ -427,7 +427,7 @@ fn emit_to_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #64");                                     // reserve toArray frame
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // establish toArray frame
-    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); //load fixed-array storage
     emitter.instruction("str x9, [sp, #0]");                                    // save source storage
     emitter.instruction("ldr x10, [x9]");                                       // load fixed size
     emitter.instruction("str x10, [sp, #8]");                                   // save fixed size
@@ -492,7 +492,7 @@ fn emit_from_array_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_from_array_hash_size");
     emitter.instruction("ldr x10, [x1]");                                       // load hash entry count for packed import
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload preserveKeys flag
-    emitter.instruction("cbnz x11, __rt_spl_fixed_from_array_hash_preserve_size"); // preserveKeys=true sizes by the maximum numeric key
+    emitter.instruction("cbnz x11, __rt_spl_fixed_from_array_hash_preserve_size"); //preserveKeys=true sizes by the maximum numeric key
     emitter.instruction("str x10, [sp, #24]");                                  // packed hash import size equals entry count
     emitter.instruction("b __rt_spl_fixed_from_array_alloc");                   // allocate with packed hash size
     emitter.label("__rt_spl_fixed_from_array_hash_preserve_size");
@@ -575,7 +575,7 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload receiver for resize
     emitter.instruction("bl __rt_spl_fixed_set_size");                          // resize receiver to exactly the source length
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver after resize
-    emitter.instruction(&format!("ldr x9, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load destination fixed storage
+    emitter.instruction(&format!("ldr x9, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); //load destination fixed storage
     emitter.instruction("str x9, [sp, #32]");                                   // save destination storage
     emitter.instruction("str xzr, [sp, #40]");                                  // initialize copy cursor
     emitter.label("__rt_spl_fixed_copy_from_array_loop");
@@ -609,7 +609,7 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload receiver for resize
     emitter.instruction("bl __rt_spl_fixed_set_size");                          // resize receiver for packed hash import
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver after resize
-    emitter.instruction(&format!("ldr x9, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load destination fixed storage
+    emitter.instruction(&format!("ldr x9, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); //load destination fixed storage
     emitter.instruction("str x9, [sp, #32]");                                   // save destination storage
     emitter.instruction("str xzr, [sp, #40]");                                  // initialize packed destination index
     emitter.instruction("str xzr, [sp, #48]");                                  // initialize hash iterator cursor
@@ -650,7 +650,7 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload receiver for resize
     emitter.instruction("bl __rt_spl_fixed_set_size");                          // resize receiver for preserved numeric keys
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver after resize
-    emitter.instruction(&format!("ldr x9, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load destination fixed storage
+    emitter.instruction(&format!("ldr x9, [x9, #{}]", SPL_FIXED_STORAGE_OFFSET)); //load destination fixed storage
     emitter.instruction("str x9, [sp, #32]");                                   // save destination storage
     emitter.instruction("str xzr, [sp, #48]");                                  // reset hash iterator cursor for value copy
     emitter.label("__rt_spl_fixed_copy_hash_preserve_loop");
@@ -765,7 +765,7 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save requested fixed size
     emitter.instruction(&format!("mov rax, {}", SPL_FIXED_OBJECT_SIZE));        // request fixed-array object payload size
     emitter.instruction("call __rt_heap_alloc");                                // allocate SplFixedArray object payload
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize object heap kind with x86 marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); //materialize object heap kind with x86 marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as an object instance
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload concrete class id
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at object header
@@ -788,7 +788,7 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_spl_fixed_new_zero_loop");                    // continue zeroing storage slots
     emitter.label("__rt_spl_fixed_new_done");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload object pointer
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", SPL_FIXED_STORAGE_OFFSET)); // object.storage = fixed-array storage
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", SPL_FIXED_STORAGE_OFFSET)); //object.storage = fixed-array storage
     emitter.instruction("mov rax, r11");                                        // return initialized SplFixedArray object
     emitter.instruction("add rsp, 24");                                         // release constructor spills
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -799,7 +799,7 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
 /// rdi = receiver SplFixedArray object. Returns the fixed size in rax.
 fn emit_count_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_count");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); //load fixed-array storage
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // return logical fixed size
     emitter.instruction("ret");                                                 // return count/getSize result
 }
@@ -826,7 +826,7 @@ fn emit_set_size_x86_64(emitter: &mut Emitter) {
     );
     emitter.label("__rt_spl_fixed_set_size_nonnegative");
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save requested new size
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); // load current storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); //load current storage
     emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // save current storage
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load old size
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save old size
@@ -840,7 +840,7 @@ fn emit_set_size_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_grow");                                // grow fixed-array storage
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save grown storage
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver
-    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], rax", SPL_FIXED_STORAGE_OFFSET)); // publish grown storage on receiver
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {}], rax", SPL_FIXED_STORAGE_OFFSET)); //publish grown storage on receiver
     emitter.instruction("jmp __rt_spl_fixed_set_size_grow_check");              // grow again if requested size still exceeds capacity
     emitter.label("__rt_spl_fixed_set_size_release_tail");
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload storage
@@ -978,7 +978,7 @@ fn emit_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 0");                                          // reject negative offsets
     emitter.instruction("jl __rt_spl_fixed_offset_set_range_throw");            // negative offsets are out of range
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload receiver
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); //load fixed-array storage
     emitter.instruction("mov r11, QWORD PTR [r9]");                             // load fixed size
     emitter.instruction("cmp r10, r11");                                        // compare offset against fixed size
     emitter.instruction("jae __rt_spl_fixed_offset_set_range_throw");           // reject offsets outside fixed range
@@ -1083,7 +1083,7 @@ fn emit_offset_prefix_x86_64(emitter: &mut Emitter, type_label: &str, range_labe
     emitter.instruction("cmp r10, 0");                                          // reject negative offsets
     emitter.instruction(&format!("jl {}", range_label));                        // negative offsets are invalid
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload receiver
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); //load fixed-array storage
     emitter.instruction("mov r11, QWORD PTR [r9]");                             // load fixed size
     emitter.instruction("cmp r10, r11");                                        // compare offset against fixed size
     emitter.instruction(&format!("jae {}", range_label));                       // reject offsets outside fixed range
@@ -1110,7 +1110,7 @@ fn emit_to_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for toArray
     emitter.instruction("mov rbp, rsp");                                        // establish toArray frame
     emitter.instruction("sub rsp, 48");                                         // reserve source, size, result, and cursor spills
-    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); //load fixed-array storage
     emitter.instruction("mov QWORD PTR [rbp - 8], r9");                         // save source storage
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load fixed size
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save fixed size
@@ -1176,7 +1176,7 @@ fn emit_from_array_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_spl_fixed_from_array_hash_size_x86");
     emitter.instruction("mov r10, QWORD PTR [rsi]");                            // load hash entry count for packed import
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // is preserveKeys false?
-    emitter.instruction("jne __rt_spl_fixed_from_array_hash_preserve_size_x86"); // preserveKeys=true sizes by maximum numeric key
+    emitter.instruction("jne __rt_spl_fixed_from_array_hash_preserve_size_x86"); //preserveKeys=true sizes by maximum numeric key
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // packed hash import size equals entry count
     emitter.instruction("jmp __rt_spl_fixed_from_array_alloc_x86");             // allocate with packed hash size
     emitter.label("__rt_spl_fixed_from_array_hash_preserve_size_x86");
@@ -1260,7 +1260,7 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload receiver for resize
     emitter.instruction("call __rt_spl_fixed_set_size");                        // resize receiver to exactly the source length
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver after resize
-    emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_FIXED_STORAGE_OFFSET)); // load destination fixed storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_FIXED_STORAGE_OFFSET)); //load destination fixed storage
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save destination storage
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize copy cursor
     emitter.label("__rt_spl_fixed_copy_from_array_loop");
@@ -1291,7 +1291,7 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload receiver for resize
     emitter.instruction("call __rt_spl_fixed_set_size");                        // resize receiver for packed hash import
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver after resize
-    emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_FIXED_STORAGE_OFFSET)); // load destination fixed storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_FIXED_STORAGE_OFFSET)); //load destination fixed storage
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save destination storage
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize packed destination index
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // initialize hash iterator cursor
@@ -1331,7 +1331,7 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload receiver for resize
     emitter.instruction("call __rt_spl_fixed_set_size");                        // resize receiver for preserved numeric keys
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver after resize
-    emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_FIXED_STORAGE_OFFSET)); // load destination fixed storage
+    emitter.instruction(&format!("mov r9, QWORD PTR [r9 + {}]", SPL_FIXED_STORAGE_OFFSET)); //load destination fixed storage
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save destination storage
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // reset hash iterator cursor for value copy
     emitter.label("__rt_spl_fixed_copy_hash_preserve_loop_x86");

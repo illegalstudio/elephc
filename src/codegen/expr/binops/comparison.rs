@@ -161,7 +161,7 @@ fn compare_saved_truthiness_with_current(op: &BinOp, emitter: &mut Emitter) {
         Arch::X86_64 => "r10",
     };
     abi::emit_pop_reg(emitter, left_reg);
-    emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); // compare left truthiness against right truthiness
+    emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); //compare left truthiness against right truthiness
     emit_set_bool_from_flags(emitter, loose_equality_condition(op));
 }
 
@@ -175,7 +175,7 @@ fn compare_saved_right_truthiness_with_current_left(op: &BinOp, emitter: &mut Em
         Arch::X86_64 => "r10",
     };
     abi::emit_pop_reg(emitter, right_reg);
-    emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), right_reg)); // compare left truthiness against right truthiness
+    emitter.instruction(&format!("cmp {}, {}", abi::int_result_reg(emitter), right_reg)); //compare left truthiness against right truthiness
     emit_set_bool_from_flags(emitter, loose_equality_condition(op));
 }
 
@@ -463,7 +463,7 @@ pub(super) fn emit_loose_equality_binop(
             Arch::X86_64 => "r10",
         };
         abi::emit_pop_reg(emitter, left_reg);
-        emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); // compare left against right in integer registers
+        emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); //compare left against right in integer registers
     }
     let cond = match op {
         BinOp::Eq => "eq",
@@ -514,7 +514,7 @@ pub(super) fn emit_order_compare_binop(
             Arch::X86_64 => "r10",
         };
         abi::emit_pop_reg(emitter, left_reg);
-        emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); // compare left against right in integer registers
+        emitter.instruction(&format!("cmp {}, {}", left_reg, abi::int_result_reg(emitter))); //compare left against right in integer registers
     }
     let cond = match op {
         BinOp::Lt => "lt",

@@ -141,7 +141,7 @@ fn emit_user_wrapper_stream_cast_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable for the resolved class
-    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_SLOT_CAST * 8)); // load the stream_cast method pointer (slot 10)
+    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", VTABLE_SLOT_CAST * 8)); //load the stream_cast method pointer (slot 10)
     emitter.instruction("test r11, r11");                                       // is stream_cast missing?
     emitter.instruction("jz __rt_uwcast_neg1_x86");                             // method absent: not selectable
 

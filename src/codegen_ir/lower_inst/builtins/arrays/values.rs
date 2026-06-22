@@ -286,7 +286,7 @@ fn emit_append_string_value_x86_64(ctx: &mut FunctionContext<'_>, ptr_reg: &str,
 fn emit_append_word_value_x86_64(ctx: &mut FunctionContext<'_>, value_reg: &str) {
     ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                   // load the result values array pointer from the fixed stack layout
     ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the current result values array length before appending
-    ctx.emitter.instruction(&format!("mov QWORD PTR [r10 + r11 * 8 + 24], {}", value_reg)); // store the value payload into the next result values slot
+    ctx.emitter.instruction(&format!("mov QWORD PTR [r10 + r11 * 8 + 24], {}", value_reg)); //store the value payload into the next result values slot
     ctx.emitter.instruction("add r11, 1");                                      // increment the result values array length after the append
     ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // persist the updated result values array length in the header
 }
@@ -317,13 +317,13 @@ fn emit_indexed_array_value_type_stamp(ctx: &mut FunctionContext<'_>, array_reg:
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "r12");
-            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); // load the packed array kind word from the heap header
+            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); //load the packed array kind word from the heap header
             ctx.emitter.instruction("mov r12, 0xffffffff000080ff");             // materialize the heap-kind preservation mask without clobbering the array base
             ctx.emitter.instruction("and r10, r12");                            // preserve heap magic plus indexed-array metadata bits
             ctx.emitter.instruction(&format!("mov r12, {}", value_type_tag));   // materialize the runtime array value_type tag
             ctx.emitter.instruction("shl r12, 8");                              // move the value_type tag into the packed kind-word byte lane
             ctx.emitter.instruction("or r10, r12");                             // combine the preserved heap kind with the stamped value_type tag
-            ctx.emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); // persist the packed array kind word in the heap header
+            ctx.emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); //persist the packed array kind word in the heap header
             abi::emit_pop_reg(ctx.emitter, "r12");
         }
     }

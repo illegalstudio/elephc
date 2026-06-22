@@ -141,11 +141,11 @@ fn emit_function_variant_dispatcher(
     abi::emit_load_symbol_to_reg(emitter, target_reg, &active_symbol, 0);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cbz {}, {}", target_reg, fail_label)); // abort if no include has activated this function variant
+            emitter.instruction(&format!("cbz {}, {}", target_reg, fail_label)); //abort if no include has activated this function variant
             emitter.instruction(&format!("br {}", target_reg));                 // tail-dispatch to the active function variant with existing arguments
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("test {}, {}", target_reg, target_reg)); // abort if no include has activated this function variant
+            emitter.instruction(&format!("test {}, {}", target_reg, target_reg)); //abort if no include has activated this function variant
             emitter.instruction(&format!("je {}", fail_label));                 // jump to the undefined-function fatal path
             emitter.instruction(&format!("jmp {}", target_reg));                // tail-dispatch to the active function variant with existing arguments
         }

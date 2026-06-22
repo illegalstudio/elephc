@@ -33,10 +33,10 @@ pub(super) fn lower_int_binop(
     load_integer_operand(ctx, rhs, rhs_reg, inst)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("{} {}, {}, {}", aarch64_mnemonic, result_reg, result_reg, rhs_reg)); // compute the integer arithmetic result from both SSA operands
+            ctx.emitter.instruction(&format!("{} {}, {}, {}", aarch64_mnemonic, result_reg, result_reg, rhs_reg)); //compute the integer arithmetic result from both SSA operands
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("{} {}, {}", x86_64_mnemonic, result_reg, rhs_reg)); // update the integer result register with the arithmetic operand
+            ctx.emitter.instruction(&format!("{} {}, {}", x86_64_mnemonic, result_reg, rhs_reg)); //update the integer result register with the arithmetic operand
         }
     }
     store_if_result(ctx, inst)
@@ -55,9 +55,9 @@ pub(super) fn lower_int_mod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let quotient_reg = abi::tertiary_scratch_reg(ctx.emitter);
-            ctx.emitter.instruction(&format!("cbz {}, {}", rhs_reg, zero_label)); // branch to zero-divisor guard when modulo divisor is zero
-            ctx.emitter.instruction(&format!("sdiv {}, {}, {}", quotient_reg, result_reg, rhs_reg)); // compute signed quotient for the modulo operation
-            ctx.emitter.instruction(&format!("msub {}, {}, {}, {}", result_reg, quotient_reg, rhs_reg, result_reg)); // compute left - quotient * right as the remainder
+            ctx.emitter.instruction(&format!("cbz {}, {}", rhs_reg, zero_label)); //branch to zero-divisor guard when modulo divisor is zero
+            ctx.emitter.instruction(&format!("sdiv {}, {}, {}", quotient_reg, result_reg, rhs_reg)); //compute signed quotient for the modulo operation
+            ctx.emitter.instruction(&format!("msub {}, {}, {}, {}", result_reg, quotient_reg, rhs_reg, result_reg)); //compute left - quotient * right as the remainder
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the modulo zero fallback after a normal remainder
             ctx.emitter.label(&zero_label);
             ctx.emitter.instruction(&format!("mov {}, #0", result_reg));        // return zero for modulo by zero to match the legacy backend
@@ -116,10 +116,10 @@ pub(super) fn lower_int_unary(
     load_integer_operand(ctx, value, result_reg, inst)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("{} {}, {}", aarch64_mnemonic, result_reg, result_reg)); // apply the integer unary operation to the loaded operand
+            ctx.emitter.instruction(&format!("{} {}, {}", aarch64_mnemonic, result_reg, result_reg)); //apply the integer unary operation to the loaded operand
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("{} {}", x86_64_mnemonic, result_reg)); // apply the integer unary operation to the loaded operand
+            ctx.emitter.instruction(&format!("{} {}", x86_64_mnemonic, result_reg)); //apply the integer unary operation to the loaded operand
         }
     }
     store_if_result(ctx, inst)
@@ -140,11 +140,11 @@ pub(super) fn lower_int_shift(
     load_integer_operand(ctx, rhs, rhs_reg, inst)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("{} {}, {}, {}", aarch64_mnemonic, result_reg, result_reg, rhs_reg)); // shift the integer operand by the EIR count operand
+            ctx.emitter.instruction(&format!("{} {}, {}, {}", aarch64_mnemonic, result_reg, result_reg, rhs_reg)); //shift the integer operand by the EIR count operand
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("mov rcx, {}", rhs_reg));          // move the variable shift count into x86_64's required cl register
-            ctx.emitter.instruction(&format!("{} {}, cl", x86_64_mnemonic, result_reg)); // shift the integer operand by the low count byte
+            ctx.emitter.instruction(&format!("{} {}, cl", x86_64_mnemonic, result_reg)); //shift the integer operand by the low count byte
         }
     }
     store_if_result(ctx, inst)

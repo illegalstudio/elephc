@@ -167,11 +167,11 @@ fn lower_switch(
         abi::emit_load_int_immediate(ctx.emitter, case_reg, case.value);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_reg)); // compare switch scrutinee with the case value
+                ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_reg)); //compare switch scrutinee with the case value
                 ctx.emitter.instruction(&format!("b.eq {}", branch_label));     // branch to the matching switch case
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_reg)); // compare switch scrutinee with the case value
+                ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_reg)); //compare switch scrutinee with the case value
                 ctx.emitter.instruction(&format!("je {}", branch_label));       // branch to the matching switch case
             }
         }

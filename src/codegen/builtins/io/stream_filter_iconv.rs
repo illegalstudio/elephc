@@ -321,7 +321,7 @@ where
     emitter.instruction("mov QWORD PTR [rsp + 24], r9");                        // save the output buffer capacity
     emitter.instruction("mov rax, r9");                                         // buffer size into the allocator argument
     emitter.instruction("call __rt_heap_alloc");                                // allocate the converted-data buffer
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // owned-string heap-kind word
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); //owned-string heap-kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer header
     emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // save the output buffer pointer
 

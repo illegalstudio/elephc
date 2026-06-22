@@ -90,7 +90,7 @@ pub fn emit(
             // remap libc (fd=x0, sec=x1, usec=x2) → set_option(fd, option, arg1=sec, arg2=usec)
             emitter.instruction("mov x3, x2");                                  // arg2 = microseconds
             emitter.instruction("mov x2, x1");                                  // arg1 = seconds
-            emitter.instruction(&format!("mov x1, #{}", STREAM_OPTION_READ_TIMEOUT)); // option = STREAM_OPTION_READ_TIMEOUT
+            emitter.instruction(&format!("mov x1, #{}", STREAM_OPTION_READ_TIMEOUT)); //option = STREAM_OPTION_READ_TIMEOUT
             abi::emit_call_label(emitter, "__rt_user_wrapper_set_option");     // call the wrapper's stream_set_option($option, $arg1, $arg2)
             emitter.label(&after);
         }
@@ -104,7 +104,7 @@ pub fn emit(
             // remap libc (fd=rdi, sec=rsi, usec=rdx) → set_option(fd, option, arg1=sec, arg2=usec)
             emitter.instruction("mov rcx, rdx");                                // arg2 = microseconds
             emitter.instruction("mov rdx, rsi");                                // arg1 = seconds
-            emitter.instruction(&format!("mov rsi, {}", STREAM_OPTION_READ_TIMEOUT)); // option = STREAM_OPTION_READ_TIMEOUT
+            emitter.instruction(&format!("mov rsi, {}", STREAM_OPTION_READ_TIMEOUT)); //option = STREAM_OPTION_READ_TIMEOUT
             abi::emit_call_label(emitter, "__rt_user_wrapper_set_option");     // call the wrapper's stream_set_option($option, $arg1, $arg2)
             emitter.label(&after);
         }

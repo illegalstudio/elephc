@@ -73,7 +73,7 @@ pub fn emit(
         |wrapper, emitter, ctx, data| {
             // -- evaluate initial value (third arg) --
             emit_expr(&args[2], emitter, ctx, data);
-            emitter.instruction(&format!("mov {}, {}", initial_arg_reg, result_reg)); // place the initial accumulator in the third runtime argument register
+            emitter.instruction(&format!("mov {}, {}", initial_arg_reg, result_reg)); //place the initial accumulator in the third runtime argument register
 
             callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
             abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
@@ -96,7 +96,7 @@ pub fn emit(
     ) {
         // -- evaluate initial value (third arg) --
         emit_expr(&args[2], emitter, ctx, data);
-        emitter.instruction(&format!("mov {}, {}", initial_arg_reg, result_reg)); // place the initial accumulator in the third runtime argument register
+        emitter.instruction(&format!("mov {}, {}", initial_arg_reg, result_reg)); //place the initial accumulator in the third runtime argument register
 
         callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
         abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
@@ -117,7 +117,7 @@ pub fn emit(
         |wrapper, emitter, ctx, data| {
             // -- evaluate initial value (third arg) --
             emit_expr(&args[2], emitter, ctx, data);
-            emitter.instruction(&format!("mov {}, {}", initial_arg_reg, result_reg)); // place the initial accumulator in the third runtime argument register
+            emitter.instruction(&format!("mov {}, {}", initial_arg_reg, result_reg)); //place the initial accumulator in the third runtime argument register
 
             callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
             abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
@@ -147,7 +147,7 @@ pub fn emit(
 
         // -- evaluate initial value (third arg) --
         emit_expr(&args[2], emitter, ctx, data);
-        emitter.instruction(&format!("mov {}, {}", initial_arg_reg, result_reg)); // place the initial accumulator in the third runtime argument register
+        emitter.instruction(&format!("mov {}, {}", initial_arg_reg, result_reg)); //place the initial accumulator in the third runtime argument register
 
         callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
         abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);
@@ -173,7 +173,7 @@ pub fn emit(
 
         // -- evaluate initial value (third arg) --
         emit_expr(&args[2], emitter, ctx, data);
-        emitter.instruction(&format!("mov {}, {}", initial_arg_reg, result_reg)); // place the initial accumulator in the third runtime argument register
+        emitter.instruction(&format!("mov {}, {}", initial_arg_reg, result_reg)); //place the initial accumulator in the third runtime argument register
 
         callback_env::load_env_slot_to_reg(emitter, array_arg_reg, wrapper.array_slot_offset);
         abi::emit_symbol_address(emitter, callback_arg_reg, &wrapper.wrapper_label);

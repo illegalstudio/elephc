@@ -166,7 +166,7 @@ pub(crate) fn emit_compress_arm64(
     abi::emit_symbol_address(emitter, "x11", "_stream_filter_buf");
     emitter.instruction("str x11, [x10, #24]");                                 // bz_stream.next_out = scratch window base
     emitter.instruction(&format!("mov w12, #{}", FILTER_BUF_SIZE & 0xFFFF));    // low half of the scratch window capacity
-    emitter.instruction(&format!("movk w12, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
+    emitter.instruction(&format!("movk w12, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); //high half of the scratch window capacity
     emitter.instruction("str w12, [x10, #32]");                                 // bz_stream.avail_out = scratch window capacity
     emitter.instruction("mov x0, x10");                                         // arg 0 = bz_stream pointer
     emitter.instruction("mov w1, #0");                                          // arg 1 = BZ_RUN (0)
@@ -175,7 +175,7 @@ pub(crate) fn emit_compress_arm64(
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the bz_stream pointer after the compress call
     emitter.instruction("ldr w12, [x10, #32]");                                 // reload avail_out left after this compress step
     emitter.instruction(&format!("mov w13, #{}", FILTER_BUF_SIZE & 0xFFFF));    // low half of the scratch window capacity
-    emitter.instruction(&format!("movk w13, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
+    emitter.instruction(&format!("movk w13, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); //high half of the scratch window capacity
     emitter.instruction("sub w12, w13, w12");                                   // produced = capacity - avail_out
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd = the saved file descriptor
     abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
@@ -215,7 +215,7 @@ pub(crate) fn emit_compress_arm64(
     abi::emit_symbol_address(emitter, "x11", "_stream_filter_buf");
     emitter.instruction("str x11, [x10, #24]");                                 // bz_stream.next_out = scratch window base
     emitter.instruction(&format!("mov w12, #{}", FILTER_BUF_SIZE & 0xFFFF));    // low half of the scratch window capacity
-    emitter.instruction(&format!("movk w12, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
+    emitter.instruction(&format!("movk w12, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); //high half of the scratch window capacity
     emitter.instruction("str w12, [x10, #32]");                                 // bz_stream.avail_out = scratch window capacity
     emitter.instruction("mov x0, x10");                                         // arg 0 = bz_stream pointer
     emitter.instruction("mov w1, #2");                                          // arg 1 = BZ_FINISH (2)
@@ -225,7 +225,7 @@ pub(crate) fn emit_compress_arm64(
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the bz_stream pointer
     emitter.instruction("ldr w12, [x10, #32]");                                 // reload avail_out left after this flush step
     emitter.instruction(&format!("mov w13, #{}", FILTER_BUF_SIZE & 0xFFFF));    // low half of the scratch window capacity
-    emitter.instruction(&format!("movk w13, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
+    emitter.instruction(&format!("movk w13, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); //high half of the scratch window capacity
     emitter.instruction("sub w12, w13, w12");                                   // produced = capacity - avail_out
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd = the saved file descriptor
     abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
@@ -339,7 +339,7 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the bz_stream pointer
     abi::emit_symbol_address(emitter, "r11", "_stream_filter_buf");             // scratch window base
     emitter.instruction("mov QWORD PTR [r10 + 24], r11");                       // bz_stream.next_out = scratch window base
-    emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); // bz_stream.avail_out = scratch window capacity
+    emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); //bz_stream.avail_out = scratch window capacity
     emitter.instruction("mov rdi, r10");                                        // arg 0 = bz_stream pointer
     emitter.instruction("xor esi, esi");                                        // arg 1 = BZ_RUN (0)
     emitter.instruction("call BZ2_bzCompress");                                 // run one compress step over the input window
@@ -385,7 +385,7 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the bz_stream pointer
     abi::emit_symbol_address(emitter, "r11", "_stream_filter_buf");             // scratch window base
     emitter.instruction("mov QWORD PTR [r10 + 24], r11");                       // bz_stream.next_out = scratch window base
-    emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); // bz_stream.avail_out = scratch window capacity
+    emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); //bz_stream.avail_out = scratch window capacity
     emitter.instruction("mov rdi, r10");                                        // arg 0 = bz_stream pointer
     emitter.instruction("mov esi, 2");                                          // arg 1 = BZ_FINISH (2)
     emitter.instruction("call BZ2_bzCompress");                                 // flush a chunk of the compressed tail

@@ -46,7 +46,7 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
 
     // -- open file with write+create+truncate --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload null-terminated path
-    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_trunc())); // O_WRONLY|O_CREAT|O_TRUNC
+    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_trunc())); //O_WRONLY|O_CREAT|O_TRUNC
     emitter.instruction("mov x2, #0x1A4");                                      // file mode 0644 (octal)
     emitter.syscall(5);
     emitter.instruction("str x0, [sp, #8]");                                    // save fd on stack
@@ -97,7 +97,7 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the C filename pointer for the later open() call
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the C filename pointer as the first libc open() argument
-    emitter.instruction(&format!("mov rsi, 0x{:X}", emitter.platform.o_wronly_creat_trunc())); // pass O_WRONLY|O_CREAT|O_TRUNC as the open() flags
+    emitter.instruction(&format!("mov rsi, 0x{:X}", emitter.platform.o_wronly_creat_trunc())); //pass O_WRONLY|O_CREAT|O_TRUNC as the open() flags
     emitter.instruction("mov rdx, 0x1A4");                                      // pass mode 0644 for newly created files
     emitter.instruction("call open");                                           // open the destination file for overwriting through libc open()
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the opened file descriptor for the later write() and close() calls

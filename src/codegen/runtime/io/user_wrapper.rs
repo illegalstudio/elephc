@@ -786,7 +786,7 @@ fn emit_user_wrapper_fstat_linux_x86_64(emitter: &mut Emitter) {
 /// handle slot index in `dst`. The shift-and-subtract sequence keeps the
 /// constant out of an immediate field (it does not fit a 12-bit cmp/sub).
 fn emit_aarch64_slot_from_fd(emitter: &mut Emitter, src: &str, dst: &str) {
-    emitter.instruction(&format!("mov w{}, #{:#x}", dst.trim_start_matches('x'), FD_BASE_LOW16)); // load the high half of USER_WRAPPER_FD_BASE
+    emitter.instruction(&format!("mov w{}, #{:#x}", dst.trim_start_matches('x'), FD_BASE_LOW16)); //load the high half of USER_WRAPPER_FD_BASE
     emitter.instruction(&format!("lsl {}, {}, #16", dst, dst));                 // shift into bits 30..16 to form 0x40000000
     emitter.instruction(&format!("sub {}, {}, {}", dst, src, dst));             // dst = fd - USER_WRAPPER_FD_BASE → handle slot index
 }
@@ -837,7 +837,7 @@ fn emit_x86_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slo
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable for the resolved class
-    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", vtable_slot * 8)); // load the requested wrapper method pointer
+    emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", vtable_slot * 8)); //load the requested wrapper method pointer
     emitter.instruction("test r11, r11");                                       // is the method missing?
     emitter.instruction(&format!("jz {}", missing_label));                      // method absent: take the fallback
 }

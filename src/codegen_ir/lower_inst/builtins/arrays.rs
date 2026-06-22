@@ -646,7 +646,7 @@ fn reserve_descriptor_callback_env_from_reg(
             ctx.emitter.instruction(&format!("str {}, [sp]", descriptor_reg));  // store the selected runtime string descriptor for the descriptor callback wrapper
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp], {}", descriptor_reg)); // store the selected runtime string descriptor for the descriptor callback wrapper
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rsp], {}", descriptor_reg)); //store the selected runtime string descriptor for the descriptor callback wrapper
         }
     }
     16
@@ -2820,7 +2820,7 @@ fn emit_static_method_callback_wrapper_x86_64(
             abi::emit_load_int_immediate(ctx.emitter, "rcx", class_id as i64);
         }
         StaticCallbackCalledClass::Env => {
-            ctx.emitter.instruction(&format!("mov rcx, QWORD PTR [{}]", env_reg)); // load the late-static called-class id from the callback environment
+            ctx.emitter.instruction(&format!("mov rcx, QWORD PTR [{}]", env_reg)); //load the late-static called-class id from the callback environment
         }
     }
     shift_callback_args_after_hidden_x86_64(ctx, visible_arg_types);
@@ -2897,14 +2897,14 @@ fn emit_static_callback_dynamic_call(ctx: &mut FunctionContext<'_>, slot: usize)
     let hidden_called_class_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let class_id_scratch = abi::temp_int_reg(ctx.emitter.target);
     let dispatch_scratch = abi::symbol_scratch_reg(ctx.emitter);
-    ctx.emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); // preserve the forwarded called-class id across static-vtable address materialization
+    ctx.emitter.instruction(&format!("mov {}, {}", class_id_scratch, hidden_called_class_reg)); //preserve the forwarded called-class id across static-vtable address materialization
     abi::emit_symbol_address(ctx.emitter, dispatch_scratch, "_class_static_vtable_ptrs");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
+            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", dispatch_scratch, dispatch_scratch, class_id_scratch)); //load the class-specific static-vtable pointer from the global table
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_scratch, dispatch_scratch, class_id_scratch)); // load the class-specific static-vtable pointer from the global table
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", dispatch_scratch, dispatch_scratch, class_id_scratch)); //load the class-specific static-vtable pointer from the global table
         }
     }
     abi::emit_load_from_address(ctx.emitter, dispatch_scratch, dispatch_scratch, slot * 8);
@@ -3419,7 +3419,7 @@ fn materialize_array_fill_assoc_value_words(
                 }
                 Arch::X86_64 => {
                     ctx.emitter.instruction(&format!("movq {}, xmm0", lo_reg)); // pass the floating-point fill bits as the assoc-fill value low word
-                    ctx.emitter.instruction(&format!("xor {}, {}", hi_reg, hi_reg)); // clear the unused assoc-fill value high word
+                    ctx.emitter.instruction(&format!("xor {}, {}", hi_reg, hi_reg)); //clear the unused assoc-fill value high word
                 }
             }
             Ok(())
@@ -3431,7 +3431,7 @@ fn materialize_array_fill_assoc_value_words(
                     ctx.emitter.instruction(&format!("mov {}, #0", hi_reg));    // clear the unused assoc-fill value high word
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction(&format!("xor {}, {}", hi_reg, hi_reg)); // clear the unused assoc-fill value high word
+                    ctx.emitter.instruction(&format!("xor {}, {}", hi_reg, hi_reg)); //clear the unused assoc-fill value high word
                 }
             }
             Ok(())

@@ -96,8 +96,8 @@ pub(crate) fn emit_array_literal(
                 emitter.instruction(&format!("str d0, [x9, #{}]", 24 + i * 8)); // store float element at data offset
             }
             PhpType::Str => {
-                emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); // store string pointer at data offset
-                emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); // store string length right after pointer
+                emitter.instruction(&format!("str x1, [x9, #{}]", 24 + i * 16)); //store string pointer at data offset
+                emitter.instruction(&format!("str x2, [x9, #{}]", 24 + i * 16 + 8)); //store string length right after pointer
             }
             PhpType::Mixed | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
                 emitter.instruction(&format!("str x0, [x9, #{}]", 24 + i * 8)); // store array/object pointer at data offset
@@ -488,13 +488,13 @@ pub(crate) fn emit_array_value_type_stamp(
         }
         Arch::X86_64 => {
             abi::emit_push_reg(emitter, "r12");                                 // preserve the x86_64 nested-call scratch register before reusing it as a temporary array-stamp helper
-            emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); // load the packed array kind word from the heap header
+            emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); //load the packed array kind word from the heap header
             emitter.instruction("mov r12, 0xffffffff000080ff");                 // materialize the x86_64 heap-kind preservation mask without clobbering the array base register
             emitter.instruction("and r10, r12");                                // preserve the x86_64 heap magic marker plus the indexed-array kind and persistent COW flag
             emitter.instruction(&format!("mov r12, {}", value_type_tag));       // materialize the runtime array value_type tag in a scratch register that does not alias the array base register
             emitter.instruction("shl r12, 8");                                  // move the value_type tag into the packed kind-word byte lane
             emitter.instruction("or r10, r12");                                 // combine the preserved heap kind with the stamped array value_type tag
-            emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); // persist the packed array kind word in the heap header
+            emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); //persist the packed array kind word in the heap header
             abi::emit_pop_reg(emitter, "r12");                                  // restore the x86_64 nested-call scratch register after the array value-type stamp is complete
         }
     }

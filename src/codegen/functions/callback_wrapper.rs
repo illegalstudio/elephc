@@ -42,7 +42,7 @@ pub(crate) fn emit_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCal
     emitter.raw(".align 2");
     emitter.label_global(&wrapper.label);
     abi::emit_frame_prologue(emitter, frame_size);
-    emitter.instruction(&format!("stp x19, x20, [sp, #{}]", saved_callee_offset)); // preserve wrapper callee-saved registers
+    emitter.instruction(&format!("stp x19, x20, [sp, #{}]", saved_callee_offset)); //preserve wrapper callee-saved registers
 
     let env_reg = incoming_env_reg(emitter, &wrapper.visible_arg_types);
     emitter.instruction(&format!("mov x20, {}", env_reg));                      // keep the callback environment pointer across argument reshuffling
@@ -66,7 +66,7 @@ pub(crate) fn emit_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCal
     abi::emit_call_reg(emitter, "x19");
     abi::emit_release_temporary_stack(emitter, overflow_bytes);                 // drop stack-passed closure arguments after the adapted callback returns
 
-    emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_callee_offset)); // restore wrapper callee-saved registers
+    emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_callee_offset)); //restore wrapper callee-saved registers
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
 }
@@ -174,16 +174,16 @@ fn spill_visible_args(emitter: &mut Emitter, visible_arg_types: &[PhpType]) {
         match (emitter.target.arch, ty) {
             (Arch::AArch64, PhpType::Float) => {
                 let reg = abi::float_arg_reg_name(emitter.target, assignment.start_reg);
-                emitter.instruction(&format!("str {}, [sp, #{}]", reg, idx * 16)); // spill the incoming float callback argument before loading captures
+                emitter.instruction(&format!("str {}, [sp, #{}]", reg, idx * 16)); //spill the incoming float callback argument before loading captures
             }
             (Arch::AArch64, PhpType::Str) => {
                 let ptr_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
                 let len_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg + 1);
-                emitter.instruction(&format!("stp {}, {}, [sp, #{}]", ptr_reg, len_reg, idx * 16)); // spill the incoming string callback argument before loading captures
+                emitter.instruction(&format!("stp {}, {}, [sp, #{}]", ptr_reg, len_reg, idx * 16)); //spill the incoming string callback argument before loading captures
             }
             (Arch::AArch64, _) => {
                 let reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
-                emitter.instruction(&format!("str {}, [sp, #{}]", reg, idx * 16)); // spill the incoming scalar callback argument before loading captures
+                emitter.instruction(&format!("str {}, [sp, #{}]", reg, idx * 16)); //spill the incoming scalar callback argument before loading captures
             }
             (Arch::X86_64, PhpType::Float) => {
                 let reg = abi::float_arg_reg_name(emitter.target, assignment.start_reg);
@@ -217,32 +217,32 @@ fn spill_captures(
         let env_offset = (idx + 1) * 16;
         match (emitter.target.arch, ty) {
             (Arch::AArch64, PhpType::Float) => {
-                emitter.instruction(&format!("ldr d0, [{}, #{}]", env_reg, env_offset)); // load a captured float from the callback environment
-                emitter.instruction(&format!("str d0, [sp, #{}]", arg_idx * 16)); // spill the captured float for the final closure call
+                emitter.instruction(&format!("ldr d0, [{}, #{}]", env_reg, env_offset)); //load a captured float from the callback environment
+                emitter.instruction(&format!("str d0, [sp, #{}]", arg_idx * 16)); //spill the captured float for the final closure call
             }
             (Arch::AArch64, PhpType::Str) => {
-                emitter.instruction(&format!("ldr x9, [{}, #{}]", env_reg, env_offset)); // load the captured string pointer from the callback environment
-                emitter.instruction(&format!("ldr x10, [{}, #{}]", env_reg, env_offset + 8)); // load the captured string length from the callback environment
-                emitter.instruction(&format!("stp x9, x10, [sp, #{}]", arg_idx * 16)); // spill the captured string pair for the final closure call
+                emitter.instruction(&format!("ldr x9, [{}, #{}]", env_reg, env_offset)); //load the captured string pointer from the callback environment
+                emitter.instruction(&format!("ldr x10, [{}, #{}]", env_reg, env_offset + 8)); //load the captured string length from the callback environment
+                emitter.instruction(&format!("stp x9, x10, [sp, #{}]", arg_idx * 16)); //spill the captured string pair for the final closure call
             }
             (Arch::AArch64, PhpType::Void | PhpType::Never) => {}
             (Arch::AArch64, _) => {
-                emitter.instruction(&format!("ldr x9, [{}, #{}]", env_reg, env_offset)); // load a captured scalar/pointer from the callback environment
-                emitter.instruction(&format!("str x9, [sp, #{}]", arg_idx * 16)); // spill the captured scalar/pointer for the final closure call
+                emitter.instruction(&format!("ldr x9, [{}, #{}]", env_reg, env_offset)); //load a captured scalar/pointer from the callback environment
+                emitter.instruction(&format!("str x9, [sp, #{}]", arg_idx * 16)); //spill the captured scalar/pointer for the final closure call
             }
             (Arch::X86_64, PhpType::Float) => {
-                emitter.instruction(&format!("movsd xmm0, QWORD PTR [{} + {}]", env_reg, env_offset)); // load a captured float from the callback environment
+                emitter.instruction(&format!("movsd xmm0, QWORD PTR [{} + {}]", env_reg, env_offset)); //load a captured float from the callback environment
                 abi::store_at_offset(emitter, "xmm0", frame_arg_slot_offset(arg_idx));
             }
             (Arch::X86_64, PhpType::Str) => {
-                emitter.instruction(&format!("mov r10, QWORD PTR [{} + {}]", env_reg, env_offset)); // load the captured string pointer from the callback environment
-                emitter.instruction(&format!("mov r11, QWORD PTR [{} + {}]", env_reg, env_offset + 8)); // load the captured string length from the callback environment
+                emitter.instruction(&format!("mov r10, QWORD PTR [{} + {}]", env_reg, env_offset)); //load the captured string pointer from the callback environment
+                emitter.instruction(&format!("mov r11, QWORD PTR [{} + {}]", env_reg, env_offset + 8)); //load the captured string length from the callback environment
                 abi::store_at_offset(emitter, "r10", frame_arg_slot_offset(arg_idx));
                 abi::store_at_offset(emitter, "r11", frame_arg_slot_offset(arg_idx) - 8);
             }
             (Arch::X86_64, PhpType::Void | PhpType::Never) => {}
             (Arch::X86_64, _) => {
-                emitter.instruction(&format!("mov r10, QWORD PTR [{} + {}]", env_reg, env_offset)); // load a captured scalar/pointer from the callback environment
+                emitter.instruction(&format!("mov r10, QWORD PTR [{} + {}]", env_reg, env_offset)); //load a captured scalar/pointer from the callback environment
                 abi::store_at_offset(emitter, "r10", frame_arg_slot_offset(arg_idx));
             }
         }

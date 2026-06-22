@@ -146,7 +146,7 @@ fn emit_opendir_glob_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // struct pointer
     emitter.instruction("mov r10, QWORD PTR [r9 + 24]");                        // gl_pathc lives at glob_t offset 0
     emitter.instruction("mov QWORD PTR [r9 + 8], r10");                         // struct.pathc = gl_pathc
-    emitter.instruction(&format!("mov r10, QWORD PTR [r9 + 24 + {}]", pathv_off)); // gl_pathv at the platform-specific offset
+    emitter.instruction(&format!("mov r10, QWORD PTR [r9 + 24 + {}]", pathv_off)); //gl_pathv at the platform-specific offset
     emitter.instruction("mov QWORD PTR [r9 + 0], r10");                         // struct.pathv = gl_pathv
     emitter.instruction("mov QWORD PTR [r9 + 16], 0");                          // struct.index = 0
 

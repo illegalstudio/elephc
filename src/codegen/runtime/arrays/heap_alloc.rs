@@ -303,7 +303,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // load the cached block's next pointer within this size class
     emitter.instruction("mov QWORD PTR [rcx], r11");                            // unlink the cached block from its segregated small-bin chain
     emitter.instruction("mov DWORD PTR [r10 + 4], 1");                          // restore a live refcount of one in the reused heap header
-    emitter.instruction(&format!("mov r11, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); // materialize the x86_64 heap marker while leaving the low kind bits clear
+    emitter.instruction(&format!("mov r11, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); //materialize the x86_64 heap marker while leaving the low kind bits clear
     emitter.instruction("mov QWORD PTR [r10 + 8], r11");                        // stamp the reused heap header as an owned raw heap allocation
     emitter.instruction("lea rax, [r10 + 16]");                                 // return the user payload pointer instead of the internal header address
     emitter.instruction("jmp __rt_heap_alloc_count");                           // reuse the shared allocation-accounting path for cached blocks
@@ -370,7 +370,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r9], r8");                              // replace the matched free block with the split remainder in the free list
     emitter.instruction("mov DWORD PTR [r10], eax");                            // shrink the reused block header down to the requested payload size
     emitter.instruction("mov DWORD PTR [r10 + 4], 1");                          // restore a live refcount of one in the reused heap header
-    emitter.instruction(&format!("mov r8, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); // materialize the x86_64 heap marker for the reused block header
+    emitter.instruction(&format!("mov r8, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); //materialize the x86_64 heap marker for the reused block header
     emitter.instruction("mov QWORD PTR [r10 + 8], r8");                         // stamp the reused block as an owned raw heap allocation
     emitter.instruction("lea rax, [r10 + 16]");                                 // return the user payload pointer for the reused block
     emitter.instruction("jmp __rt_heap_alloc_count");                           // reuse the common allocation-accounting path
@@ -379,7 +379,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [r10 + 16]");                       // load the matched free block successor before unlinking it
     emitter.instruction("mov QWORD PTR [r9], rcx");                             // unlink the matched free block from the ordered free list
     emitter.instruction("mov DWORD PTR [r10 + 4], 1");                          // restore a live refcount of one in the reused whole block
-    emitter.instruction(&format!("mov r8, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); // materialize the x86_64 heap marker for the reused whole block
+    emitter.instruction(&format!("mov r8, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); //materialize the x86_64 heap marker for the reused whole block
     emitter.instruction("mov QWORD PTR [r10 + 8], r8");                         // stamp the whole reused block as an owned raw heap allocation
     emitter.instruction("lea rax, [r10 + 16]");                                 // return the user payload pointer for the reused free block
 
@@ -416,7 +416,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r10, [r11 + r10]");                                // compute the new block header address inside the heap buffer
     emitter.instruction("mov DWORD PTR [r10], eax");                            // write the requested payload size into the new block header
     emitter.instruction("mov DWORD PTR [r10 + 4], 1");                          // initialize the new block refcount to one
-    emitter.instruction(&format!("mov r8, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); // materialize the x86_64 heap marker for the freshly bumped block
+    emitter.instruction(&format!("mov r8, 0x{:x}", X86_64_HEAP_MAGIC_HI32 << 32)); //materialize the x86_64 heap marker for the freshly bumped block
     emitter.instruction("mov QWORD PTR [r10 + 8], r8");                         // stamp the new block as an owned raw heap allocation
     emitter.instruction("mov QWORD PTR [r9], rcx");                             // persist the advanced bump offset after carving out this block
     emitter.instruction("lea rax, [r10 + 16]");                                 // return the user payload pointer instead of the header address

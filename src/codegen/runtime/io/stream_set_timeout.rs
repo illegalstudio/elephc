@@ -43,7 +43,7 @@ pub fn emit_stream_set_timeout(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_set_timeout_ok")); // continue when setsockopt succeeded
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_set_timeout_ok")); //continue when setsockopt succeeded
     emitter.instruction("mov x0, #0");                                          // setsockopt failed: report false
     emitter.instruction("b __rt_stream_set_timeout_ret");                       // return the failure result
     emitter.label("__rt_stream_set_timeout_ok");

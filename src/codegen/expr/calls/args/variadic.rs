@@ -115,7 +115,7 @@ pub(crate) fn emit_variadic_array_arg_from_exprs(
                 emitter.instruction(&format!("ldr {}, [sp]", peek_reg));        // peek the variadic array pointer without removing it from the stack
             }
             crate::codegen::platform::Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", peek_reg)); // peek the variadic array pointer without removing it from the stack
+                emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", peek_reg)); //peek the variadic array pointer without removing it from the stack
             }
         }
         if stamp_value_type && idx == 0 {

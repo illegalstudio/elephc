@@ -80,7 +80,7 @@ pub(super) fn emit_magic_set_call(
                         emitter.instruction("ldr d0, [sp, #16]");               // reload the saved float value for Mixed boxing
                     }
                     Arch::X86_64 => {
-                        emitter.instruction("movsd xmm0, QWORD PTR [rsp + 16]"); // reload the saved float value for Mixed boxing
+                        emitter.instruction("movsd xmm0, QWORD PTR [rsp + 16]"); //reload the saved float value for Mixed boxing
                     }
                 }
                 crate::codegen::emit_box_current_expr_value_as_mixed_for_container(
@@ -114,7 +114,7 @@ pub(super) fn emit_magic_set_call(
         abi::emit_release_temporary_stack(emitter, 16);                              // drop the saved original value after boxing it into Mixed storage
     }
 
-    emitter.instruction(&format!("mov {}, {}", boxed_reg, abi::int_result_reg(emitter))); // keep the boxed Mixed value across property-name setup
+    emitter.instruction(&format!("mov {}, {}", boxed_reg, abi::int_result_reg(emitter))); //keep the boxed Mixed value across property-name setup
     crate::codegen::expr::push_magic_property_name_arg(property, emitter, data);
     abi::emit_push_reg(emitter, boxed_reg);                                          // push the boxed Mixed $value argument
     abi::emit_push_reg(emitter, object_reg);                                         // push $this pointer for __set dispatch

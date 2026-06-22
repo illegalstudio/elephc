@@ -95,7 +95,7 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // check the current JSON decoder condition
     emitter.instruction("b.ge __rt_json_decode_object_real_fail");              // branch on the current JSON decoder condition
     emitter.instruction("ldrb w13, [x1, x9]");                                  // load or prepare JSON decoder state
-    emitter.instruction("cbnz x12, __rt_json_decode_object_real_key_after_escape"); // branch on the current JSON decoder condition
+    emitter.instruction("cbnz x12, __rt_json_decode_object_real_key_after_escape"); //branch on the current JSON decoder condition
     emitter.instruction("cmp w13, #92");                                        // '\\'
     emitter.instruction("b.eq __rt_json_decode_object_real_key_set_escape");    // branch on the current JSON decoder condition
     emitter.instruction("cmp w13, #34");                                        // '"' → key end
@@ -152,10 +152,10 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // check the current JSON decoder condition
     emitter.instruction("b.ge __rt_json_decode_object_real_value_done");        // branch on the current JSON decoder condition
     emitter.instruction("ldrb w15, [x1, x9]");                                  // load or prepare JSON decoder state
-    emitter.instruction("cbnz x14, __rt_json_decode_object_real_value_after_escape"); // branch on the current JSON decoder condition
-    emitter.instruction("cbnz x13, __rt_json_decode_object_real_value_in_string"); // branch on the current JSON decoder condition
+    emitter.instruction("cbnz x14, __rt_json_decode_object_real_value_after_escape"); //branch on the current JSON decoder condition
+    emitter.instruction("cbnz x13, __rt_json_decode_object_real_value_in_string"); //branch on the current JSON decoder condition
     emitter.instruction("cmp w15, #34");                                        // check the current JSON decoder condition
-    emitter.instruction("b.eq __rt_json_decode_object_real_value_enter_string"); // branch on the current JSON decoder condition
+    emitter.instruction("b.eq __rt_json_decode_object_real_value_enter_string"); //branch on the current JSON decoder condition
     emitter.instruction("cmp w15, #91");                                        // check the current JSON decoder condition
     emitter.instruction("b.eq __rt_json_decode_object_real_value_open");        // branch on the current JSON decoder condition
     emitter.instruction("cmp w15, #123");                                       // check the current JSON decoder condition
@@ -421,11 +421,11 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_json_decode_object_real_value_done_x");       // branch on the current JSON decoder condition
     emitter.instruction("movzx r8, BYTE PTR [rax + rcx]");                      // load or prepare JSON decoder state
     emitter.instruction("test r12, r12");                                       // check the current JSON decoder condition
-    emitter.instruction("jne __rt_json_decode_object_real_value_after_escape_x"); // branch on the current JSON decoder condition
+    emitter.instruction("jne __rt_json_decode_object_real_value_after_escape_x"); //branch on the current JSON decoder condition
     emitter.instruction("test r11, r11");                                       // check the current JSON decoder condition
     emitter.instruction("jne __rt_json_decode_object_real_value_in_string_x");  // branch on the current JSON decoder condition
     emitter.instruction("cmp r8, 34");                                          // check the current JSON decoder condition
-    emitter.instruction("je __rt_json_decode_object_real_value_enter_string_x"); // branch on the current JSON decoder condition
+    emitter.instruction("je __rt_json_decode_object_real_value_enter_string_x"); //branch on the current JSON decoder condition
     emitter.instruction("cmp r8, 91");                                          // check the current JSON decoder condition
     emitter.instruction("je __rt_json_decode_object_real_value_open_x");        // branch on the current JSON decoder condition
     emitter.instruction("cmp r8, 123");                                         // check the current JSON decoder condition

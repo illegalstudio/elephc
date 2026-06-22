@@ -193,12 +193,12 @@ fn overwrite_attrs_property(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("ldr x9, [sp]");                                // peek the saved Reflection* object pointer
-            emitter.instruction(&format!("ldr x0, [x9, #{}]", attrs_low_offset)); // load the default __attrs array pointer
+            emitter.instruction(&format!("ldr x0, [x9, #{}]", attrs_low_offset)); //load the default __attrs array pointer
             emitter.instruction("bl __rt_decref_array");                        // release the default empty attributes array
         }
         Arch::X86_64 => {
             emitter.instruction("mov r10, QWORD PTR [rsp]");                    // peek the saved Reflection* object pointer
-            emitter.instruction(&format!("mov rax, QWORD PTR [r10 + {}]", attrs_low_offset)); // load the default __attrs array pointer
+            emitter.instruction(&format!("mov rax, QWORD PTR [r10 + {}]", attrs_low_offset)); //load the default __attrs array pointer
             emitter.instruction("call __rt_decref_array");                      // release the default empty attributes array
         }
     }
@@ -214,14 +214,14 @@ fn overwrite_attrs_property(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("ldr x9, [sp]");                                // reload the saved Reflection* object pointer
-            emitter.instruction(&format!("str x0, [x9, #{}]", attrs_low_offset)); // store the populated __attrs array pointer
+            emitter.instruction(&format!("str x0, [x9, #{}]", attrs_low_offset)); //store the populated __attrs array pointer
             emitter.instruction("mov x10, #4");                                 // runtime kind tag 4 = indexed array
-            emitter.instruction(&format!("str x10, [x9, #{}]", attrs_high_offset)); // store the __attrs array kind tag
+            emitter.instruction(&format!("str x10, [x9, #{}]", attrs_high_offset)); //store the __attrs array kind tag
         }
         Arch::X86_64 => {
             emitter.instruction("mov r10, QWORD PTR [rsp]");                    // reload the saved Reflection* object pointer
-            emitter.instruction(&format!("mov QWORD PTR [r10 + {}], rax", attrs_low_offset)); // store the populated __attrs array pointer
-            emitter.instruction(&format!("mov QWORD PTR [r10 + {}], 4", attrs_high_offset)); // store the __attrs array kind tag
+            emitter.instruction(&format!("mov QWORD PTR [r10 + {}], rax", attrs_low_offset)); //store the populated __attrs array pointer
+            emitter.instruction(&format!("mov QWORD PTR [r10 + {}], 4", attrs_high_offset)); //store the __attrs array kind tag
         }
     }
 }

@@ -144,7 +144,7 @@ fn emit_alloc_stack_x86_64(emitter: &mut Emitter) {
 
     // -- mmap(NULL, requested_size + GUARD, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0) --
     emitter.instruction("xor edi, edi");                                        // addr = NULL — let the kernel pick the address
-    emitter.instruction(&format!("lea rsi, [r12 + {}]", FIBER_GUARD_PAGE_SIZE)); // length = usable size + guard page
+    emitter.instruction(&format!("lea rsi, [r12 + {}]", FIBER_GUARD_PAGE_SIZE)); //length = usable size + guard page
     emitter.instruction("mov r13, rsi");                                        // r13 = total mapped length for the eventual munmap
     emitter.instruction("mov edx, 3");                                          // prot = PROT_READ | PROT_WRITE
     emitter.instruction(&format!("mov ecx, {}", map_flags));                    // flags = MAP_PRIVATE | MAP_ANON for this platform

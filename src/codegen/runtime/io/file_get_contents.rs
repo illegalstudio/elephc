@@ -61,7 +61,7 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // compare the Linux stat result against the success sentinel
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_file_get_contents_stat_ok")); // continue only when stat succeeded
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_file_get_contents_stat_ok")); //continue only when stat succeeded
     emitter.instruction("b __rt_file_get_contents_fail");                       // return an empty string and warn when stat fails
     emitter.label("__rt_file_get_contents_stat_ok");
 
@@ -77,7 +77,7 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     if plat.needs_cmp_before_error_branch() {
         emitter.instruction("cmp x0, #0");                                      // compare the Linux open result against the success sentinel
     }
-    emitter.instruction(&plat.branch_on_syscall_success("__rt_file_get_contents_open_ok")); // continue only when open succeeded
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_file_get_contents_open_ok")); //continue only when open succeeded
     emitter.instruction("b __rt_file_get_contents_fail");                       // return an empty string and warn when open fails
     emitter.label("__rt_file_get_contents_open_ok");
     emitter.instruction(&format!("str x0, [sp, #{}]", fd_off));                 // save fd on stack
@@ -111,7 +111,7 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
 
     emitter.label("__rt_file_get_contents_fail");
     abi::emit_symbol_address(emitter, "x1", "_diag_file_get_contents_failed_msg");
-    emitter.instruction(&format!("mov x2, #{}", FILE_GET_CONTENTS_FAILED_WARNING.len())); // pass the warning byte length to the diagnostic helper
+    emitter.instruction(&format!("mov x2, #{}", FILE_GET_CONTENTS_FAILED_WARNING.len())); //pass the warning byte length to the diagnostic helper
     emitter.instruction("bl __rt_diag_warning");                                // emit or suppress the file_get_contents() failure warning
     emitter.instruction("mov x1, #0");                                          // return an empty string pointer on read-path failure
     emitter.instruction("mov x2, #0");                                          // return an empty string length on read-path failure
@@ -154,7 +154,7 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_file_get_contents_fail");                     // return the empty string when the input path cannot be stated
 
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", size_off));   // load st_size from the temporary Linux stat buffer after libc stat() succeeds
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", size_slot_off)); // preserve the file byte size across the later open(), heap_alloc(), and read() calls
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", size_slot_off)); //preserve the file byte size across the later open(), heap_alloc(), and read() calls
 
     emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", path_off));   // reload the C path pointer before opening the input file for reading
     emitter.instruction("xor esi, esi");                                        // pass O_RDONLY as the libc open() flags for the file_get_contents() read path
@@ -163,15 +163,15 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 0");                                          // test whether libc open() succeeded before attempting to allocate or read
     emitter.instruction("jl __rt_file_get_contents_fail");                      // return the empty string when the file could not be opened for reading
 
-    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", size_slot_off)); // reload the requested file size before allocating the owned destination buffer
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", size_slot_off)); //reload the requested file size before allocating the owned destination buffer
     emitter.instruction("call __rt_heap_alloc");                                // allocate owned heap storage for the file payload through the shared x86_64 heap wrapper
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the owned-string heap kind word with the x86_64 heap marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); //materialize the owned-string heap kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated buffer as a persisted elephc string in the uniform heap header
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", heap_off));   // preserve the owned destination buffer pointer across the libc read() and close() calls
 
     emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", fd_off));     // pass the opened file descriptor as the first libc read() argument
     emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", heap_off));   // pass the owned destination buffer as the second libc read() argument
-    emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {}]", size_slot_off)); // pass the requested byte count from the stat-derived file size to libc read()
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {}]", size_slot_off)); //pass the requested byte count from the stat-derived file size to libc read()
     emitter.instruction("call read");                                           // read the entire file payload into the owned elephc string buffer through libc read()
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", bread_off));  // preserve the actual read byte count for the final elephc string result pair
 
@@ -186,7 +186,7 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_file_get_contents_fail");
     abi::emit_symbol_address(emitter, "rdi", "_diag_file_get_contents_failed_msg"); // pass the file_get_contents() warning text pointer to the diagnostic helper
-    emitter.instruction(&format!("mov esi, {}", FILE_GET_CONTENTS_FAILED_WARNING.len())); // pass the warning byte length to the diagnostic helper
+    emitter.instruction(&format!("mov esi, {}", FILE_GET_CONTENTS_FAILED_WARNING.len())); //pass the warning byte length to the diagnostic helper
     emitter.instruction("call __rt_diag_warning");                              // emit or suppress the file_get_contents() failure warning
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer when the file could not be stated or opened
     emitter.instruction("xor edx, edx");                                        // return an empty string length when the file could not be stated or opened

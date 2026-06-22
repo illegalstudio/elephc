@@ -663,7 +663,7 @@ pub(crate) fn emit_callable_array_descriptor_env_after_saved_array(
     let array_callback = resolve_callable_array_descriptor_callback(callback, ctx, data)?;
     if let Some((receiver, _)) = &array_callback.receiver_prefix {
         emit_expr(receiver, emitter, ctx, data);
-        emitter.instruction(&format!("mov {}, {}", call_reg, abi::int_result_reg(emitter))); // preserve callable-array receiver while restoring the saved array
+        emitter.instruction(&format!("mov {}, {}", call_reg, abi::int_result_reg(emitter))); //preserve callable-array receiver while restoring the saved array
     }
     abi::emit_pop_reg(emitter, array_reg);
 
@@ -681,7 +681,7 @@ pub(crate) fn emit_callable_array_descriptor_env_after_saved_array(
         ctx,
     );
     if let Some((_, receiver_ty)) = &array_callback.receiver_prefix {
-        emitter.instruction(&format!("mov {}, {}", abi::int_result_reg(emitter), call_reg)); // restore callable-array receiver for descriptor prefix storage
+        emitter.instruction(&format!("mov {}, {}", abi::int_result_reg(emitter), call_reg)); //restore callable-array receiver for descriptor prefix storage
         store_descriptor_callback_prefix_result(&wrapper, 0, receiver_ty, emitter);
     }
     store_descriptor_callback_array_reg(&wrapper, array_reg, emitter);

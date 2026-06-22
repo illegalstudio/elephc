@@ -150,7 +150,7 @@ fn box_owned_pathinfo_array_as_mixed(emitter: &mut Emitter) {
             abi::emit_push_reg(emitter, "rax");                                 // preserve the freshly owned hash while allocating the mixed cell
             emitter.instruction("mov rax, 24");                                 // mixed cells store tag plus two payload words
             abi::emit_call_label(emitter, "__rt_heap_alloc");                   // allocate the boxed runtime result cell
-            emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the mixed-cell heap kind word with the x86_64 heap marker
+            emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); //materialize the mixed-cell heap kind word with the x86_64 heap marker
             emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the heap allocation as a mixed cell
             emitter.instruction("mov QWORD PTR [rax], 5");                      // store runtime tag 5 = associative array payload
             abi::emit_pop_reg(emitter, "r10");                                  // reload the owned pathinfo hash pointer

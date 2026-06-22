@@ -176,14 +176,14 @@ fn lower_mixed_callable_descriptor_invoke(
         Arch::AArch64 => {
             ctx.load_value_to_reg(callable, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); // check whether the boxed Mixed payload is a callable descriptor
+            ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); //check whether the boxed Mixed payload is a callable descriptor
             ctx.emitter.instruction(&format!("b.ne {}", fatal_label));          // fatal when the boxed Mixed value is not callable
             ctx.emitter.instruction(&format!("mov {}, x1", descriptor_reg));    // keep the unboxed callable descriptor in the nested-call register
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(callable, "rax")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_CALLABLE)); // check whether the boxed Mixed payload is a callable descriptor
+            ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_CALLABLE)); //check whether the boxed Mixed payload is a callable descriptor
             ctx.emitter.instruction(&format!("jne {}", fatal_label));           // fatal when the boxed Mixed value is not callable
             ctx.emitter.instruction(&format!("mov {}, rdi", descriptor_reg));   // keep the unboxed callable descriptor in the nested-call register
         }
@@ -882,11 +882,11 @@ fn emit_unbox_mixed_callable_array_slot(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(callable, array_reg)?;
-            ctx.emitter.instruction(&format!("ldr x0, [{}, #{}]", array_reg, offset)); // load the boxed callable-array selector slot
+            ctx.emitter.instruction(&format!("ldr x0, [{}, #{}]", array_reg, offset)); //load the boxed callable-array selector slot
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(callable, array_reg)?;
-            ctx.emitter.instruction(&format!("mov rax, QWORD PTR [{} + {}]", array_reg, offset)); // load the boxed callable-array selector slot
+            ctx.emitter.instruction(&format!("mov rax, QWORD PTR [{} + {}]", array_reg, offset)); //load the boxed callable-array selector slot
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -1226,7 +1226,7 @@ fn emit_runtime_descriptor_with_saved_receiver_capture(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter.instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the receiver-bound descriptor while copying its static header
+    ctx.emitter.instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); //keep the receiver-bound descriptor while copying its static header
     callable_descriptor::emit_copy_static_descriptor_to_runtime(
         ctx.emitter,
         descriptor_reg,
@@ -1240,7 +1240,7 @@ fn emit_runtime_descriptor_with_saved_receiver_capture(
         receiver_ty,
     );
     if descriptor_reg != result_reg {
-        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); // return the receiver-bound callable-array descriptor
+        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); //return the receiver-bound callable-array descriptor
     }
 }
 
@@ -1558,10 +1558,10 @@ fn move_normalized_invoker_arg_to_result(ctx: &mut FunctionContext<'_>, source_r
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, source_reg)); // place the normalized invoker argument where the caller will preserve it
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, source_reg)); //place the normalized invoker argument where the caller will preserve it
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, source_reg)); // place the normalized invoker argument where the caller will preserve it
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, source_reg)); //place the normalized invoker argument where the caller will preserve it
         }
     }
 }
@@ -1586,10 +1586,10 @@ fn emit_branch_if_invoker_present(
 ) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbnz {}, {}", invoker_reg, ready_label)); // continue when the callable descriptor has a uniform invoker
+            ctx.emitter.instruction(&format!("cbnz {}, {}", invoker_reg, ready_label)); //continue when the callable descriptor has a uniform invoker
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", invoker_reg, invoker_reg)); // check whether the callable descriptor has a uniform invoker
+            ctx.emitter.instruction(&format!("test {}, {}", invoker_reg, invoker_reg)); //check whether the callable descriptor has a uniform invoker
             ctx.emitter.instruction(&format!("jnz {}", ready_label));           // continue when the callable descriptor has a uniform invoker
         }
     }
@@ -1720,10 +1720,10 @@ fn move_reg_to_arg(ctx: &mut FunctionContext<'_>, source_reg: &str, arg_index: u
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, source_reg)); // move the callable descriptor into the invoker ABI argument
+            ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, source_reg)); //move the callable descriptor into the invoker ABI argument
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, source_reg)); // move the callable descriptor into the invoker ABI argument
+            ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, source_reg)); //move the callable descriptor into the invoker ABI argument
         }
     }
 }

@@ -88,7 +88,7 @@ pub fn emit(
             if emitter.platform.needs_cmp_before_error_branch() {
                 emitter.instruction("cmp x0, #0");                              // Linux: negative lseek result means fseek() failed
             }
-            emitter.instruction(&emitter.platform.branch_on_syscall_success(&success_label)); // continue only when lseek succeeded
+            emitter.instruction(&emitter.platform.branch_on_syscall_success(&success_label)); //continue only when lseek succeeded
             abi::emit_pop_reg(emitter, "x9");                                   // discard preserved fd on the fseek() failure path
             emitter.instruction("mov x0, #-1");                                 // fseek() returns -1 on failure
             emitter.instruction(&format!("b {}", done_label));                  // skip EOF reset after a failed seek

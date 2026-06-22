@@ -76,7 +76,7 @@ fn emit_runtime_descriptor_with_captures(
     emitter.comment("callable descriptor: allocate runtime capture storage");
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), total_bytes as i64);
     abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction(&format!("mov {}, {}", descriptor_reg, abi::int_result_reg(emitter))); // keep the runtime descriptor pointer while storing captures
+    emitter.instruction(&format!("mov {}, {}", descriptor_reg, abi::int_result_reg(emitter))); //keep the runtime descriptor pointer while storing captures
     callable_descriptor::emit_copy_static_descriptor_to_runtime(
         emitter,
         descriptor_reg,
@@ -139,7 +139,7 @@ fn emit_runtime_descriptor_with_captures(
     }
 
     if descriptor_reg != abi::int_result_reg(emitter) {
-        emitter.instruction(&format!("mov {}, {}", abi::int_result_reg(emitter), descriptor_reg)); // return the runtime callable descriptor pointer
+        emitter.instruction(&format!("mov {}, {}", abi::int_result_reg(emitter), descriptor_reg)); //return the runtime callable descriptor pointer
     }
 }
 
@@ -185,7 +185,7 @@ fn promote_by_ref_capture_to_heap_cell(
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 16);
     abi::emit_call_label(emitter, "__rt_heap_alloc");
     let cell_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!("mov {}, {}", cell_reg, abi::int_result_reg(emitter))); // keep the promoted capture cell while moving the local value into it
+    emitter.instruction(&format!("mov {}, {}", cell_reg, abi::int_result_reg(emitter))); //keep the promoted capture cell while moving the local value into it
     copy_local_value_to_ref_cell(&current_ty, slot_offset, cell_reg, emitter);
     release_owned_local_value_after_ref_cell_copy(
         &current_ty,

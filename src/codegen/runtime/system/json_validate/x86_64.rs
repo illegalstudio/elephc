@@ -193,7 +193,7 @@ fn emit_match_literal_x(emitter: &mut Emitter, suffix: &str, lit: &[char]) {
     emitter.instruction(&format!("jg {}", fail_label));                         // branch on the current JSON validator condition
     abi::emit_load_symbol_to_reg(emitter, "rax", "_json_validate_ptr", 0);      // load or prepare JSON validator state
     for (offset, &c) in lit.iter().enumerate() {
-        emitter.instruction(&format!("movzx r9, BYTE PTR [rax + rcx + {}]", offset)); // load or prepare JSON validator state
+        emitter.instruction(&format!("movzx r9, BYTE PTR [rax + rcx + {}]", offset)); //load or prepare JSON validator state
         emitter.instruction(&format!("cmp r9, {}", c as u32));                  // check the current JSON validator condition
         emitter.instruction(&format!("jne {}", fail_label));                    // branch on the current JSON validator condition
     }
@@ -437,27 +437,27 @@ fn emit_string_parser_x(emitter: &mut Emitter) {
 fn emit_uhex_loop_x(emitter: &mut Emitter, suffix: &str, error_label: &str) {
     emitter.label(&format!("__rt_json_validate_uhex_loop_{suffix}_x"));
     emitter.instruction("cmp r9, 0");                                           // 4 digits consumed?
-    emitter.instruction(&format!("je __rt_json_validate_uhex_done_{suffix}_x")); // exit loop with r10 = codepoint
+    emitter.instruction(&format!("je __rt_json_validate_uhex_done_{suffix}_x")); //exit loop with r10 = codepoint
     emitter.instruction("cmp rcx, rdx");                                        // bounds check
     emitter.instruction(&format!("jge {error_label}"));                         // branch on the current JSON validator condition
     emitter.instruction("movzx r8, BYTE PTR [rax + rcx]");                      // load or prepare JSON validator state
     emitter.instruction("cmp r8, 48");                                          // '0'?
     emitter.instruction(&format!("jl {error_label}"));                          // branch on the current JSON validator condition
     emitter.instruction("cmp r8, 57");                                          // ..'9'?
-    emitter.instruction(&format!("jle __rt_json_validate_uhex_dec_{suffix}_x")); // branch on the current JSON validator condition
+    emitter.instruction(&format!("jle __rt_json_validate_uhex_dec_{suffix}_x")); //branch on the current JSON validator condition
     emitter.instruction("cmp r8, 65");                                          // 'A'?
     emitter.instruction(&format!("jl {error_label}"));                          // branch on the current JSON validator condition
     emitter.instruction("cmp r8, 70");                                          // ..'F'?
-    emitter.instruction(&format!("jle __rt_json_validate_uhex_upper_{suffix}_x")); // branch on the current JSON validator condition
+    emitter.instruction(&format!("jle __rt_json_validate_uhex_upper_{suffix}_x")); //branch on the current JSON validator condition
     emitter.instruction("cmp r8, 97");                                          // 'a'?
     emitter.instruction(&format!("jl {error_label}"));                          // branch on the current JSON validator condition
     emitter.instruction("cmp r8, 102");                                         // ..'f'?
     emitter.instruction(&format!("jg {error_label}"));                          // branch on the current JSON validator condition
     emitter.instruction("sub r8, 87");                                          // 'a'..'f' → 10..15
-    emitter.instruction(&format!("jmp __rt_json_validate_uhex_acc_{suffix}_x")); // continue in the JSON validator control path
+    emitter.instruction(&format!("jmp __rt_json_validate_uhex_acc_{suffix}_x")); //continue in the JSON validator control path
     emitter.label(&format!("__rt_json_validate_uhex_dec_{suffix}_x"));
     emitter.instruction("sub r8, 48");                                          // '0'..'9' → 0..9
-    emitter.instruction(&format!("jmp __rt_json_validate_uhex_acc_{suffix}_x")); // continue in the JSON validator control path
+    emitter.instruction(&format!("jmp __rt_json_validate_uhex_acc_{suffix}_x")); //continue in the JSON validator control path
     emitter.label(&format!("__rt_json_validate_uhex_upper_{suffix}_x"));
     emitter.instruction("sub r8, 55");                                          // 'A'..'F' → 10..15
     emitter.label(&format!("__rt_json_validate_uhex_acc_{suffix}_x"));
@@ -465,7 +465,7 @@ fn emit_uhex_loop_x(emitter: &mut Emitter, suffix: &str, error_label: &str) {
     emitter.instruction("or r10, r8");                                          // OR in the digit value
     emitter.instruction("add rcx, 1");                                          // advance past the digit
     emitter.instruction("sub r9, 1");                                           // one fewer digit to scan
-    emitter.instruction(&format!("jmp __rt_json_validate_uhex_loop_{suffix}_x")); // continue in the JSON validator control path
+    emitter.instruction(&format!("jmp __rt_json_validate_uhex_loop_{suffix}_x")); //continue in the JSON validator control path
     emitter.label(&format!("__rt_json_validate_uhex_done_{suffix}_x"));
 }
 

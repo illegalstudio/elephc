@@ -59,13 +59,13 @@ fn emit_array_value_type_stamp(emitter: &mut Emitter, array_reg: &str, elem_ty: 
             emitter.instruction(&format!("str x10, [{}, #-8]", array_reg));     // persist the packed array kind word in the heap header
         }
         crate::codegen::platform::Arch::X86_64 => {
-            emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); // load the packed array kind word from the heap header
+            emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); //load the packed array kind word from the heap header
             emitter.instruction("mov rdx, 0xffffffff000080ff");                 // materialize the x86_64 indexed-array metadata preservation mask
             emitter.instruction("and r10, rdx");                                // preserve heap marker, indexed-array kind, and persistent COW bits
             emitter.instruction(&format!("mov rcx, {}", value_type_tag));       // materialize the runtime array value_type tag
             emitter.instruction("shl rcx, 8");                                  // move the value_type tag into the packed kind-word byte lane
             emitter.instruction("or r10, rcx");                                 // combine the heap kind with the array value_type tag
-            emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); // persist the packed array kind word in the heap header
+            emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); //persist the packed array kind word in the heap header
         }
     }
 }
@@ -90,7 +90,7 @@ fn emit_loaded_array_source_to_reg(
 ) {
     match array_source {
         LoadedArraySource::Result => {
-            emitter.instruction(&format!("mov {}, {}", dest_reg, abi::int_result_reg(emitter))); // preserve the callback-argument array pointer from the result register
+            emitter.instruction(&format!("mov {}, {}", dest_reg, abi::int_result_reg(emitter))); //preserve the callback-argument array pointer from the result register
         }
         LoadedArraySource::TemporaryStackSlot(offset) => {
             abi::emit_load_temporary_stack_slot(emitter, dest_reg, offset);
@@ -174,7 +174,7 @@ fn materialize_callback_address_and_preserve_descriptor(
         }
         _ => {
             emit_expr(callback, emitter, ctx, data);
-            emitter.instruction(&format!("mov {}, {}", call_reg, abi::int_result_reg(emitter))); // keep the evaluated callback descriptor in the nested-call scratch register
+            emitter.instruction(&format!("mov {}, {}", call_reg, abi::int_result_reg(emitter))); //keep the evaluated callback descriptor in the nested-call scratch register
             abi::emit_push_reg(emitter, call_reg);                              // preserve the evaluated callable descriptor for descriptor-invoker dispatch
             callable_descriptor::emit_load_entry_from_descriptor(emitter, call_reg, call_reg);
             (
@@ -629,7 +629,7 @@ fn emit_box_current_ref_arg_address_for_invoker(
     let ref_cell_reg = abi::secondary_scratch_reg(emitter);
     let marker_tag_reg = abi::tertiary_scratch_reg(emitter);
     let source_tag_reg = abi::symbol_scratch_reg(emitter);
-    emitter.instruction(&format!("mov {}, {}", ref_cell_reg, abi::int_result_reg(emitter))); // preserve the source variable storage address before Mixed marker boxing
+    emitter.instruction(&format!("mov {}, {}", ref_cell_reg, abi::int_result_reg(emitter))); //preserve the source variable storage address before Mixed marker boxing
     abi::emit_load_int_immediate(emitter, marker_tag_reg, INVOKER_ARG_REF_CELL_TAG);
     abi::emit_load_int_immediate(
         emitter,
@@ -974,11 +974,11 @@ pub(crate) fn emit_loaded_array_callback_call(
                 let done_label = ctx.next_label("cufa_ref_arg_done");
                 match emitter.target.arch {
                     crate::codegen::platform::Arch::AArch64 => {
-                        emitter.instruction(&format!("cmp {}, #{}", len_reg, i + 1)); // compare provided array length before binding a by-reference callback argument
+                        emitter.instruction(&format!("cmp {}, #{}", len_reg, i + 1)); //compare provided array length before binding a by-reference callback argument
                         emitter.instruction(&format!("b.ge {}", load_label));   // bind the provided element when this by-reference slot exists
                     }
                     crate::codegen::platform::Arch::X86_64 => {
-                        emitter.instruction(&format!("cmp {}, {}", len_reg, i + 1)); // compare provided array length before binding a by-reference callback argument
+                        emitter.instruction(&format!("cmp {}, {}", len_reg, i + 1)); //compare provided array length before binding a by-reference callback argument
                         emitter.instruction(&format!("jge {}", load_label));    // bind the provided element when this by-reference slot exists
                     }
                 }
@@ -1024,10 +1024,10 @@ pub(crate) fn emit_loaded_array_callback_call(
             let done_label = ctx.next_label("cufa_arg_done");
             match emitter.target.arch {
                 crate::codegen::platform::Arch::AArch64 => {
-                    emitter.instruction(&format!("cmp {}, #{}", len_reg, i + 1)); // compare provided array length against required positional index
+                    emitter.instruction(&format!("cmp {}, #{}", len_reg, i + 1)); //compare provided array length against required positional index
                 }
                 crate::codegen::platform::Arch::X86_64 => {
-                    emitter.instruction(&format!("cmp {}, {}", len_reg, i + 1)); // compare provided array length against required positional index
+                    emitter.instruction(&format!("cmp {}, {}", len_reg, i + 1)); //compare provided array length against required positional index
                 }
             }
             match emitter.target.arch {
@@ -1064,10 +1064,10 @@ pub(crate) fn emit_loaded_array_callback_call(
         let done_label = ctx.next_label("cufa_variadic_done");
         match emitter.target.arch {
             crate::codegen::platform::Arch::AArch64 => {
-                emitter.instruction(&format!("cmp {}, #{}", len_reg, regular_param_count)); // compare provided array length against the fixed arity prefix
+                emitter.instruction(&format!("cmp {}, #{}", len_reg, regular_param_count)); //compare provided array length against the fixed arity prefix
             }
             crate::codegen::platform::Arch::X86_64 => {
-                emitter.instruction(&format!("cmp {}, {}", len_reg, regular_param_count)); // compare provided array length against the fixed arity prefix
+                emitter.instruction(&format!("cmp {}, {}", len_reg, regular_param_count)); //compare provided array length against the fixed arity prefix
             }
         }
         match emitter.target.arch {
@@ -1088,24 +1088,24 @@ pub(crate) fn emit_loaded_array_callback_call(
         emitter.label(&build_label);
         match emitter.target.arch {
             crate::codegen::platform::Arch::AArch64 => {
-                emitter.instruction(&format!("sub {}, {}, #{}", tail_count_reg, len_reg, regular_param_count)); // compute the count of variadic tail arguments
+                emitter.instruction(&format!("sub {}, {}, #{}", tail_count_reg, len_reg, regular_param_count)); //compute the count of variadic tail arguments
             }
             crate::codegen::platform::Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, {}", tail_count_reg, len_reg)); // seed the tail count from the provided array length
-                emitter.instruction(&format!("sub {}, {}", tail_count_reg, regular_param_count)); // compute the count of variadic tail arguments
+                emitter.instruction(&format!("mov {}, {}", tail_count_reg, len_reg)); //seed the tail count from the provided array length
+                emitter.instruction(&format!("sub {}, {}", tail_count_reg, regular_param_count)); //compute the count of variadic tail arguments
             }
         }
-        emitter.instruction(&format!("mov {}, {}", array_new_capacity_reg, tail_count_reg)); // pass the exact tail argument count as the initial capacity
+        emitter.instruction(&format!("mov {}, {}", array_new_capacity_reg, tail_count_reg)); //pass the exact tail argument count as the initial capacity
         abi::emit_load_int_immediate(emitter, array_new_elem_size_reg, variadic_elem_ty.stack_size() as i64);
         abi::emit_call_label(emitter, "__rt_array_new");
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));              // keep the variadic array pointer on the stack while filling it
-        emitter.instruction(&format!("mov {}, {}", peek_reg, abi::int_result_reg(emitter))); // copy the variadic array pointer into a scratch register for metadata stamping
+        emitter.instruction(&format!("mov {}, {}", peek_reg, abi::int_result_reg(emitter))); //copy the variadic array pointer into a scratch register for metadata stamping
         emit_array_value_type_stamp(emitter, peek_reg, &variadic_elem_ty);      // stamp the array header with the variadic element runtime tag
         abi::emit_load_int_immediate(emitter, tail_index_reg, 0);
         let loop_label = ctx.next_label("cufa_variadic_loop");
         let loop_done_label = ctx.next_label("cufa_variadic_loop_done");
         emitter.label(&loop_label);
-        emitter.instruction(&format!("cmp {}, {}", tail_index_reg, tail_count_reg)); // stop once every tail element has been copied
+        emitter.instruction(&format!("cmp {}, {}", tail_index_reg, tail_count_reg)); //stop once every tail element has been copied
         match emitter.target.arch {
             crate::codegen::platform::Arch::AArch64 => {
                 emitter.instruction(&format!("b.ge {}", loop_done_label));      // exit the fill loop when the tail array is complete
@@ -1118,17 +1118,17 @@ pub(crate) fn emit_loaded_array_callback_call(
         if regular_param_count > 0 {
             match emitter.target.arch {
                 crate::codegen::platform::Arch::AArch64 => {
-                    emitter.instruction(&format!("add {}, {}, #{}", index_reg, index_reg, regular_param_count)); // offset the tail index by the fixed-arity prefix length
+                    emitter.instruction(&format!("add {}, {}, #{}", index_reg, index_reg, regular_param_count)); //offset the tail index by the fixed-arity prefix length
                 }
                 crate::codegen::platform::Arch::X86_64 => {
-                    emitter.instruction(&format!("add {}, {}", index_reg, regular_param_count)); // offset the tail index by the fixed-arity prefix length
+                    emitter.instruction(&format!("add {}, {}", index_reg, regular_param_count)); //offset the tail index by the fixed-arity prefix length
                 }
             }
         }
         emitter.instruction(&format!("mov {}, {}", data_reg, array_reg));       // start from the callback-argument array pointer before indexing into payload data
         match emitter.target.arch {
             crate::codegen::platform::Arch::AArch64 => {
-                emitter.instruction(&format!("add {}, {}, #24", data_reg, data_reg)); // skip the fixed array header before indexing variadic source elements
+                emitter.instruction(&format!("add {}, {}, #24", data_reg, data_reg)); //skip the fixed array header before indexing variadic source elements
             }
             crate::codegen::platform::Arch::X86_64 => {
                 emitter.instruction(&format!("add {}, 24", data_reg));          // skip the fixed array header before indexing variadic source elements
@@ -1138,16 +1138,16 @@ pub(crate) fn emit_loaded_array_callback_call(
             PhpType::Str => {
                 match emitter.target.arch {
                     crate::codegen::platform::Arch::AArch64 => {
-                        emitter.instruction(&format!("lsl {}, {}, #4", offset_reg, index_reg)); // compute the 16-byte source slot offset for a string element
-                        emitter.instruction(&format!("add {}, {}, {}", data_reg, data_reg, offset_reg)); // advance to the selected source string element
+                        emitter.instruction(&format!("lsl {}, {}, #4", offset_reg, index_reg)); //compute the 16-byte source slot offset for a string element
+                        emitter.instruction(&format!("add {}, {}, {}", data_reg, data_reg, offset_reg)); //advance to the selected source string element
                         let (ptr_reg, len_reg_out) = abi::string_result_regs(emitter);
                         abi::emit_load_from_address(emitter, ptr_reg, data_reg, 0);
                         abi::emit_load_from_address(emitter, len_reg_out, data_reg, 8);
                     }
                     crate::codegen::platform::Arch::X86_64 => {
-                        emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); // copy the element index before scaling to bytes
+                        emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); //copy the element index before scaling to bytes
                         emitter.instruction(&format!("shl {}, 4", offset_reg)); // compute the 16-byte source slot offset for a string element
-                        emitter.instruction(&format!("add {}, {}", data_reg, offset_reg)); // advance to the selected source string element
+                        emitter.instruction(&format!("add {}, {}", data_reg, offset_reg)); //advance to the selected source string element
                         let (ptr_reg, len_reg_out) = abi::string_result_regs(emitter);
                         abi::emit_load_from_address(emitter, ptr_reg, data_reg, 0);
                         abi::emit_load_from_address(emitter, len_reg_out, data_reg, 8);
@@ -1157,13 +1157,13 @@ pub(crate) fn emit_loaded_array_callback_call(
             PhpType::Float => {
                 match emitter.target.arch {
                     crate::codegen::platform::Arch::AArch64 => {
-                        emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, index_reg)); // compute the 8-byte source slot offset for a float element
-                        emitter.instruction(&format!("add {}, {}, {}", data_reg, data_reg, offset_reg)); // advance to the selected source float element
+                        emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, index_reg)); //compute the 8-byte source slot offset for a float element
+                        emitter.instruction(&format!("add {}, {}, {}", data_reg, data_reg, offset_reg)); //advance to the selected source float element
                     }
                     crate::codegen::platform::Arch::X86_64 => {
-                        emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); // copy the element index before scaling to bytes
+                        emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); //copy the element index before scaling to bytes
                         emitter.instruction(&format!("shl {}, 3", offset_reg)); // compute the 8-byte source slot offset for a float element
-                        emitter.instruction(&format!("add {}, {}", data_reg, offset_reg)); // advance to the selected source float element
+                        emitter.instruction(&format!("add {}, {}", data_reg, offset_reg)); //advance to the selected source float element
                     }
                 }
                 abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), data_reg, 0);
@@ -1172,13 +1172,13 @@ pub(crate) fn emit_loaded_array_callback_call(
             _ => {
                 match emitter.target.arch {
                     crate::codegen::platform::Arch::AArch64 => {
-                        emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, index_reg)); // compute the 8-byte source slot offset for a scalar or boxed element
-                        emitter.instruction(&format!("add {}, {}, {}", data_reg, data_reg, offset_reg)); // advance to the selected source scalar element
+                        emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, index_reg)); //compute the 8-byte source slot offset for a scalar or boxed element
+                        emitter.instruction(&format!("add {}, {}, {}", data_reg, data_reg, offset_reg)); //advance to the selected source scalar element
                     }
                     crate::codegen::platform::Arch::X86_64 => {
-                        emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); // copy the element index before scaling to bytes
+                        emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); //copy the element index before scaling to bytes
                         emitter.instruction(&format!("shl {}, 3", offset_reg)); // compute the 8-byte source slot offset for a scalar or boxed element
-                        emitter.instruction(&format!("add {}, {}", data_reg, offset_reg)); // advance to the selected source scalar element
+                        emitter.instruction(&format!("add {}, {}", data_reg, offset_reg)); //advance to the selected source scalar element
                     }
                 }
                 abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), data_reg, 0);
@@ -1199,7 +1199,7 @@ pub(crate) fn emit_loaded_array_callback_call(
                 emitter.instruction(&format!("ldr {}, [sp]", peek_reg));        // reload the variadic array pointer from the stack
             }
             crate::codegen::platform::Arch::X86_64 => {
-                emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", peek_reg)); // reload the variadic array pointer from the stack
+                emitter.instruction(&format!("mov {}, QWORD PTR [rsp]", peek_reg)); //reload the variadic array pointer from the stack
             }
         }
         match stored_ty {
@@ -1220,36 +1220,36 @@ pub(crate) fn emit_loaded_array_callback_call(
             | PhpType::Pointer(_)
             | PhpType::Union(_) | PhpType::Never => {
                 let dest_reg = len_store_reg;
-                emitter.instruction(&format!("mov {}, {}", dest_reg, peek_reg)); // point at the variadic array before skipping the header
+                emitter.instruction(&format!("mov {}, {}", dest_reg, peek_reg)); //point at the variadic array before skipping the header
                 match emitter.target.arch {
                     crate::codegen::platform::Arch::AArch64 => {
-                        emitter.instruction(&format!("add {}, {}, #24", dest_reg, dest_reg)); // point at the variadic array payload
-                        emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, tail_index_reg)); // compute the 8-byte destination slot offset
-                        emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, offset_reg)); // advance to the selected variadic destination slot
+                        emitter.instruction(&format!("add {}, {}, #24", dest_reg, dest_reg)); //point at the variadic array payload
+                        emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, tail_index_reg)); //compute the 8-byte destination slot offset
+                        emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, offset_reg)); //advance to the selected variadic destination slot
                     }
                     crate::codegen::platform::Arch::X86_64 => {
                         emitter.instruction(&format!("add {}, 24", dest_reg));  // point at the variadic array payload
-                        emitter.instruction(&format!("mov {}, {}", offset_reg, tail_index_reg)); // copy the destination index before scaling
+                        emitter.instruction(&format!("mov {}, {}", offset_reg, tail_index_reg)); //copy the destination index before scaling
                         emitter.instruction(&format!("shl {}, 3", offset_reg)); // compute the 8-byte destination slot offset
-                        emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg)); // advance to the selected variadic destination slot
+                        emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg)); //advance to the selected variadic destination slot
                     }
                 }
                 abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), dest_reg, 0);
             }
             PhpType::Float => {
                 let dest_reg = len_store_reg;
-                emitter.instruction(&format!("mov {}, {}", dest_reg, peek_reg)); // point at the variadic array before skipping the header
+                emitter.instruction(&format!("mov {}, {}", dest_reg, peek_reg)); //point at the variadic array before skipping the header
                 match emitter.target.arch {
                     crate::codegen::platform::Arch::AArch64 => {
-                        emitter.instruction(&format!("add {}, {}, #24", dest_reg, dest_reg)); // point at the variadic array payload
-                        emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, tail_index_reg)); // compute the 8-byte destination slot offset
-                        emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, offset_reg)); // advance to the selected variadic destination slot
+                        emitter.instruction(&format!("add {}, {}, #24", dest_reg, dest_reg)); //point at the variadic array payload
+                        emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, tail_index_reg)); //compute the 8-byte destination slot offset
+                        emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, offset_reg)); //advance to the selected variadic destination slot
                     }
                     crate::codegen::platform::Arch::X86_64 => {
                         emitter.instruction(&format!("add {}, 24", dest_reg));  // point at the variadic array payload
-                        emitter.instruction(&format!("mov {}, {}", offset_reg, tail_index_reg)); // copy the destination index before scaling
+                        emitter.instruction(&format!("mov {}, {}", offset_reg, tail_index_reg)); //copy the destination index before scaling
                         emitter.instruction(&format!("shl {}, 3", offset_reg)); // compute the 8-byte destination slot offset
-                        emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg)); // advance to the selected variadic destination slot
+                        emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg)); //advance to the selected variadic destination slot
                     }
                 }
                 abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), dest_reg, 0);
@@ -1257,18 +1257,18 @@ pub(crate) fn emit_loaded_array_callback_call(
             PhpType::Str => {
                 let dest_reg = len_store_reg;
                 let (ptr_reg, len_reg_out) = abi::string_result_regs(emitter);
-                emitter.instruction(&format!("mov {}, {}", dest_reg, peek_reg)); // point at the variadic array before skipping the header
+                emitter.instruction(&format!("mov {}, {}", dest_reg, peek_reg)); //point at the variadic array before skipping the header
                 match emitter.target.arch {
                     crate::codegen::platform::Arch::AArch64 => {
-                        emitter.instruction(&format!("add {}, {}, #24", dest_reg, dest_reg)); // point at the variadic array payload
-                        emitter.instruction(&format!("lsl {}, {}, #4", offset_reg, tail_index_reg)); // compute the 16-byte destination slot offset
-                        emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, offset_reg)); // advance to the selected variadic destination slot
+                        emitter.instruction(&format!("add {}, {}, #24", dest_reg, dest_reg)); //point at the variadic array payload
+                        emitter.instruction(&format!("lsl {}, {}, #4", offset_reg, tail_index_reg)); //compute the 16-byte destination slot offset
+                        emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, offset_reg)); //advance to the selected variadic destination slot
                     }
                     crate::codegen::platform::Arch::X86_64 => {
                         emitter.instruction(&format!("add {}, 24", dest_reg));  // point at the variadic array payload
-                        emitter.instruction(&format!("mov {}, {}", offset_reg, tail_index_reg)); // copy the destination index before scaling
+                        emitter.instruction(&format!("mov {}, {}", offset_reg, tail_index_reg)); //copy the destination index before scaling
                         emitter.instruction(&format!("shl {}, 4", offset_reg)); // compute the 16-byte destination slot offset
-                        emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg)); // advance to the selected variadic destination slot
+                        emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg)); //advance to the selected variadic destination slot
                     }
                 }
                 abi::emit_store_to_address(emitter, ptr_reg, dest_reg, 0);
@@ -1278,7 +1278,7 @@ pub(crate) fn emit_loaded_array_callback_call(
         }
         match emitter.target.arch {
             crate::codegen::platform::Arch::AArch64 => {
-                emitter.instruction(&format!("add {}, {}, #1", tail_index_reg, tail_index_reg)); // advance to the next tail element
+                emitter.instruction(&format!("add {}, {}, #1", tail_index_reg, tail_index_reg)); //advance to the next tail element
             }
             crate::codegen::platform::Arch::X86_64 => {
                 emitter.instruction(&format!("add {}, 1", tail_index_reg));     // advance to the next tail element
@@ -1446,11 +1446,11 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(emitter: &mut Emitter, ctx: &
 fn emit_branch_if_invoker_ref_cell_tag(tag_reg: &str, label: &str, emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #{}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); // check for an invoker-only by-reference argument marker
+            emitter.instruction(&format!("cmp {}, #{}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); //check for an invoker-only by-reference argument marker
             emitter.instruction(&format!("b.eq {}", label));                    // use the original caller storage when this slot is a marker
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, {}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); // check for an invoker-only by-reference argument marker
+            emitter.instruction(&format!("cmp {}, {}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); //check for an invoker-only by-reference argument marker
             emitter.instruction(&format!("je {}", label));                      // use the original caller storage when this slot is a marker
         }
     }
@@ -1542,7 +1542,7 @@ pub(crate) fn emit_branch_if_mixed_arg_tag(
 ) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #{}", tag_reg, expected_tag)); // check the runtime tag of the boxed invoker argument container
+            emitter.instruction(&format!("cmp {}, #{}", tag_reg, expected_tag)); //check the runtime tag of the boxed invoker argument container
             emitter.instruction(&format!("b.eq {}", label));                    // dispatch to the handler for this argument-container shape
         }
         Arch::X86_64 => {
@@ -1589,11 +1589,11 @@ fn emit_indexed_required_arg_count_check(
     let ok_label = ctx.next_label("cufa_indexed_required_ok");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, #{}", len_reg, required_count)); // check that the dynamic indexed arg array contains all required callback parameters
+            emitter.instruction(&format!("cmp {}, #{}", len_reg, required_count)); //check that the dynamic indexed arg array contains all required callback parameters
             emitter.instruction(&format!("b.ge {}", ok_label));                 // continue when every required callback parameter is present
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, {}", len_reg, required_count)); // check that the dynamic indexed arg array contains all required callback parameters
+            emitter.instruction(&format!("cmp {}, {}", len_reg, required_count)); //check that the dynamic indexed arg array contains all required callback parameters
             emitter.instruction(&format!("jge {}", ok_label));                  // continue when every required callback parameter is present
         }
     }
@@ -2106,12 +2106,12 @@ fn emit_load_indexed_array_runtime_value_type_tag(
 ) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldr {}, [{}, #-8]", tag_reg, array_reg)); // load the packed indexed-array metadata before Mixed-slot conversion
+            emitter.instruction(&format!("ldr {}, [{}, #-8]", tag_reg, array_reg)); //load the packed indexed-array metadata before Mixed-slot conversion
             emitter.instruction(&format!("lsr {}, {}, #8", tag_reg, tag_reg));  // move the indexed-array value_type tag into the low bits
-            emitter.instruction(&format!("and {}, {}, #0x7f", tag_reg, tag_reg)); // isolate the runtime indexed-array value_type tag
+            emitter.instruction(&format!("and {}, {}, #0x7f", tag_reg, tag_reg)); //isolate the runtime indexed-array value_type tag
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov {}, QWORD PTR [{} - 8]", tag_reg, array_reg)); // load the packed indexed-array metadata before Mixed-slot conversion
+            emitter.instruction(&format!("mov {}, QWORD PTR [{} - 8]", tag_reg, array_reg)); //load the packed indexed-array metadata before Mixed-slot conversion
             emitter.instruction(&format!("shr {}, 8", tag_reg));                // move the indexed-array value_type tag into the low bits
             emitter.instruction(&format!("and {}, 0x7f", tag_reg));             // isolate the runtime indexed-array value_type tag
         }
@@ -2184,11 +2184,11 @@ fn emit_branch_if_descriptor_invoker_missing(
 ) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cbz {}, {}", invoker_reg, missing_label)); // abort when the descriptor has no uniform invoker
+            emitter.instruction(&format!("cbz {}, {}", invoker_reg, missing_label)); //abort when the descriptor has no uniform invoker
             emitter.instruction(&format!("b {}", ready_label));                 // continue when a descriptor invoker is available
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("test {}, {}", invoker_reg, invoker_reg)); // abort when the descriptor has no uniform invoker
+            emitter.instruction(&format!("test {}, {}", invoker_reg, invoker_reg)); //abort when the descriptor has no uniform invoker
             emitter.instruction(&format!("je {}", missing_label));              // branch to the fatal descriptor-invoker diagnostic
             emitter.instruction(&format!("jmp {}", ready_label));               // continue when a descriptor invoker is available
         }
@@ -2351,11 +2351,11 @@ fn emit_loaded_array_unknown_callback_call_by_arity(
     for (arg_count, label) in case_labels.iter().enumerate() {
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("cmp {}, #{}", len_reg, arg_count)); // compare runtime callback-argument count against this unknown-signature case
+                emitter.instruction(&format!("cmp {}, #{}", len_reg, arg_count)); //compare runtime callback-argument count against this unknown-signature case
                 emitter.instruction(&format!("b.eq {}", label));                // dispatch to the call shape matching the runtime argument count
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("cmp {}, {}", len_reg, arg_count)); // compare runtime callback-argument count against this unknown-signature case
+                emitter.instruction(&format!("cmp {}, {}", len_reg, arg_count)); //compare runtime callback-argument count against this unknown-signature case
                 emitter.instruction(&format!("je {}", label));                  // dispatch to the call shape matching the runtime argument count
             }
         }
@@ -2533,10 +2533,10 @@ fn emit_unknown_captured_callback_overflow_dynamic(
     if capture_stack_bytes > 0 {
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("add {}, {}, #{}", overflow_bytes_reg, overflow_bytes_reg, capture_stack_bytes)); // reserve trailing stack slots for captured callback arguments
+                emitter.instruction(&format!("add {}, {}, #{}", overflow_bytes_reg, overflow_bytes_reg, capture_stack_bytes)); //reserve trailing stack slots for captured callback arguments
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("add {}, {}", overflow_bytes_reg, capture_stack_bytes)); // reserve trailing stack slots for captured callback arguments
+                emitter.instruction(&format!("add {}, {}", overflow_bytes_reg, capture_stack_bytes)); //reserve trailing stack slots for captured callback arguments
             }
         }
     }
@@ -2704,24 +2704,24 @@ fn emit_unknown_dynamic_overflow_size(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("mov {}, #0", overflow_count_reg));    // default to no stack-passed unknown callback arguments
-            emitter.instruction(&format!("cmp {}, #{}", len_reg, register_arg_capacity)); // compare runtime arity with the register argument capacity
+            emitter.instruction(&format!("cmp {}, #{}", len_reg, register_arg_capacity)); //compare runtime arity with the register argument capacity
             emitter.instruction(&format!("b.gt {}", has_overflow));             // compute stack spill bytes only when runtime arity exceeds registers
             emitter.instruction(&format!("b {}", done));                        // skip overflow sizing for register-only calls
             emitter.label(&has_overflow);
-            emitter.instruction(&format!("sub {}, {}, #{}", overflow_count_reg, len_reg, register_arg_capacity)); // count callback arguments that must be stack-passed
+            emitter.instruction(&format!("sub {}, {}, #{}", overflow_count_reg, len_reg, register_arg_capacity)); //count callback arguments that must be stack-passed
             emitter.label(&done);
-            emitter.instruction(&format!("lsl {}, {}, #4", overflow_bytes_reg, overflow_count_reg)); // convert stack-passed argument count to 16-byte ABI slots
+            emitter.instruction(&format!("lsl {}, {}, #4", overflow_bytes_reg, overflow_count_reg)); //convert stack-passed argument count to 16-byte ABI slots
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov {}, 0", overflow_count_reg));     // default to no stack-passed unknown callback arguments
-            emitter.instruction(&format!("cmp {}, {}", len_reg, register_arg_capacity)); // compare runtime arity with the register argument capacity
+            emitter.instruction(&format!("cmp {}, {}", len_reg, register_arg_capacity)); //compare runtime arity with the register argument capacity
             emitter.instruction(&format!("jg {}", has_overflow));               // compute stack spill bytes only when runtime arity exceeds registers
             emitter.instruction(&format!("jmp {}", done));                      // skip overflow sizing for register-only calls
             emitter.label(&has_overflow);
-            emitter.instruction(&format!("mov {}, {}", overflow_count_reg, len_reg)); // seed overflow count from the runtime callback arity
-            emitter.instruction(&format!("sub {}, {}", overflow_count_reg, register_arg_capacity)); // count callback arguments that must be stack-passed
+            emitter.instruction(&format!("mov {}, {}", overflow_count_reg, len_reg)); //seed overflow count from the runtime callback arity
+            emitter.instruction(&format!("sub {}, {}", overflow_count_reg, register_arg_capacity)); //count callback arguments that must be stack-passed
             emitter.label(&done);
-            emitter.instruction(&format!("mov {}, {}", overflow_bytes_reg, overflow_count_reg)); // copy overflow count before scaling to bytes
+            emitter.instruction(&format!("mov {}, {}", overflow_bytes_reg, overflow_count_reg)); //copy overflow count before scaling to bytes
             emitter.instruction(&format!("shl {}, 4", overflow_bytes_reg));     // convert stack-passed argument count to 16-byte ABI slots
         }
     }
@@ -2759,12 +2759,12 @@ fn emit_unknown_dynamic_register_arg_temps(
         let done_label = ctx.next_label("cufa_unknown_dynamic_reg_done");
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("cmp {}, #{}", len_reg, arg_idx + 1)); // check whether this register-passed callback argument exists
+                emitter.instruction(&format!("cmp {}, #{}", len_reg, arg_idx + 1)); //check whether this register-passed callback argument exists
                 emitter.instruction(&format!("b.ge {}", load_label));           // materialize the register argument when present
                 emitter.instruction(&format!("b {}", done_label));              // leave absent optional unknown callback argument registers untouched
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("cmp {}, {}", len_reg, arg_idx + 1)); // check whether this register-passed callback argument exists
+                emitter.instruction(&format!("cmp {}, {}", len_reg, arg_idx + 1)); //check whether this register-passed callback argument exists
                 emitter.instruction(&format!("jge {}", load_label));            // materialize the register argument when present
                 emitter.instruction(&format!("jmp {}", done_label));            // leave absent optional unknown callback argument registers untouched
             }
@@ -2802,15 +2802,15 @@ fn emit_unknown_dynamic_stack_args(
     emitter.label(&loop_label);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {}, {}", idx_reg, overflow_count_reg)); // stop after all stack-passed unknown callback args are materialized
+            emitter.instruction(&format!("cmp {}, {}", idx_reg, overflow_count_reg)); //stop after all stack-passed unknown callback args are materialized
             emitter.instruction(&format!("b.ge {}", done_label));               // leave the overflow materialization loop
-            emitter.instruction(&format!("add {}, {}, #{}", source_idx_reg, idx_reg, register_arg_capacity)); // convert overflow index to source array index
+            emitter.instruction(&format!("add {}, {}, #{}", source_idx_reg, idx_reg, register_arg_capacity)); //convert overflow index to source array index
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {}, {}", idx_reg, overflow_count_reg)); // stop after all stack-passed unknown callback args are materialized
+            emitter.instruction(&format!("cmp {}, {}", idx_reg, overflow_count_reg)); //stop after all stack-passed unknown callback args are materialized
             emitter.instruction(&format!("jge {}", done_label));                // leave the overflow materialization loop
-            emitter.instruction(&format!("mov {}, {}", source_idx_reg, idx_reg)); // seed source array index from overflow index
-            emitter.instruction(&format!("add {}, {}", source_idx_reg, register_arg_capacity)); // convert overflow index to source array index
+            emitter.instruction(&format!("mov {}, {}", source_idx_reg, idx_reg)); //seed source array index from overflow index
+            emitter.instruction(&format!("add {}, {}", source_idx_reg, register_arg_capacity)); //convert overflow index to source array index
         }
     }
     emit_dynamic_array_element_to_result(
@@ -2855,20 +2855,20 @@ fn emit_dynamic_array_element_to_result(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("mov {}, {}", source_reg, array_reg)); // seed the dynamic source element pointer from the callback-argument array
-            emitter.instruction(&format!("add {}, {}, #24", source_reg, source_reg)); // skip the indexed array header before dynamic argument lookup
+            emitter.instruction(&format!("add {}, {}, #24", source_reg, source_reg)); //skip the indexed array header before dynamic argument lookup
             if args::array_element_stride(elem_ty) == 16 {
-                emitter.instruction(&format!("lsl {}, {}, #4", offset_reg, index_reg)); // scale dynamic source index by the string element width
+                emitter.instruction(&format!("lsl {}, {}, #4", offset_reg, index_reg)); //scale dynamic source index by the string element width
             } else {
-                emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, index_reg)); // scale dynamic source index by the scalar element width
+                emitter.instruction(&format!("lsl {}, {}, #3", offset_reg, index_reg)); //scale dynamic source index by the scalar element width
             }
-            emitter.instruction(&format!("add {}, {}, {}", source_reg, source_reg, offset_reg)); // address the selected dynamic callback argument slot
+            emitter.instruction(&format!("add {}, {}, {}", source_reg, source_reg, offset_reg)); //address the selected dynamic callback argument slot
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov {}, {}", source_reg, array_reg)); // seed the dynamic source element pointer from the callback-argument array
             emitter.instruction(&format!("add {}, 24", source_reg));            // skip the indexed array header before dynamic argument lookup
             emitter.instruction(&format!("mov {}, {}", offset_reg, index_reg)); // copy dynamic source index before scaling
-            emitter.instruction(&format!("imul {}, {}", offset_reg, args::array_element_stride(elem_ty))); // scale dynamic source index by the element width
-            emitter.instruction(&format!("add {}, {}", source_reg, offset_reg)); // address the selected dynamic callback argument slot
+            emitter.instruction(&format!("imul {}, {}", offset_reg, args::array_element_stride(elem_ty))); //scale dynamic source index by the element width
+            emitter.instruction(&format!("add {}, {}", source_reg, offset_reg)); //address the selected dynamic callback argument slot
         }
     }
     args::load_array_element_to_result(emitter, elem_ty, source_reg, 0);
@@ -2885,12 +2885,12 @@ fn emit_unknown_dynamic_stack_arg_address(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("mov {}, sp", dest_reg));              // seed overflow destination from the current stack pointer
-            emitter.instruction(&format!("add {}, {}, #{}", dest_reg, dest_reg, register_temp_bytes)); // skip register-argument temp slots to reach outgoing stack args
-            emitter.instruction(&format!("lsl {}, {}, #4", offset_reg, idx_reg)); // scale overflow argument index by the 16-byte ABI slot width
-            emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, offset_reg)); // address the outgoing overflow argument slot
+            emitter.instruction(&format!("add {}, {}, #{}", dest_reg, dest_reg, register_temp_bytes)); //skip register-argument temp slots to reach outgoing stack args
+            emitter.instruction(&format!("lsl {}, {}, #4", offset_reg, idx_reg)); //scale overflow argument index by the 16-byte ABI slot width
+            emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, offset_reg)); //address the outgoing overflow argument slot
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("lea {}, [rsp + {}]", dest_reg, register_temp_bytes)); // address the first outgoing overflow argument slot
+            emitter.instruction(&format!("lea {}, [rsp + {}]", dest_reg, register_temp_bytes)); //address the first outgoing overflow argument slot
             emitter.instruction(&format!("mov {}, {}", offset_reg, idx_reg));   // copy overflow argument index before scaling to bytes
             emitter.instruction(&format!("shl {}, 4", offset_reg));             // scale overflow argument index by the 16-byte ABI slot width
             emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg));  // address the outgoing overflow argument slot
@@ -2911,12 +2911,12 @@ fn emit_unknown_dynamic_load_register_args(
         let done_label = ctx.next_label("cufa_unknown_dynamic_arg_done");
         match emitter.target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("cmp {}, #{}", len_reg, arg_idx + 1)); // check whether this final register argument exists
+                emitter.instruction(&format!("cmp {}, #{}", len_reg, arg_idx + 1)); //check whether this final register argument exists
                 emitter.instruction(&format!("b.ge {}", load_label));           // load the ABI register when the argument was provided
                 emitter.instruction(&format!("b {}", done_label));              // skip absent unknown callback argument registers
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("cmp {}, {}", len_reg, arg_idx + 1)); // check whether this final register argument exists
+                emitter.instruction(&format!("cmp {}, {}", len_reg, arg_idx + 1)); //check whether this final register argument exists
                 emitter.instruction(&format!("jge {}", load_label));            // load the ABI register when the argument was provided
                 emitter.instruction(&format!("jmp {}", done_label));            // skip absent unknown callback argument registers
             }
@@ -3028,20 +3028,20 @@ fn emit_dynamic_capture_stack_arg_address(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("mov {}, sp", dest_reg));              // seed the captured-argument stack slot from the current stack pointer
-            emitter.instruction(&format!("add {}, {}, #{}", dest_reg, dest_reg, register_temp_bytes)); // skip register-argument temps before captured stack args
-            emitter.instruction(&format!("lsl {}, {}, #4", offset_reg, overflow_count_reg)); // scale visible overflow count to outgoing stack bytes
-            emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, offset_reg)); // skip dynamic visible overflow args before captured stack args
+            emitter.instruction(&format!("add {}, {}, #{}", dest_reg, dest_reg, register_temp_bytes)); //skip register-argument temps before captured stack args
+            emitter.instruction(&format!("lsl {}, {}, #4", offset_reg, overflow_count_reg)); //scale visible overflow count to outgoing stack bytes
+            emitter.instruction(&format!("add {}, {}, {}", dest_reg, dest_reg, offset_reg)); //skip dynamic visible overflow args before captured stack args
             if capture_stack_offset > 0 {
-                emitter.instruction(&format!("add {}, {}, #{}", dest_reg, dest_reg, capture_stack_offset)); // select the current captured stack argument slot
+                emitter.instruction(&format!("add {}, {}, #{}", dest_reg, dest_reg, capture_stack_offset)); //select the current captured stack argument slot
             }
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("lea {}, [rsp + {}]", dest_reg, register_temp_bytes)); // skip register-argument temps before captured stack args
-            emitter.instruction(&format!("mov {}, {}", offset_reg, overflow_count_reg)); // copy visible overflow count before scaling to bytes
+            emitter.instruction(&format!("lea {}, [rsp + {}]", dest_reg, register_temp_bytes)); //skip register-argument temps before captured stack args
+            emitter.instruction(&format!("mov {}, {}", offset_reg, overflow_count_reg)); //copy visible overflow count before scaling to bytes
             emitter.instruction(&format!("shl {}, 4", offset_reg));             // scale visible overflow count to outgoing stack bytes
             emitter.instruction(&format!("add {}, {}", dest_reg, offset_reg));  // skip dynamic visible overflow args before captured stack args
             if capture_stack_offset > 0 {
-                emitter.instruction(&format!("add {}, {}", dest_reg, capture_stack_offset)); // select the current captured stack argument slot
+                emitter.instruction(&format!("add {}, {}", dest_reg, capture_stack_offset)); //select the current captured stack argument slot
             }
         }
     }

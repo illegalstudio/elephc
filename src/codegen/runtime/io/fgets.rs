@@ -138,9 +138,9 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     // -- nonblocking read miss: return accumulated bytes without EOF --
     emitter.label("__rt_fgets_read_failed");
     if emitter.platform.needs_cmp_before_error_branch() {
-        emitter.instruction(&format!("cmn x0, #{}", emitter.platform.would_block_errno())); // Linux: compare read result with -EAGAIN/-EWOULDBLOCK
+        emitter.instruction(&format!("cmn x0, #{}", emitter.platform.would_block_errno())); //Linux: compare read result with -EAGAIN/-EWOULDBLOCK
     } else {
-        emitter.instruction(&format!("cmp x0, #{}", emitter.platform.would_block_errno())); // macOS: compare errno with EAGAIN/EWOULDBLOCK
+        emitter.instruction(&format!("cmp x0, #{}", emitter.platform.would_block_errno())); //macOS: compare errno with EAGAIN/EWOULDBLOCK
     }
     emitter.instruction("b.eq __rt_fgets_done");                                // would-block returns the partial line, not EOF
 

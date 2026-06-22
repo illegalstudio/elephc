@@ -257,7 +257,7 @@ where
     emitter.instruction("cmp rax, 0");                                          // did read return EOF or an error?
     emitter.instruction(&format!("jle {}", slurp_done));                        // stop slurping on EOF or error
     emitter.instruction("add QWORD PTR [rbp - 16], rax");                       // bump offset
-    emitter.instruction(&format!("cmp QWORD PTR [rbp - 16], {}", FILTER_BUF_SIZE)); // is there still room to read more?
+    emitter.instruction(&format!("cmp QWORD PTR [rbp - 16], {}", FILTER_BUF_SIZE)); //is there still room to read more?
     emitter.instruction(&format!("jl {}", slurp));                              // continue slurping until buffer is full or EOF
     emitter.label(&slurp_done);
 
