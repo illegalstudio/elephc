@@ -2348,6 +2348,36 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies direct ReflectionParameter construction accepts runtime object method targets.
+#[test]
+fn execute_program_reflection_parameter_accepts_object_expression_target() {
+    let program = parse_fragment(
+        br#"class EvalDirectParamObjectTarget {
+    public function run(int $id, ?string $name = null) {}
+}
+$param = new ReflectionParameter([new EvalDirectParamObjectTarget(), "run"], "name");
+echo $param->getName(); echo ":";
+echo $param->getPosition(); echo ":";
+echo $param->getDeclaringClass()->getName(); echo ":";
+echo $param->getDeclaringFunction()->getName(); echo ":";
+echo $param->isOptional() ? "O" : "R"; echo ":";
+echo $param->getType()->getName(); echo ":";
+echo $param->allowsNull() ? "N" : "n";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "name:1:EvalDirectParamObjectTarget:run:O:string:N"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass::getMethods preserves eval method parameter metadata.
 #[test]
 fn execute_program_reflection_class_lists_eval_method_parameters() {

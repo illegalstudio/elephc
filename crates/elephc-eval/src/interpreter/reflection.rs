@@ -140,6 +140,12 @@ enum EvalReflectionPropertyHook {
     Set,
 }
 
+/// Constructor selector accepted by `ReflectionParameter`.
+enum EvalReflectionParameterSelector {
+    Name(String),
+    Position(i64),
+}
+
 impl EvalReflectionPropertyHook {
     /// Returns the associative-array key PHP uses for this hook kind.
     const fn key(self) -> &'static str {
@@ -217,6 +223,9 @@ pub(in crate::interpreter) fn eval_reflection_owner_new_object(
         }
         Some(EVAL_REFLECTION_OWNER_PROPERTY) => {
             eval_reflection_property_new(evaluated_args, context, values)
+        }
+        Some(EVAL_REFLECTION_OWNER_PARAMETER) => {
+            eval_reflection_parameter_new(evaluated_args, context, values)
         }
         Some(EVAL_REFLECTION_OWNER_CLASS_CONSTANT) => {
             eval_reflection_class_constant_new(evaluated_args, context, values)
@@ -1970,6 +1979,166 @@ fn eval_reflection_function_object_result(
         context,
         values,
     )
+}
+
+/// Builds an eval-backed `ReflectionParameter` object for a function or method parameter.
+fn eval_reflection_parameter_new(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let args = bind_evaluated_function_args(
+        &[String::from("function"), String::from("param")],
+        evaluated_args,
+    )?;
+    let selector = eval_reflection_parameter_selector(args[1], values)?;
+    let Some(parameter) =
+        eval_reflection_parameter_constructor_metadata(args[0], selector, context, values)?
+    else {
+        return Ok(None);
+    };
+    eval_reflection_parameter_object_result(&parameter, context, values).map(Some)
+}
+
+/// Resolves `ReflectionParameter` constructor target metadata.
+fn eval_reflection_parameter_constructor_metadata(
+    target: RuntimeCellHandle,
+    selector: EvalReflectionParameterSelector,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalReflectionParameterMetadata>, EvalStatus> {
+    if values.is_array_like(target)? {
+        return eval_reflection_method_parameter_metadata(target, selector, context, values);
+    }
+    if values.type_tag(target)? == EVAL_TAG_STRING {
+        return eval_reflection_function_parameter_metadata(target, selector, context, values);
+    }
+    Err(EvalStatus::RuntimeFatal)
+}
+
+/// Builds selected parameter metadata for an eval or native free function.
+fn eval_reflection_function_parameter_metadata(
+    target: RuntimeCellHandle,
+    selector: EvalReflectionParameterSelector,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalReflectionParameterMetadata>, EvalStatus> {
+    let requested_name = eval_reflection_string_arg(target, values)?;
+    let lookup_name = requested_name.trim_start_matches('\\').to_ascii_lowercase();
+    if let Some(function) = context.function(&lookup_name).cloned() {
+        let parameters = eval_reflection_function_parameters(
+            function.name(),
+            function.params(),
+            function.attributes().to_vec(),
+            function.parameter_attributes(),
+            function.parameter_types(),
+            function.parameter_defaults(),
+            function.parameter_is_by_ref(),
+            function.parameter_is_variadic(),
+        );
+        return Ok(eval_reflection_parameter_for_selector(parameters, selector));
+    }
+    if let Some(function) = context.native_function(&lookup_name) {
+        let reflected_name = requested_name.trim_start_matches('\\');
+        let parameter_names = eval_reflection_native_function_parameter_names(&function);
+        let parameter_attributes = vec![Vec::new(); parameter_names.len()];
+        let parameter_types: Vec<Option<EvalParameterType>> = vec![None; parameter_names.len()];
+        let parameter_defaults = vec![None; parameter_names.len()];
+        let parameter_is_by_ref = vec![false; parameter_names.len()];
+        let parameter_is_variadic = vec![false; parameter_names.len()];
+        let parameters = eval_reflection_function_parameters(
+            reflected_name,
+            &parameter_names,
+            Vec::new(),
+            &parameter_attributes,
+            &parameter_types,
+            &parameter_defaults,
+            &parameter_is_by_ref,
+            &parameter_is_variadic,
+        );
+        return Ok(eval_reflection_parameter_for_selector(parameters, selector));
+    }
+    Ok(None)
+}
+
+/// Builds selected parameter metadata for an eval or generated/AOT method target.
+fn eval_reflection_method_parameter_metadata(
+    target: RuntimeCellHandle,
+    selector: EvalReflectionParameterSelector,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalReflectionParameterMetadata>, EvalStatus> {
+    if values.array_len(target)? != 2 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let zero = values.int(0)?;
+    let one = values.int(1)?;
+    let receiver = values.array_get(target, zero)?;
+    let method = values.array_get(target, one)?;
+    let method_name = eval_reflection_string_arg(method, values)?;
+    let class_name = match values.type_tag(receiver)? {
+        EVAL_TAG_OBJECT => eval_reflection_object_class_name(receiver, context, values)?,
+        EVAL_TAG_STRING => eval_reflection_string_arg(receiver, values)?,
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    let member = if eval_reflection_class_like_exists(&class_name, context) {
+        let reflected_method_name = eval_reflection_member_name(
+            EVAL_REFLECTION_OWNER_METHOD,
+            &class_name,
+            &method_name,
+            context,
+        )
+        .ok_or(EvalStatus::RuntimeFatal)?;
+        eval_reflection_method_metadata(&class_name, &reflected_method_name, context)
+            .ok_or(EvalStatus::RuntimeFatal)?
+    } else {
+        let Some(member) = eval_reflection_aot_method_metadata_with_signature_if_exists(
+            &class_name,
+            &method_name,
+            context,
+            values,
+        )?
+        else {
+            return Ok(None);
+        };
+        member
+    };
+    Ok(eval_reflection_parameter_for_selector(
+        member.parameters,
+        selector,
+    ))
+}
+
+/// Converts a `ReflectionParameter` selector runtime value to a supported selector.
+fn eval_reflection_parameter_selector(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalReflectionParameterSelector, EvalStatus> {
+    match values.type_tag(value)? {
+        EVAL_TAG_STRING => {
+            eval_reflection_string_arg(value, values).map(EvalReflectionParameterSelector::Name)
+        }
+        EVAL_TAG_INT => {
+            eval_int_value(value, values).map(EvalReflectionParameterSelector::Position)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Selects a parameter by PHP name or zero-based position.
+fn eval_reflection_parameter_for_selector(
+    parameters: Vec<EvalReflectionParameterMetadata>,
+    selector: EvalReflectionParameterSelector,
+) -> Option<EvalReflectionParameterMetadata> {
+    match selector {
+        EvalReflectionParameterSelector::Name(name) => parameters
+            .into_iter()
+            .find(|parameter| parameter.name == name),
+        EvalReflectionParameterSelector::Position(position) if position >= 0 => {
+            parameters.into_iter().nth(position as usize)
+        }
+        EvalReflectionParameterSelector::Position(_) => None,
+    }
 }
 
 /// Builds an eval-backed `ReflectionMethod` object when the reflected method exists in eval.
@@ -6142,6 +6311,7 @@ fn reflection_owner_kind(class_name: &str) -> Option<u64> {
         "reflectionfunction" => Some(EVAL_REFLECTION_OWNER_FUNCTION),
         "reflectionmethod" => Some(EVAL_REFLECTION_OWNER_METHOD),
         "reflectionproperty" => Some(EVAL_REFLECTION_OWNER_PROPERTY),
+        "reflectionparameter" => Some(EVAL_REFLECTION_OWNER_PARAMETER),
         "reflectionclassconstant" => Some(EVAL_REFLECTION_OWNER_CLASS_CONSTANT),
         "reflectionenumunitcase" => Some(EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE),
         "reflectionenumbackedcase" => Some(EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE),

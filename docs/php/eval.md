@@ -345,7 +345,10 @@ flags are retained for eval-declared functions and methods, including
 returns the declaring class-like symbol for eval method parameters, and
 `ReflectionParameter::getDeclaringFunction()` returns a `ReflectionFunction`
 object for eval free-function parameters or a `ReflectionMethod` object for the
-declaring eval method. `ReflectionFunction::invoke()` and `invokeArgs()`
+declaring eval method. Direct `new ReflectionParameter(...)` construction
+accepts eval free-function names, class/interface/trait method arrays, and
+object-method arrays resolved from the evaluated runtime object, including
+inline `new` expressions. `ReflectionFunction::invoke()` and `invokeArgs()`
 dispatch eval-declared functions with the same named/default/variadic argument
 binding used by direct eval function calls. Defaulted eval method parameters are
 bound when omitted and reported through `ReflectionParameter::isOptional()`,

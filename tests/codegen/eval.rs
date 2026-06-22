@@ -8540,6 +8540,36 @@ foreach ($params as $param) {
     );
 }
 
+/// Verifies eval direct ReflectionParameter construction accepts runtime object method targets.
+#[test]
+fn test_eval_reflection_parameter_accepts_object_expression_target() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalDirectParamObjectTarget {
+    public function run(int $id, ?string $name = null) {}
+}
+$param = new ReflectionParameter([new EvalDirectParamObjectTarget(), "run"], 1);
+echo $param->getName() . ":";
+echo $param->getPosition() . ":";
+echo $param->getDeclaringClass()->getName() . ":";
+echo $param->getDeclaringFunction()->getName() . ":";
+echo ($param->isOptional() ? "O" : "R") . ":";
+echo $param->getType()->getName() . ":";
+echo $param->allowsNull() ? "N" : "n";
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "name:1:EvalDirectParamObjectTarget:run:O:string:N"
+    );
+}
+
 /// Verifies eval ReflectionParameter exposes PHP constant-default metadata.
 #[test]
 fn test_eval_reflection_parameter_reports_default_constant_metadata() {
