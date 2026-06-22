@@ -438,3 +438,43 @@ echo (new ReflectionClass(ReflectPropertyStringTarget::class))->getProperty("lab
         "Property [ public int $id = 7 ]|Property [ protected static string $label = 'ok' ]|Property [ private $implicit = NULL ]|Property [ public int|string $union ]|Property [ protected static string $label = 'ok' ]"
     );
 }
+
+/// Verifies AOT `ReflectionProperty::hasHooks()` and `getHooks()` expose
+/// concrete property hook metadata as ReflectionMethod objects.
+#[test]
+fn test_reflection_property_get_hooks_formats_aot_hook_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectPropertyHookMetadataTarget {
+    public int $raw = 2;
+    public int $doubled {
+        get { return $this->raw * 2; }
+        set { $this->raw = $value; }
+    }
+    public int $readonlyHook {
+        get => $this->raw + 1;
+    }
+    public int $plain = 5;
+}
+
+$hooked = new ReflectionProperty(ReflectPropertyHookMetadataTarget::class, "doubled");
+$readonly = new ReflectionProperty(ReflectPropertyHookMetadataTarget::class, "readonlyHook");
+$plain = new ReflectionProperty(ReflectPropertyHookMetadataTarget::class, "plain");
+
+echo ($hooked->hasHooks() ? "H" : "h") . ":";
+$hooks = $hooked->getHooks();
+echo count($hooks) . ":" . $hooks["get"]->getName() . ":" . $hooks["set"]->getName() . ":";
+echo $hooks["get"]->getDeclaringClass()->getName() . ":";
+echo $hooks["get"]->getNumberOfParameters() . ":";
+echo $hooks["set"]->getNumberOfParameters() . ":" . $hooks["set"]->getParameters()[0]->getName() . ":";
+echo ($readonly->hasHooks() ? "R" : "r") . ":";
+$readonlyHooks = $readonly->getHooks();
+echo count($readonlyHooks) . ":" . $readonlyHooks["get"]->getName() . ":";
+echo ($plain->hasHooks() ? "bad" : "plain") . ":" . count($plain->getHooks());
+"#,
+    );
+    assert_eq!(
+        out,
+        "H:2:$doubled::get:$doubled::set:ReflectPropertyHookMetadataTarget:0:1:value:R:1:$readonlyHook::get:plain:0"
+    );
+}

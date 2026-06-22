@@ -296,6 +296,14 @@ fn reflection_static_properties_map_type() -> PhpType {
     }
 }
 
+/// Returns `array<string, ReflectionMethod>` for property-hook reflection maps.
+fn reflection_property_hook_map_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Object("ReflectionMethod".to_string())),
+    }
+}
+
 /// Returns a nullable object type expression for one synthetic reflection class.
 fn nullable_object_type(class_name: &str) -> TypeExpr {
     TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(class_name))))
@@ -3117,6 +3125,18 @@ fn add_reflection_member_flag_methods(
             false_bool(),
         ));
         properties.push(builtin_property(
+            "__has_hooks",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
+            "__hooks",
+            Visibility::Private,
+            Some(array_type()),
+            empty_array(),
+        ));
+        properties.push(builtin_property(
             "__default_value",
             Visibility::Private,
             Some(mixed_type()),
@@ -3153,6 +3173,15 @@ fn add_reflection_member_flag_methods(
         methods.push(builtin_reflection_class_bool_method(
             "isDynamic",
             "__is_dynamic",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "hasHooks",
+            "__has_hooks",
+        ));
+        methods.push(builtin_reflection_class_array_method(
+            "getHooks",
+            "__hooks",
+            array_type(),
         ));
         properties.push(builtin_property(
             "__string",
@@ -4086,6 +4115,11 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
             }
             if class_name == "ReflectionProperty" {
+                for (property_name, property_type) in &mut class_info.properties {
+                    if property_name == "__hooks" {
+                        *property_type = reflection_property_hook_map_type();
+                    }
+                }
                 for method_name in [
                     "isfinal",
                     "isabstract",
@@ -4094,6 +4128,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "ispromoted",
                     "isvirtual",
                     "isdynamic",
+                    "hashooks",
                     "isinitialized",
                     "isprotectedset",
                     "isprivateset",
@@ -4118,6 +4153,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method_name)) {
                         sig.return_type = PhpType::Mixed;
                     }
+                }
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getHooks")) {
+                    sig.return_type = reflection_property_hook_map_type();
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getModifiers")) {
                     sig.return_type = PhpType::Int;

@@ -1187,7 +1187,7 @@ echo (new ReflectionClass(ReflectionClass::class))->isCloneable() ? "C" : "c";
 /// report PHP Traversable-compatible class metadata.
 #[test]
 fn test_reflection_class_is_iterable() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_heap_size(
         r#"<?php
 class ReflectIterablePlain {}
 abstract class ReflectIterableAbstract implements Iterator {}
@@ -1217,6 +1217,7 @@ echo (new ReflectionClass(stdClass::class))->isIterable() ? "S" : "s";
 echo (new ReflectionClass(ReflectIterableEnum::class))->isIterable() ? "E" : "e";
 echo (new ReflectionClass(ReflectIterableTrait::class))->isIterable() ? "H" : "h";
 "#,
+        67_108_864,
     );
     assert_eq!(out, "pIAGbftRseh");
 }

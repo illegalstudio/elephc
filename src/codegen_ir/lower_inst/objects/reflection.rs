@@ -55,6 +55,7 @@ struct ReflectionOwnerMetadata {
     constant_reflection_members: Vec<ReflectionListedMember>,
     method_members: Vec<ReflectionListedMember>,
     property_members: Vec<ReflectionListedMember>,
+    property_hook_members: Vec<(String, ReflectionListedMember)>,
     constructor_member: Option<ReflectionListedMember>,
     parent_class_name: Option<String>,
     constant_value: Option<ReflectionConstantValue>,
@@ -104,6 +105,7 @@ struct ReflectionListedMember {
     modifiers: i64,
     type_metadata: Option<ReflectionParameterTypeMetadata>,
     default_value: Option<ReflectionParameterDefaultValue>,
+    property_hook_members: Vec<(String, ReflectionListedMember)>,
     required_parameter_count: i64,
     is_deprecated: bool,
     is_generator: bool,
@@ -541,6 +543,18 @@ fn emit_reflection_owner_object(
             class_name,
             metadata.property_default_value.as_ref(),
         )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__has_hooks",
+            !metadata.property_hook_members.is_empty(),
+        )?;
+        emit_reflection_property_hook_array_property_by_name(
+            ctx,
+            class_name,
+            "__hooks",
+            &metadata.property_hook_members,
+        )?;
         let property_string = reflection_property_to_string(
             metadata.reflected_name.as_deref().unwrap_or(""),
             metadata.member_flags,
@@ -707,6 +721,7 @@ fn reflection_class_metadata_for_name(
             constant_reflection_members,
             method_members,
             property_members,
+            property_hook_members: Vec::new(),
             constructor_member,
             parent_class_name: reflection_parent_class_name(ctx, info),
             constant_value: None,
@@ -773,6 +788,7 @@ fn reflection_class_metadata_for_name(
             constant_reflection_members,
             method_members,
             property_members,
+            property_hook_members: Vec::new(),
             constructor_member,
             parent_class_name: None,
             constant_value: None,
@@ -845,6 +861,7 @@ fn reflection_class_metadata_for_name(
             constant_reflection_members,
             method_members,
             property_members,
+            property_hook_members: Vec::new(),
             constructor_member,
             parent_class_name: None,
             constant_value: None,
@@ -1010,6 +1027,7 @@ fn reflection_method_owner_metadata(
         constant_reflection_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
+        property_hook_members: Vec::new(),
         constructor_member: None,
         parent_class_name: member.declaring_class_name,
         constant_value: member.constant_value,
@@ -1054,6 +1072,15 @@ fn reflection_property_metadata(
         .and_then(|(_, info)| {
             let declaring_class_name =
                 reflection_property_declaring_class_name(info, &property_name);
+            let type_metadata = reflection_property_type_metadata(info, &property_name);
+            let member_flags = reflection_property_member_flags(info, &property_name)?;
+            let property_hook_members = reflection_property_hook_members(
+                info,
+                &property_name,
+                declaring_class_name.as_deref(),
+                member_flags,
+                type_metadata.as_ref(),
+            );
             Some(ReflectionOwnerMetadata {
                 reflected_name: Some(property_name.clone()),
                 attr_names: info
@@ -1079,13 +1106,14 @@ fn reflection_property_metadata(
                 constant_reflection_members: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
+                property_hook_members,
                 constructor_member: None,
                 parent_class_name: declaring_class_name,
                 constant_value: None,
                 backing_value: None,
                 is_enum_case: false,
                 parameter_members: Vec::new(),
-                type_metadata: reflection_property_type_metadata(info, &property_name),
+                type_metadata,
                 property_default_value: reflection_property_default_value(info, &property_name),
                 required_parameter_count: 0,
                 is_deprecated: false,
@@ -1102,7 +1130,7 @@ fn reflection_property_metadata(
                 is_cloneable: false,
                 is_iterable: false,
                 modifiers: reflection_property_modifiers_for_info(info, &property_name)?,
-                member_flags: reflection_property_member_flags(info, &property_name)?,
+                member_flags,
             })
         })
         .unwrap_or_else(empty_reflection_metadata))
@@ -1279,6 +1307,7 @@ fn reflection_class_constant_metadata(
             constant_reflection_members: Vec::new(),
             method_members: Vec::new(),
             property_members: Vec::new(),
+            property_hook_members: Vec::new(),
             constructor_member: None,
             parent_class_name: Some(enum_name.to_string()),
             constant_value: Some(ReflectionConstantValue::EnumCase {
@@ -1355,6 +1384,7 @@ fn reflection_enum_case_metadata(
                 constant_reflection_members: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
+                property_hook_members: Vec::new(),
                 constructor_member: None,
                 parent_class_name: Some(enum_name.to_string()),
                 constant_value: Some(ReflectionConstantValue::EnumCase {
@@ -1413,6 +1443,7 @@ fn reflection_class_constant_owner_metadata(
         constant_reflection_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
+        property_hook_members: Vec::new(),
         constructor_member: None,
         parent_class_name: Some(metadata.declaring_class_name),
         constant_value: Some(metadata.value),
@@ -2267,6 +2298,7 @@ fn push_unique_constant_reflection_member(
         modifiers: reflection_class_constant_modifiers(&visibility, is_final),
         type_metadata: None,
         default_value: None,
+        property_hook_members: Vec::new(),
         required_parameter_count: 0,
         is_deprecated: false,
         is_generator: false,
@@ -2617,6 +2649,7 @@ fn reflection_class_method_member(
         modifiers: reflection_method_modifiers_from_flags(flags),
         type_metadata,
         default_value: None,
+        property_hook_members: Vec::new(),
         required_parameter_count,
         is_deprecated: sig.deprecation.is_some(),
         is_generator,
@@ -2699,6 +2732,7 @@ fn reflection_interface_method_member(
         modifiers: reflection_method_modifiers_from_flags(flags),
         type_metadata,
         default_value: None,
+        property_hook_members: Vec::new(),
         required_parameter_count,
         is_deprecated: sig.deprecation.is_some(),
         is_generator: false,
@@ -2777,6 +2811,7 @@ fn reflection_trait_method_member(
         modifiers: reflection_method_modifiers_from_flags(flags),
         type_metadata,
         default_value: None,
+        property_hook_members: Vec::new(),
         required_parameter_count,
         is_deprecated: info.signature.deprecation.is_some(),
         is_generator,
@@ -2831,13 +2866,21 @@ fn reflection_class_property_member(
     })?;
     let type_metadata = reflection_property_type_metadata(info, property_name);
     let default_value = reflection_property_default_value(info, property_name);
+    let declaring_class_name = reflection_property_declaring_class_name(info, property_name)
+        .or_else(|| {
+            (is_reflection_enum(ctx, class_name) && property_name == "name")
+                .then(|| class_name.to_string())
+        });
+    let property_hook_members = reflection_property_hook_members(
+        info,
+        property_name,
+        declaring_class_name.as_deref(),
+        flags,
+        type_metadata.as_ref(),
+    );
     Some(ReflectionListedMember {
         name: property_name.to_string(),
-        declaring_class_name: reflection_property_declaring_class_name(info, property_name)
-            .or_else(|| {
-                (is_reflection_enum(ctx, class_name) && property_name == "name")
-                    .then(|| class_name.to_string())
-            }),
+        declaring_class_name,
         attr_names: info
             .property_attribute_names
             .get(property_name)
@@ -2855,6 +2898,7 @@ fn reflection_class_property_member(
             .unwrap_or_else(|| reflection_property_modifiers_from_flags(flags)),
         type_metadata,
         default_value,
+        property_hook_members,
         required_parameter_count: 0,
         is_deprecated: false,
         is_generator: false,
@@ -2880,6 +2924,153 @@ fn reflection_property_type_metadata(
         .iter()
         .find(|(name, _)| name == property_name)?;
     reflection_parameter_type_metadata(None, property_type)
+}
+
+/// Builds concrete or abstract property-hook ReflectionMethod metadata for one property.
+fn reflection_property_hook_members(
+    info: &crate::types::ClassInfo,
+    property_name: &str,
+    declaring_class_name: Option<&str>,
+    property_flags: ReflectionMemberFlags,
+    property_type_metadata: Option<&ReflectionParameterTypeMetadata>,
+) -> Vec<(String, ReflectionListedMember)> {
+    let mut members = Vec::new();
+    let declaring_class_name = declaring_class_name.map(str::to_string).or_else(|| {
+        info.abstract_property_hooks
+            .get(property_name)
+            .map(|contract| contract.declaring_type.clone())
+    });
+    let has_concrete_get = info
+        .methods
+        .contains_key(&php_symbol_key(&property_hook_get_method(property_name)));
+    let has_concrete_set = info
+        .methods
+        .contains_key(&php_symbol_key(&property_hook_set_method(property_name)));
+    let contract = info.abstract_property_hooks.get(property_name);
+    if has_concrete_get || contract.and_then(|contract| contract.get_type.as_ref()).is_some() {
+        let return_type = contract
+            .and_then(|contract| contract.get_type.as_ref())
+            .and_then(|ty| reflection_parameter_type_metadata(None, ty))
+            .or_else(|| property_type_metadata.cloned());
+        members.push((
+            String::from("get"),
+            reflection_property_hook_method_member(
+                property_name,
+                "get",
+                declaring_class_name.clone(),
+                property_flags,
+                !has_concrete_get,
+                return_type,
+                None,
+            ),
+        ));
+    }
+    if has_concrete_set || contract.and_then(|contract| contract.set_type.as_ref()).is_some() {
+        let parameter_type = contract
+            .and_then(|contract| contract.set_type.as_ref())
+            .and_then(|ty| reflection_parameter_type_metadata(None, ty))
+            .or_else(|| property_type_metadata.cloned());
+        members.push((
+            String::from("set"),
+            reflection_property_hook_method_member(
+                property_name,
+                "set",
+                declaring_class_name,
+                property_flags,
+                !has_concrete_set,
+                Some(ReflectionParameterTypeMetadata::Named(
+                    reflection_builtin_named_type("void", false),
+                )),
+                parameter_type,
+            ),
+        ));
+    }
+    members
+}
+
+/// Builds one ReflectionMethod metadata record for a property hook.
+fn reflection_property_hook_method_member(
+    property_name: &str,
+    hook_name: &str,
+    declaring_class_name: Option<String>,
+    property_flags: ReflectionMemberFlags,
+    is_abstract: bool,
+    return_type: Option<ReflectionParameterTypeMetadata>,
+    parameter_type: Option<ReflectionParameterTypeMetadata>,
+) -> ReflectionListedMember {
+    let visibility = reflection_visibility_from_member_flags(property_flags);
+    let flags = reflection_member_flags(false, &visibility, false, is_abstract, false, false);
+    let name = format!("${property_name}::{hook_name}");
+    let required_parameter_count = i64::from(hook_name == "set");
+    let declaring_function = ReflectionDeclaringFunctionMember::Method {
+        name: name.clone(),
+        declaring_class_name: declaring_class_name.clone(),
+        attr_names: Vec::new(),
+        attr_args: Vec::new(),
+        flags,
+        required_parameter_count,
+        type_metadata: return_type.clone(),
+        is_deprecated: false,
+        is_generator: false,
+    };
+    let parameters = if hook_name == "set" {
+        vec![reflection_property_hook_parameter_member(
+            declaring_class_name.clone(),
+            declaring_function.clone(),
+            parameter_type,
+        )]
+    } else {
+        Vec::new()
+    };
+    ReflectionListedMember {
+        name,
+        declaring_class_name,
+        attr_names: Vec::new(),
+        attr_args: Vec::new(),
+        constant_value: None,
+        is_enum_case: false,
+        flags,
+        modifiers: reflection_method_modifiers_from_flags(flags),
+        type_metadata: return_type,
+        default_value: None,
+        property_hook_members: Vec::new(),
+        required_parameter_count,
+        is_deprecated: false,
+        is_generator: false,
+        prototype_member: None,
+        parameters,
+    }
+}
+
+/// Builds the synthetic `value` parameter exposed by set-hook ReflectionMethod objects.
+fn reflection_property_hook_parameter_member(
+    declaring_class_name: Option<String>,
+    declaring_function: ReflectionDeclaringFunctionMember,
+    type_metadata: Option<ReflectionParameterTypeMetadata>,
+) -> ReflectionParameterMember {
+    let has_type = type_metadata.is_some();
+    let allows_null = type_metadata.as_ref().is_some_and(reflection_type_allows_null);
+    let is_array_type = reflection_parameter_has_named_type(type_metadata.as_ref(), "array");
+    let is_callable_type = reflection_parameter_has_named_type(type_metadata.as_ref(), "callable");
+    ReflectionParameterMember {
+        name: String::from("value"),
+        declaring_class_name,
+        declaring_function: Some(declaring_function),
+        attr_names: Vec::new(),
+        attr_args: Vec::new(),
+        position: 0,
+        is_optional: false,
+        is_variadic: false,
+        is_passed_by_reference: false,
+        is_promoted: false,
+        has_type,
+        allows_null,
+        is_array_type,
+        is_callable_type,
+        type_metadata,
+        default_value: None,
+        default_value_constant_name: None,
+    }
 }
 
 /// Returns supported default metadata for one reflected property.
@@ -3043,6 +3234,7 @@ fn default_method_members(
             )),
             type_metadata: None,
             default_value: None,
+        property_hook_members: Vec::new(),
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
@@ -3086,6 +3278,7 @@ fn default_property_members(
             ),
             type_metadata: None,
             default_value: None,
+        property_hook_members: Vec::new(),
             required_parameter_count: 0,
             is_deprecated: false,
             is_generator: false,
@@ -3950,6 +4143,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         constant_reflection_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
+        property_hook_members: Vec::new(),
         constructor_member: None,
         parent_class_name: None,
         constant_value: None,
@@ -4409,6 +4603,46 @@ fn emit_reflection_member_array_property_by_name(
     Ok(())
 }
 
+/// Replaces a ReflectionProperty private slot with string-keyed hook ReflectionMethod objects.
+fn emit_reflection_property_hook_array_property_by_name(
+    ctx: &mut FunctionContext<'_>,
+    owner_class_name: &str,
+    property_name: &str,
+    members: &[(String, ReflectionListedMember)],
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(owner_class_name)
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let low_offset = reflection_property_offset(class_info, property_name)?;
+    let high_offset = low_offset + 8;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    emit_reflection_property_hook_array(ctx, members)?;
+    let assoc_type = reflection_property_hook_map_type();
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::secondary_scratch_reg(ctx.emitter),
+        runtime_value_tag(&assoc_type) as i64,
+    );
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::secondary_scratch_reg(ctx.emitter),
+        object_reg,
+        high_offset,
+    );
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    Ok(())
+}
+
 /// Replaces the ReflectionClass private constructor slot with `ReflectionMethod|null`.
 fn emit_reflection_constructor_property(
     ctx: &mut FunctionContext<'_>,
@@ -4603,6 +4837,23 @@ fn emit_reflection_member_array(
     Ok(())
 }
 
+/// Allocates a string-keyed hook map with populated ReflectionMethod objects.
+fn emit_reflection_property_hook_array(
+    ctx: &mut FunctionContext<'_>,
+    members: &[(String, ReflectionListedMember)],
+) -> Result<()> {
+    emit_empty_assoc_array_literal_to_result(
+        ctx,
+        &PhpType::Object("ReflectionMethod".to_string()),
+    );
+    for (key, member) in members {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_reflection_member_object(ctx, "ReflectionMethod", member)?;
+        emit_reflection_method_hash_insert(ctx, key);
+    }
+    Ok(())
+}
+
 /// Allocates an indexed array of populated ReflectionParameter objects.
 fn emit_reflection_parameter_array(
     ctx: &mut FunctionContext<'_>,
@@ -4681,6 +4932,47 @@ fn emit_reflection_class_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
             );
             abi::emit_call_label(ctx.emitter, "__rt_hash_set");
         }
+    }
+}
+
+/// Inserts the current ReflectionMethod object into the stacked associative array.
+fn emit_reflection_method_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
+    let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x0");                              // pass the ReflectionMethod object as the hook hash payload
+            ctx.emitter.instruction("mov x4, xzr");                             // object hook hash payloads do not use the high word
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x5",
+                runtime_value_tag(&PhpType::Object("ReflectionMethod".to_string())) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the ReflectionMethod object as the hook hash payload
+            ctx.emitter.instruction("xor r8, r8");                              // object hook hash payloads do not use the high word
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "r9",
+                runtime_value_tag(&PhpType::Object("ReflectionMethod".to_string())) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        }
+    }
+}
+
+/// Returns the associative map type used by `ReflectionProperty::getHooks()`.
+fn reflection_property_hook_map_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Object("ReflectionMethod".to_string())),
     }
 }
 
@@ -5233,6 +5525,20 @@ fn emit_reflection_member_object(
             member_class_name,
             member.default_value.as_ref(),
         )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            member_class_name,
+            "__has_hooks",
+            !member.property_hook_members.is_empty(),
+        )?;
+        if !member.property_hook_members.is_empty() {
+            emit_reflection_property_hook_array_property_by_name(
+                ctx,
+                member_class_name,
+                "__hooks",
+                &member.property_hook_members,
+            )?;
+        }
         let property_string = reflection_property_to_string(
             &member.name,
             member.flags,
@@ -6187,13 +6493,7 @@ fn reflection_property_modifiers(
 
 /// Computes PHP's `ReflectionProperty::getModifiers()` bitmask from predicate flags.
 fn reflection_property_modifiers_from_flags(flags: ReflectionMemberFlags) -> i64 {
-    let visibility = if flags.is_private {
-        Visibility::Private
-    } else if flags.is_protected {
-        Visibility::Protected
-    } else {
-        Visibility::Public
-    };
+    let visibility = reflection_visibility_from_member_flags(flags);
     reflection_property_modifiers(
         &visibility,
         flags.is_static,
@@ -6203,6 +6503,17 @@ fn reflection_property_modifiers_from_flags(flags: ReflectionMemberFlags) -> i64
         flags.is_virtual,
         None,
     )
+}
+
+/// Converts retained member visibility flags back into a `Visibility` value.
+fn reflection_visibility_from_member_flags(flags: ReflectionMemberFlags) -> Visibility {
+    if flags.is_private {
+        Visibility::Private
+    } else if flags.is_protected {
+        Visibility::Protected
+    } else {
+        Visibility::Public
+    }
 }
 
 /// Computes PHP's `ReflectionMethod::getModifiers()` bitmask from method flags.
