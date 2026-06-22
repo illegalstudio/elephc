@@ -2,7 +2,7 @@
 title: "ptr_read16()"
 description: "Lowers `ptr_read16(pointer)` by reading one unsigned 16-bit word through a checked pointer."
 sidebar:
-  order: 273
+  order: 275
 ---
 
 ## ptr_read16()

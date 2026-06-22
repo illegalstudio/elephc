@@ -575,7 +575,7 @@ PHP-visible surface, not the internal commits.
 - [x] Phase 47 — runtime-built `phar://` write streams for `fopen()`: non-literal `fopen($path, $mode)` now publishes the PHAR URL writer bridge alongside the dynamic reader bridge. `__rt_fopen_maybe_phar` still routes `r*` modes to `__rt_phar_read_entry`, but `w`/`a`/`c`/`x` modes now tail-call `__rt_phar_write_open_url`, which persists the full runtime URL with `__rt_str_persist` so `fclose()` can finalize through `elephc_phar_put_url`. Dynamic stream writes therefore preserve sibling entries in native PHAR archives just like literal streams and dynamic `file_put_contents()` writes. Test: `test_fopen_dynamic_phar_write_preserves_existing_entries`. Follow-up phases cover compressed-entry controls and concurrent PHAR write streams; private-key signing remains deferred. ARM64 + x86_64 (both Docker-verified)
 - [x] Phase 48 — tar/zip `phar://` writes: the `elephc-phar` bridge now preserves the archive family for existing native PHAR, tar, and ZIP containers, and missing `.tar` / `.zip` archive paths are created in that family instead of native PHAR. Literal write splitting recognizes `.phar/`, `.tar/`, and `.zip/` boundaries; runtime-built URLs use the same suffix-aware split. ZIP output preserves stored/deflated entries, tar output is POSIX ustar, and native PHAR gzip/bzip2 entries keep their compression when replaced. Tests: `writes_tar_entries`, `writes_zip_entries`, `writes_preserve_gzip_native_phar_entries`, `writes_preserve_bzip2_native_phar_entries`, `test_file_put_contents_phar_tar_archive_runtime_readback`, `test_file_put_contents_phar_zip_archive_runtime_readback`. Follow-up phases cover compression controls and concurrent PHAR write streams; private-key signing remains deferred. ARM64 + x86_64 (both Docker-verified)
 - [x] Phase 49 — concurrent `phar://` write streams: write-mode `fopen()` now publishes buffered `elephc-phar` stream entrypoints, so literal and runtime-built PHAR URLs receive real synthetic descriptors in the `0x50000000..0x50000020` range instead of sharing one global `0x50000000` stream. `fwrite()` and `fclose()` dispatch that whole range, and the bridge owns per-descriptor payload/target state until finalization; the old assembly single-stream writer remains as an unlinked-bridge fallback. Tests: `concurrent_phar_write_streams_preserve_distinct_entries`, `test_fopen_concurrent_phar_write_streams_preserve_entries`. Deferred: private-key signing. ARM64 + x86_64 (both Docker-verified)
-- [x] Phase 50 — `Phar` / `PharData` OOP baseline: the checker now injects builtin `Phar`, `PharData`, and `PharFileInfo` classes with PHP-facing format/compression/signature constants, constructors that store the archive path, object-local mixed metadata/string stub state, archive-scanned plus object-local entry iteration state, `addFromString()`, `delete()`, `compressFiles()`, `decompressFiles()`, path helpers, entry `getContent()`, and ArrayAccess methods (`offsetGet`, `offsetSet`, `offsetExists`, `offsetUnset`) lowered as synthetic PHP bodies over the existing `phar://` `file_get_contents()` / `file_put_contents()` / `unlink()` runtime paths plus the elephc-phar compression/listing bridge. This gives `$phar->addFromString("entry", "data")`, `$phar->delete("entry")`, `setMetadata()` / `getMetadata()` / `hasMetadata()` / `delMetadata()` for strings, arrays, ints, and null, `setStub()` / `getStub()`, native-PHAR `Phar::GZ` / `Phar::BZ2` / `Phar::NONE` compression control, ZIP `Phar::GZ` / `Phar::NONE` compression control, `$phar["entry"]->getContent()` reads through `PharFileInfo`, `foreach ($phar as $name => $info)` for entries scanned from existing native PHAR/tar/ZIP archives and entries written through that object, `isset($phar["entry"])`, and `unset($phar["entry"])` coverage for native PHAR plus tar/ZIP containers without new target-specific assembly. Tests: `test_phar_oop_array_access_read_write`, `test_phar_oop_add_from_string_writes_entries`, `test_phar_oop_metadata_stub_and_path_helpers`, `test_phar_oop_iteration_tracks_written_entries`, `test_phar_oop_iteration_scans_existing_archives`, `test_phar_oop_array_access_unset_deletes_entry`, `test_phar_oop_delete_method_removes_entries`, `test_phar_oop_compress_and_decompress_files`. Deferred: persisted metadata/stub serialization, tar compression controls, and private-key signing.
+- [x] Phase 50 — `Phar` / `PharData` OOP baseline: the checker now injects builtin `Phar`, `PharData`, and `PharFileInfo` classes with PHP-facing format/compression/signature constants, constructors that store the archive path, object-local mixed metadata/string stub state, archive-scanned plus object-local entry iteration state, `addFromString()`, `delete()`, `compressFiles()`, `decompressFiles()`, path helpers, entry `getContent()`, and ArrayAccess methods (`offsetGet`, `offsetSet`, `offsetExists`, `offsetUnset`) lowered as synthetic PHP bodies over the existing `phar://` `file_get_contents()` / `file_put_contents()` / `unlink()` runtime paths plus the elephc-phar compression/listing bridge. This gives `$phar->addFromString("entry", "data")`, `$phar->delete("entry")`, `setMetadata()` / `getMetadata()` / `hasMetadata()` / `delMetadata()` for strings, arrays, ints, and null, `setStub()` / `getStub()`, native-PHAR `Phar::GZ` / `Phar::BZ2` / `Phar::NONE` compression control, ZIP `Phar::GZ` / `Phar::NONE` compression control, `$phar["entry"]->getContent()` reads through `PharFileInfo`, `foreach ($phar as $name => $info)` for entries scanned from existing native PHAR/tar/ZIP archives and entries written through that object, `isset($phar["entry"])`, and `unset($phar["entry"])` coverage for native PHAR plus tar/ZIP containers without new target-specific assembly. Tests: `test_phar_oop_array_access_read_write`, `test_phar_oop_add_from_string_writes_entries`, `test_phar_oop_metadata_stub_and_path_helpers`, `test_phar_oop_iteration_tracks_written_entries`, `test_phar_oop_iteration_scans_existing_archives`, `test_phar_oop_array_access_unset_deletes_entry`, `test_phar_oop_delete_method_removes_entries`, `test_phar_oop_compress_and_decompress_files`. Persisted metadata/stub serialization landed in a later change; tar archive-wide compression controls and private-key signing remain deferred.
 
 ### Streams — remaining work (subsystem considered *partially complete*; merged as-is)
 
@@ -610,18 +610,61 @@ none are needed for typical stream usage.
   rewrites and OpenSSL/private-key signing.
 - [x] **`phar://` tar/zip variants** — native PHAR, tar-based PHAR, and
   zip-based PHAR containers are readable and writable through literal and
-  runtime PHAR URLs. ZIP64, encrypted ZIP entries, and ZIP data descriptors
-  remain deferred.
+  runtime PHAR URLs. ZIP entries written with a streaming data descriptor
+  (general-purpose flag bit 3) are read via the authoritative
+  central-directory sizes. ZIP64 archives (over 65535 entries, or sizes/offsets
+  over 4 GiB) are read and written — verified interchangeable with PHP and
+  Python. Traditional-PKWARE (ZipCrypto) encrypted ZIP entries are read and
+  written with a password set via the `Phar`/`PharData::setZipPassword()` compiler
+  extension (when set, zip entries — the stub included — are encrypted on write and
+  decrypted on read; the `.phar/signature.bin` entry stays in the clear). ZipCrypto
+  is cryptographically weak and kept only for compatibility with legacy archives.
 - [x] **`Phar` / `PharData` OOP API** — a baseline constructor/constants,
   `addFromString()`, `delete()`, native-PHAR `compressFiles()` /
   `decompressFiles()` (native PHAR plus ZIP `Phar::GZ` / `Phar::NONE`),
-  object-local mixed metadata/string stub accessors, path helpers, `PharFileInfo`
+  path helpers, `PharFileInfo`
   `getContent()`, archive-scanned and object-local entry iteration, and
   ArrayAccess read/write/isset surface is implemented (Phase 50). `offsetUnset()`
-  deletes archive entries through the PHAR-aware `unlink()` path. The closed
-  scope is the baseline OOP archive surface; persisted metadata/stub
-  serialization, tar compression controls, and OpenSSL/private-key signing remain
-  future work.
+  deletes archive entries through the PHAR-aware `unlink()` path.
+- [x] **`Phar` persisted global metadata and stub** — `setMetadata()` /
+  `getMetadata()` / `hasMetadata()` / `delMetadata()` and `setStub()` / `getStub()`
+  persist into the archive file and round-trip across fresh objects and processes
+  (and the PHP interpreter) for native PHAR (manifest field + byte-prefix stub),
+  tar (`.phar/.metadata.bin` + `.phar/stub.php`), and zip (EOCD comment +
+  `.phar/stub.php`); reserved `.phar/*` control entries are hidden from listings.
+  Backed by new public `serialize()` / `unserialize()` builtins (scalar + nested
+  array subset, byte-for-byte PHP-compatible).
+- [x] **`serialize()` / `unserialize()` objects + references** — objects serialize as
+  `O:<len>:"<Class>":<count>:{...}` with PHP's exact public/protected/private key
+  mangling, honour the `__serialize`/`__unserialize`/`__sleep`/`__wakeup` magic methods,
+  and emit `r:<index>;` back-references for repeated objects (PHP's global value counter);
+  `unserialize()` rebuilds shared objects as one instance (`===` identity preserved).
+  Byte-for-byte PHP-compatible; 3-target verified. Deferred: cyclic references inside an
+  object's own properties resolve to `null` on read, and the deprecated `Serializable`
+  (`C:`) interface is unsupported.
+- [x] **`PharData` whole-archive (tar) compression** — `compress(Phar::GZ)` /
+  `compress(Phar::BZ2)` write a sibling `.tar.gz` / `.tar.bz2` and return a fresh
+  `PharData`; `decompress()` writes the plain `.tar` back. Compressed archives are read
+  transparently (the bridge detects the gzip/bzip2 wrapper) and are interchangeable with
+  the PHP interpreter. Per-entry native/zip compression stays on `compressFiles()`.
+- [x] **`Phar` signatures incl. OpenSSL (RSA)** — `setSignatureAlgorithm()` /
+  `getSignature()` across native PHAR, tar, and zip phars. Hash algorithms
+  (MD5/SHA1/SHA256/SHA512) and `setSignatureAlgorithm(Phar::OPENSSL, $privateKey)`
+  (RSA-SHA1, PEM PKCS#1/PKCS#8 key via the pure-Rust `rsa` crate). Native PHARs use the
+  `digest/sig ++ flag ++ "GBMB"` trailer; tar and zip phars use a `.phar/signature.bin`
+  control entry (`LE32(flag) ++ LE32(len) ++ signature`) appended last, with the
+  signature computed over the data records (tar) or local entries + central directory +
+  comment (zip), matching php-src. `getSignature()` returns `['hash' => <uppercase hex>,
+  'hash_type' => ...]`. The PHP interpreter verifies elephc-written signatures across all
+  three families (OpenSSL against the matching `.pubkey`).
+- [x] **`PharFileInfo` persisted per-file metadata** — `setMetadata()` /
+  `getMetadata()` / `hasMetadata()` / `delMetadata()` on the `PharFileInfo` objects
+  returned by ArrayAccess persist per-entry metadata into the archive file and
+  round-trip across fresh objects and the PHP interpreter for native PHAR (per-entry
+  manifest field), tar (`.phar/.metadata/<entry>/.metadata.bin` side entry), and zip
+  (per-entry central-directory file comment). Same `serialize()` scalar + array
+  subset as global metadata; verified byte-compatible by reading elephc-written
+  archives back with the PHP interpreter (including nested entry paths).
 - [x] **TLS `ciphers` / `security_level`** — accepted without error but *not
   honored*: rustls has no OpenSSL-cipher-string equivalent and selects TLS
   1.2/1.3 automatically. Honest no-op by design (upstream limitation), not a

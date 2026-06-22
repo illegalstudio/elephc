@@ -2,7 +2,7 @@
 title: "hex2bin()"
 description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 338
+  order: 340
 ---
 
 ## hex2bin()

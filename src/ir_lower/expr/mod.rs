@@ -6068,6 +6068,10 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "is_resource" | "hash_equals" | "hash_update" | "spl_autoload_register"
         | "spl_autoload_unregister" | "stream_context_set_option" | "stream_context_set_params"
         | "stream_filter_register" | "stream_filter_remove" | "__elephc_phar_set_compression"
+        | "__elephc_phar_set_metadata" | "__elephc_phar_set_stub"
+        | "__elephc_phar_set_file_metadata"
+        | "__elephc_phar_sign_openssl" | "__elephc_phar_sign_hash"
+        | "__elephc_phar_set_zip_password"
         | "stream_wrapper_register" | "stream_wrapper_restore" | "stream_wrapper_unregister"
         | "stream_isatty" | "stream_is_local" | "stream_set_blocking" | "stream_set_timeout"
         | "stream_socket_enable_crypto" | "stream_socket_shutdown" | "stream_supports_lock" | "symlink" | "touch"
@@ -6078,7 +6082,12 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "getcwd" | "getenv" | "gethostname" | "gethostbyname" | "php_uname"
         | "readline" | "shell_exec" | "sys_get_temp_dir"
         | "fread" | "get_resource_type" | "gzcompress" | "gzdeflate" | "hash" | "hash_final" | "hash_hmac" | "long2ip"
-        | "stream_get_line" | "system" | "spl_autoload_extensions" | "tempnam" | "vsprintf" => {
+        | "stream_get_line" | "system" | "spl_autoload_extensions" | "tempnam" | "vsprintf"
+        | "__elephc_phar_get_metadata" | "__elephc_phar_get_stub"
+        | "__elephc_phar_get_file_metadata"
+        | "__elephc_phar_gzip_archive" | "__elephc_phar_bzip2_archive"
+        | "__elephc_phar_decompress_archive"
+        | "__elephc_phar_get_signature_hash" | "__elephc_phar_get_signature_type" => {
             Some(PhpType::Str)
         }
         "disk_free_space" | "disk_total_space" => Some(PhpType::Float),

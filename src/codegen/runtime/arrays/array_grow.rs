@@ -119,7 +119,11 @@ fn emit_array_grow_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving indexed-array growth spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved source pointer, length, element size, and grown array pointer
-    emitter.instruction("sub rsp, 40");                                         // reserve aligned spill slots for the unique source array pointer, length, element size, and grown array pointer
+    emitter.instruction("sub rsp, 64");                                         // reserve 16-byte-aligned spill slots for the growth bookkeeping and the saved callee-saved registers
+    emitter.instruction("mov QWORD PTR [rbp - 40], r12");                       // preserve callee-saved r12 (reused below as the element-size scratch)
+    emitter.instruction("mov QWORD PTR [rbp - 48], r13");                       // preserve callee-saved r13 (reused below as the new-capacity scratch)
+    emitter.instruction("mov QWORD PTR [rbp - 56], r14");                       // preserve callee-saved r14 (reused below as the previous-array scratch)
+    emitter.instruction("mov QWORD PTR [rbp - 64], r15");                       // preserve callee-saved r15 (reused below as the previous-kind scratch)
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the incoming indexed-array pointer across uniqueness and allocation helper calls
     emitter.instruction("call __rt_array_ensure_unique");                       // split shared indexed arrays before reallocating storage for growth
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the unique indexed-array pointer after copy-on-write splitting
@@ -167,7 +171,11 @@ fn emit_array_grow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the previous unique indexed-array pointer before releasing its backing storage
     emitter.instruction("call __rt_heap_free");                                 // release the previous unique indexed-array storage now that the grown copy is live
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return the grown indexed-array pointer after releasing the previous storage
-    emitter.instruction("add rsp, 40");                                         // release the indexed-array growth spill slots before returning
+    emitter.instruction("mov r12, QWORD PTR [rbp - 40]");                       // restore the caller's callee-saved r12 before returning
+    emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // restore the caller's callee-saved r13 before returning
+    emitter.instruction("mov r14, QWORD PTR [rbp - 56]");                       // restore the caller's callee-saved r14 before returning
+    emitter.instruction("mov r15, QWORD PTR [rbp - 64]");                       // restore the caller's callee-saved r15 before returning
+    emitter.instruction("add rsp, 64");                                         // release the indexed-array growth spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the grown indexed array
     emitter.instruction("ret");                                                 // return to the caller with rax holding the grown indexed-array pointer
 }

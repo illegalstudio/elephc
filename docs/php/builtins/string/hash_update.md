@@ -2,7 +2,7 @@
 title: "hash_update()"
 description: "Lowers `hash_update(context, data)` through the incremental hash runtime helper."
 sidebar:
-  order: 337
+  order: 339
 ---
 
 ## hash_update()

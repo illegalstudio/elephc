@@ -2,7 +2,7 @@
 title: "ucfirst()"
 description: "Lowers `ucfirst()` by copying the string and uppercasing the first ASCII byte."
 sidebar:
-  order: 381
+  order: 383
 ---
 
 ## ucfirst()

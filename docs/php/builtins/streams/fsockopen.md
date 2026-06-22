@@ -2,7 +2,7 @@
 title: "fsockopen()"
 description: "fsockopen() — streams builtin supported by Elephc."
 sidebar:
-  order: 311
+  order: 313
 ---
 
 ## fsockopen()

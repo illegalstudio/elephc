@@ -2,7 +2,7 @@
 title: "ptr_offset()"
 description: "Lowers `ptr_offset(pointer, offset)` by adding a byte offset to a raw address."
 sidebar:
-  order: 272
+  order: 274
 ---
 
 ## ptr_offset()

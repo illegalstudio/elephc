@@ -2,7 +2,7 @@
 title: "urlencode()"
 description: "Lowers a one-argument string builtin that directly delegates to a runtime helper."
 sidebar:
-  order: 384
+  order: 386
 ---
 
 ## urlencode()

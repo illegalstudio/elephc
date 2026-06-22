@@ -2,7 +2,7 @@
 title: "pclose()"
 description: "Lowers `pclose(handle)` and returns the child process status."
 sidebar:
-  order: 287
+  order: 289
 ---
 
 ## pclose()

@@ -497,6 +497,35 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Bool))
         }
+        "serialize" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "serialize() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
+        "unserialize" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(CompileError::new(
+                    span,
+                    "unserialize() takes 1 or 2 arguments",
+                ));
+            }
+            let data_ty = checker.infer_type(&args[0], env)?;
+            if !is_json_string_arg_type(&data_ty) {
+                return Err(CompileError::new(
+                    args[0].span,
+                    "unserialize() data argument must be string-compatible",
+                ));
+            }
+            if let Some(options) = args.get(1) {
+                checker.infer_type(options, env)?;
+            }
+            Ok(Some(PhpType::Mixed))
+        }
         "json_last_error" => {
             if !args.is_empty() {
                 return Err(CompileError::new(

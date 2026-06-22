@@ -37,6 +37,7 @@ mod calendar;
 mod callables;
 mod system;
 mod json;
+mod serialize;
 mod regressions;
 mod objects;
 mod destructors;

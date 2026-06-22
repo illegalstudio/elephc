@@ -2145,6 +2145,233 @@ echo $pd->getMetadata() . "|" . $pd->__toString();
     );
 }
 
+/// Global metadata and the stub persist into the archive and are read back by a fresh
+/// `Phar`/`PharData` object across all three families (native, tar, zip).
+#[test]
+fn test_phar_oop_metadata_stub_persist_across_objects() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new Phar("persist.phar");
+$p->addFromString("a.txt", "alpha");
+$p->setMetadata(["v" => "1.0", "n" => 5]);
+$q = new Phar("persist.phar");
+$m = $q->getMetadata();
+echo $m["v"], ":", $m["n"], ":", ($q->hasMetadata() ? "y" : "n"), "|";
+$t = new PharData("persist.tar");
+$t->addFromString("b.txt", "bravo");
+$t->setMetadata("tar-meta");
+$t->setStub("<?php __HALT_COMPILER(); ?>");
+$t2 = new PharData("persist.tar");
+echo $t2->getMetadata(), ":", $t2->getStub(), "|";
+echo $t2->count(), "|";
+$z = new PharData("persist.zip");
+$z->addFromString("c.txt", "charlie");
+$z->setMetadata(["zip" => 1]);
+$z2 = new PharData("persist.zip");
+$zm = $z2->getMetadata();
+echo $zm["zip"];
+"#,
+    );
+    assert_eq!(
+        out,
+        "1.0:5:y|tar-meta:<?php __HALT_COMPILER(); ?>|1|1"
+    );
+}
+
+/// `PharFileInfo::setMetadata()`/`getMetadata()`/`hasMetadata()`/`delMetadata()`
+/// persist per-file metadata into the archive and round-trip across fresh objects,
+/// for native PHAR, tar, and zip, including a nested entry path and scalar metadata.
+#[test]
+fn test_phar_oop_per_file_metadata_persist() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new Phar("perfile.phar");
+$p->addFromString("a.txt", "alpha");
+$p->addFromString("dir/b.txt", "bravo");
+$p["a.txt"]->setMetadata(["role" => "first", "n" => 3]);
+$p["dir/b.txt"]->setMetadata("nested");
+$q = new Phar("perfile.phar");
+$am = $q["a.txt"]->getMetadata();
+echo $am["role"], ":", $am["n"], "|";
+echo $q["dir/b.txt"]->getMetadata(), "|";
+echo ($q["a.txt"]->hasMetadata() ? "y" : "n"), ($q["dir/b.txt"]->hasMetadata() ? "y" : "n"), "|";
+$t = new PharData("perfile.tar");
+$t->addFromString("c.txt", "charlie");
+$t->addFromString("d.txt", "delta");
+$t["c.txt"]->setMetadata(["t" => 9]);
+$t2 = new PharData("perfile.tar");
+$tm = $t2["c.txt"]->getMetadata();
+echo $tm["t"], ":", ($t2["c.txt"]->hasMetadata() ? "y" : "n"), ($t2["d.txt"]->hasMetadata() ? "y" : "n"), "|";
+$z = new PharData("perfile.zip");
+$z->addFromString("e.txt", "echo");
+$z["e.txt"]->setMetadata(["z" => "v"]);
+$z["e.txt"]->delMetadata();
+$z2 = new PharData("perfile.zip");
+echo ($z2["e.txt"]->hasMetadata() ? "y" : "n");
+unlink("perfile.phar");
+unlink("perfile.tar");
+unlink("perfile.zip");
+"#,
+    );
+    assert_eq!(out, "first:3|nested|yy|9:yn|n");
+}
+
+/// `PharData::compress()` produces a whole-archive `.tar.gz`/`.tar.bz2` that is read
+/// back transparently, and `decompress()` reverses it — entries (including a nested
+/// path) survive each step.
+#[test]
+fn test_phar_oop_tar_whole_archive_compression() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new PharData("wac.tar");
+$p->addFromString("a.txt", "alpha");
+$p->addFromString("dir/b.txt", "bravo");
+$gz = $p->compress(Phar::GZ);
+echo $gz->count(), ":", $gz["a.txt"]->getContent(), ":", $gz["dir/b.txt"]->getContent(), "|";
+$bz = $p->compress(Phar::BZ2);
+echo $bz->count(), ":", $bz["a.txt"]->getContent(), "|";
+$back = $gz->decompress();
+echo $back->count(), ":", $back["dir/b.txt"]->getContent();
+unlink("wac.tar");
+unlink("wac.tar.gz");
+unlink("wac.tar.bz2");
+"#,
+    );
+    assert_eq!(out, "2:alpha:bravo|2:alpha|2:bravo");
+}
+
+/// `Phar::setSignatureAlgorithm(Phar::OPENSSL, $key)` signs the archive with RSA-SHA1
+/// and `getSignature()` reads it back as an OpenSSL signature; a hash algorithm
+/// (`Phar::SHA256`) rewrites the trailer and reads back as SHA-256.
+#[test]
+fn test_phar_oop_signature_algorithms() {
+    let out = compile_and_run(
+        r#"<?php
+$key = <<<'KEYEOF'
+-----BEGIN PRIVATE KEY-----
+MIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGBAOuAP7xZaVfhwn9l
+BaMgxKPU1ODBpuT7Ybu6Fav03TJp1BKc1wUMiXnUPraUUI2R2JxoattDe7R/LcGk
+jVoPiBGGPoxxTaByd5LJZJk6MJAiGBhzQT7bkK3OMDHLQqhziefqDFfnDLt/TN7+
+umuMCPtLmuF6UUXiebMzyH21x7jvAgMBAAECgYBBhL+2rgVxzrxm5vsnhEFQ9zB2
+i0ncYNey+7V1zr0PfoPi3cGwhOlmfJcqAp9ak534/c/kyqSK9esL+bTdvn5zIQqC
+Swt2znffaW9nC6lM/pkZcvGLETt2m0L71n6pZVkMewsGBm9YrBQFA1krC7BV674U
+mlOmmYpM3LPgzmRLwQJBAPm/G7O4Stmzu5xV5qtvYX1dNZ2gydkVyfK/AwCYpfbK
+8ZXntKeWCt1BER1hNBSMPacHKb0LotK3j3LNNteLHCECQQDxZdNsXNLTHylWKA/X
+dyM3SH9mM6ESZP07cU7Ifq6t9zJdTfGdiyxsAjaaXxDmShL+bAjU16iwaTAGcYTB
+NrMPAkEAoUGwVV7Nlbvji5I7mr4UKKoikGDdc/oJp1+GRMBLiQqI6s3ta7gJ08rL
+jjjRM+NJe6u4W4RD4eL8EJhIrOv5gQJAK4Tm+8c0PtmEU0L/sCGLWMEaLquqIy3P
+tXK0+FJWXYiOLOILaBKaHJK9k1EGM+4wxGtnoC+M+tjLzq2SeF7LIwJAPdLUn2Qq
+eGMK12chOVcx41RxYctqsOlEKCIt011yGsV2/Mdm9ljTXeyXvNXCVOVcnHaf1v5w
+rNiobfy8sSb6iw==
+-----END PRIVATE KEY-----
+KEYEOF;
+$p = new Phar("signed.phar");
+$p->addFromString("a.txt", "alpha");
+$p->setSignatureAlgorithm(Phar::OPENSSL, $key);
+$s = $p->getSignature();
+echo $s["hash_type"], ":", strlen($s["hash"]), "|";
+$p->setSignatureAlgorithm(Phar::SHA256);
+$s2 = $p->getSignature();
+echo $s2["hash_type"], ":", strlen($s2["hash"]);
+unlink("signed.phar");
+"#,
+    );
+    // 1024-bit RSA signature = 128 bytes = 256 uppercase-hex chars; SHA-256 = 32 bytes = 64 hex.
+    assert_eq!(out, "OpenSSL:256|SHA-256:64");
+}
+
+/// Tar and zip phars carry their signature in a `.phar/signature.bin` entry rather
+/// than a trailer. `PharData::setSignatureAlgorithm()` signs both families (hash and
+/// OpenSSL), `getSignature()` reads them back, and the signed archive still reads.
+#[test]
+fn test_phar_oop_tar_zip_signatures() {
+    let out = compile_and_run(
+        r#"<?php
+$key = <<<'KEYEOF'
+-----BEGIN PRIVATE KEY-----
+MIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGBAOuAP7xZaVfhwn9l
+BaMgxKPU1ODBpuT7Ybu6Fav03TJp1BKc1wUMiXnUPraUUI2R2JxoattDe7R/LcGk
+jVoPiBGGPoxxTaByd5LJZJk6MJAiGBhzQT7bkK3OMDHLQqhziefqDFfnDLt/TN7+
+umuMCPtLmuF6UUXiebMzyH21x7jvAgMBAAECgYBBhL+2rgVxzrxm5vsnhEFQ9zB2
+i0ncYNey+7V1zr0PfoPi3cGwhOlmfJcqAp9ak534/c/kyqSK9esL+bTdvn5zIQqC
+Swt2znffaW9nC6lM/pkZcvGLETt2m0L71n6pZVkMewsGBm9YrBQFA1krC7BV674U
+mlOmmYpM3LPgzmRLwQJBAPm/G7O4Stmzu5xV5qtvYX1dNZ2gydkVyfK/AwCYpfbK
+8ZXntKeWCt1BER1hNBSMPacHKb0LotK3j3LNNteLHCECQQDxZdNsXNLTHylWKA/X
+dyM3SH9mM6ESZP07cU7Ifq6t9zJdTfGdiyxsAjaaXxDmShL+bAjU16iwaTAGcYTB
+NrMPAkEAoUGwVV7Nlbvji5I7mr4UKKoikGDdc/oJp1+GRMBLiQqI6s3ta7gJ08rL
+jjjRM+NJe6u4W4RD4eL8EJhIrOv5gQJAK4Tm+8c0PtmEU0L/sCGLWMEaLquqIy3P
+tXK0+FJWXYiOLOILaBKaHJK9k1EGM+4wxGtnoC+M+tjLzq2SeF7LIwJAPdLUn2Qq
+eGMK12chOVcx41RxYctqsOlEKCIt011yGsV2/Mdm9ljTXeyXvNXCVOVcnHaf1v5w
+rNiobfy8sSb6iw==
+-----END PRIVATE KEY-----
+KEYEOF;
+$tar = new PharData("sig.tar");
+$tar->addFromString("doc.txt", "tarbody");
+$tar->setSignatureAlgorithm(Phar::SHA256);
+$ts = $tar->getSignature();
+echo $ts["hash_type"], ":", strlen($ts["hash"]), "|";
+$zip = new PharData("sig.zip");
+$zip->addFromString("doc.txt", "zipbody");
+$zip->setSignatureAlgorithm(Phar::OPENSSL, $key);
+$zs = $zip->getSignature();
+echo $zs["hash_type"], ":", strlen($zs["hash"]), "|";
+echo $tar["doc.txt"]->getContent(), ":", $zip["doc.txt"]->getContent();
+unlink("sig.tar");
+unlink("sig.zip");
+"#,
+    );
+    // SHA-256 digest = 32 bytes = 64 hex; OpenSSL 1024-bit RSA = 128 bytes = 256 hex.
+    assert_eq!(out, "SHA-256:64|OpenSSL:256|tarbody:zipbody");
+}
+
+/// `PharData::setZipPassword()` decrypts traditional-PKWARE (ZipCrypto) encrypted
+/// ZIP entries (a compiler extension). The embedded fixture was produced by the
+/// `zip --encrypt` CLI; the correct password reads the payload, a wrong one yields
+/// nothing.
+#[test]
+fn test_phar_oop_zipcrypto_password() {
+    // A real `zip --encrypt -P hunter2` archive of "secret zipcrypto payload\n".
+    let out = compile_and_run(
+        r#"<?php
+$zip = base64_decode("UEsDBAoACQAAACWR1Fy68T/DJQAAABkAAAAMABwAemNfcGxhaW4udHh0VVQJAAMluzZqJbs2anV4CwABBPUBAAAEAAAAAIX9cegIcalT/zcAGsBrKLo1vP/AI2DJ71z0w4OcxvSzLXaea0tQSwcIuvE/wyUAAAAZAAAAUEsBAh4DCgAJAAAAJZHUXLrxP8MlAAAAGQAAAAwAGAAAAAAAAQAAAKSBAAAAAHpjX3BsYWluLnR4dFVUBQADJbs2anV4CwABBPUBAAAEAAAAAFBLBQYAAAAAAQABAFIAAAB7AAAAAAA=");
+file_put_contents("enc.zip", $zip);
+$p = new PharData("enc.zip");
+$p->setZipPassword("hunter2");
+echo $p["zc_plain.txt"]->getContent();
+$wrong = new PharData("enc.zip");
+$wrong->setZipPassword("nope");
+echo "|len=", strlen($wrong["zc_plain.txt"]->getContent());
+unlink("enc.zip");
+"#,
+    );
+    assert_eq!(out, "secret zipcrypto payload\n|len=0");
+}
+
+/// `PharData::setZipPassword()` also encrypts on write (a compiler extension): with a
+/// password set before `addFromString`, the entry is ZipCrypto-encrypted on disk and
+/// round-trips back through a fresh object with the correct password, while a fresh
+/// object with a wrong password cannot decrypt it.
+#[test]
+fn test_phar_oop_zipcrypto_write_roundtrip() {
+    let out = compile_and_run(
+        r#"<?php
+$p = new PharData("encw.zip");
+$p->setZipPassword("hunter2");
+$p->addFromString("a.txt", "secret payload");
+// A fresh object with the correct password decrypts the written entry.
+$ok = new PharData("encw.zip");
+$ok->setZipPassword("hunter2");
+echo $ok["a.txt"]->getContent();
+// A fresh object with a wrong password cannot decrypt it.
+$bad = new PharData("encw.zip");
+$bad->setZipPassword("nope");
+echo "|len=", strlen($bad["a.txt"]->getContent());
+unlink("encw.zip");
+"#,
+    );
+    assert_eq!(out, "secret payload|len=0");
+}
+
 /// `Phar` and `PharData` iterate over entries written through the OOP surface.
 #[test]
 fn test_phar_oop_iteration_tracks_written_entries() {

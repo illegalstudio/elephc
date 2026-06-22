@@ -2,7 +2,7 @@
 title: "strstr()"
 description: "Lowers `strstr(haystack, needle)` by searching and returning the matching suffix."
 sidebar:
-  order: 375
+  order: 377
 ---
 
 ## strstr()

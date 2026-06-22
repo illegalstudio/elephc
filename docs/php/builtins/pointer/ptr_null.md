@@ -2,7 +2,7 @@
 title: "ptr_null()"
 description: "Lowers `ptr_null()` by materializing the raw null pointer sentinel."
 sidebar:
-  order: 271
+  order: 273
 ---
 
 ## ptr_null()
