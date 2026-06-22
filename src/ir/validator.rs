@@ -275,7 +275,10 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell | EvalFunctionCallArray
         | EvalFunctionExists | EvalClassExists | EvalConstantExists | EvalConstantFetch
-        | EnumBackingStringToInt | EnumBackingMixedToInt => {
+        | EnumBackingStringToInt
+        | EnumBackingMixedToInt
+        | PropInitialized
+        | ReflectionStaticPropertyInitialized => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
         LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
@@ -395,7 +398,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         }
         BufferNew => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         LoadLocal | LoadRefCell | LoadGlobal | LoadStaticLocal | LoadStaticProperty
-        | LoadReflectionStaticProperty | ExternGlobalLoad => {
+        | LoadReflectionStaticProperty | ReflectionStaticPropertyInitialized | ExternGlobalLoad => {
             check_count(inst_id, inst, 0, "0")
         }
         UnsetLocal | PromoteLocalRefCell | AliasLocalRefCell | ReleaseLocalRefCell => {
@@ -439,6 +442,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         }
         DynamicObjectNewWithoutConstructorMixed
         | PropGet
+        | PropInitialized
         | PropSet
         | LoadPropRefCell
         | DynamicPropGet

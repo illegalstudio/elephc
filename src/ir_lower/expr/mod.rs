@@ -10407,6 +10407,21 @@ fn lower_reflection_property_value_call(
             let (_, property, _) = reflection_property_instance_target(ctx, object_expr)?;
             lower_reflection_property_set_value(ctx, &property, args, expr)
         }
+        "isinitialized" => {
+            if let Some((declaring_class, property, _)) =
+                reflection_property_static_target(ctx, object_expr)
+            {
+                return lower_reflection_property_static_is_initialized(
+                    ctx,
+                    &declaring_class,
+                    &property,
+                    args,
+                    expr,
+                );
+            }
+            let (_, property, _) = reflection_property_any_instance_target(ctx, object_expr)?;
+            lower_reflection_property_is_initialized(ctx, &property, args, expr)
+        }
         _ => None,
     }
 }
@@ -10448,6 +10463,26 @@ fn lower_reflection_property_set_value(
     Some(lower_null(ctx, expr))
 }
 
+/// Lowers `ReflectionProperty::isInitialized($object)` to a direct slot probe.
+fn lower_reflection_property_is_initialized(
+    ctx: &mut LoweringContext<'_, '_>,
+    property: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let object_arg = reflection_property_get_value_arg(args)?;
+    let object = lower_expr(ctx, &object_arg);
+    let data = ctx.intern_string(property);
+    Some(ctx.emit_value(
+        Op::PropInitialized,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(expr.span),
+    ))
+}
+
 /// Lowers static `ReflectionProperty::getValue()` to a reflection static-property read.
 fn lower_reflection_property_get_static_value(
     ctx: &mut LoweringContext<'_, '_>,
@@ -10465,6 +10500,25 @@ fn lower_reflection_property_get_static_value(
         declaring_class,
         property,
         property_ty,
+        expr,
+    ))
+}
+
+/// Lowers static `ReflectionProperty::isInitialized()` to a direct static-slot probe.
+fn lower_reflection_property_static_is_initialized(
+    ctx: &mut LoweringContext<'_, '_>,
+    declaring_class: &str,
+    property: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if let Some(ignored_object) = reflection_property_static_get_value_ignored_arg(args)? {
+        lower_ignored_reflection_argument(ctx, &ignored_object);
+    }
+    Some(lower_reflection_static_property_initialized_by_class_name(
+        ctx,
+        declaring_class,
+        property,
         expr,
     ))
 }
@@ -10591,6 +10645,28 @@ fn reflection_property_instance_target(
         return None;
     }
     if class_info.property_visibilities.get(&property) != Some(&Visibility::Public) {
+        return None;
+    }
+    let (_, (_, property_ty)) = class_info.visible_property(&property)?;
+    Some((
+        class_name,
+        property,
+        normalize_value_php_type(property_ty.codegen_repr()),
+    ))
+}
+
+/// Resolves a known non-static ReflectionProperty target without enforcing visibility.
+fn reflection_property_any_instance_target(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> Option<(String, String, PhpType)> {
+    let (class_name, property) = reflection_property_reflected_target(ctx, object_expr)?;
+    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    if class_info
+        .static_properties
+        .iter()
+        .any(|(name, _)| name == &property)
+    {
         return None;
     }
     let (_, (_, property_ty)) = class_info.visible_property(&property)?;
@@ -11303,6 +11379,23 @@ fn lower_reflection_static_property_get_by_class_name(
         result_type,
         expr,
         Op::LoadReflectionStaticProperty,
+    )
+}
+
+/// Emits a visibility-bypassing static-property initialization probe.
+fn lower_reflection_static_property_initialized_by_class_name(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    lower_static_property_get_by_class_name_with_op(
+        ctx,
+        class_name,
+        property,
+        PhpType::Bool,
+        expr,
+        Op::ReflectionStaticPropertyInitialized,
     )
 }
 

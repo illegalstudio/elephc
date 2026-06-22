@@ -205,6 +205,7 @@ pub enum Op {
     StoreStaticProperty,
     LoadReflectionStaticProperty,
     StoreReflectionStaticProperty,
+    ReflectionStaticPropertyInitialized,
     IAdd,
     ISub,
     IMul,
@@ -317,6 +318,7 @@ pub enum Op {
     DynamicObjectNewMixed,
     DynamicObjectNewWithoutConstructorMixed,
     PropGet,
+    PropInitialized,
     PropSet,
     /// Loads the raw reference-cell pointer stored in a reference property's slot,
     /// without dereferencing it. Used to alias a local to `$obj->prop` and to return
@@ -448,8 +450,9 @@ impl Op {
             },
             AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
             ReleaseLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
-            LoadGlobal | LoadStaticProperty | LoadReflectionStaticProperty | ScopedConstantGet
-            | ClassAttrNames | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
+            LoadGlobal | LoadStaticProperty | LoadReflectionStaticProperty
+            | ReflectionStaticPropertyInitialized | ScopedConstantGet | ClassAttrNames
+            | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
             StoreGlobal | StoreStaticLocal | StoreStaticProperty | StoreReflectionStaticProperty
             | InitStaticLocal | IncludeOnceMark | FunctionVariantMark | TryPushHandler
             | TryPopHandler => E::WRITES_GLOBAL,
@@ -473,9 +476,8 @@ impl Op {
             | HashCloneShallow | ObjectCloneShallow => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
-            ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet | LoadPropRefCell => {
-                E::READS_HEAP
-            }
+            ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet | PropInitialized
+            | LoadPropRefCell => E::READS_HEAP,
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
@@ -579,6 +581,7 @@ impl Op {
             StoreStaticProperty => "store_static_property",
             LoadReflectionStaticProperty => "load_reflection_static_property",
             StoreReflectionStaticProperty => "store_reflection_static_property",
+            ReflectionStaticPropertyInitialized => "reflection_static_property_initialized",
             IAdd => "iadd",
             ISub => "isub",
             IMul => "imul",
@@ -693,6 +696,7 @@ impl Op {
                 "dynamic_object_new_without_constructor_mixed"
             }
             PropGet => "prop_get",
+            PropInitialized => "prop_initialized",
             PropSet => "prop_set",
             LoadPropRefCell => "load_prop_ref_cell",
             LoadArrayElemRefCell => "load_array_elem_ref_cell",

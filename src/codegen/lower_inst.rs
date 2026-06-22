@@ -174,6 +174,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
             objects::lower_dynamic_object_new_without_constructor_mixed(ctx, &inst)
         }
         Op::PropGet => objects::lower_prop_get(ctx, &inst),
+        Op::PropInitialized => objects::lower_prop_initialized(ctx, &inst),
         Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
         Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
         Op::BindRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),
@@ -191,6 +192,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
         Op::LoadReflectionStaticProperty => {
             static_properties::lower_load_reflection_static_property(ctx, &inst)
+        }
+        Op::ReflectionStaticPropertyInitialized => {
+            static_properties::lower_reflection_static_property_initialized(ctx, &inst)
         }
         Op::StoreReflectionStaticProperty => {
             static_properties::lower_store_reflection_static_property(ctx, &inst)
