@@ -18,7 +18,7 @@
 
 use image::Rgba;
 
-use crate::{ffi_guard, blend_over, images, insert_image, pack_color, try_new_rgba, unpack_color, ImageObj};
+use crate::{ffi_guard, lock_recover, blend_over, images, insert_image, pack_color, try_new_rgba, unpack_color, ImageObj};
 
 /// Creates a true-color RGBA image filled with opaque black (GD's default) and
 /// returns its handle, or `-1` if the dimensions are invalid.
@@ -85,7 +85,7 @@ pub extern "C" fn elephc_img_set_pixel(handle: i64, x: i64, y: i64, color: i64) 
         if x < 0 || y < 0 {
             return;
         }
-        let mut guard = images().lock().unwrap();
+        let mut guard = lock_recover(images());
         if let Some(obj) = guard.get_mut(&handle) {
             if (x as u32) < obj.img.width() && (y as u32) < obj.img.height() {
                 let src = unpack_color(color);
@@ -108,7 +108,7 @@ pub extern "C" fn elephc_img_color_at(handle: i64, x: i64, y: i64) -> i64 {
         if x < 0 || y < 0 {
             return -1;
         }
-        match images().lock().unwrap().get(&handle) {
+        match lock_recover(images()).get(&handle) {
             Some(obj) if (x as u32) < obj.img.width() && (y as u32) < obj.img.height() => {
                 pack_color(*obj.img.get_pixel(x as u32, y as u32))
             }
@@ -121,7 +121,7 @@ pub extern "C" fn elephc_img_color_at(handle: i64, x: i64, y: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_sx(handle: i64) -> i64 {
     ffi_guard(-1, move || {
-        match images().lock().unwrap().get(&handle) {
+        match lock_recover(images()).get(&handle) {
             Some(obj) => obj.img.width() as i64,
             None => -1,
         }
@@ -132,7 +132,7 @@ pub extern "C" fn elephc_img_sx(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_sy(handle: i64) -> i64 {
     ffi_guard(-1, move || {
-        match images().lock().unwrap().get(&handle) {
+        match lock_recover(images()).get(&handle) {
             Some(obj) => obj.img.height() as i64,
             None => -1,
         }
@@ -144,7 +144,7 @@ pub extern "C" fn elephc_img_sy(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_is_truecolor(handle: i64) -> i64 {
     ffi_guard(-1, move || {
-        match images().lock().unwrap().get(&handle) {
+        match lock_recover(images()).get(&handle) {
             Some(obj) => obj.truecolor as i64,
             None => -1,
         }
@@ -155,7 +155,7 @@ pub extern "C" fn elephc_img_is_truecolor(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_res_x(handle: i64) -> i64 {
     ffi_guard(-1, move || {
-        match images().lock().unwrap().get(&handle) {
+        match lock_recover(images()).get(&handle) {
             Some(obj) => obj.res_x,
             None => -1,
         }
@@ -166,7 +166,7 @@ pub extern "C" fn elephc_img_res_x(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_res_y(handle: i64) -> i64 {
     ffi_guard(-1, move || {
-        match images().lock().unwrap().get(&handle) {
+        match lock_recover(images()).get(&handle) {
             Some(obj) => obj.res_y,
             None => -1,
         }
@@ -178,7 +178,7 @@ pub extern "C" fn elephc_img_res_y(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_set_res(handle: i64, res_x: i64, res_y: i64) {
     ffi_guard((), move || {
-        if let Some(obj) = images().lock().unwrap().get_mut(&handle) {
+        if let Some(obj) = lock_recover(images()).get_mut(&handle) {
             obj.res_x = res_x;
             obj.res_y = res_y;
         }
@@ -189,7 +189,7 @@ pub extern "C" fn elephc_img_set_res(handle: i64, res_x: i64, res_y: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_img_set_alpha_blending(handle: i64, on: i64) {
     ffi_guard((), move || {
-        if let Some(obj) = images().lock().unwrap().get_mut(&handle) {
+        if let Some(obj) = lock_recover(images()).get_mut(&handle) {
             obj.alpha_blending = on != 0;
         }
     })
@@ -199,7 +199,7 @@ pub extern "C" fn elephc_img_set_alpha_blending(handle: i64, on: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_img_set_save_alpha(handle: i64, on: i64) {
     ffi_guard((), move || {
-        if let Some(obj) = images().lock().unwrap().get_mut(&handle) {
+        if let Some(obj) = lock_recover(images()).get_mut(&handle) {
             obj.save_alpha = on != 0;
         }
     })
@@ -210,7 +210,7 @@ pub extern "C" fn elephc_img_set_save_alpha(handle: i64, on: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_img_set_transparent(handle: i64, color: i64) {
     ffi_guard((), move || {
-        if let Some(obj) = images().lock().unwrap().get_mut(&handle) {
+        if let Some(obj) = lock_recover(images()).get_mut(&handle) {
             obj.transparent = color;
         }
     })
@@ -220,7 +220,7 @@ pub extern "C" fn elephc_img_set_transparent(handle: i64, color: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_img_get_transparent(handle: i64) -> i64 {
     ffi_guard(-1, move || {
-        match images().lock().unwrap().get(&handle) {
+        match lock_recover(images()).get(&handle) {
             Some(obj) => obj.transparent,
             None => -1,
         }
@@ -233,7 +233,7 @@ pub extern "C" fn elephc_img_get_transparent(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_color_total(handle: i64) -> i64 {
     ffi_guard(-1, move || {
-        match images().lock().unwrap().get(&handle) {
+        match lock_recover(images()).get(&handle) {
             Some(_) => 0,
             None => -1,
         }
@@ -246,7 +246,7 @@ pub extern "C" fn elephc_img_color_total(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_set_truecolor(handle: i64, on: i64) {
     ffi_guard((), move || {
-        if let Some(obj) = images().lock().unwrap().get_mut(&handle) {
+        if let Some(obj) = lock_recover(images()).get_mut(&handle) {
             obj.truecolor = on != 0;
         }
     })
@@ -258,6 +258,6 @@ pub extern "C" fn elephc_img_set_truecolor(handle: i64, on: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_img_destroy(handle: i64) {
     ffi_guard((), move || {
-        images().lock().unwrap().remove(&handle);
+        lock_recover(images()).remove(&handle);
     })
 }

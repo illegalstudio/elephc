@@ -19,7 +19,7 @@
 
 use std::os::raw::c_char;
 
-use crate::{ffi_guard, cstr_arg, images, unpack_color};
+use crate::{ffi_guard, lock_recover, cstr_arg, images, unpack_color};
 
 /// Renders a string with the built-in 8×8 font at `(x, y)`. When `vertical` is
 /// set the layout is rotated 90° counter-clockwise (`imagestringup`). The `font`
@@ -27,7 +27,7 @@ use crate::{ffi_guard, cstr_arg, images, unpack_color};
 fn render_builtin(handle: i64, x: i64, y: i64, color: i64, text: &str, vertical: bool) {
     use font8x8::{UnicodeFonts, BASIC_FONTS};
 
-    let mut guard = images().lock().unwrap();
+    let mut guard = lock_recover(images());
     let Some(obj) = guard.get_mut(&handle) else {
         return;
     };

@@ -49,7 +49,7 @@ use std::collections::HashMap;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use image::{ImageFormat, Rgba, RgbaImage};
 
@@ -146,7 +146,7 @@ pub(crate) fn next_id() -> i64 {
 /// Inserts a new image into the handle table and returns its fresh handle ID.
 pub(crate) fn insert_image(obj: ImageObj) -> i64 {
     let id = next_id();
-    images().lock().unwrap().insert(id, obj);
+    lock_recover(images()).insert(id, obj);
     id
 }
 
@@ -163,6 +163,15 @@ pub(crate) fn ffi_guard<T>(fallback: T, body: impl FnOnce() -> T) -> T {
         Ok(value) => value,
         Err(_) => fallback,
     }
+}
+
+/// Locks a process-global table, recovering the guard if a previously caught
+/// panic poisoned the mutex. After [`ffi_guard`] swallows a panic that happened
+/// while a table lock was held, the lock stays poisoned; the payload is still
+/// structurally valid, so reusing it lets the bridge keep serving later calls
+/// instead of degrading every subsequent operation to its failure sentinel.
+pub(crate) fn lock_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Allocates a `width`×`height` RGBA image filled with `fill`, or returns `None`

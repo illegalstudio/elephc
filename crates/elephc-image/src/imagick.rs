@@ -40,6 +40,7 @@ use crate::codec::{
 use crate::gd::{elephc_img_color_at, elephc_img_destroy, elephc_img_sx, elephc_img_sy};
 use crate::{
     ffi_guard,
+    lock_recover,
     cstr_arg, images, insert_image, try_new_rgba, unpack_color, ImageObj, FMT_BMP, FMT_GIF,
     FMT_JPEG, FMT_PNG, FMT_WEBP,
 };
@@ -87,7 +88,7 @@ fn imagetype_to_fmt(image_type: i64) -> i64 {
 /// Returns the active frame's GD image handle, or `None` for an unknown wand or a
 /// wand with no frames. Shared with the ops/draw modules.
 pub(crate) fn current_handle(wand_id: i64) -> Option<i64> {
-    let guard = wands().lock().unwrap();
+    let guard = lock_recover(wands());
     let wand = guard.get(&wand_id)?;
     wand.frames.get(wand.current).copied()
 }
@@ -101,7 +102,7 @@ pub(crate) fn replace_current(wand_id: i64, new_handle: i64) -> i64 {
         return -1;
     }
     let old = {
-        let mut guard = wands().lock().unwrap();
+        let mut guard = lock_recover(wands());
         let Some(wand) = guard.get_mut(&wand_id) else {
             // No wand to attach the new image to: free it so it does not leak.
             drop(guard);
@@ -125,7 +126,7 @@ pub(crate) fn replace_current(wand_id: i64, new_handle: i64) -> i64 {
 /// Returns `0` on success and `-1` for an unknown wand (the orphaned handle is
 /// freed so it does not leak).
 fn append_frame(wand_id: i64, handle: i64, fmt: i64) -> i64 {
-    let mut guard = wands().lock().unwrap();
+    let mut guard = lock_recover(wands());
     let Some(wand) = guard.get_mut(&wand_id) else {
         drop(guard);
         elephc_img_destroy(handle);
@@ -142,7 +143,7 @@ fn append_frame(wand_id: i64, handle: i64, fmt: i64) -> i64 {
 pub extern "C" fn elephc_imagick_new() -> i64 {
     ffi_guard(-1, move || {
         let id = next_wand_id();
-        wands().lock().unwrap().insert(
+        lock_recover(wands()).insert(
             id,
             Wand {
                 frames: Vec::new(),
@@ -161,7 +162,7 @@ pub extern "C" fn elephc_imagick_new() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_imagick_destroy(wand_id: i64) {
     ffi_guard((), move || {
-        let frames = wands().lock().unwrap().remove(&wand_id).map(|w| w.frames);
+        let frames = lock_recover(wands()).remove(&wand_id).map(|w| w.frames);
         if let Some(frames) = frames {
             for handle in frames {
                 elephc_img_destroy(handle);
@@ -175,7 +176,7 @@ pub extern "C" fn elephc_imagick_destroy(wand_id: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_imagick_clear(wand_id: i64) {
     ffi_guard((), move || {
-        let mut guard = wands().lock().unwrap();
+        let mut guard = lock_recover(wands());
         if let Some(wand) = guard.get_mut(&wand_id) {
             let frames = std::mem::take(&mut wand.frames);
             wand.current = 0;
@@ -192,7 +193,7 @@ pub extern "C" fn elephc_imagick_clear(wand_id: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_imagick_count(wand_id: i64) -> i64 {
     ffi_guard(-1, move || {
-        match wands().lock().unwrap().get(&wand_id) {
+        match lock_recover(wands()).get(&wand_id) {
             Some(wand) => wand.frames.len() as i64,
             None => -1,
         }
@@ -280,7 +281,7 @@ pub extern "C" fn elephc_imagick_add_image(dst_wand: i64, src_wand: i64) -> i64 
             .map(|w| w.format)
             .unwrap_or(FMT_PNG);
         let cloned = {
-            let guard = images().lock().unwrap();
+            let guard = lock_recover(images());
             let Some(obj) = guard.get(&src_handle) else {
                 return -1;
             };
@@ -322,7 +323,7 @@ pub extern "C" fn elephc_imagick_cur_height(wand_id: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_imagick_set_format(wand_id: i64, fmt: i64) {
     ffi_guard((), move || {
-        if let Some(wand) = wands().lock().unwrap().get_mut(&wand_id) {
+        if let Some(wand) = lock_recover(wands()).get_mut(&wand_id) {
             wand.format = fmt;
         }
     })
@@ -333,7 +334,7 @@ pub extern "C" fn elephc_imagick_set_format(wand_id: i64, fmt: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_imagick_get_format(wand_id: i64) -> i64 {
     ffi_guard(-1, move || {
-        match wands().lock().unwrap().get(&wand_id) {
+        match lock_recover(wands()).get(&wand_id) {
             Some(wand) => wand.format,
             None => -1,
         }
@@ -345,7 +346,7 @@ pub extern "C" fn elephc_imagick_get_format(wand_id: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_imagick_set_quality(wand_id: i64, quality: i64) {
     ffi_guard((), move || {
-        if let Some(wand) = wands().lock().unwrap().get_mut(&wand_id) {
+        if let Some(wand) = lock_recover(wands()).get_mut(&wand_id) {
             wand.quality = quality;
         }
     })
@@ -356,7 +357,7 @@ pub extern "C" fn elephc_imagick_set_quality(wand_id: i64, quality: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_imagick_get_quality(wand_id: i64) -> i64 {
     ffi_guard(-1, move || {
-        match wands().lock().unwrap().get(&wand_id) {
+        match lock_recover(wands()).get(&wand_id) {
             Some(wand) => wand.quality,
             None => -1,
         }
@@ -378,7 +379,7 @@ pub unsafe extern "C" fn elephc_imagick_write_file(
             return -1;
         };
         let (fmt, quality) = {
-            let guard = wands().lock().unwrap();
+            let guard = lock_recover(wands());
             let Some(wand) = guard.get(&wand_id) else {
                 return -1;
             };
@@ -400,7 +401,7 @@ pub extern "C" fn elephc_imagick_get_blob(wand_id: i64, fmt_override: i64) -> i6
             return -1;
         };
         let (fmt, quality) = {
-            let guard = wands().lock().unwrap();
+            let guard = lock_recover(wands());
             let Some(wand) = guard.get(&wand_id) else {
                 return -1;
             };
@@ -419,7 +420,7 @@ pub extern "C" fn elephc_imagick_get_blob(wand_id: i64, fmt_override: i64) -> i6
 #[no_mangle]
 pub extern "C" fn elephc_imagick_get_index(wand_id: i64) -> i64 {
     ffi_guard(-1, move || {
-        match wands().lock().unwrap().get(&wand_id) {
+        match lock_recover(wands()).get(&wand_id) {
             Some(wand) => wand.current as i64,
             None => -1,
         }
@@ -432,7 +433,7 @@ pub extern "C" fn elephc_imagick_get_index(wand_id: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_imagick_set_index(wand_id: i64, index: i64) -> i64 {
     ffi_guard(-1, move || {
-        let mut guard = wands().lock().unwrap();
+        let mut guard = lock_recover(wands());
         let Some(wand) = guard.get_mut(&wand_id) else {
             return -1;
         };
@@ -450,7 +451,7 @@ pub extern "C" fn elephc_imagick_set_index(wand_id: i64, index: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_imagick_next(wand_id: i64) -> i64 {
     ffi_guard(-1, move || {
-        let mut guard = wands().lock().unwrap();
+        let mut guard = lock_recover(wands());
         let Some(wand) = guard.get_mut(&wand_id) else {
             return -1;
         };
@@ -469,7 +470,7 @@ pub extern "C" fn elephc_imagick_next(wand_id: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_imagick_previous(wand_id: i64) -> i64 {
     ffi_guard(-1, move || {
-        let mut guard = wands().lock().unwrap();
+        let mut guard = lock_recover(wands());
         let Some(wand) = guard.get_mut(&wand_id) else {
             return -1;
         };
@@ -487,7 +488,7 @@ pub extern "C" fn elephc_imagick_previous(wand_id: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_imagick_first(wand_id: i64) {
     ffi_guard((), move || {
-        if let Some(wand) = wands().lock().unwrap().get_mut(&wand_id) {
+        if let Some(wand) = lock_recover(wands()).get_mut(&wand_id) {
             wand.current = 0;
         }
     })
@@ -498,7 +499,7 @@ pub extern "C" fn elephc_imagick_first(wand_id: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_imagick_last(wand_id: i64) {
     ffi_guard((), move || {
-        if let Some(wand) = wands().lock().unwrap().get_mut(&wand_id) {
+        if let Some(wand) = lock_recover(wands()).get_mut(&wand_id) {
             if !wand.frames.is_empty() {
                 wand.current = wand.frames.len() - 1;
             }
@@ -529,7 +530,7 @@ pub extern "C" fn elephc_imagick_fill(wand_id: i64, color: i64) -> i64 {
             return -1;
         };
         let fill = unpack_color(color);
-        let mut guard = images().lock().unwrap();
+        let mut guard = lock_recover(images());
         let Some(obj) = guard.get_mut(&handle) else {
             return -1;
         };

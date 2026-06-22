@@ -26,7 +26,7 @@
 
 use image::{imageops, imageops::FilterType, Rgba, RgbaImage};
 
-use crate::{ffi_guard, blend_over, fbuf, images, insert_image, unpack_color, unpack_pair, ImageObj};
+use crate::{ffi_guard, lock_recover, blend_over, fbuf, images, insert_image, unpack_color, unpack_pair, ImageObj};
 
 /// GD interpolation code for nearest-neighbour sampling (`IMG_NEAREST_NEIGHBOUR`);
 /// any other stored interpolation selects a linear filter for scaling.
@@ -73,7 +73,7 @@ pub extern "C" fn elephc_img_copy(dst_h: i64, src_h: i64, dxy: i64, sxy: i64, sw
         let (dx, dy) = unpack_pair(dxy);
         let (sx, sy) = unpack_pair(sxy);
         let (sw, sh) = unpack_pair(swh);
-        let mut guard = images().lock().unwrap();
+        let mut guard = lock_recover(images());
         let Some(src) = guard.get(&src_h) else {
             return -1;
         };
@@ -140,7 +140,7 @@ fn copy_merge_impl(
     let (sx, sy) = unpack_pair(sxy);
     let (sw, sh) = unpack_pair(swh);
     let p = (pct.clamp(0, 100) as f64) / 100.0;
-    let mut guard = images().lock().unwrap();
+    let mut guard = lock_recover(images());
     let Some(src) = guard.get(&src_h) else {
         return -1;
     };
@@ -195,7 +195,7 @@ fn copy_scaled(
     if dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0 {
         return -1;
     }
-    let mut guard = images().lock().unwrap();
+    let mut guard = lock_recover(images());
     let Some(src) = guard.get(&src_h) else {
         return -1;
     };
@@ -253,7 +253,7 @@ pub extern "C" fn elephc_img_scale(src_h: i64, new_w: i64, new_h: i64, mode: i64
         if new_w <= 0 {
             return -1;
         }
-        let guard = images().lock().unwrap();
+        let guard = lock_recover(images());
         let Some(src) = guard.get(&src_h) else {
             return -1;
         };
@@ -282,7 +282,7 @@ pub extern "C" fn elephc_img_crop(src_h: i64, x: i64, y: i64, w: i64, h: i64) ->
         if w <= 0 || h <= 0 {
             return -1;
         }
-        let guard = images().lock().unwrap();
+        let guard = lock_recover(images());
         let Some(src) = guard.get(&src_h) else {
             return -1;
         };
@@ -323,7 +323,7 @@ pub extern "C" fn elephc_img_crop_auto(
     threshold_permille: i64,
 ) -> i64 {
     ffi_guard(-1, move || {
-        let guard = images().lock().unwrap();
+        let guard = lock_recover(images());
         let Some(src) = guard.get(&src_h) else {
             return -1;
         };
@@ -373,7 +373,7 @@ pub extern "C" fn elephc_img_crop_auto(
 #[no_mangle]
 pub extern "C" fn elephc_img_flip(handle: i64, mode: i64) -> i64 {
     ffi_guard(-1, move || {
-        let mut guard = images().lock().unwrap();
+        let mut guard = lock_recover(images());
         let Some(obj) = guard.get_mut(&handle) else {
             return -1;
         };
@@ -397,7 +397,7 @@ pub extern "C" fn elephc_img_flip(handle: i64, mode: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_rotate(src_h: i64, angle_mdeg: i64, bgcolor: i64) -> i64 {
     ffi_guard(-1, move || {
-        let guard = images().lock().unwrap();
+        let guard = lock_recover(images());
         let Some(src) = guard.get(&src_h) else {
             return -1;
         };
@@ -467,7 +467,7 @@ pub extern "C" fn elephc_img_affine(src_h: i64) -> i64 {
         if det.abs() < 1e-12 {
             return -1;
         }
-        let guard = images().lock().unwrap();
+        let guard = lock_recover(images());
         let Some(src) = guard.get(&src_h) else {
             return -1;
         };

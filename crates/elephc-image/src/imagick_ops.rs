@@ -26,10 +26,10 @@
 
 use image::{imageops, Rgba, RgbaImage};
 
-use crate::filter::{elephc_img_convolution, elephc_img_filter};
+use crate::filter::{convolve3x3, elephc_img_convolution, elephc_img_filter};
 use crate::imagick::{current_handle, replace_current};
 use crate::transform::{elephc_img_crop, elephc_img_flip, elephc_img_rotate, elephc_img_scale};
-use crate::{ffi_guard, blend_over, images};
+use crate::{ffi_guard, lock_recover, blend_over, images};
 
 /// Imagick `COMPOSITE_OVER` operator code (also the default). Source-over blend.
 const COMPOSITE_OVER: i64 = 40;
@@ -132,7 +132,7 @@ pub extern "C" fn elephc_imagick_blur(wand_id: i64, sigma_milli: i64) -> i64 {
             return -1;
         };
         let sigma = (sigma_milli as f32 / 1000.0).max(0.1);
-        let mut guard = images().lock().unwrap();
+        let mut guard = lock_recover(images());
         let Some(obj) = guard.get_mut(&handle) else {
             return -1;
         };
@@ -220,7 +220,7 @@ pub extern "C" fn elephc_imagick_modulate(
         let sf = saturation_pct as f64 / 100.0;
         // Imagick maps hue 0..200 to a -180..+180 degree rotation (100 = no change).
         let hue_shift = (hue_pct as f64 - 100.0) / 100.0; // in turns (1.0 = 360°)
-        let mut guard = images().lock().unwrap();
+        let mut guard = lock_recover(images());
         let Some(obj) = guard.get_mut(&handle) else {
             return -1;
         };
@@ -247,34 +247,15 @@ pub extern "C" fn elephc_imagick_sharpen(wand_id: i64, radius_milli: i64, sigma_
         let Some(handle) = current_handle(wand_id) else {
             return -1;
         };
-        let mut guard = images().lock().unwrap();
+        let mut guard = lock_recover(images());
         let Some(obj) = guard.get_mut(&handle) else {
             return -1;
         };
         let orig = obj.img.clone();
-        let (w, h) = (orig.width(), orig.height());
-        // 3×3 sharpen kernel (sum 1): center 5, edge-neighbours -1.
+        // 3×3 sharpen kernel (sum 1): center 5, edge-neighbours -1. Edge pixels
+        // replicate (clamp), divisor 1, no offset — the shared convolution helper.
         let k = [0.0, -1.0, 0.0, -1.0, 5.0, -1.0, 0.0, -1.0, 0.0];
-        for y in 0..h {
-            for x in 0..w {
-                let mut acc = [0.0f64; 3];
-                for ky in 0..3 {
-                    for kx in 0..3 {
-                        let px = (x as i64 + kx as i64 - 1).clamp(0, w as i64 - 1) as u32;
-                        let py = (y as i64 + ky as i64 - 1).clamp(0, h as i64 - 1) as u32;
-                        let s = orig.get_pixel(px, py).0;
-                        let coef = k[ky * 3 + kx];
-                        acc[0] += s[0] as f64 * coef;
-                        acc[1] += s[1] as f64 * coef;
-                        acc[2] += s[2] as f64 * coef;
-                    }
-                }
-                let a = orig.get_pixel(x, y).0[3];
-                let ch = |v: f64| v.round().clamp(0.0, 255.0) as u8;
-                obj.img
-                    .put_pixel(x, y, Rgba([ch(acc[0]), ch(acc[1]), ch(acc[2]), a]));
-            }
-        }
+        convolve3x3(&mut obj.img, &orig, k, 1.0, 0.0);
         0
     })
 }
@@ -318,14 +299,14 @@ pub extern "C" fn elephc_imagick_composite(
         };
         // Clone the source frame so a self-composite (same handle) cannot alias.
         let src_img: RgbaImage = {
-            let guard = images().lock().unwrap();
+            let guard = lock_recover(images());
             let Some(obj) = guard.get(&src_handle) else {
                 return -1;
             };
             obj.img.clone()
         };
         let blend = op == COMPOSITE_OVER;
-        let mut guard = images().lock().unwrap();
+        let mut guard = lock_recover(images());
         let Some(dst) = guard.get_mut(&dst_handle) else {
             return -1;
         };

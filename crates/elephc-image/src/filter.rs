@@ -23,7 +23,7 @@
 
 use image::{Rgba, RgbaImage};
 
-use crate::{ffi_guard, fbuf, images};
+use crate::{ffi_guard, lock_recover, fbuf, images};
 
 /// Built-in 3×3 convolution kernels keyed by `IMG_FILTER_*` selector, paired with
 /// their divisor. Matches libgd's `gd_filter.c` definitions.
@@ -57,7 +57,7 @@ fn clamp_coord(v: i64, max: u32) -> u32 {
 /// Applies a 3×3 convolution to the RGB channels in place, reading neighbors from
 /// `orig` (a pre-convolution clone) with edge replication, dividing by `div` and
 /// adding `offset`. Alpha is preserved.
-fn convolve3x3(img: &mut RgbaImage, orig: &RgbaImage, k: [f64; 9], div: f64, offset: f64) {
+pub(crate) fn convolve3x3(img: &mut RgbaImage, orig: &RgbaImage, k: [f64; 9], div: f64, offset: f64) {
     let (w, h) = (img.width(), img.height());
     let div = if div == 0.0 { 1.0 } else { div };
     for y in 0..h {
@@ -221,7 +221,7 @@ fn scatter(img: &mut RgbaImage, sub: i64, plus: i64) -> bool {
 #[no_mangle]
 pub extern "C" fn elephc_img_filter(handle: i64, filter: i64, a1: i64, a2: i64, a3: i64, a4: i64) -> i64 {
     ffi_guard(-1, move || {
-        let mut guard = images().lock().unwrap();
+        let mut guard = lock_recover(images());
         let Some(obj) = guard.get_mut(&handle) else {
             return -1;
         };
@@ -267,7 +267,7 @@ pub extern "C" fn elephc_img_convolution(handle: i64, div_fixed: i64, offset_fix
         let kernel = [m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]];
         let div = div_fixed as f64 / 65536.0;
         let offset = offset_fixed as f64 / 65536.0;
-        let mut guard = images().lock().unwrap();
+        let mut guard = lock_recover(images());
         let Some(obj) = guard.get_mut(&handle) else {
             return -1;
         };
@@ -289,7 +289,7 @@ pub extern "C" fn elephc_img_gamma(handle: i64, in_fixed: i64, out_fixed: i64) -
             return -1;
         }
         let g = ig / og;
-        let mut guard = images().lock().unwrap();
+        let mut guard = lock_recover(images());
         let Some(obj) = guard.get_mut(&handle) else {
             return -1;
         };
@@ -308,7 +308,7 @@ pub extern "C" fn elephc_img_gamma(handle: i64, in_fixed: i64, out_fixed: i64) -
 #[no_mangle]
 pub extern "C" fn elephc_img_set_interpolation(handle: i64, method: i64) {
     ffi_guard((), move || {
-        if let Some(obj) = images().lock().unwrap().get_mut(&handle) {
+        if let Some(obj) = lock_recover(images()).get_mut(&handle) {
             obj.interpolation = method;
         }
     })
@@ -318,7 +318,7 @@ pub extern "C" fn elephc_img_set_interpolation(handle: i64, method: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_img_get_interpolation(handle: i64) -> i64 {
     ffi_guard(-1, move || {
-        match images().lock().unwrap().get(&handle) {
+        match lock_recover(images()).get(&handle) {
             Some(obj) => obj.interpolation,
             None => -1,
         }
@@ -329,7 +329,7 @@ pub extern "C" fn elephc_img_get_interpolation(handle: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_set_interlace(handle: i64, on: i64) {
     ffi_guard((), move || {
-        if let Some(obj) = images().lock().unwrap().get_mut(&handle) {
+        if let Some(obj) = lock_recover(images()).get_mut(&handle) {
             obj.interlace = on != 0;
         }
     })
@@ -339,7 +339,7 @@ pub extern "C" fn elephc_img_set_interlace(handle: i64, on: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_img_get_interlace(handle: i64) -> i64 {
     ffi_guard(-1, move || {
-        match images().lock().unwrap().get(&handle) {
+        match lock_recover(images()).get(&handle) {
             Some(obj) => obj.interlace as i64,
             None => -1,
         }

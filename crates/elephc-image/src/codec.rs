@@ -32,6 +32,7 @@ use image::{DynamicImage, ExtendedColorType, ImageEncoder, ImageFormat, RgbaImag
 
 use crate::{
     ffi_guard,
+    lock_recover,
     cstr_arg, fmt_code_to_format, format_to_imagetype, images, insert_image, ImageObj, FMT_JPEG,
 };
 
@@ -127,7 +128,7 @@ pub extern "C" fn elephc_img_stage_ptr(len: i64) -> *mut u8 {
         if len <= 0 {
             return std::ptr::null_mut();
         }
-        let mut guard = stage_cell().lock().unwrap();
+        let mut guard = lock_recover(stage_cell());
         guard.clear();
         guard.resize(len as usize, 0);
         guard.as_mut_ptr()
@@ -139,7 +140,7 @@ pub extern "C" fn elephc_img_stage_ptr(len: i64) -> *mut u8 {
 /// Imagick bridge so `readImageBlob` can record the source format without a
 /// second decode (the staging buffer still holds the bytes after a decode).
 pub(crate) fn stage_guess_imagetype(len: usize) -> i64 {
-    let guard = stage_cell().lock().unwrap();
+    let guard = lock_recover(stage_cell());
     if len == 0 || guard.len() < len {
         return 0;
     }
@@ -158,7 +159,7 @@ pub extern "C" fn elephc_img_create_from_stage(len: i64) -> i64 {
         if len <= 0 {
             return -1;
         }
-        let guard = stage_cell().lock().unwrap();
+        let guard = lock_recover(stage_cell());
         let len = len as usize;
         if guard.len() < len {
             return -1;
@@ -222,7 +223,7 @@ pub unsafe extern "C" fn elephc_img_write_file(
         let Some(path) = cstr_arg(path) else {
             return -1;
         };
-        let guard = images().lock().unwrap();
+        let guard = lock_recover(images());
         let Some(obj) = guard.get(&handle) else {
             return -1;
         };
@@ -244,7 +245,7 @@ pub unsafe extern "C" fn elephc_img_write_file(
 #[no_mangle]
 pub extern "C" fn elephc_img_encode(handle: i64, fmt: i64, quality: i64) -> i64 {
     ffi_guard(-1, move || {
-        let guard = images().lock().unwrap();
+        let guard = lock_recover(images());
         let Some(obj) = guard.get(&handle) else {
             return -1;
         };
@@ -252,7 +253,7 @@ pub extern "C" fn elephc_img_encode(handle: i64, fmt: i64, quality: i64) -> i64 
             return -1;
         };
         drop(guard);
-        *encode_cell().lock().unwrap() = bytes;
+        *lock_recover(encode_cell()) = bytes;
         0
     })
 }
@@ -261,7 +262,7 @@ pub extern "C" fn elephc_img_encode(handle: i64, fmt: i64, quality: i64) -> i64 
 /// cell so the prelude can read them through `elephc_img_encoded_ptr`/`_len` just
 /// like the GD/Imagick encode path. The previous contents are replaced.
 pub(crate) fn set_encoded(bytes: Vec<u8>) {
-    *encode_cell().lock().unwrap() = bytes;
+    *lock_recover(encode_cell()) = bytes;
 }
 
 /// Returns a read pointer to the encode cell's bytes. Valid until the next encode
@@ -270,7 +271,7 @@ pub(crate) fn set_encoded(bytes: Vec<u8>) {
 #[no_mangle]
 pub extern "C" fn elephc_img_encoded_ptr() -> *const u8 {
     ffi_guard(std::ptr::null(), move || {
-        encode_cell().lock().unwrap().as_ptr()
+        lock_recover(encode_cell()).as_ptr()
     })
 }
 
@@ -278,7 +279,7 @@ pub extern "C" fn elephc_img_encoded_ptr() -> *const u8 {
 #[no_mangle]
 pub extern "C" fn elephc_img_encoded_len() -> i64 {
     ffi_guard(-1, move || {
-        encode_cell().lock().unwrap().len() as i64
+        lock_recover(encode_cell()).len() as i64
     })
 }
 
@@ -286,7 +287,7 @@ pub extern "C" fn elephc_img_encoded_len() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_encoded_clear() {
     ffi_guard((), move || {
-        encode_cell().lock().unwrap().clear();
+        lock_recover(encode_cell()).clear();
     })
 }
 
@@ -309,7 +310,7 @@ pub unsafe extern "C" fn elephc_img_probe_file(path: *const c_char) -> i64 {
         let Ok((width, height)) = reader.into_dimensions() else {
             return -1;
         };
-        *probe_cell().lock().unwrap() = ProbeResult {
+        *lock_recover(probe_cell()) = ProbeResult {
             width: width as i64,
             height: height as i64,
             image_type: format_to_imagetype(format),
@@ -331,7 +332,7 @@ pub extern "C" fn elephc_img_probe_stage(len: i64) -> i64 {
         if len <= 0 {
             return -1;
         }
-        let guard = stage_cell().lock().unwrap();
+        let guard = lock_recover(stage_cell());
         let len = len as usize;
         if guard.len() < len {
             return -1;
@@ -347,7 +348,7 @@ pub extern "C" fn elephc_img_probe_stage(len: i64) -> i64 {
             return -1;
         };
         drop(guard);
-        *probe_cell().lock().unwrap() = ProbeResult {
+        *lock_recover(probe_cell()) = ProbeResult {
             width: width as i64,
             height: height as i64,
             image_type: format_to_imagetype(format),
@@ -362,7 +363,7 @@ pub extern "C" fn elephc_img_probe_stage(len: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_probe_width() -> i64 {
     ffi_guard(-1, move || {
-        probe_cell().lock().unwrap().width
+        lock_recover(probe_cell()).width
     })
 }
 
@@ -370,7 +371,7 @@ pub extern "C" fn elephc_img_probe_width() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_probe_height() -> i64 {
     ffi_guard(-1, move || {
-        probe_cell().lock().unwrap().height
+        lock_recover(probe_cell()).height
     })
 }
 
@@ -378,7 +379,7 @@ pub extern "C" fn elephc_img_probe_height() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_probe_type() -> i64 {
     ffi_guard(-1, move || {
-        probe_cell().lock().unwrap().image_type
+        lock_recover(probe_cell()).image_type
     })
 }
 
@@ -386,7 +387,7 @@ pub extern "C" fn elephc_img_probe_type() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_probe_bits() -> i64 {
     ffi_guard(-1, move || {
-        probe_cell().lock().unwrap().bits
+        lock_recover(probe_cell()).bits
     })
 }
 
@@ -394,6 +395,6 @@ pub extern "C" fn elephc_img_probe_bits() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_probe_channels() -> i64 {
     ffi_guard(-1, move || {
-        probe_cell().lock().unwrap().channels
+        lock_recover(probe_cell()).channels
     })
 }

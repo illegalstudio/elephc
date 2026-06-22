@@ -23,7 +23,7 @@ use std::os::raw::c_char;
 use std::sync::{Mutex, OnceLock};
 
 use crate::xfer::{in_bytes, set_out};
-use crate::{cstr_arg, ffi_guard};
+use crate::{cstr_arg, ffi_guard, lock_recover};
 
 /// Datasets from the last `iptcparse`, grouped by `record#dataset` key in
 /// first-seen order, each key holding its values in occurrence order. PHP's
@@ -56,7 +56,7 @@ pub extern "C" fn elephc_iptc_parse(len: i64) -> i64 {
             }
         }
         let count = groups.len() as i64;
-        *iptc_groups().lock().unwrap() = groups;
+        *lock_recover(iptc_groups()) = groups;
         count
     })
 }
@@ -65,7 +65,7 @@ pub extern "C" fn elephc_iptc_parse(len: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_iptc_key_count() -> i64 {
     ffi_guard(-1, move || {
-        iptc_groups().lock().unwrap().len() as i64
+        lock_recover(iptc_groups()).len() as i64
     })
 }
 
@@ -74,7 +74,7 @@ pub extern "C" fn elephc_iptc_key_count() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_iptc_key(index: i64) -> i64 {
     ffi_guard(-1, move || {
-        let guard = iptc_groups().lock().unwrap();
+        let guard = lock_recover(iptc_groups());
         let Some((key, _)) = usize::try_from(index).ok().and_then(|i| guard.get(i)) else {
             return -1;
         };
@@ -89,7 +89,7 @@ pub extern "C" fn elephc_iptc_key(index: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_iptc_val_count(index: i64) -> i64 {
     ffi_guard(-1, move || {
-        let guard = iptc_groups().lock().unwrap();
+        let guard = lock_recover(iptc_groups());
         match usize::try_from(index).ok().and_then(|i| guard.get(i)) {
             Some((_, values)) => values.len() as i64,
             None => -1,
@@ -102,7 +102,7 @@ pub extern "C" fn elephc_iptc_val_count(index: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_iptc_val(key_index: i64, val_index: i64) -> i64 {
     ffi_guard(-1, move || {
-        let guard = iptc_groups().lock().unwrap();
+        let guard = lock_recover(iptc_groups());
         let value = usize::try_from(key_index)
             .ok()
             .and_then(|i| guard.get(i))

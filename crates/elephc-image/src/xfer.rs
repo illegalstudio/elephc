@@ -23,7 +23,7 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use crate::ffi_guard;
+use crate::{ffi_guard, lock_recover};
 
 /// Input staging buffer: the prelude resizes it via `elephc_img_in_ptr`, copies a
 /// PHP string into it with `ptr_write_string`, then calls a parser/embedder that
@@ -54,7 +54,7 @@ fn kv_list() -> &'static Mutex<Vec<(String, Vec<u8>)>> {
 /// producing entry point hands back to the prelude.
 pub(crate) fn set_out(bytes: Vec<u8>) -> i64 {
     let len = bytes.len() as i64;
-    *out_cell().lock().unwrap() = bytes;
+    *lock_recover(out_cell()) = bytes;
     len
 }
 
@@ -64,7 +64,7 @@ pub(crate) fn in_bytes(len: i64) -> Option<Vec<u8>> {
     if len < 0 {
         return None;
     }
-    let guard = in_cell().lock().unwrap();
+    let guard = lock_recover(in_cell());
     let len = len as usize;
     if guard.len() < len {
         return None;
@@ -76,7 +76,7 @@ pub(crate) fn in_bytes(len: i64) -> Option<Vec<u8>> {
 /// parser to return to the prelude.
 pub(crate) fn set_kv(list: Vec<(String, Vec<u8>)>) -> i64 {
     let n = list.len() as i64;
-    *kv_list().lock().unwrap() = list;
+    *lock_recover(kv_list()) = list;
     n
 }
 
@@ -89,7 +89,7 @@ pub extern "C" fn elephc_img_in_ptr(len: i64) -> *mut u8 {
         if len <= 0 {
             return std::ptr::null_mut();
         }
-        let mut guard = in_cell().lock().unwrap();
+        let mut guard = lock_recover(in_cell());
         guard.clear();
         guard.resize(len as usize, 0);
         guard.as_mut_ptr()
@@ -102,7 +102,7 @@ pub extern "C" fn elephc_img_in_ptr(len: i64) -> *mut u8 {
 #[no_mangle]
 pub extern "C" fn elephc_img_out_ptr() -> *const u8 {
     ffi_guard(std::ptr::null(), move || {
-        out_cell().lock().unwrap().as_ptr()
+        lock_recover(out_cell()).as_ptr()
     })
 }
 
@@ -110,7 +110,7 @@ pub extern "C" fn elephc_img_out_ptr() -> *const u8 {
 #[no_mangle]
 pub extern "C" fn elephc_img_kv_count() -> i64 {
     ffi_guard(-1, move || {
-        kv_list().lock().unwrap().len() as i64
+        lock_recover(kv_list()).len() as i64
     })
 }
 
@@ -119,7 +119,7 @@ pub extern "C" fn elephc_img_kv_count() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_kv_key(index: i64) -> i64 {
     ffi_guard(-1, move || {
-        let guard = kv_list().lock().unwrap();
+        let guard = lock_recover(kv_list());
         let Some((key, _)) = usize::try_from(index).ok().and_then(|i| guard.get(i)) else {
             return -1;
         };
@@ -134,7 +134,7 @@ pub extern "C" fn elephc_img_kv_key(index: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_kv_val(index: i64) -> i64 {
     ffi_guard(-1, move || {
-        let guard = kv_list().lock().unwrap();
+        let guard = lock_recover(kv_list());
         let Some((_, val)) = usize::try_from(index).ok().and_then(|i| guard.get(i)) else {
             return -1;
         };

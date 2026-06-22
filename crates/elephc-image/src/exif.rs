@@ -28,7 +28,7 @@ use exif::{In, Value};
 
 use crate::exif_tags::php_tag_name;
 use crate::xfer::{set_kv, set_out};
-use crate::{ffi_guard, cstr_arg, format_to_imagetype};
+use crate::{ffi_guard, lock_recover, cstr_arg, format_to_imagetype};
 
 /// Dimensions and IMAGETYPE code of the most recently extracted thumbnail.
 #[derive(Clone, Copy, Default)]
@@ -160,7 +160,7 @@ pub unsafe extern "C" fn elephc_exif_thumbnail(path: *const c_char) -> i64 {
         let Some((thumb, meta)) = extract_thumbnail(&bytes) else {
             return -1;
         };
-        *thumb_meta().lock().unwrap() = meta;
+        *lock_recover(thumb_meta()) = meta;
         set_out(thumb)
     })
 }
@@ -228,7 +228,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 #[no_mangle]
 pub extern "C" fn elephc_exif_thumb_width() -> i64 {
     ffi_guard(-1, move || {
-        thumb_meta().lock().unwrap().width
+        lock_recover(thumb_meta()).width
     })
 }
 
@@ -236,7 +236,7 @@ pub extern "C" fn elephc_exif_thumb_width() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_exif_thumb_height() -> i64 {
     ffi_guard(-1, move || {
-        thumb_meta().lock().unwrap().height
+        lock_recover(thumb_meta()).height
     })
 }
 
@@ -244,6 +244,6 @@ pub extern "C" fn elephc_exif_thumb_height() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_exif_thumb_type() -> i64 {
     ffi_guard(-1, move || {
-        thumb_meta().lock().unwrap().image_type
+        lock_recover(thumb_meta()).image_type
     })
 }

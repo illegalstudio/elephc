@@ -21,7 +21,7 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use crate::ffi_guard;
+use crate::{ffi_guard, lock_recover};
 
 /// Scale factor for the 16.16 fixed-point values pushed across the ABI.
 const FIXED_ONE: f64 = 65536.0;
@@ -35,14 +35,14 @@ fn fbuf_cell() -> &'static Mutex<Vec<f64>> {
 /// Returns a copy of the buffered matrix values (in push order) for the consuming
 /// bridge call to apply.
 pub(crate) fn values() -> Vec<f64> {
-    fbuf_cell().lock().unwrap().clone()
+    lock_recover(fbuf_cell()).clone()
 }
 
 /// Clears the float buffer before a new matrix is described.
 #[no_mangle]
 pub extern "C" fn elephc_img_fbuf_reset() {
     ffi_guard((), move || {
-        fbuf_cell().lock().unwrap().clear();
+        lock_recover(fbuf_cell()).clear();
     })
 }
 
@@ -50,6 +50,6 @@ pub extern "C" fn elephc_img_fbuf_reset() {
 #[no_mangle]
 pub extern "C" fn elephc_img_fbuf_push(fixed16: i64) {
     ffi_guard((), move || {
-        fbuf_cell().lock().unwrap().push(fixed16 as f64 / FIXED_ONE);
+        lock_recover(fbuf_cell()).push(fixed16 as f64 / FIXED_ONE);
     })
 }

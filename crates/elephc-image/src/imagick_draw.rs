@@ -27,7 +27,7 @@ use crate::draw::{
     elephc_img_filled_rectangle, elephc_img_line, elephc_img_poly_add, elephc_img_poly_fill,
     elephc_img_poly_line, elephc_img_poly_reset, elephc_img_rectangle, elephc_img_set_thickness,
 };
-use crate::ffi_guard;
+use crate::{ffi_guard, lock_recover};
 use crate::gd::elephc_img_set_pixel;
 use crate::imagick::current_handle;
 
@@ -90,7 +90,7 @@ fn pack_pair(hi: i64, lo: i64) -> i64 {
 
 /// Records a command on a draw object, snapshotting its current fill/stroke/width.
 fn push_cmd(draw_id: i64, kind: CmdKind) {
-    if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
+    if let Some(state) = lock_recover(draws()).get_mut(&draw_id) {
         state.cmds.push(Cmd {
             kind,
             fill: state.fill,
@@ -106,7 +106,7 @@ fn push_cmd(draw_id: i64, kind: CmdKind) {
 pub extern "C" fn elephc_idraw_new() -> i64 {
     ffi_guard(-1, move || {
         let id = next_draw_id();
-        draws().lock().unwrap().insert(
+        lock_recover(draws()).insert(
             id,
             DrawState {
                 fill: 0,
@@ -125,7 +125,7 @@ pub extern "C" fn elephc_idraw_new() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_idraw_destroy(draw_id: i64) {
     ffi_guard((), move || {
-        draws().lock().unwrap().remove(&draw_id);
+        lock_recover(draws()).remove(&draw_id);
     })
 }
 
@@ -134,7 +134,7 @@ pub extern "C" fn elephc_idraw_destroy(draw_id: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_idraw_clear(draw_id: i64) {
     ffi_guard((), move || {
-        if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
+        if let Some(state) = lock_recover(draws()).get_mut(&draw_id) {
             state.fill = 0;
             state.stroke = NO_COLOR;
             state.width = 1;
@@ -148,7 +148,7 @@ pub extern "C" fn elephc_idraw_clear(draw_id: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_idraw_set_fill(draw_id: i64, color: i64) {
     ffi_guard((), move || {
-        if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
+        if let Some(state) = lock_recover(draws()).get_mut(&draw_id) {
             state.fill = color;
         }
     })
@@ -159,7 +159,7 @@ pub extern "C" fn elephc_idraw_set_fill(draw_id: i64, color: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_idraw_set_stroke(draw_id: i64, color: i64) {
     ffi_guard((), move || {
-        if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
+        if let Some(state) = lock_recover(draws()).get_mut(&draw_id) {
             state.stroke = color;
         }
     })
@@ -170,7 +170,7 @@ pub extern "C" fn elephc_idraw_set_stroke(draw_id: i64, color: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_idraw_set_stroke_width(draw_id: i64, width: i64) {
     ffi_guard((), move || {
-        if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
+        if let Some(state) = lock_recover(draws()).get_mut(&draw_id) {
             state.width = width.max(1);
         }
     })
@@ -181,7 +181,7 @@ pub extern "C" fn elephc_idraw_set_stroke_width(draw_id: i64, width: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_idraw_get_fill(draw_id: i64) -> i64 {
     ffi_guard(-1, move || {
-        match draws().lock().unwrap().get(&draw_id) {
+        match lock_recover(draws()).get(&draw_id) {
             Some(state) => state.fill,
             None => NO_COLOR,
         }
@@ -262,7 +262,7 @@ pub extern "C" fn elephc_idraw_point(draw_id: i64, x: i64, y: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_idraw_poly_reset(draw_id: i64) {
     ffi_guard((), move || {
-        if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
+        if let Some(state) = lock_recover(draws()).get_mut(&draw_id) {
             state.poly_buf.clear();
         }
     })
@@ -272,7 +272,7 @@ pub extern "C" fn elephc_idraw_poly_reset(draw_id: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_idraw_poly_point(draw_id: i64, x: i64, y: i64) {
     ffi_guard((), move || {
-        if let Some(state) = draws().lock().unwrap().get_mut(&draw_id) {
+        if let Some(state) = lock_recover(draws()).get_mut(&draw_id) {
             state.poly_buf.push((x, y));
         }
     })
@@ -283,7 +283,7 @@ pub extern "C" fn elephc_idraw_poly_point(draw_id: i64, x: i64, y: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_idraw_polygon(draw_id: i64) {
     ffi_guard((), move || {
-        let pts = match draws().lock().unwrap().get(&draw_id) {
+        let pts = match lock_recover(draws()).get(&draw_id) {
             Some(state) => state.poly_buf.clone(),
             None => return,
         };
@@ -303,7 +303,7 @@ pub extern "C" fn elephc_imagick_draw(wand_id: i64, draw_id: i64) -> i64 {
         // Snapshot the command list so the draws() lock is not held during rendering
         // (the GD entry points take the images() lock, never draws()).
         let cmds: Vec<(CmdSnapshot, i64, i64, i64)> = {
-            let guard = draws().lock().unwrap();
+            let guard = lock_recover(draws());
             let Some(state) = guard.get(&draw_id) else {
                 return -1;
             };
