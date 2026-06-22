@@ -717,7 +717,9 @@ v0.24.x. The legacy AST backend is frozen behind `--ast-backend` for diagnostics
 and removal work only, and ≥15% performance improvement on compute benchmarks
 after Phase 06 by end of v0.24.x.
 
-## v0.25.x — EIR optimization passes
+## v0.25.x — EIR optimization passes and Image support
+
+### EIR optimization passes
 
 Build the IR-level passes that the AST optimizer could not reach now that the
 EIR backend is the user-facing default.
@@ -743,71 +745,7 @@ Expected outcome: EIR remains the only active backend implementation target,
 additional 10–20% performance gain on loop-heavy and call-heavy benchmarks,
 and cumulative ≥30% improvement vs end-of-v0.23 baseline.
 
-## v0.26.x — Performance closure, legacy cleanup, and 0.x stabilization
-
-Optimization work should now be driven by benchmarks, generated assembly size,
-and 0.x validation rather than by speculative pass work.
-
-- [ ] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling
-- [ ] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes
-- [ ] Resource scope-cleanup — auto-free tag-9 resource handles that leave scope without their explicit close (today an unclosed `fopen()` leaks its fd and an unfinalized `hash_init()` context leaks its heap state until process exit; `functions/cleanup.rs` skips `Resource`s by design). Prerequisites: a resource-kind subtype in the Mixed cell so the cleanup pass can pick the right destructor (fd → `close()`, HashContext → `elephc_crypto_free`, …), and aliasing safety (resources have no refcount; `$b = $a` would double-free under naive scope-free). Includes wiring the currently-uncalled `elephc_crypto_free` (`_elephc_crypto_free_fn` slot + publish entry + a `__rt_hash_ctx_free` helper) and nulling the Mixed payload in `hash_final` so finalized contexts are skipped — which also defuses the double-final UB documented in `src/codegen/runtime/strings/hash_context.rs`
-- [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling (feeds the EIR effects table)
-- [ ] Guard reasoning v2 for dead-code elimination — broader range reasoning and multi-variable facts beyond current strict-scalar, boolean, loose-comparison, and safe relational-complement guards
-- [ ] Exception-aware DCE v2 — exact thrown-type / handler reachability, nested try rethrow modeling, and less conservative finally-path invalidation
-- [ ] Control-flow normalization v2 — broader canonicalization of nested block/control shells before CFG-aware optimization passes
-- [ ] Composite conditional include function variants — extend include-graph exclusivity from one direct `if` / `elseif` / `else` chain to nested/composed conditional paths where declarations are pairwise exclusive only after combining multiple branch decisions
-- [ ] Switch-aware conditional include function variants — extend include-graph exclusivity beyond `if` / `elseif` / `else` to `switch` cases once fall-through, `break`, and terminating case bodies are modeled precisely; revisit `match` only if include-like statement lowering ever appears inside match arms
-- [ ] Runtime routine dead stripping — include or link only runtime helpers reachable from the generated program instead of carrying the whole target runtime slice
-- [ ] Tail-call optimization — direct tail self- and mutual-recursion lowering on top of EIR (`Br` to function entry with parameter rebinding)
-- [ ] Performance within 2x of C -O0 on compute benchmarks
-- [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before deleting the frozen legacy backend
-- [ ] Real-world CLI tools compiled as validation
-- [ ] Audit remaining references to `--ast-backend` and legacy AST emitters so docs, help text, and release notes present them as frozen diagnostic-only fallback before removal
-- [ ] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
-- [ ] Delete frozen legacy AST → ASM emitter modules after shared ABI/runtime dependencies are disentangled
-- [ ] Rename `src/codegen_ir/` to `src/codegen/`
-- [ ] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
-- [ ] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0
-- [ ] Apple notarization for direct downloads (codesign + notarytool)
-- [ ] Installation / packaging documentation for the supported host platforms
-
-## Later 0.x product tracks
-
-These are valuable product directions that build on the stabilized 0.x compiler
-and runtime foundation.
-
-## v0.27.x — Shared and static libraries (C ABI)
-
-- [x] `--emit cdylib` flag, export PHP functions as C-callable symbols via `#[Export]` (shipped early; supersedes the planned `--lib` spelling)
-- [x] `#[Export]` attribute for symbol selection (supersedes the planned `--export` flag spelling)
-- [x] `.dylib` / `.so` output on all supported targets (macOS aarch64, Linux aarch64, Linux x86_64)
-- [ ] `.a` static library output
-- [ ] Multi-file library compilation
-- [x] Symbol visibility control — ELF cdylibs hide every internal global; the dynamic symbol table exposes only `#[Export]` trampolines and the `elephc_init`/`elephc_shutdown`/`elephc_last_error`/`elephc_free` lifecycle entry points
-- [ ] String return values from exported functions (host frees via `elephc_free`)
-- [ ] Auto-generated C header file
-- [ ] Null-terminated string convention for C interop
-- [x] Stateful FFI callback trampolines — generate C-ABI-compatible trampoline symbols for descriptor-backed callables passed to extern `callable` parameters, retaining descriptor/capture/receiver environments for supported scalar/ptr signatures and documenting constraints for C APIs without userdata/context slots
-- [ ] `pkg-config` generation
-- [ ] FFI documentation for C, Rust, Python, Go
-
-## v0.28.x — PHP extension bridge (experimental)
-
-- [ ] `zval` pack/unpack routines (convert elephc values ↔ PHP `zval` structs)
-- [ ] Link against PHP extension `.so` / `.dylib` shared libraries
-- [ ] Bridge for string, int, float, bool, array types
-- [ ] Proof of concept with one extension (e.g., `mbstring` or `curl`)
-- [ ] `--ext` flag to specify extension libraries at compile time
-- [ ] Documentation: how to bridge a PHP extension
-
-## v0.29.x — WebAssembly target
-
-- [ ] WASM codegen backend
-- [ ] `.wat` / `.wasm` emission
-- [ ] WASI support for I/O
-- [ ] NPM package generation
-
-## v0.30.x — Image support (GD, Exif/IPTC, Imagick, Gmagick, Cairo)
+### Image support (GD, Exif/IPTC, Imagick, Gmagick, Cairo)
 
 Complete PHP image surface on a pure-Rust bridge (`crates/elephc-image`,
 `image`/`imageproc`/`ab_glyph`/`tiny-skia`/`kamadak-exif`). Delivered through a
@@ -929,6 +867,71 @@ tested, diagnostic-emitting gaps.
   Bridge externs renamed `cairo_*` → `elephc_cairo_*` to free the `cairo_` namespace
   for the procedural PHP layer, and `program_uses_image` now detects the `cairo_`
   prefix so pure-procedural programs pull in the prelude
+
+## v0.26.x — Performance closure, legacy cleanup, and 0.x stabilization
+
+Optimization work should now be driven by benchmarks, generated assembly size,
+and 0.x validation rather than by speculative pass work.
+
+- [ ] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling
+- [ ] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes
+- [ ] Resource scope-cleanup — auto-free tag-9 resource handles that leave scope without their explicit close (today an unclosed `fopen()` leaks its fd and an unfinalized `hash_init()` context leaks its heap state until process exit; `functions/cleanup.rs` skips `Resource`s by design). Prerequisites: a resource-kind subtype in the Mixed cell so the cleanup pass can pick the right destructor (fd → `close()`, HashContext → `elephc_crypto_free`, …), and aliasing safety (resources have no refcount; `$b = $a` would double-free under naive scope-free). Includes wiring the currently-uncalled `elephc_crypto_free` (`_elephc_crypto_free_fn` slot + publish entry + a `__rt_hash_ctx_free` helper) and nulling the Mixed payload in `hash_final` so finalized contexts are skipped — which also defuses the double-final UB documented in `src/codegen/runtime/strings/hash_context.rs`
+- [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling (feeds the EIR effects table)
+- [ ] Guard reasoning v2 for dead-code elimination — broader range reasoning and multi-variable facts beyond current strict-scalar, boolean, loose-comparison, and safe relational-complement guards
+- [ ] Exception-aware DCE v2 — exact thrown-type / handler reachability, nested try rethrow modeling, and less conservative finally-path invalidation
+- [ ] Control-flow normalization v2 — broader canonicalization of nested block/control shells before CFG-aware optimization passes
+- [ ] Composite conditional include function variants — extend include-graph exclusivity from one direct `if` / `elseif` / `else` chain to nested/composed conditional paths where declarations are pairwise exclusive only after combining multiple branch decisions
+- [ ] Switch-aware conditional include function variants — extend include-graph exclusivity beyond `if` / `elseif` / `else` to `switch` cases once fall-through, `break`, and terminating case bodies are modeled precisely; revisit `match` only if include-like statement lowering ever appears inside match arms
+- [ ] Runtime routine dead stripping — include or link only runtime helpers reachable from the generated program instead of carrying the whole target runtime slice
+- [ ] Tail-call optimization — direct tail self- and mutual-recursion lowering on top of EIR (`Br` to function entry with parameter rebinding)
+- [ ] Performance within 2x of C -O0 on compute benchmarks
+- [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before deleting the frozen legacy backend
+- [ ] Real-world CLI tools compiled as validation
+- [ ] Audit remaining references to `--ast-backend` and legacy AST emitters so docs, help text, and release notes present them as frozen diagnostic-only fallback before removal
+- [ ] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
+- [ ] Delete frozen legacy AST → ASM emitter modules after shared ABI/runtime dependencies are disentangled
+- [ ] Rename `src/codegen_ir/` to `src/codegen/`
+- [ ] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
+- [ ] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0
+- [ ] Apple notarization for direct downloads (codesign + notarytool)
+- [ ] Installation / packaging documentation for the supported host platforms
+
+## Later 0.x product tracks
+
+These are valuable product directions that build on the stabilized 0.x compiler
+and runtime foundation.
+
+## v0.27.x — Shared and static libraries (C ABI)
+
+- [x] `--emit cdylib` flag, export PHP functions as C-callable symbols via `#[Export]` (shipped early; supersedes the planned `--lib` spelling)
+- [x] `#[Export]` attribute for symbol selection (supersedes the planned `--export` flag spelling)
+- [x] `.dylib` / `.so` output on all supported targets (macOS aarch64, Linux aarch64, Linux x86_64)
+- [ ] `.a` static library output
+- [ ] Multi-file library compilation
+- [x] Symbol visibility control — ELF cdylibs hide every internal global; the dynamic symbol table exposes only `#[Export]` trampolines and the `elephc_init`/`elephc_shutdown`/`elephc_last_error`/`elephc_free` lifecycle entry points
+- [ ] String return values from exported functions (host frees via `elephc_free`)
+- [ ] Auto-generated C header file
+- [ ] Null-terminated string convention for C interop
+- [x] Stateful FFI callback trampolines — generate C-ABI-compatible trampoline symbols for descriptor-backed callables passed to extern `callable` parameters, retaining descriptor/capture/receiver environments for supported scalar/ptr signatures and documenting constraints for C APIs without userdata/context slots
+- [ ] `pkg-config` generation
+- [ ] FFI documentation for C, Rust, Python, Go
+
+## v0.28.x — PHP extension bridge (experimental)
+
+- [ ] `zval` pack/unpack routines (convert elephc values ↔ PHP `zval` structs)
+- [ ] Link against PHP extension `.so` / `.dylib` shared libraries
+- [ ] Bridge for string, int, float, bool, array types
+- [ ] Proof of concept with one extension (e.g., `mbstring` or `curl`)
+- [ ] `--ext` flag to specify extension libraries at compile time
+- [ ] Documentation: how to bridge a PHP extension
+
+## v0.29.x — WebAssembly target
+
+- [ ] WASM codegen backend
+- [ ] `.wat` / `.wasm` emission
+- [ ] WASI support for I/O
+- [ ] NPM package generation
+
 
 ## Deferred ideas
 
