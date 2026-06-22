@@ -1124,6 +1124,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionProperty::isPromoted()` | `new ReflectionProperty($class_name, $property_name)` | Return whether the reflected property came from constructor property promotion |
 | `ReflectionProperty::getModifiers()` | `new ReflectionProperty($class_name, $property_name)` | Return PHP's `ReflectionProperty::IS_*` visibility/static/finality/abstract/readonly/virtual/set-visibility bitmask |
 | `ReflectionProperty::isDefault()` | `new ReflectionProperty($class_name, $property_name)` or `ReflectionClass::getProperty()` / `getProperties()` | Return whether the reflected property is declared/default rather than dynamic |
+| `ReflectionProperty::isDynamic()` | Same as `ReflectionProperty::isDefault()` | Return `false` for supported declared properties; dynamic object properties are not yet materialized as `ReflectionProperty` objects |
 | `ReflectionProperty::hasType()` | `new ReflectionProperty($class_name, $property_name)` or `ReflectionClass::getProperty()` / `getProperties()` | Return whether the reflected property has a retained declared type |
 | `ReflectionProperty::getType()` | Same as `ReflectionProperty::hasType()` | Return a `ReflectionNamedType`, `ReflectionUnionType`, or `ReflectionIntersectionType` for supported property types, or `null` when no type is declared |
 | `ReflectionProperty::getSettableType()` | Same as `ReflectionProperty::hasType()` | Return the retained settable property type as a `ReflectionNamedType`, `ReflectionUnionType`, or `ReflectionIntersectionType`, or `null` when no type is declared; for the supported property surface this currently matches `getType()` |
@@ -1155,6 +1156,9 @@ Limitations today:
 - `ReflectionProperty::getSettableType()` is supported for the same retained
   property type metadata as `ReflectionProperty::getType()` on the current
   property surface.
+- `ReflectionProperty::isDynamic()` reports `false` for supported declared
+  properties. elephc does not currently materialize dynamic object properties as
+  `ReflectionProperty` instances.
 
 `ReflectionProperty::isDefault()` is also supported for materialized declared
 properties. elephc does not currently materialize dynamic object properties as

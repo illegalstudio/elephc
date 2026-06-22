@@ -7461,7 +7461,9 @@ $classReadonlyProp = new ReflectionProperty("EvalReflectReadonlyClass", "classRe
 echo $classReadonlyProp->isReadOnly() ? "C" : "c";
 echo $classReadonlyProp->isProtectedSet() ? "T" : "t";
 echo $classReadonlyProp->isPrivateSet() ? "D" : "d";
-echo $classReadonlyProp->getModifiers();');
+echo $classReadonlyProp->getModifiers();
+echo ":";
+echo $visibleProp->isDynamic() ? "D" : "d";');
 "#,
     );
     assert!(
@@ -7471,7 +7473,7 @@ echo $classReadonlyProp->getModifiers();');
     );
     assert_eq!(
         out.stdout,
-        "SPurfa:APs:FUs:SRpfartd20:sPufartd2:RUTd2177:FU33:FS49:Af577:CTd2177"
+        "SPurfa:APs:FUs:SRpfartd20:sPufartd2:RUTd2177:FU33:FS49:Af577:CTd2177:d"
     );
 }
 

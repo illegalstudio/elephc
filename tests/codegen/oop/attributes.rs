@@ -1091,9 +1091,11 @@ $protected = new ReflectionProperty(ReflectSetVisibility::class, "protectedSet")
 echo $protected->isPrivateSet() ? "P" : "p";
 echo $protected->isProtectedSet() ? "T" : "t";
 echo $protected->getModifiers();
+echo ":";
+echo $protected->isDynamic() ? "D" : "d";
 "#,
     );
-    assert_eq!(out, "Pt4129:pT2049");
+    assert_eq!(out, "Pt4129:pT2049:d");
 }
 
 /// Verifies that `ReflectionClass::isReadOnly()` reports readonly class metadata.

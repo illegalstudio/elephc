@@ -2218,6 +2218,12 @@ fn add_reflection_member_flag_methods(
             false_bool(),
         ));
         properties.push(builtin_property(
+            "__is_dynamic",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
             "__default_value",
             Visibility::Private,
             Some(mixed_type()),
@@ -2250,6 +2256,10 @@ fn add_reflection_member_flag_methods(
         methods.push(builtin_reflection_class_bool_method(
             "isVirtual",
             "__is_virtual",
+        ));
+        methods.push(builtin_reflection_class_bool_method(
+            "isDynamic",
+            "__is_dynamic",
         ));
         methods.push(builtin_reflection_property_modifier_mask_method(
             "isProtectedSet",
@@ -3061,6 +3071,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     "isdefault",
                     "ispromoted",
                     "isvirtual",
+                    "isdynamic",
                     "isprotectedset",
                     "isprivateset",
                 ] {
