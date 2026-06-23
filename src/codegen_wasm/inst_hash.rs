@@ -18,16 +18,23 @@
 //!   hash therefore stores concrete entries with their own tag; reads box back into a
 //!   Mixed cell on demand. Only `Mixed`/`Iterable`/`TaggedScalar` source values need a
 //!   real boxing step, which lands with string keys in P5d-2.
-//! - This phase (P5d-1c) supports integer/bool/float KEYS. String and Mixed keys need
-//!   PHP integer-like-string normalization (`__rt_hash_normalize_key`) and arrive in
-//!   P5d-2; until then they return a clean `WasmError::Unsupported`.
+//! - KEYS: integer/bool/float keys pass through inline; string keys are classified by
+//!   `__rt_hash_normalize_key` (integer-like strings collapse to int keys); Mixed-cell
+//!   keys go through `__rt_hash_key_from_mixed` (unbox + per-tag classification).
+//! - REFCOUNTED READS: a `HashGet` result is EIR `MaybeOwned`, so the consumer may
+//!   release it. To stay safe against that release the wasm reads return OWNED values
+//!   even though the native backend returns a borrowed payload: a string element is
+//!   copied with `__rt_str_persist`, a Mixed element is (re)boxed with
+//!   `__rt_mixed_from_value` (which also yields a null cell on a miss, tag 8), and a
+//!   container element is increfed (null-safe) before being returned. All read paths
+//!   stay branchless via `select` plus null-safe runtime calls.
 
 use super::context::{FnCtx, Result};
 use super::inst::{operand, store_result, value_source_slot};
 use super::values::WasmRepr;
 use super::wat::ValType;
 use super::WasmError;
-use crate::ir::{Immediate, Instruction};
+use crate::ir::{Immediate, Instruction, IrHeapKind, IrType};
 use crate::types::PhpType;
 
 /// The in-band i64 null marker (`PHP_INT_MAX - 1`) the wasm32-wasi backend uses for
@@ -132,13 +139,22 @@ pub(super) fn lower_hash_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
 }
 
 /// Lowers `Op::HashGet` (`$h[k]`). Materializes the key, calls `__rt_hash_get` (which
-/// returns `(found, value_lo, value_hi, value_tag)`), then reconstructs a SCALAR
-/// result: an integer/bool element yields the raw i64 payload (the null sentinel on a
-/// miss) and a float element reinterprets the payload bits (0.0 on a miss).
+/// returns `(found, value_lo, value_hi, value_tag)`), captures all four results, then
+/// reconstructs the typed result:
+/// - an integer/bool element yields the raw i64 payload (the null sentinel on a miss);
+/// - a float element reinterprets the payload bits (0.0 on a miss);
+/// - a string element is copied into an OWNED heap string via `__rt_str_persist` (an
+///   empty owned string on a miss, which the runtime handles safely);
+/// - a Mixed element is (re)boxed via `__rt_mixed_from_value`: a fresh OWNED cell on a
+///   hit of any tag, and a null cell on a miss (the runtime returns tag 8, so
+///   `$h[missing]` boxes to PHP null);
+/// - a container element (array/hash/object) is increfed (null-safe) and returned, or
+///   null on a miss.
 ///
-/// Refcounted reads — string, container, and Mixed-typed (box-on-read) elements —
-/// carry a borrow-vs-own reconciliation against the hash's own reference and land in
-/// P5d-2 with their ownership contract; they return a clean `Unsupported` here.
+/// All refcounted results are returned OWNED to honor the EIR `MaybeOwned` contract on a
+/// `HashGet` result, so a consumer that releases the value cannot use-after-free the
+/// hash's own stored reference. Every path stays branchless via `select` plus null-safe
+/// runtime calls. Tagged-scalar reads are not yet supported and return `Unsupported`.
 pub(super) fn lower_hash_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let hash = operand(inst, 0)?;
     let key = operand(inst, 1)?;
@@ -146,16 +162,14 @@ pub(super) fn lower_hash_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
         .result
         .ok_or_else(|| WasmError::Unsupported("hash_get without a result".to_string()))?;
     let result_repr = ctx.value_repr(result)?.clone();
+    let result_ir = ctx.function.value(result).map(|v| v.ir_type);
 
-    // Reject refcounted results before emitting the call so the stack stays balanced.
-    match result_repr {
-        WasmRepr::I64(_) | WasmRepr::F64(_) => {}
-        other => {
-            return Err(WasmError::Unsupported(format!(
-                "hash_get into {:?} (refcounted reads land in P5d-2)",
-                other
-            )))
-        }
+    // Reject still-unsupported reprs before emitting the call so the stack stays balanced.
+    if matches!(result_repr, WasmRepr::Tagged { .. } | WasmRepr::Void) {
+        return Err(WasmError::Unsupported(format!(
+            "hash_get into {:?}",
+            result_repr
+        )));
     }
 
     let (key_lo, key_hi) = materialize_hash_key(ctx, key)?;
@@ -169,11 +183,12 @@ pub(super) fn lower_hash_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
     ctx.fb
         .ins("call $__rt_hash_get", "look up hash element");
 
-    // The lookup yields four results; only the found flag and low payload word are
-    // needed for a scalar read, so drop the value tag and high word.
-    ctx.fb.ins("drop", "discard value tag");
+    // Capture all four results; the value tag is on top of the stack.
+    let vtag = ctx.fresh_temp(ValType::I64);
+    ctx.fb.ins(&format!("local.set {}", vtag), "captured value tag");
+    let vhi = ctx.fresh_temp(ValType::I64);
+    ctx.fb.ins(&format!("local.set {}", vhi), "captured value high word");
     let vlo = ctx.fresh_temp(ValType::I64);
-    ctx.fb.ins("drop", "discard value high word");
     ctx.fb.ins(&format!("local.set {}", vlo), "captured value low word");
     let found = ctx.fresh_temp(ValType::I32);
     ctx.fb.ins(&format!("local.set {}", found), "captured found flag");
@@ -197,8 +212,57 @@ pub(super) fn lower_hash_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
             ctx.fb.ins("f64.reinterpret_i64", "payload bits -> float");
             store_result(ctx, inst)
         }
-        // Unreachable: refcounted reprs were rejected above.
-        _ => Err(WasmError::Unsupported("hash_get scalar reconstruction".to_string())),
+        WasmRepr::Str { .. } => {
+            // Own a copy of the borrowed hash string; a miss (vlo=0, vhi=0) persists an
+            // empty owned string, which __rt_str_persist handles safely.
+            ctx.fb
+                .ins(&format!("local.get {}", vlo), "stored string ptr (extended)");
+            ctx.fb.ins("i32.wrap_i64", "string ptr -> i32");
+            ctx.fb
+                .ins(&format!("local.get {}", vhi), "stored string length");
+            ctx.fb
+                .ins("call $__rt_str_persist", "own a copy of the hash string");
+            // Returns (ptr i32, len i64) — exactly the Str repr's component order.
+            store_result(ctx, inst)
+        }
+        WasmRepr::Ptr(_) => match result_ir {
+            Some(IrType::Heap(IrHeapKind::Mixed)) => {
+                // Box-on-read: a fresh owned Mixed cell on any hit tag; on a miss the
+                // runtime returns tag 8, so this boxes a null cell ($h[missing] is null).
+                ctx.fb.ins(&format!("local.get {}", vtag), "element tag");
+                ctx.fb.ins(&format!("local.get {}", vlo), "element low word");
+                ctx.fb.ins(&format!("local.get {}", vhi), "element high word");
+                ctx.fb
+                    .ins("call $__rt_mixed_from_value", "box hash element into a Mixed cell");
+                store_result(ctx, inst)
+            }
+            Some(IrType::Heap(_)) => {
+                // Container element: incref the borrowed pointer (null-safe, a no-op on a
+                // miss) so the caller owns a reference, then select null on a miss.
+                let ptr = ctx.fresh_temp(ValType::I32);
+                ctx.fb
+                    .ins(&format!("local.get {}", vlo), "stored container ptr (extended)");
+                ctx.fb.ins("i32.wrap_i64", "container ptr -> i32");
+                ctx.fb
+                    .ins(&format!("local.set {}", ptr), "captured container pointer");
+                ctx.fb
+                    .ins(&format!("local.get {}", ptr), "container pointer to retain");
+                ctx.fb
+                    .ins("call $__rt_incref", "retain the borrowed container (null-safe)");
+                ctx.fb.ins(&format!("local.get {}", ptr), "container pointer");
+                ctx.fb.ins("i32.const 0", "null pointer for a miss");
+                ctx.fb.ins(&format!("local.get {}", found), "found flag (i32 cond)");
+                ctx.fb.ins("select", "found ? container : null");
+                store_result(ctx, inst)
+            }
+            _ => Err(WasmError::Unsupported(
+                "hash_get into a non-heap pointer".to_string(),
+            )),
+        },
+        // Tagged/Void were rejected above.
+        _ => Err(WasmError::Unsupported(
+            "hash_get result reconstruction".to_string(),
+        )),
     }
 }
 
@@ -206,11 +270,14 @@ pub(super) fn lower_hash_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
 ///
 /// Integer and boolean keys pass through with `key_hi = -1` (the int-key marker);
 /// float keys truncate toward zero to an int key, matching PHP's array-key coercion.
-/// String and Mixed keys require PHP integer-like-string normalization and return a
-/// clean `Unsupported` until P5d-2.
+/// String keys are classified by `__rt_hash_normalize_key` (integer-like strings
+/// collapse to int keys, others keep `key_hi = len`). A Mixed-cell key is unboxed and
+/// classified by `__rt_hash_key_from_mixed`. Other representations (e.g. a tagged
+/// scalar, or a non-Mixed heap pointer used as an offset) return a clean `Unsupported`.
 fn materialize_hash_key(ctx: &mut FnCtx, key: crate::ir::ValueId) -> Result<(String, String)> {
     let key_lo = ctx.fresh_temp(ValType::I64);
     let key_hi = ctx.fresh_temp(ValType::I64);
+    let key_ir = ctx.function.value(key).map(|v| v.ir_type);
     let repr = ctx.value_repr(key)?.clone();
     match repr {
         WasmRepr::I64(_) => {
@@ -231,11 +298,28 @@ fn materialize_hash_key(ctx: &mut FnCtx, key: crate::ir::ValueId) -> Result<(Str
             ctx.fb
                 .ins(&format!("local.set {}", key_hi), "float hash key high word");
         }
+        WasmRepr::Str { .. } => {
+            // String key: integer-like strings collapse to int keys, others stay strings.
+            ctx.emit_load_value(key)?; // ptr (i32), len (i64) — len on top
+            ctx.fb
+                .ins("call $__rt_hash_normalize_key", "classify string key (int-like -> int key)");
+            ctx.fb
+                .ins(&format!("local.set {}", key_hi), "normalized hash key high word");
+            ctx.fb
+                .ins(&format!("local.set {}", key_lo), "normalized hash key low word");
+        }
+        WasmRepr::Ptr(_) if matches!(key_ir, Some(IrType::Heap(IrHeapKind::Mixed))) => {
+            // Mixed-cell key: unbox + per-tag classification in the runtime helper.
+            ctx.emit_load_value(key)?; // i32 Mixed cell pointer
+            ctx.fb
+                .ins("call $__rt_hash_key_from_mixed", "classify a Mixed array key");
+            ctx.fb
+                .ins(&format!("local.set {}", key_hi), "Mixed hash key high word");
+            ctx.fb
+                .ins(&format!("local.set {}", key_lo), "Mixed hash key low word");
+        }
         other => {
-            return Err(WasmError::Unsupported(format!(
-                "hash key of {:?} (string/mixed keys land in P5d-2)",
-                other
-            )))
+            return Err(WasmError::Unsupported(format!("hash key of {:?}", other)))
         }
     }
     Ok((key_lo, key_hi))

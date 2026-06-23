@@ -1496,6 +1496,377 @@ mod tests {
         }
     }
 
+    /// Verifies a string-keyed, Mixed-valued hash round-trips a string value:
+    /// `$h["name"] = "Bob"; echo $h["name"];` -> "Bob". Exercises string-key
+    /// materialization (`__rt_hash_normalize_key` keeps "name" a string key), a borrowed
+    /// string value persisted by `__rt_hash_set`, and a box-on-read Mixed result echoed
+    /// through the Mixed writer.
+    #[test]
+    fn hash_string_key_mixed_value_echoes() {
+        let assoc = PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Mixed),
+        };
+        let mut module = Module::new(Target::wasm());
+        let name = module.data.intern_string("name");
+        let bob = module.data.intern_string("Bob");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    assoc.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key = b.emit_const_str(name);
+            let val = b.emit_const_str(bob);
+            let _ = b.emit(
+                Op::HashSet,
+                vec![h, key, val],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key2 = b.emit_const_str(name);
+            let g = b
+                .emit(
+                    Op::HashGet,
+                    vec![h2, key2],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::MaybeOwned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![g],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(o) = run_main(&module) {
+            assert_eq!(o, "Bob");
+        }
+    }
+
+    /// Verifies an integer-like string key normalizes to the same int key:
+    /// `$h["7"] = 100; return $h[7];` -> 100. The string key "7" and the int key 7 must
+    /// hash and compare equal — `__rt_hash_normalize_key` collapses "7" to int 7.
+    #[test]
+    fn hash_intlike_string_key_normalizes() {
+        let assoc = PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Int),
+        };
+        let mut module = Module::new(Target::wasm());
+        let seven = module.data.intern_string("7");
+        let mut f = Function::new("n".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    assoc.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key = b.emit_const_str(seven); // string key "7"
+            let val = b.emit_const_i64(100);
+            let _ = b.emit(
+                Op::HashSet,
+                vec![h, key, val],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let ikey = b.emit_const_i64(7); // int key 7 — must collide with "7"
+            let g = b
+                .emit(Op::HashGet, vec![h2, ikey], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(g) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_n", &[]) {
+            assert_eq!(o, "100");
+        }
+    }
+
+    /// Verifies a Mixed-valued hash read of an absent string key boxes to PHP null,
+    /// which echoes as the empty string: `$h["a"] = "x"; echo $h["b"];` -> "". The miss
+    /// path returns tag 8, so `__rt_mixed_from_value` produces a null cell.
+    #[test]
+    fn hash_mixed_read_miss_echoes_empty() {
+        let assoc = PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Mixed),
+        };
+        let mut module = Module::new(Target::wasm());
+        let a = module.data.intern_string("a");
+        let x = module.data.intern_string("x");
+        let bkey = module.data.intern_string("b");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    assoc.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key = b.emit_const_str(a);
+            let val = b.emit_const_str(x);
+            let _ = b.emit(
+                Op::HashSet,
+                vec![h, key, val],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let miss = b.emit_const_str(bkey);
+            let g = b
+                .emit(
+                    Op::HashGet,
+                    vec![h2, miss],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::MaybeOwned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![g],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(o) = run_main(&module) {
+            assert_eq!(o, "");
+        }
+    }
+
+    /// Verifies a string-keyed, string-valued hash round-trips through the owned-copy
+    /// read path: `$h["k"] = "val"; echo $h["k"];` -> "val". The read returns a value the
+    /// EIR marks `MaybeOwned`, so the lowering persists an owned copy via
+    /// `__rt_str_persist` rather than aliasing the hash's stored reference.
+    #[test]
+    fn hash_string_value_owned_read_echoes() {
+        let assoc = PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Str),
+        };
+        let mut module = Module::new(Target::wasm());
+        let k = module.data.intern_string("k");
+        let v = module.data.intern_string("val");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    assoc.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key = b.emit_const_str(k);
+            let val = b.emit_const_str(v);
+            let _ = b.emit(
+                Op::HashSet,
+                vec![h, key, val],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key2 = b.emit_const_str(k);
+            let g = b
+                .emit(Op::HashGet, vec![h2, key2], None, IrType::Str, PhpType::Str, Ownership::MaybeOwned)
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![g],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(o) = run_main(&module) {
+            assert_eq!(o, "val");
+        }
+    }
+
+    /// Verifies a hash whose values are indexed arrays round-trips a container through
+    /// the increfing read path: `$h["a"] = [10, 20]; return $h["a"][1];` -> 20. The
+    /// `HashGet` returns the stored array retained (owned), and `ArrayGet` then reads an
+    /// element of it.
+    #[test]
+    fn hash_array_value_container_read() {
+        let inner = PhpType::Array(Box::new(PhpType::Int));
+        let assoc = PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(inner.clone()),
+        };
+        let mut module = Module::new(Target::wasm());
+        let a = module.data.intern_string("a");
+        let mut f = Function::new("c".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    assoc.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Array),
+                    inner.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            for v in [10_i64, 20] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![arr, c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key = b.emit_const_str(a);
+            let _ = b.emit(
+                Op::HashSet,
+                vec![h, key, arr],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key2 = b.emit_const_str(a);
+            let got = b
+                .emit(
+                    Op::HashGet,
+                    vec![h2, key2],
+                    None,
+                    IrType::Heap(IrHeapKind::Array),
+                    inner.clone(),
+                    Ownership::MaybeOwned,
+                )
+                .unwrap();
+            let idx = b.emit_const_i64(1);
+            let g = b
+                .emit(Op::ArrayGet, vec![got, idx], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(g) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_c", &[]) {
+            assert_eq!(o, "20");
+        }
+    }
+
     /// Pushes a string literal into a string array, reads it back via ArrayGet,
     /// and echoes it — exercising `__rt_array_push_str` (persist) + `get_str`
     /// + `__rt_echo_str` through the full lowering.

@@ -33,6 +33,7 @@ pub(super) fn emit_hash_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_HASH_KEY_HASH);
     wm.add_raw_func(RT_HASH_KEY_EQ);
     wm.add_raw_func(RT_HASH_NORMALIZE_KEY);
+    wm.add_raw_func(RT_HASH_KEY_FROM_MIXED);
     wm.add_raw_func(RT_HASH_NEW);
     wm.add_raw_func(RT_HASH_GET);
     wm.add_raw_func(RT_HASH_INSERT_OWNED);
@@ -156,6 +157,35 @@ const RT_HASH_NORMALIZE_KEY: &str = r#"(func $__rt_hash_normalize_key (param $pt
   (if (result i64 i64) (i32.eqz (local.get $neg))               ;; apply the sign to the magnitude
     (then (local.get $acc) (i64.const -1))                      ;; positive: (acc, -1)
     (else (i64.sub (i64.const 0) (local.get $acc)) (i64.const -1))))  ;; negative: (-acc, -1); -acc of i64::MIN magnitude is i64::MIN
+"#;
+
+/// `__rt_hash_key_from_mixed`: turns a boxed `Mixed` array key into the two-word hash
+/// key `(key_lo, key_hi)` the `__rt_hash_*` runtime expects. Unboxes the cell (tags:
+/// 0=int, 1=string, 2=float, 3=bool, 8=null) and classifies: int/bool pass through as
+/// `(value, -1)`; a float truncates toward zero (PHP key coercion); a string is routed
+/// through `__rt_hash_normalize_key` so integer-like strings collapse to int keys; null
+/// becomes PHP's empty-string key `(0, 0)`. Any other (illegal) offset type falls back
+/// to its payload word as an int key — PHP would fatal, but the wasm backend has no
+/// exceptions yet. `key_hi == -1` marks an int key; `key_hi >= 0` marks a string key.
+const RT_HASH_KEY_FROM_MIXED: &str = r#"(func $__rt_hash_key_from_mixed (param $ptr i32) (result i64 i64)
+  (local $tag i64)
+  (local $lo i64)
+  (local $hi i64)
+  (call $__rt_mixed_unbox (local.get $ptr))                    ;; unbox -> (tag, lo, hi); hi on top
+  (local.set $hi)                                              ;; payload high word (string length / unused)
+  (local.set $lo)                                              ;; payload low word (value / string ptr)
+  (local.set $tag)                                             ;; runtime type tag
+  (if (i32.or (i64.eq (local.get $tag) (i64.const 0))          ;; int, or
+              (i64.eq (local.get $tag) (i64.const 3)))         ;; bool: low word is already the integer key
+    (then (return (local.get $lo) (i64.const -1))))            ;; (value, -1) marks an int key
+  (if (i64.eq (local.get $tag) (i64.const 2))                  ;; float key
+    (then (return (i64.trunc_sat_f64_s (f64.reinterpret_i64 (local.get $lo))) (i64.const -1))))  ;; truncate toward zero
+  (if (i64.eq (local.get $tag) (i64.const 1))                  ;; string key
+    (then (return (call $__rt_hash_normalize_key (i32.wrap_i64 (local.get $lo)) (local.get $hi)))))  ;; int-like -> int, else string
+  (if (i64.eq (local.get $tag) (i64.const 8))                  ;; null key
+    (then (return (i64.const 0) (i64.const 0))))               ;; PHP $a[null] is the "" (zero-length string) key
+  (local.get $lo)                                              ;; illegal offset type: use the payload word
+  (i64.const -1))                                              ;; as an int key (no exceptions yet)
 "#;
 
 /// `__rt_hash_new`: allocates an empty hash with `capacity` entry slots and a
