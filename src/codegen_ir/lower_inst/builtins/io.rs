@@ -47,6 +47,14 @@ pub(super) fn lower_file_get_contents(
         if path_literal.starts_with("phar://") {
             return lower_literal_phar_file_get_contents(ctx, inst, path_literal);
         }
+        if path_literal == "php://input" {
+            // file_get_contents('php://input'): under --web `__rt_php_input` copies
+            // the captured request body into an owned string; in a non-web build it
+            // returns a null pointer so the result boxes to PHP false.
+            abi::emit_call_label(ctx.emitter, "__rt_php_input");
+            box_owned_string_or_false_result(ctx, "fgc");
+            return store_if_result(ctx, inst);
+        }
     }
     if path_literal.is_none() {
         publish_dynamic_phar_function_pointers(ctx);

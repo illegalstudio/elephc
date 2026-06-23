@@ -325,6 +325,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // The terminal-stdout indirection every echo/print travels through. Always
     // emitted (every program can echo); its body differs for `--web` builds.
     io::emit_stdout_write(emitter, features.web);
+    // Backs file_get_contents('php://input'); reads the request body under --web,
+    // returns false (null) otherwise. Always emitted so the EIR call resolves.
+    io::emit_php_input(emitter, features.web);
     io::emit_cstr(emitter);
     io::emit_disk_space(emitter);
     io::emit_fopen(emitter);

@@ -329,3 +329,18 @@ fn web_get_does_not_leak_across_requests() {
     assert!(r1.ends_with("first"), "r1: {:?}", r1);
     assert!(r2.ends_with("none"), "r2 leaked stale $_GET: {:?}", r2);
 }
+
+/// Verifies file_get_contents('php://input') returns the raw request body under --web.
+#[test]
+fn web_php_input_returns_body() {
+    let dir = make_test_dir("web_php_input");
+    let src = "<?php echo file_get_contents('php://input');";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(&addr, "POST", "/", &[("Content-Type", "application/json")], "{\"k\":42}");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("{\"k\":42}"), "body: {:?}", resp);
+}
