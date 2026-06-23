@@ -42,7 +42,14 @@ use crate::ir::{Function, InstId, LocalSlotId, Module, Terminator};
 /// 5. Declare local slots (params share locals with slots 0..params.len()).
 /// 6. Declare SSA value locals.
 /// 7. Build `FnCtx`, emit the entry-state prologue, emit the dispatch loop.
-pub fn lower_function(module: &Module, function: &Function) -> Result<FuncBuilder> {
+///
+/// `str_literals` is the module-wide string-literal layout (indexed by `DataId`),
+/// used by `ConstStr` lowering to address the data segments.
+pub fn lower_function(
+    module: &Module,
+    function: &Function,
+    str_literals: &[(u32, u32)],
+) -> Result<FuncBuilder> {
     let is_main = function.flags.is_main;
 
     // Step a: Choose internal name and export.
@@ -100,6 +107,7 @@ pub fn lower_function(module: &Module, function: &Function) -> Result<FuncBuilde
         slot_locals,
         state_local,
         temp_counter: 0,
+        str_literals,
     };
 
     // Prologue: set initial state to the entry block index.

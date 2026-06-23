@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use super::values::WasmRepr;
 use super::wat::{FuncBuilder, ValType};
 use super::WasmError;
-use crate::ir::{BlockId, Function, LocalSlotId, Module, ValueId};
+use crate::ir::{BlockId, DataId, Function, LocalSlotId, Module, ValueId};
 
 /// Result type for the lowering modules, using the parent module's `WasmError`.
 pub(super) type Result<T> = std::result::Result<T, WasmError>;
@@ -56,6 +56,9 @@ pub(super) struct FnCtx<'a> {
     pub(super) state_local: String,
     /// Counter for generating unique temp local names (`$__tmp0`, `$__tmp1`, ...).
     pub(super) temp_counter: u32,
+    /// String-literal layout indexed by `DataId.as_raw()`: `(byte_offset, byte_len)`
+    /// of each interned string's data segment in linear memory.
+    pub(super) str_literals: &'a [(u32, u32)],
 }
 
 impl<'a> FnCtx<'a> {
@@ -86,6 +89,17 @@ impl<'a> FnCtx<'a> {
     /// dispatch loop encoding.
     pub(super) fn block_index(&self, b: BlockId) -> u32 {
         b.as_raw()
+    }
+
+    /// Resolves a string literal's `(byte_offset, byte_len)` in linear memory.
+    ///
+    /// Returns `Err(WasmError::Unsupported)` if the `DataId` is out of range for
+    /// the module's string-literal layout.
+    pub(super) fn str_literal(&self, data_id: DataId) -> Result<(u32, u32)> {
+        self.str_literals
+            .get(data_id.as_raw() as usize)
+            .copied()
+            .ok_or_else(|| WasmError::Unsupported(format!("unknown string literal {:?}", data_id)))
     }
 
     /// Declares a fresh temp local of the given type and returns its `$name` reference.

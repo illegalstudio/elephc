@@ -47,7 +47,16 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
         results: vec![ValType::I32],
     });
     wm.add_raw_func(RT_ECHO_I64);
+    wm.add_raw_func(RT_ECHO_STR);
 }
+
+/// `__rt_echo_str`: writes a string (a linear-memory pointer + byte length) to
+/// stdout via `fd_write`. The length is an i64 (PHP int) wrapped to the i32 the
+/// iovec field requires.
+const RT_ECHO_STR: &str = r#"(func $__rt_echo_str (param $ptr i32) (param $len i64)
+  (i32.store (i32.const 0) (local.get $ptr))                ;; iovec.buf_ptr
+  (i32.store (i32.const 4) (i32.wrap_i64 (local.get $len))) ;; iovec.buf_len
+  (drop (call $wasi_fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))) ;; write to stdout"#;
 
 /// `__rt_echo_i64`: writes a signed 64-bit integer to stdout as decimal text.
 ///

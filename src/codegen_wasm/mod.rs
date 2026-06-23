@@ -76,11 +76,30 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     if has_main {
         runtime::emit_command_runtime(&mut wm);
     }
-    wm.set_memory(1, Some("memory"));
+
+    // Lay out every interned string literal as a data segment above the runtime
+    // scratch region, recording (offset, byte_len) per DataId for ConstStr.
+    let mut str_literals: Vec<(u32, u32)> = Vec::with_capacity(module.data.strings.len());
+    let mut cursor = runtime::RT_SCRATCH_END;
+    for s in &module.data.strings {
+        let bytes = s.as_bytes();
+        wm.add_data(wat::DataSegment {
+            offset: cursor,
+            bytes: bytes.to_vec(),
+        });
+        str_literals.push((cursor, bytes.len() as u32));
+        // 4-align the next literal.
+        cursor = (cursor + bytes.len() as u32 + 3) & !3;
+    }
+
+    // Size memory to hold the scratch + data, plus headroom for the heap.
+    const PAGE: u32 = 65536;
+    let pages = (cursor / PAGE) + 2;
+    wm.set_memory(pages, Some("memory"));
 
     // Lower every user function; `main` becomes the WASI `_start` command entry.
     for func in &module.functions {
-        let fb = function::lower_function(module, func)?;
+        let fb = function::lower_function(module, func, &str_literals)?;
         wm.add_func(fb);
     }
 
@@ -112,6 +131,17 @@ mod tests {
         Ownership, Terminator, ValueId,
     };
     use crate::types::PhpType;
+
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Per-process sequence for unique temp directories (tests run in parallel).
+    static TMP_SEQ: AtomicU32 = AtomicU32::new(0);
+
+    /// Returns a unique temp directory path so concurrent wasmer runs never collide.
+    fn unique_tmp_dir(tag: &str) -> std::path::PathBuf {
+        let n = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("elephc_wasm_{}_{}_{}", tag, std::process::id(), n))
+    }
 
     /// Assembles WAT to a wasm binary and fully validates it, returning the bytes.
     ///
@@ -286,7 +316,7 @@ mod tests {
         }
         let wat = generate(&main_condbr_module(), Emit::Executable).expect("main should lower");
         let bytes = assemble_and_validate(&wat);
-        let dir = std::env::temp_dir().join(format!("elephc_wasm_p1_{}", std::process::id()));
+        let dir = unique_tmp_dir("cmd");
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("main.wasm");
         std::fs::write(&path, &bytes).expect("write wasm");
@@ -308,7 +338,7 @@ mod tests {
         if !wasmer_available() {
             return None;
         }
-        let dir = std::env::temp_dir().join(format!("elephc_wasm_run_{}", std::process::id()));
+        let dir = unique_tmp_dir("run");
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("m.wasm");
         std::fs::write(&path, &bytes).expect("write wasm");
@@ -355,6 +385,60 @@ mod tests {
         module.add_function(f);
         if let Some(out) = run_main(&module) {
             assert_eq!(out, "42-701000000");
+        }
+    }
+
+    /// Verifies `echo "Hello, WASM!"` of a string literal writes the exact bytes to
+    /// stdout via a data segment + `__rt_echo_str`.
+    #[test]
+    fn echo_string_literal_writes_to_stdout() {
+        let mut module = Module::new(Target::wasm());
+        let hello = module.data.intern_string("Hello, WASM!");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let s = b.emit_const_str(hello);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![s],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "Hello, WASM!");
+        }
+    }
+
+    /// Verifies `strlen` of a string literal returns the byte length (the literal's
+    /// data-segment length), checked via `wasmer --invoke`.
+    #[test]
+    fn strlen_of_literal_invokes_correctly() {
+        let mut module = Module::new(Target::wasm());
+        let s_id = module.data.intern_string("héllo"); // 6 bytes (é is 2 bytes UTF-8)
+        let mut f = Function::new("slen".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let s = b.emit_const_str(s_id);
+            let len = b
+                .emit(Op::StrLen, vec![s], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(len) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_slen", &[]) {
+            assert_eq!(o, "6");
         }
     }
 
@@ -422,11 +506,7 @@ mod tests {
         if !wasmer_available() {
             return None;
         }
-        let dir = std::env::temp_dir().join(format!(
-            "elephc_wasm_p2_{}_{}",
-            std::process::id(),
-            export
-        ));
+        let dir = unique_tmp_dir("inv");
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("m.wasm");
         std::fs::write(&path, &bytes).expect("write wasm");

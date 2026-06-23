@@ -38,6 +38,8 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ConstF64 => lower_const_f64(ctx, &inst),
         Op::ConstBool => lower_const_bool(ctx, &inst),
         Op::ConstNull => lower_const_null(ctx, &inst),
+        Op::ConstStr => lower_const_str(ctx, &inst),
+        Op::StrLen => lower_strlen(ctx, &inst),
         Op::Nop => lower_nop(ctx),
         Op::ConcatReset => lower_concat_reset(ctx),
         Op::LoadLocal => lower_load_local(ctx, &inst),
@@ -243,6 +245,29 @@ fn lower_const_null(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
+/// Lowers `ConstStr`: pushes the literal's linear-memory pointer (i32) and byte
+/// length (i64) from the module's string-literal layout.
+fn lower_const_str(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let (offset, len) = ctx.str_literal(data_immediate(inst)?)?;
+    ctx.fb
+        .ins(&format!("i32.const {}", offset), "string literal ptr");
+    ctx.fb.ins(&format!("i64.const {}", len), "string literal len");
+    store_result(ctx, inst)
+}
+
+/// Lowers `StrLen`: reads the length component of a string value.
+fn lower_strlen(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let op0 = operand(inst, 0)?;
+    let repr = ctx.value_repr(op0)?.clone();
+    match repr {
+        WasmRepr::Str { len, .. } => {
+            ctx.fb.ins(&format!("local.get {}", len), "string length");
+        }
+        other => return Err(WasmError::Unsupported(format!("strlen of {:?}", other))),
+    }
+    store_result(ctx, inst)
+}
+
 /// Lowers `Nop`: emits a comment; the result local (if any) keeps its default 0.
 fn lower_nop(ctx: &mut FnCtx) -> Result<()> {
     ctx.fb.comment("nop");
@@ -432,6 +457,12 @@ fn lower_echo(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         WasmRepr::I64(_) => {
             ctx.emit_load_value(op0)?;
             ctx.fb.ins("call $__rt_echo_i64", "echo integer to stdout");
+            Ok(())
+        }
+        WasmRepr::Str { .. } => {
+            // Pushes ptr (i32) then len (i64), matching __rt_echo_str's params.
+            ctx.emit_load_value(op0)?;
+            ctx.fb.ins("call $__rt_echo_str", "echo string to stdout");
             Ok(())
         }
         other => Err(WasmError::Unsupported(format!("echo of {:?}", other))),
