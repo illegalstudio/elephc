@@ -259,6 +259,40 @@ const RT_ROUND_DIGITS: &str = r#"(func $__rt_round_digits (param $digptr i32) (p
   (i32.const 1))                                                   ;; signal exponent shifts up by 1
 "#;
 
+/// Writes a non-negative 32-bit value as its minimal decimal ASCII (no leading zeros,
+/// no padding) and returns the digit count.
+///
+/// `value` 0 writes a single '0' (length 1). Used to format a float's decimal exponent
+/// (e.g. 20 -> "20", 7 -> "7") in PHP-style scientific notation, which omits the leading
+/// zero a C `%E` exponent would pad. Counts digits, then writes them right-to-left.
+const RT_U32_TO_DEC: &str = r#"(func $__rt_u32_to_dec (param $value i32) (param $ptr i32) (result i32)
+  (local $v i32) (local $len i32) (local $i i32)
+  (if (i32.eqz (local.get $value))                                 ;; zero -> single '0'
+    (then
+      (i32.store8 (local.get $ptr) (i32.const 48))                 ;; write '0'
+      (return (i32.const 1))))                                     ;; length 1
+  (local.set $v (local.get $value))                               ;; copy for digit counting
+  (local.set $len (i32.const 0))                                  ;; digit count = 0
+  (block $ce                                                      ;; count-loop exit target
+    (loop $cl                                                     ;; count digits
+      (br_if $ce (i32.eqz (local.get $v)))                        ;; stop when the copy reaches 0
+      (local.set $len (i32.add (local.get $len) (i32.const 1)))   ;; one more digit
+      (local.set $v (i32.div_u (local.get $v) (i32.const 10)))    ;; drop the lowest digit
+      (br $cl)))                                                  ;; continue counting
+  (local.set $v (local.get $value))                              ;; reset copy for writing
+  (local.set $i (local.get $len))                                ;; write cursor = len (one past the last byte)
+  (block $we                                                      ;; write-loop exit target
+    (loop $wl                                                     ;; write digits right-to-left
+      (br_if $we (i32.eqz (local.get $i)))                        ;; stop after writing all digits
+      (local.set $i (i32.sub (local.get $i) (i32.const 1)))       ;; pre-decrement to the current byte index
+      (i32.store8                                                 ;; ptr[i] = ASCII digit (v mod 10)
+        (i32.add (local.get $ptr) (local.get $i))
+        (i32.add (i32.const 48) (i32.rem_u (local.get $v) (i32.const 10))))
+      (local.set $v (i32.div_u (local.get $v) (i32.const 10)))    ;; drop the digit just written
+      (br $wl)))                                                  ;; continue writing
+  (local.get $len))                                              ;; return the digit count
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
 /// Currently emits `__rt_f64_decompose` (the float decoder) plus the big-integer
@@ -278,6 +312,7 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_U32_TO_9DIGITS);
     wm.add_raw_func(RT_F64_DIGITS);
     wm.add_raw_func(RT_ROUND_DIGITS);
+    wm.add_raw_func(RT_U32_TO_DEC);
 }
 
 #[cfg(test)]
@@ -892,6 +927,58 @@ mod tests {
     fn round_carry_propagation() {
         if let Some(o) = run_float_driver(&round_driver("12995", 4, 4), "t") {
             assert_eq!(o, "1300");
+        }
+    }
+
+    /// Builds a driver that writes the minimal decimal of `value` at 256, then returns
+    /// `len*1000000 + value(first expect_len digits)` to check both the length and digits.
+    fn u32_to_dec_driver(value: u32, expect_len: u32) -> String {
+        format!(
+            r#"(func $t (export "t") (result i64)
+  (local $len i32)
+  (local.set $len (call $__rt_u32_to_dec (i32.const {value}) (i32.const 256)))
+  (i64.add (i64.mul (i64.extend_i32_u (local.get $len)) (i64.const 1000000)) {horner}))"#,
+            horner = digits_value(256, expect_len),
+        )
+    }
+
+    /// 20 -> "20", length 2; witness = 2*1000000 + 20 = 2000020.
+    #[test]
+    fn u32_to_dec_two_digits() {
+        if let Some(o) = run_float_driver(&u32_to_dec_driver(20, 2), "t") {
+            assert_eq!(o, "2000020");
+        }
+    }
+
+    /// 7 -> "7", length 1; witness = 1*1000000 + 7 = 1000007.
+    #[test]
+    fn u32_to_dec_single_digit() {
+        if let Some(o) = run_float_driver(&u32_to_dec_driver(7, 1), "t") {
+            assert_eq!(o, "1000007");
+        }
+    }
+
+    /// 0 -> "0", length 1; witness = 1*1000000 + 0 = 1000000.
+    #[test]
+    fn u32_to_dec_zero() {
+        if let Some(o) = run_float_driver(&u32_to_dec_driver(0, 1), "t") {
+            assert_eq!(o, "1000000");
+        }
+    }
+
+    /// 308 -> "308", length 3 (a typical large float exponent); witness = 3*1000000 + 308.
+    #[test]
+    fn u32_to_dec_three_digits() {
+        if let Some(o) = run_float_driver(&u32_to_dec_driver(308, 3), "t") {
+            assert_eq!(o, "3000308");
+        }
+    }
+
+    /// 4294967295 (u32 max) -> "4294967295", length 10; witness = 10*1000000 + 4294967295.
+    #[test]
+    fn u32_to_dec_max() {
+        if let Some(o) = run_float_driver(&u32_to_dec_driver(4294967295, 10), "t") {
+            assert_eq!(o, "4304967295");
         }
     }
 }
