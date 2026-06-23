@@ -32,6 +32,7 @@ pub(super) fn emit_hash_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_HASH_FNV1A);
     wm.add_raw_func(RT_HASH_KEY_HASH);
     wm.add_raw_func(RT_HASH_KEY_EQ);
+    wm.add_raw_func(RT_HASH_NORMALIZE_KEY);
     wm.add_raw_func(RT_HASH_NEW);
     wm.add_raw_func(RT_HASH_GET);
     wm.add_raw_func(RT_HASH_INSERT_OWNED);
@@ -98,6 +99,63 @@ const RT_HASH_KEY_EQ: &str = r#"(func $__rt_hash_key_eq (param $l_lo i64) (param
     (local.set $i (i64.add (local.get $i) (i64.const 1)))
     (br $byte)))
   (i32.const 1))
+"#;
+
+/// `__rt_hash_normalize_key`: classifies a string array key. Returns `(key_lo, key_hi)`
+/// = `(int_value, -1)` when the string is a canonical PHP integer (round-trips through
+/// `(string)(int)$s === $s`: optional leading `-`, no leading zeros except a lone "0",
+/// no "-0", magnitude within i64), and the string fallback `(extend_i32_u(ptr), len)`
+/// otherwise. Mirrors PHP's `_zend_handle_numeric_str_ex`. Overflow is detected per
+/// digit against a sign-dependent limit (positive cap `i64::MAX`, negative magnitude
+/// cap `i64::MIN`).
+const RT_HASH_NORMALIZE_KEY: &str = r#"(func $__rt_hash_normalize_key (param $ptr i32) (param $len i64) (result i64 i64)
+  (local $i i64)
+  (local $neg i32)
+  (local $c i32)
+  (local $d i64)
+  (local $acc i64)
+  (local $limit_div i64)
+  (local $limit_mod i64)
+  (if (i64.eqz (local.get $len))                                ;; empty string is not an int key
+    (then (return (i64.extend_i32_u (local.get $ptr)) (local.get $len))))  ;; keep it a string key
+  (local.set $neg (i32.const 0))                                ;; assume non-negative
+  (local.set $i (i64.const 0))                                  ;; scan from byte 0
+  (if (i32.eq (i32.load8_u (local.get $ptr)) (i32.const 45))    ;; leading '-'?
+    (then
+      (local.set $neg (i32.const 1))                            ;; mark negative
+      (local.set $i (i64.const 1))                              ;; skip the sign byte
+      (if (i64.eq (local.get $len) (i64.const 1))               ;; "-" alone is not an int
+        (then (return (i64.extend_i32_u (local.get $ptr)) (local.get $len))))))  ;; string fallback
+  (local.set $c (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))  ;; first digit byte
+  (if (i32.eq (local.get $c) (i32.const 48))                    ;; leading '0'?
+    (then
+      (if (i32.and (i32.eqz (local.get $neg)) (i64.eq (local.get $len) (i64.const 1)))  ;; only a lone unsigned "0" is canonical
+        (then (return (i64.const 0) (i64.const -1)))            ;; "0" -> int key 0
+        (else (return (i64.extend_i32_u (local.get $ptr)) (local.get $len))))))  ;; "00"/"01"/"-0" stay strings
+  (if (i32.or (i32.lt_u (local.get $c) (i32.const 49)) (i32.gt_u (local.get $c) (i32.const 57)))  ;; first digit must be '1'..'9'
+    (then (return (i64.extend_i32_u (local.get $ptr)) (local.get $len))))  ;; non-digit start -> string
+  (local.set $limit_div (i64.const 922337203685477580))         ;; floor(i64 cap / 10), same for both signs
+  (if (i32.eq (local.get $neg) (i32.const 1))                   ;; negative magnitude cap is i64::MIN
+    (then (local.set $limit_mod (i64.const 8)))                 ;; cap % 10 = 8 for 9223372036854775808
+    (else (local.set $limit_mod (i64.const 7))))                ;; cap % 10 = 7 for 9223372036854775807
+  (local.set $acc (i64.const 0))                                ;; accumulated magnitude
+  (block $end
+    (loop $scan
+      (br_if $end (i64.ge_u (local.get $i) (local.get $len)))   ;; consumed every byte
+      (local.set $c (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))  ;; next byte
+      (if (i32.or (i32.lt_u (local.get $c) (i32.const 48)) (i32.gt_u (local.get $c) (i32.const 57)))  ;; any non-digit?
+        (then (return (i64.extend_i32_u (local.get $ptr)) (local.get $len))))  ;; -> string fallback
+      (local.set $d (i64.extend_i32_u (i32.sub (local.get $c) (i32.const 48))))  ;; digit value 0..9
+      (if (i32.or (i64.gt_u (local.get $acc) (local.get $limit_div))            ;; acc*10 would overflow, or
+                  (i32.and (i64.eq (local.get $acc) (local.get $limit_div))     ;; acc*10 is exactly at the cap and
+                           (i64.gt_u (local.get $d) (local.get $limit_mod))))   ;; the last digit exceeds it
+        (then (return (i64.extend_i32_u (local.get $ptr)) (local.get $len))))  ;; out of i64 range -> string
+      (local.set $acc (i64.add (i64.mul (local.get $acc) (i64.const 10)) (local.get $d)))  ;; acc = acc*10 + d
+      (local.set $i (i64.add (local.get $i) (i64.const 1)))     ;; advance
+      (br $scan)))                                              ;; loop back-edge
+  (if (result i64 i64) (i32.eqz (local.get $neg))               ;; apply the sign to the magnitude
+    (then (local.get $acc) (i64.const -1))                      ;; positive: (acc, -1)
+    (else (i64.sub (i64.const 0) (local.get $acc)) (i64.const -1))))  ;; negative: (-acc, -1); -acc of i64::MIN magnitude is i64::MIN
 "#;
 
 /// `__rt_hash_new`: allocates an empty hash with `capacity` entry slots and a
@@ -841,6 +899,96 @@ mod tests {
   (i64.add (local.get $ov) (i64.mul (local.get $cv) (i64.const 1000))))"#;
         if let Some(o) = run_driver(driver, "t") {
             assert_eq!(o, "99010");
+        }
+    }
+
+    /// Builds a driver that writes `s` to memory at offset 300, normalizes it as a hash
+    /// key, and returns the materialized int value when it is a canonical integer key
+    /// (`key_hi == -1`) or the returned `key_hi` (the byte length for a string key)
+    /// otherwise — letting a test distinguish an int key from a string key by sign.
+    fn normalize_driver(s: &str) -> String {
+        let mut body = String::from(
+            "(func $t (export \"t\") (result i64)\n  (local $lo i64) (local $hi i64)\n",
+        );
+        for (i, b) in s.bytes().enumerate() {
+            body.push_str(&format!(
+                "  (i32.store8 (i32.const {}) (i32.const {}))\n",
+                300 + i,
+                b
+            ));
+        }
+        body.push_str(&format!(
+            "  (call $__rt_hash_normalize_key (i32.const 300) (i64.const {}))\n",
+            s.len()
+        ));
+        body.push_str("  (local.set $hi) (local.set $lo)\n");
+        body.push_str(
+            "  (if (result i64) (i64.eq (local.get $hi) (i64.const -1))\n    (then (local.get $lo))\n    (else (local.get $hi))))",
+        );
+        body
+    }
+
+    /// Canonical decimal integers normalize to int keys: "123" -> 123, "-45" -> -45,
+    /// "0" -> 0. The driver returns the int value when `key_hi == -1`.
+    #[test]
+    fn normalize_key_canonical_integers() {
+        if let Some(o) = run_driver(&normalize_driver("123"), "t") {
+            assert_eq!(o, "123");
+        }
+        if let Some(o) = run_driver(&normalize_driver("-45"), "t") {
+            assert_eq!(o, "-45");
+        }
+        if let Some(o) = run_driver(&normalize_driver("0"), "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// Non-canonical numeric strings stay string keys (the driver returns `key_hi`,
+    /// which is the byte length, not -1): "01" (leading zero, len 2), "-0" (len 2),
+    /// "+1" (leading plus, len 2), "1 " (trailing space, len 2).
+    #[test]
+    fn normalize_key_non_canonical_stays_string() {
+        for (s, len) in [("01", "2"), ("-0", "2"), ("+1", "2"), ("1 ", "2")] {
+            if let Some(o) = run_driver(&normalize_driver(s), "t") {
+                assert_eq!(o, len, "input {:?} should stay a string key", s);
+            }
+        }
+    }
+
+    /// Non-numeric strings stay string keys: "abc" (len 3) and "-" alone (len 1)
+    /// return `key_hi` = the length rather than -1.
+    #[test]
+    fn normalize_key_non_numeric_stays_string() {
+        if let Some(o) = run_driver(&normalize_driver("abc"), "t") {
+            assert_eq!(o, "3");
+        }
+        if let Some(o) = run_driver(&normalize_driver("-"), "t") {
+            assert_eq!(o, "1");
+        }
+    }
+
+    /// The i64 boundaries normalize exactly: "9223372036854775807" -> i64::MAX and
+    /// "-9223372036854775808" -> i64::MIN (the negative-magnitude cap).
+    #[test]
+    fn normalize_key_i64_bounds() {
+        if let Some(o) = run_driver(&normalize_driver("9223372036854775807"), "t") {
+            assert_eq!(o, "9223372036854775807");
+        }
+        if let Some(o) = run_driver(&normalize_driver("-9223372036854775808"), "t") {
+            assert_eq!(o, "-9223372036854775808");
+        }
+    }
+
+    /// Out-of-range magnitudes stay string keys: "9223372036854775808" (i64::MAX + 1,
+    /// len 19) and "-9223372036854775809" (i64::MIN - 1, len 20) overflow the per-digit
+    /// cap and return `key_hi` = the byte length instead of an int value.
+    #[test]
+    fn normalize_key_overflow_stays_string() {
+        if let Some(o) = run_driver(&normalize_driver("9223372036854775808"), "t") {
+            assert_eq!(o, "19");
+        }
+        if let Some(o) = run_driver(&normalize_driver("-9223372036854775809"), "t") {
+            assert_eq!(o, "20");
         }
     }
 }
