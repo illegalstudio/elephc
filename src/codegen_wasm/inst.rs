@@ -85,6 +85,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ArrayLen => lower_array_len(ctx, &inst),
         Op::ArrayGet => lower_array_get(ctx, &inst),
         Op::ArrayPush => lower_array_push(ctx, &inst),
+        Op::ArraySet => lower_array_set(ctx, &inst),
         Op::MixedBox => lower_mixed_box(ctx, &inst),
         Op::MixedTagOf => lower_mixed_tag_of(ctx, &inst),
         Op::IterStart => lower_iter_start(ctx, &inst),
@@ -781,6 +782,61 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     }
     // The runtime returned the (possibly reallocated) pointer: store it back into
     // the array operand value's local.
+    ctx.emit_store_value(array)?;
+    // And mirror it to the source slot so a later LoadLocal sees the live pointer.
+    if let Some(slot) = value_source_slot(ctx, array) {
+        let array_ref = ctx.value_repr(array)?.local_refs();
+        let slot_ref = ctx.slot_repr(slot)?.local_refs();
+        if array_ref.len() == 1 && slot_ref.len() == 1 {
+            ctx.fb
+                .ins(&format!("local.get {}", array_ref[0]), "reallocated array pointer");
+            ctx.fb
+                .ins(&format!("local.set {}", slot_ref[0]), "write back to the array slot");
+        }
+    }
+    Ok(())
+}
+
+/// Lowers `Op::ArraySet` (`$a[i] = v`). Calls the copy-on-write-aware runtime
+/// setter (`__rt_array_set_int`/`__rt_array_set_str`), which may clone or
+/// reallocate the array, then writes the returned pointer back into the array
+/// operand's value local and its source slot — mirroring `lower_array_push` and
+/// the native backend. `ArraySet` produces no result value; the array operand IS
+/// the in/out storage.
+fn lower_array_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let array = operand(inst, 0)?;
+    let index = operand(inst, 1)?;
+    let value = operand(inst, 2)?;
+    // The index must be a single i64 (EIR coerces indexed-array indices to int).
+    match ctx.value_repr(index)? {
+        WasmRepr::I64(_) => {}
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "array_set index of {:?}",
+                other
+            )))
+        }
+    }
+    let value_repr = ctx.value_repr(value)?.clone();
+    match value_repr {
+        WasmRepr::I64(_) => {
+            ctx.emit_load_value(array)?; // array pointer
+            ctx.emit_load_value(index)?; // index (i64)
+            ctx.emit_load_value(value)?; // scalar value (i64)
+            ctx.fb
+                .ins("call $__rt_array_set_int", "set scalar element (COW, may reallocate)");
+        }
+        WasmRepr::Str { .. } => {
+            ctx.emit_load_value(array)?; // array pointer
+            ctx.emit_load_value(index)?; // index (i64)
+            ctx.emit_load_value(value)?; // string pointer (i32) + length (i64)
+            ctx.fb
+                .ins("call $__rt_array_set_str", "set string element (COW, persists, may reallocate)");
+        }
+        other => return Err(WasmError::Unsupported(format!("array_set of {:?}", other))),
+    }
+    // The runtime returned the (possibly cloned/reallocated) pointer: store it
+    // back into the array operand value's local.
     ctx.emit_store_value(array)?;
     // And mirror it to the source slot so a later LoadLocal sees the live pointer.
     if let Some(slot) = value_source_slot(ctx, array) {

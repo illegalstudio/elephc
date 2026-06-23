@@ -1143,6 +1143,123 @@ mod tests {
         }
     }
 
+    /// Verifies `$a[1] = 99` through the full `ArraySet` lowering: an array
+    /// `[10, 20, 30]` is stored in a local slot, the element is overwritten via
+    /// `Op::ArraySet`, then reloaded from the SAME slot and read back — proving the
+    /// setter mutates in place and the returned pointer is mirrored to the slot.
+    #[test]
+    fn array_set_overwrite_lowers() {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("s".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("a".to_string()),
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Int)),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(4)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            for v in [10_i64, 20, 30] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![arr, c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            b.emit_store_local(slot, arr);
+            let a1 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(PhpType::Int)));
+            let idx = b.emit_const_i64(1);
+            let val = b.emit_const_i64(99);
+            let _ = b.emit(
+                Op::ArraySet,
+                vec![a1, idx, val],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let a2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(PhpType::Int)));
+            let idx2 = b.emit_const_i64(1);
+            let g = b
+                .emit(Op::ArrayGet, vec![a2, idx2], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(g) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_s", &[]) {
+            assert_eq!(o, "99");
+        }
+    }
+
+    /// Verifies `$a[3] = 77` on a short array extends it via the `ArraySet`
+    /// lowering: setting past the end grows + gap-fills, so reloading from the slot
+    /// and reading the length yields 4.
+    #[test]
+    fn array_set_extends_lowers() {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("e".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("a".to_string()),
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Int)),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, arr);
+            let a1 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(PhpType::Int)));
+            let idx = b.emit_const_i64(3);
+            let val = b.emit_const_i64(77);
+            let _ = b.emit(
+                Op::ArraySet,
+                vec![a1, idx, val],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let a2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(PhpType::Int)));
+            let len = b
+                .emit(Op::ArrayLen, vec![a2], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(len) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_e", &[]) {
+            assert_eq!(o, "4");
+        }
+    }
+
     /// Pushes a string literal into a string array, reads it back via ArrayGet,
     /// and echoes it — exercising `__rt_array_push_str` (persist) + `get_str`
     /// + `__rt_echo_str` through the full lowering.
