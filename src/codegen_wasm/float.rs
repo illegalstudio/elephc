@@ -44,17 +44,44 @@ const RT_F64_DECOMPOSE: &str = r#"(func $__rt_f64_decompose (param $bits i64) (r
     (i32.const 0)))                                                   ;; class 0 = finite non-zero
 "#;
 
+/// Multiplies a fixed-width big integer in place by a small unsigned 32-bit factor.
+///
+/// The big integer is `$n` little-endian limbs of base 2^32 (i32 limbs, limb[0] least
+/// significant) starting at byte address `$ptr`; `$k` is the multiplier in [0, 2^32-1]
+/// passed in an i64. Each limb becomes `(limb*k + carry) mod 2^32` with carry propagated
+/// low-to-high. Returns the final carry (i64 in [0, 2^32-1]) the caller may store as an
+/// (n+1)-th limb. Overflow-safe: `limb*k + carry < 2^64` fits one i64 accumulator.
+const RT_BIGNUM_MUL_U32: &str = r#"(func $__rt_bignum_mul_u32 (param $ptr i32) (param $n i32) (param $k i64) (result i64)
+  (local $i i32) (local $carry i64) (local $acc i64) (local $addr i32)
+  (local.set $i (i32.const 0))                                       ;; limb index = 0
+  (local.set $carry (i64.const 0))                                   ;; running carry = 0
+  (block $end                                                        ;; loop exit target
+    (loop $top                                                       ;; iterate over limbs low-to-high
+      (br_if $end (i32.ge_u (local.get $i) (local.get $n)))          ;; stop once i >= n
+      (local.set $addr (i32.add (local.get $ptr) (i32.shl (local.get $i) (i32.const 2))))  ;; &limb[i] = ptr + i*4
+      (local.set $acc                                                ;; acc = limb[i]*k + carry
+        (i64.add
+          (i64.mul (i64.load32_u (local.get $addr)) (local.get $k))
+          (local.get $carry)))
+      (i64.store32 (local.get $addr) (local.get $acc))               ;; limb[i] = low 32 bits of acc
+      (local.set $carry (i64.shr_u (local.get $acc) (i64.const 32))) ;; carry = high 32 bits of acc
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))          ;; i = i + 1
+      (br $top)))                                                    ;; continue the loop
+  (local.get $carry))                                                ;; return the final carry
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
-/// Currently emits `__rt_f64_decompose` (stage 1 of the exact float-to-string
-/// conversion). Later stages append the exact-bignum, digit-extraction, `%.14G`
-/// formatting, and string-to-float parsing routines here. Must be called before
-/// rendering any function that references these symbols.
+/// Currently emits `__rt_f64_decompose` (the float decoder) and `__rt_bignum_mul_u32`
+/// (a big-integer primitive). Later stages append the remaining bignum primitives,
+/// digit-extraction, `%.14G` formatting, and string-to-float parsing routines here.
+/// Must be called before rendering any function that references these symbols.
 // Not yet referenced by a non-test caller: PHP-visible float formatting wires this
 // into the command/reactor runtime in stage S6. Exercised by the unit tests below.
 #[allow(dead_code)]
 pub(super) fn emit_float_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_F64_DECOMPOSE);
+    wm.add_raw_func(RT_BIGNUM_MUL_U32);
 }
 
 #[cfg(test)]
@@ -223,6 +250,76 @@ mod tests {
         );
         if let Some(o) = run_float_driver(&d, "t") {
             assert_eq!(o, "1998926");
+        }
+    }
+
+    /// One limb [5] * 3 = 15 with no carry; witness = carry*1000 + limb0 = 15.
+    #[test]
+    fn mul_u32_basic() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $carry i64)
+  (i64.store32 (i32.const 256) (i64.const 5))
+  (local.set $carry (call $__rt_bignum_mul_u32 (i32.const 256) (i32.const 1) (i64.const 3)))
+  (i64.add (i64.mul (local.get $carry) (i64.const 1000)) (i64.load32_u (i32.const 256))))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "15");
+        }
+    }
+
+    /// One limb [0xFFFFFFFF] * 2 = 0x1FFFFFFFE: limb0 = 0xFFFFFFFE (4294967294), carry 1;
+    /// witness = carry*10000000000 + limb0 = 14294967294.
+    #[test]
+    fn mul_u32_single_limb_carry() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $carry i64)
+  (i64.store32 (i32.const 256) (i64.const 0xFFFFFFFF))
+  (local.set $carry (call $__rt_bignum_mul_u32 (i32.const 256) (i32.const 1) (i64.const 2)))
+  (i64.add (i64.mul (local.get $carry) (i64.const 10000000000)) (i64.load32_u (i32.const 256))))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "14294967294");
+        }
+    }
+
+    /// Overflow safety: [0xFFFFFFFF] * 0xFFFFFFFF = (2^32-1)^2 = 0xFFFFFFFE00000001, so
+    /// limb0 = 1 and carry = 0xFFFFFFFE (4294967294); witness = carry*10 + limb0 = 42949672941.
+    #[test]
+    fn mul_u32_max_factor() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $carry i64)
+  (i64.store32 (i32.const 256) (i64.const 0xFFFFFFFF))
+  (local.set $carry (call $__rt_bignum_mul_u32 (i32.const 256) (i32.const 1) (i64.const 0xFFFFFFFF)))
+  (i64.add (i64.mul (local.get $carry) (i64.const 10)) (i64.load32_u (i32.const 256))))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "42949672941");
+        }
+    }
+
+    /// Carry propagation across two limbs: [0xFFFFFFFF, 1] (= 2^33-1) * 2 = 2^34-2, so
+    /// limb0 = 0xFFFFFFFE (4294967294), limb1 = 3, carry 0; witness = limb1*1e11 + limb0.
+    #[test]
+    fn mul_u32_two_limb_propagation() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $carry i64)
+  (i64.store32 (i32.const 256) (i64.const 0xFFFFFFFF))
+  (i64.store32 (i32.const 260) (i64.const 1))
+  (local.set $carry (call $__rt_bignum_mul_u32 (i32.const 256) (i32.const 2) (i64.const 2)))
+  (i64.add (i64.mul (i64.load32_u (i32.const 260)) (i64.const 100000000000)) (i64.load32_u (i32.const 256))))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "304294967294");
+        }
+    }
+
+    /// Multiplying by 0 zeroes every limb and returns carry 0; witness = limb0+limb1+carry = 0.
+    #[test]
+    fn mul_u32_by_zero() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $carry i64)
+  (i64.store32 (i32.const 256) (i64.const 123))
+  (i64.store32 (i32.const 260) (i64.const 456))
+  (local.set $carry (call $__rt_bignum_mul_u32 (i32.const 256) (i32.const 2) (i64.const 0)))
+  (i64.add (i64.add (i64.load32_u (i32.const 256)) (i64.load32_u (i32.const 260))) (local.get $carry)))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "0");
         }
     }
 }
