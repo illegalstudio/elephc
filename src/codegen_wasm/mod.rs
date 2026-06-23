@@ -19,7 +19,9 @@
 //!   containing instructions returns `WasmError::Unsupported` rather than emitting
 //!   silently-wrong code. Empty `main` (the P1 gate) lowers and runs end to end.
 
+mod context;
 mod function;
+mod inst;
 mod values;
 mod wat;
 
@@ -66,14 +68,19 @@ impl std::error::Error for WasmError {}
 pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     let _ = emit;
     let mut wm = wat::WatModule::new();
-    // WASI imports consumed by the runtime and terminator lowering.
-    wm.import_func(wat::FuncImport {
-        module: "wasi_snapshot_preview1".to_string(),
-        field: "proc_exit".to_string(),
-        internal: "wasi_proc_exit".to_string(),
-        params: vec![wat::ValType::I32],
-        results: vec![],
-    });
+    // `proc_exit` is only referenced by a `main`/`_start` command entry's return.
+    // Importing WASI makes a runtime treat the module as a command (requiring
+    // `_start`), so a reactor/library module with no main must not import it.
+    let has_main = module.functions.iter().any(|f| f.flags.is_main);
+    if has_main {
+        wm.import_func(wat::FuncImport {
+            module: "wasi_snapshot_preview1".to_string(),
+            field: "proc_exit".to_string(),
+            internal: "wasi_proc_exit".to_string(),
+            params: vec![wat::ValType::I32],
+            results: vec![],
+        });
+    }
     wm.set_memory(1, Some("memory"));
 
     // Lower every user function; `main` becomes the WASI `_start` command entry.
@@ -105,7 +112,10 @@ mod tests {
     use super::generate;
     use crate::codegen::platform::Target;
     use crate::codegen::Emit;
-    use crate::ir::{Builder, Function, IrType, Module, Terminator};
+    use crate::ir::{
+        Builder, CmpPredicate, Function, FunctionParam, Immediate, IrType, LocalKind, Module, Op,
+        Ownership, Terminator, ValueId,
+    };
     use crate::types::PhpType;
 
     /// Assembles WAT to a wasm binary and fully validates it, returning the bytes.
@@ -242,10 +252,10 @@ mod tests {
         assemble_and_validate(&wat);
     }
 
-    /// Verifies a block containing an instruction is rejected (instruction lowering
-    /// is a later phase) instead of emitting silently-wrong code.
+    /// Verifies an op that is not yet lowered (`EchoValue`, a later phase) is
+    /// rejected with a clean error instead of emitting silently-wrong code.
     #[test]
-    fn instruction_bearing_block_is_rejected() {
+    fn unsupported_op_is_rejected() {
         let mut module = Module::new(Target::wasm());
         let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
         function.flags.is_main = true;
@@ -254,7 +264,16 @@ mod tests {
             let entry = b.create_named_block("entry", Vec::new());
             b.set_entry(entry);
             b.position_at_end(entry);
-            let _ = b.emit_const_i64(7);
+            let v = b.emit_const_i64(7);
+            // EchoValue needs the runtime (fd_write/itoa) and is not lowered yet.
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![v],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
             b.terminate(Terminator::Return { value: None });
         }
         module.add_function(function);
@@ -283,5 +302,276 @@ mod tests {
             .expect("run wasmer");
         let _ = std::fs::remove_dir_all(&dir);
         assert!(status.success(), "wasmer run failed: {status}");
+    }
+
+    // ----- P2: scalar instruction lowering, observed via wasmer --invoke -----
+
+    /// Returns whether the `wasmer` CLI is available.
+    fn wasmer_available() -> bool {
+        std::process::Command::new("wasmer")
+            .arg("--version")
+            .output()
+            .is_ok()
+    }
+
+    /// Builds a single non-main function taking `nparams` i64 parameters. The
+    /// `body` closure receives the loaded parameter values and returns the value
+    /// the function returns. This mirrors real EIR: parameters are local slots
+    /// accessed via `LoadLocal`.
+    fn make_fn(
+        name: &str,
+        nparams: usize,
+        ret_ir: IrType,
+        ret_php: PhpType,
+        body: impl FnOnce(&mut Builder, &[ValueId]) -> ValueId,
+    ) -> Module {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new(name.to_string(), ret_ir, ret_php);
+        let mut slots = Vec::new();
+        for i in 0..nparams {
+            f.params.push(FunctionParam {
+                name: format!("p{i}"),
+                ir_type: IrType::I64,
+                php_type: PhpType::Int,
+                by_ref: false,
+                variadic: false,
+            });
+            slots.push(f.add_local(
+                Some(format!("p{i}")),
+                IrType::I64,
+                PhpType::Int,
+                LocalKind::PhpLocal,
+            ));
+        }
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let loaded: Vec<ValueId> = slots
+                .iter()
+                .map(|s| b.emit_load_local(*s, IrType::I64, PhpType::Int))
+                .collect();
+            let result = body(&mut b, &loaded);
+            b.terminate(Terminator::Return { value: Some(result) });
+        }
+        module.add_function(f);
+        module
+    }
+
+    /// Generates and validates the module's wasm, then invokes `export` under
+    /// `wasmer` with `args`, returning the trimmed stdout. Validation always runs;
+    /// the run is skipped (returns `None`) when `wasmer` is absent.
+    fn invoke(module: &Module, export: &str, args: &[&str]) -> Option<String> {
+        let wat = generate(module, Emit::Executable).expect("module should lower");
+        let bytes = assemble_and_validate(&wat);
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "elephc_wasm_p2_{}_{}",
+            std::process::id(),
+            export
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let mut cmd = std::process::Command::new("wasmer");
+        cmd.arg("run").arg("--invoke").arg(export).arg(&path);
+        for a in args {
+            cmd.arg(a);
+        }
+        let out = cmd.output().expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer --invoke {export} failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            wat
+        );
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// Builds a two-i64-parameter function applying one EIR binary op to the args.
+    fn int_binop_fn(name: &str, op: Op) -> Module {
+        make_fn(name, 2, IrType::I64, PhpType::Int, |b, p| {
+            b.emit(op, vec![p[0], p[1]], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .expect("binop produces a value")
+        })
+    }
+
+    /// Verifies integer add/sub/mul/and/intdiv/mod compute correct values.
+    #[test]
+    fn int_arithmetic_invokes_correctly() {
+        // Validation always runs inside invoke(); value checks run under wasmer.
+        if let Some(o) = invoke(&int_binop_fn("add", Op::IAdd), "fn_add", &["10", "7"]) {
+            assert_eq!(o, "17");
+        }
+        if let Some(o) = invoke(&int_binop_fn("sub", Op::ISub), "fn_sub", &["10", "7"]) {
+            assert_eq!(o, "3");
+        }
+        if let Some(o) = invoke(&int_binop_fn("mul", Op::IMul), "fn_mul", &["6", "7"]) {
+            assert_eq!(o, "42");
+        }
+        if let Some(o) = invoke(&int_binop_fn("band", Op::IBitAnd), "fn_band", &["6", "3"]) {
+            assert_eq!(o, "2");
+        }
+        if let Some(o) = invoke(&int_binop_fn("idiv", Op::ISDiv), "fn_idiv", &["17", "5"]) {
+            assert_eq!(o, "3");
+        }
+        if let Some(o) = invoke(&int_binop_fn("imod", Op::ISMod), "fn_imod", &["17", "5"]) {
+            assert_eq!(o, "2");
+        }
+    }
+
+    /// Verifies unary integer negation.
+    #[test]
+    fn int_neg_invokes_correctly() {
+        let m = make_fn("neg", 1, IrType::I64, PhpType::Int, |b, p| {
+            b.emit(Op::INeg, vec![p[0]], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap()
+        });
+        if let Some(o) = invoke(&m, "fn_neg", &["5"]) {
+            assert_eq!(o, "-5");
+        }
+    }
+
+    /// Verifies a signed less-than comparison yields an i64 boolean (0/1).
+    #[test]
+    fn int_compare_invokes_correctly() {
+        let lt = || {
+            make_fn("lt", 2, IrType::I64, PhpType::Bool, |b, p| {
+                b.emit(
+                    Op::ICmp,
+                    vec![p[0], p[1]],
+                    Some(Immediate::CmpPredicate(CmpPredicate::Slt)),
+                    IrType::I64,
+                    PhpType::Bool,
+                    Ownership::NonHeap,
+                )
+                .unwrap()
+            })
+        };
+        if let Some(o) = invoke(&lt(), "fn_lt", &["3", "5"]) {
+            assert_eq!(o, "1");
+        }
+        if let Some(o) = invoke(&lt(), "fn_lt", &["5", "3"]) {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// Verifies PHP `/` lowers to floating-point division (returns a float).
+    #[test]
+    fn php_division_returns_float() {
+        let m = make_fn("div", 2, IrType::F64, PhpType::Float, |b, p| {
+            b.emit(Op::IDiv, vec![p[0], p[1]], None, IrType::F64, PhpType::Float, Ownership::NonHeap)
+                .unwrap()
+        });
+        if let Some(o) = invoke(&m, "fn_div", &["7", "2"]) {
+            assert_eq!(o, "3.5");
+        }
+    }
+
+    /// Verifies recursion: `fib(n) = n<2 ? n : fib(n-1)+fib(n-2)` lowers across
+    /// multiple blocks with self-calls and computes fib(10) = 55 under wasmer.
+    #[test]
+    fn recursive_fib_invokes_correctly() {
+        let mut module = Module::new(Target::wasm());
+        // Intern the callee name into the module data pool so Op::Call can reference it.
+        let fib_name = module.data.intern_function_name("fib");
+        let mut f = Function::new("fib".to_string(), IrType::I64, PhpType::Int);
+        f.params.push(FunctionParam {
+            name: "n".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_n = f.add_local(Some("n".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            let base = b.create_named_block("base", Vec::new());
+            let recurse = b.create_named_block("recurse", Vec::new());
+            b.set_entry(entry);
+
+            b.position_at_end(entry);
+            let n = b.emit_load_local(slot_n, IrType::I64, PhpType::Int);
+            let two = b.emit_const_i64(2);
+            let cond = b
+                .emit(
+                    Op::ICmp,
+                    vec![n, two],
+                    Some(Immediate::CmpPredicate(CmpPredicate::Slt)),
+                    IrType::I64,
+                    PhpType::Bool,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            b.terminate(Terminator::CondBr {
+                cond,
+                then_target: base,
+                then_args: Vec::new(),
+                else_target: recurse,
+                else_args: Vec::new(),
+            });
+
+            b.position_at_end(base);
+            b.terminate(Terminator::Return { value: Some(n) });
+
+            b.position_at_end(recurse);
+            let one = b.emit_const_i64(1);
+            let nm1 = b
+                .emit(Op::ISub, vec![n, one], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            let r1 = b
+                .emit(
+                    Op::Call,
+                    vec![nm1],
+                    Some(Immediate::Data(fib_name)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let two2 = b.emit_const_i64(2);
+            let nm2 = b
+                .emit(Op::ISub, vec![n, two2], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            let r2 = b
+                .emit(
+                    Op::Call,
+                    vec![nm2],
+                    Some(Immediate::Data(fib_name)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let sum = b
+                .emit(Op::IAdd, vec![r1, r2], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(sum) });
+        }
+        module.add_function(f);
+
+        if let Some(o) = invoke(&module, "fn_fib", &["10"]) {
+            assert_eq!(o, "55");
+        }
+    }
+
+    /// Verifies an instruction-bearing block now lowers (it previously errored as a
+    /// stub): `IAdd` of two constants validates as real wasm.
+    #[test]
+    fn const_add_lowers_and_validates() {
+        let m = make_fn("c", 0, IrType::I64, PhpType::Int, |b, _| {
+            let a = b.emit_const_i64(40);
+            let c = b.emit_const_i64(2);
+            b.emit(Op::IAdd, vec![a, c], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap()
+        });
+        if let Some(o) = invoke(&m, "fn_c", &[]) {
+            assert_eq!(o, "42");
+        }
     }
 }
