@@ -293,6 +293,51 @@ const RT_U32_TO_DEC: &str = r#"(func $__rt_u32_to_dec (param $value i32) (param 
   (local.get $len))                                              ;; return the digit count
 "#;
 
+/// Formats already-rounded significant digits in PHP-style scientific notation.
+///
+/// PHP scientific differs from C `%E`: the mantissa is always `D.D...` (a leading digit,
+/// '.', then the remaining significant digits, or a single '0' when there are none), and
+/// the exponent has no leading zero (`E-7`, not `E-07`). Writes `[-]d0.dddE±X` into `$out`
+/// where `$x` is the leading digit's decimal exponent and `$sign` selects the leading '-';
+/// the exponent magnitude is written via `__rt_u32_to_dec`. Returns the byte length.
+const RT_FTOA_SCIENTIFIC: &str = r#"(func $__rt_ftoa_scientific (param $digptr i32) (param $nsig i32) (param $x i32) (param $sign i32) (param $out i32) (result i32)
+  (local $w i32) (local $i i32) (local $ax i32)
+  (local.set $w (i32.const 0))                                    ;; write cursor (bytes written) = 0
+  (if (local.get $sign)                                           ;; negative -> leading '-'
+    (then
+      (i32.store8 (local.get $out) (i32.const 45))                ;; '-'
+      (local.set $w (i32.const 1))))                              ;; advance cursor
+  (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.load8_u (local.get $digptr)))  ;; leading digit
+  (local.set $w (i32.add (local.get $w) (i32.const 1)))           ;; advance
+  (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 46))  ;; '.'
+  (local.set $w (i32.add (local.get $w) (i32.const 1)))           ;; advance
+  (if (i32.gt_s (local.get $nsig) (i32.const 1))                  ;; more significant digits?
+    (then
+      (local.set $i (i32.const 1))                                ;; copy digit[1..nsig]
+      (block $fe                                                  ;; copy-loop exit target
+        (loop $fl                                                 ;; append the remaining significant digits
+          (br_if $fe (i32.ge_s (local.get $i) (local.get $nsig))) ;; done copying
+          (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.load8_u (i32.add (local.get $digptr) (local.get $i))))  ;; copy digit
+          (local.set $w (i32.add (local.get $w) (i32.const 1)))   ;; advance out
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))   ;; advance source
+          (br $fl))))                                             ;; continue copying
+    (else
+      (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 48))  ;; no more digits -> '0'
+      (local.set $w (i32.add (local.get $w) (i32.const 1)))))     ;; advance
+  (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 69))  ;; 'E'
+  (local.set $w (i32.add (local.get $w) (i32.const 1)))           ;; advance
+  (if (i32.lt_s (local.get $x) (i32.const 0))                     ;; negative exponent
+    (then
+      (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 45))  ;; '-'
+      (local.set $ax (i32.sub (i32.const 0) (local.get $x))))     ;; ax = -x
+    (else
+      (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 43))  ;; '+'
+      (local.set $ax (local.get $x))))                           ;; ax = x
+  (local.set $w (i32.add (local.get $w) (i32.const 1)))           ;; advance past the sign
+  (local.set $w (i32.add (local.get $w) (call $__rt_u32_to_dec (local.get $ax) (i32.add (local.get $out) (local.get $w)))))  ;; write exponent magnitude, advance by its length
+  (local.get $w))                                                ;; total bytes written
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
 /// Currently emits `__rt_f64_decompose` (the float decoder) plus the big-integer
@@ -313,6 +358,7 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_F64_DIGITS);
     wm.add_raw_func(RT_ROUND_DIGITS);
     wm.add_raw_func(RT_U32_TO_DEC);
+    wm.add_raw_func(RT_FTOA_SCIENTIFIC);
 }
 
 #[cfg(test)]
@@ -979,6 +1025,70 @@ mod tests {
     fn u32_to_dec_max() {
         if let Some(o) = run_float_driver(&u32_to_dec_driver(4294967295, 10), "t") {
             assert_eq!(o, "4304967295");
+        }
+    }
+
+    /// Polynomial rolling hash of `s` (h = (h*257 + byte) mod 1e15), matching the WAT hash
+    /// loop the formatter drivers run over the output bytes. Validates the exact output
+    /// string (length and content) through a single i64 witness.
+    fn str_hash(s: &str) -> u64 {
+        let mut h: u64 = 0;
+        for b in s.bytes() {
+            h = (h.wrapping_mul(257).wrapping_add(b as u64)) % 1_000_000_000_000_000;
+        }
+        h
+    }
+
+    /// Builds a driver that writes `digits` at 256, formats them in scientific notation into
+    /// a buffer at 512, and returns the rolling hash of the `len` output bytes (matching
+    /// `str_hash`), validating the exact formatted string.
+    fn sci_driver(digits: &str, nsig: u32, x: i32, sign: u32) -> String {
+        format!(
+            r#"(func $t (export "t") (result i64)
+  (local $len i32) (local $i i32) (local $h i64)
+{stores}  (local.set $len (call $__rt_ftoa_scientific (i32.const 256) (i32.const {nsig}) (i32.const {x}) (i32.const {sign}) (i32.const 512)))
+  (local.set $h (i64.const 0))
+  (local.set $i (i32.const 0))
+  (block $e
+    (loop $l
+      (br_if $e (i32.ge_s (local.get $i) (local.get $len)))
+      (local.set $h (i64.rem_u (i64.add (i64.mul (local.get $h) (i64.const 257)) (i64.load8_u (i32.add (i32.const 512) (local.get $i)))) (i64.const 1000000000000000)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+  (local.get $h))"#,
+            stores = store_ascii(256, digits),
+        )
+    }
+
+    /// 1e20 -> "1.0E+20" (single significant digit, forced ".0", positive exponent "20").
+    #[test]
+    fn sci_one_e20() {
+        if let Some(o) = run_float_driver(&sci_driver("1", 1, 20, 0), "t") {
+            assert_eq!(o, str_hash("1.0E+20").to_string());
+        }
+    }
+
+    /// 1.2345678901234E+14 -> all 14 significant digits with the fractional tail.
+    #[test]
+    fn sci_full_mantissa() {
+        if let Some(o) = run_float_driver(&sci_driver("12345678901234", 14, 14, 0), "t") {
+            assert_eq!(o, str_hash("1.2345678901234E+14").to_string());
+        }
+    }
+
+    /// 1e-7 -> "1.0E-7": negative exponent with no leading zero (PHP, unlike C's "E-07").
+    #[test]
+    fn sci_negative_exponent() {
+        if let Some(o) = run_float_driver(&sci_driver("1", 1, -7, 0), "t") {
+            assert_eq!(o, str_hash("1.0E-7").to_string());
+        }
+    }
+
+    /// -1.5E+20 -> negative number, two significant digits.
+    #[test]
+    fn sci_negative_sign() {
+        if let Some(o) = run_float_driver(&sci_driver("15", 2, 20, 1), "t") {
+            assert_eq!(o, str_hash("-1.5E+20").to_string());
         }
     }
 }
