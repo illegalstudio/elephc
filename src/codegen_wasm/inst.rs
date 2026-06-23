@@ -21,6 +21,7 @@ use super::context::{wasm_fn_symbol, FnCtx, Result};
 use super::values::WasmRepr;
 use super::WasmError;
 use crate::ir::{CmpPredicate, DataId, Immediate, InstId, Instruction, LocalSlotId, Op, ValueId};
+use crate::types::PhpType;
 
 /// Lowers one EIR instruction by id. Loads operands, computes the result on the
 /// WASM operand stack, and stores it into the result value's local(s). Unsupported
@@ -445,21 +446,31 @@ fn lower_is_truthy(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
-/// Lowers `EchoValue`/`PrintValue` by dispatching on the operand's representation.
+/// Lowers `EchoValue`/`PrintValue` by dispatching on the operand's PHP type.
 ///
-/// Integers are written via the `__rt_echo_i64` runtime helper. Other types
-/// (float, string, bool, mixed, ...) need additional runtime support and are not
+/// Integers and booleans share the i64 representation, so the PHP type is used to
+/// pick the right runtime helper (booleans print "1"/"" rather than "0"/"1").
+/// Float, mixed, array, and object output need more runtime support and are not
 /// handled yet.
 fn lower_echo(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let op0 = operand(inst, 0)?;
-    let repr = ctx.value_repr(op0)?.clone();
-    match repr {
-        WasmRepr::I64(_) => {
+    let php = ctx
+        .function
+        .value(op0)
+        .map(|v| v.php_type.codegen_repr())
+        .ok_or_else(|| WasmError::Unsupported(format!("echo: unknown operand {:?}", op0)))?;
+    match php {
+        PhpType::Bool => {
+            ctx.emit_load_value(op0)?;
+            ctx.fb.ins("call $__rt_echo_bool", "echo boolean to stdout");
+            Ok(())
+        }
+        PhpType::Int => {
             ctx.emit_load_value(op0)?;
             ctx.fb.ins("call $__rt_echo_i64", "echo integer to stdout");
             Ok(())
         }
-        WasmRepr::Str { .. } => {
+        PhpType::Str => {
             // Pushes ptr (i32) then len (i64), matching __rt_echo_str's params.
             ctx.emit_load_value(op0)?;
             ctx.fb.ins("call $__rt_echo_str", "echo string to stdout");

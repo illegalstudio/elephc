@@ -48,7 +48,18 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
     });
     wm.add_raw_func(RT_ECHO_I64);
     wm.add_raw_func(RT_ECHO_STR);
+    wm.add_raw_func(RT_ECHO_BOOL);
 }
+
+/// `__rt_echo_bool`: PHP `echo` of a boolean writes "1" for true and nothing for
+/// false. The value is the i64 boolean (0 or 1).
+const RT_ECHO_BOOL: &str = r#"(func $__rt_echo_bool (param $v i64)
+  (if (i64.ne (local.get $v) (i64.const 0))
+    (then
+      (i32.store8 (i32.const 16) (i32.const 49))            ;; '1' into the number buffer
+      (i32.store (i32.const 0) (i32.const 16))              ;; iovec.buf_ptr
+      (i32.store (i32.const 4) (i32.const 1))               ;; iovec.buf_len = 1
+      (drop (call $wasi_fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))))) ;; write "1""#;
 
 /// `__rt_echo_str`: writes a string (a linear-memory pointer + byte length) to
 /// stdout via `fd_write`. The length is an i64 (PHP int) wrapped to the i32 the

@@ -388,6 +388,36 @@ mod tests {
         }
     }
 
+    /// Verifies `echo` of booleans: true writes "1", false writes nothing.
+    #[test]
+    fn echo_booleans_writes_to_stdout() {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            for v in [true, false, true] {
+                let c = b.emit_const_bool(v);
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "11");
+        }
+    }
+
     /// Verifies `echo "Hello, WASM!"` of a string literal writes the exact bytes to
     /// stdout via a data segment + `__rt_echo_str`.
     #[test]
