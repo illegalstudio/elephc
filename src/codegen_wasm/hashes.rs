@@ -33,6 +33,12 @@ pub(super) fn emit_hash_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_HASH_KEY_HASH);
     wm.add_raw_func(RT_HASH_KEY_EQ);
     wm.add_raw_func(RT_HASH_NEW);
+    wm.add_raw_func(RT_HASH_GET);
+    wm.add_raw_func(RT_HASH_INSERT_OWNED);
+    wm.add_raw_func(RT_HASH_RESIZE);
+    wm.add_raw_func(RT_HASH_CLONE_SHALLOW);
+    wm.add_raw_func(RT_HASH_ENSURE_UNIQUE);
+    wm.add_raw_func(RT_HASH_SET);
     wm.add_raw_func(RT_HASH_FREE_DEEP);
     wm.add_raw_func(RT_DECREF_HASH);
 }
@@ -119,6 +125,266 @@ const RT_HASH_NEW: &str = r#"(func $__rt_hash_new (param $capacity i64) (param $
     (local.set $i (i64.add (local.get $i) (i64.const 1)))
     (br $slot)))
   (local.get $p))
+"#;
+
+/// `__rt_hash_get`: linear-probe lookup of `(key_lo, key_hi)`. Returns the 4-tuple
+/// `(found, value_lo, value_hi, value_tag)`; a miss yields `(0, 0, 0, 8)` (PHP null
+/// tag). Probing stops at the first empty slot (definitive absence) or after
+/// `capacity` probes; tombstones (occupied == 2) are skipped, and equality is only
+/// tested on live slots so a freed tombstone key is never dereferenced.
+const RT_HASH_GET: &str = r#"(func $__rt_hash_get (param $hash i32) (param $key_lo i64) (param $key_hi i64) (result i32 i64 i64 i64)
+  (local $cap i64)
+  (local $slot i64)
+  (local $probes i64)
+  (local $entry i32)
+  (local $occ i64)
+  (if (i32.eqz (local.get $hash))
+    (then (return (i32.const 0) (i64.const 0) (i64.const 0) (i64.const 8))))  ;; null hash -> miss
+  (local.set $cap (i64.load (i32.add (local.get $hash) (i32.const 8))))  ;; capacity
+  (if (i64.eqz (local.get $cap))
+    (then (return (i32.const 0) (i64.const 0) (i64.const 0) (i64.const 8))))  ;; empty table -> miss
+  (local.set $slot (i64.rem_u (call $__rt_hash_key_hash (local.get $key_lo) (local.get $key_hi)) (local.get $cap)))  ;; initial bucket
+  (local.set $probes (i64.const 0))
+  (block $done (loop $probe
+    (br_if $done (i64.ge_u (local.get $probes) (local.get $cap)))  ;; probed every slot -> miss
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))  ;; &slot[slot]
+    (local.set $occ (i64.load (local.get $entry)))           ;; occupied flag
+    (if (i64.eqz (local.get $occ))
+      (then (return (i32.const 0) (i64.const 0) (i64.const 0) (i64.const 8))))  ;; empty slot -> definitively absent
+    (if (i64.eq (local.get $occ) (i64.const 1))              ;; only compare live entries (skip tombstones)
+      (then
+        (if (call $__rt_hash_key_eq (local.get $key_lo) (local.get $key_hi)
+              (i64.load (i32.add (local.get $entry) (i32.const 8)))
+              (i64.load (i32.add (local.get $entry) (i32.const 16))))  ;; keys equal?
+          (then (return (i32.const 1)
+            (i64.load (i32.add (local.get $entry) (i32.const 24)))   ;; value_lo
+            (i64.load (i32.add (local.get $entry) (i32.const 32)))   ;; value_hi
+            (i64.load (i32.add (local.get $entry) (i32.const 40))))))))  ;; value_tag
+    (local.set $slot (i64.rem_u (i64.add (local.get $slot) (i64.const 1)) (local.get $cap)))  ;; next bucket (wrap)
+    (local.set $probes (i64.add (local.get $probes) (i64.const 1)))
+    (br $probe)))
+  (i32.const 0) (i64.const 0) (i64.const 0) (i64.const 8))    ;; saturated -> miss
+"#;
+
+/// `__rt_hash_insert_owned`: places an ALREADY-OWNED key/value into the first empty
+/// slot and appends it to the insertion-order list. Assumes the key is absent and
+/// the table has room — it neither persists strings, resizes, nor updates an
+/// existing key (used by resize/clone). Returns the same `hash` pointer.
+const RT_HASH_INSERT_OWNED: &str = r#"(func $__rt_hash_insert_owned (param $hash i32) (param $key_lo i64) (param $key_hi i64) (param $val_lo i64) (param $val_hi i64) (param $val_tag i64) (result i32)
+  (local $cap i64)
+  (local $slot i64)
+  (local $entry i32)
+  (local $tail i64)
+  (local $tail_entry i32)
+  (local.set $cap (i64.load (i32.add (local.get $hash) (i32.const 8))))  ;; capacity
+  (local.set $slot (i64.rem_u (call $__rt_hash_key_hash (local.get $key_lo) (local.get $key_hi)) (local.get $cap)))  ;; initial bucket
+  (block $empty (loop $probe
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))  ;; &slot[slot]
+    (br_if $empty (i64.eqz (i64.load (local.get $entry))))   ;; found an empty slot
+    (local.set $slot (i64.rem_u (i64.add (local.get $slot) (i64.const 1)) (local.get $cap)))  ;; next bucket (wrap)
+    (br $probe)))
+  (i64.store (local.get $entry) (i64.const 1))               ;; occupied = live
+  (i64.store (i32.add (local.get $entry) (i32.const 8)) (local.get $key_lo))    ;; key_lo
+  (i64.store (i32.add (local.get $entry) (i32.const 16)) (local.get $key_hi))   ;; key_hi
+  (i64.store (i32.add (local.get $entry) (i32.const 24)) (local.get $val_lo))   ;; value_lo
+  (i64.store (i32.add (local.get $entry) (i32.const 32)) (local.get $val_hi))   ;; value_hi
+  (i64.store (i32.add (local.get $entry) (i32.const 40)) (local.get $val_tag))  ;; value_tag
+  (local.set $tail (i64.load (i32.add (local.get $hash) (i32.const 32))))       ;; current tail slot
+  (i64.store (i32.add (local.get $entry) (i32.const 48)) (local.get $tail))     ;; prev = old tail
+  (i64.store (i32.add (local.get $entry) (i32.const 56)) (i64.const -1))        ;; next = none
+  (if (i64.ne (local.get $tail) (i64.const -1))
+    (then
+      (local.set $tail_entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $tail) (i64.const 64)))))  ;; &old tail
+      (i64.store (i32.add (local.get $tail_entry) (i32.const 56)) (local.get $slot)))  ;; old tail's next = this slot
+    (else
+      (i64.store (i32.add (local.get $hash) (i32.const 24)) (local.get $slot))))  ;; first entry -> head = this slot
+  (i64.store (i32.add (local.get $hash) (i32.const 32)) (local.get $slot))      ;; tail = this slot
+  (i64.store (local.get $hash) (i64.add (i64.load (local.get $hash)) (i64.const 1)))  ;; count++
+  (local.get $hash))
+"#;
+
+/// `__rt_hash_resize`: doubles the capacity and rehashes every live entry in
+/// insertion order, MOVING (not copying) each key/value into a fresh table, then
+/// frees the old table shallowly. Returns the new hash pointer.
+const RT_HASH_RESIZE: &str = r#"(func $__rt_hash_resize (param $hash i32) (result i32)
+  (local $newcap i64)
+  (local $new i32)
+  (local $cur i64)
+  (local $oe i32)
+  (local.set $newcap (i64.shl (i64.load (i32.add (local.get $hash) (i32.const 8))) (i64.const 1)))  ;; newcap = capacity * 2
+  (if (i64.lt_u (local.get $newcap) (i64.const 8))
+    (then (local.set $newcap (i64.const 8))))                ;; minimum capacity 8
+  (local.set $new (call $__rt_hash_new (local.get $newcap) (i64.load (i32.add (local.get $hash) (i32.const 16)))))  ;; fresh larger table, same value_type
+  (local.set $cur (i64.load (i32.add (local.get $hash) (i32.const 24))))  ;; cur = old head
+  (block $done (loop $walk
+    (br_if $done (i64.eq (local.get $cur) (i64.const -1)))   ;; reached end of insertion order
+    (local.set $oe (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 64)))))  ;; &old entry
+    (drop (call $__rt_hash_insert_owned (local.get $new)
+      (i64.load (i32.add (local.get $oe) (i32.const 8)))     ;; key_lo
+      (i64.load (i32.add (local.get $oe) (i32.const 16)))    ;; key_hi
+      (i64.load (i32.add (local.get $oe) (i32.const 24)))    ;; value_lo
+      (i64.load (i32.add (local.get $oe) (i32.const 32)))    ;; value_hi
+      (i64.load (i32.add (local.get $oe) (i32.const 40)))))  ;; value_tag (moved, not persisted)
+    (local.set $cur (i64.load (i32.add (local.get $oe) (i32.const 56))))  ;; cur = next
+    (br $walk)))
+  (call $__rt_heap_free (local.get $hash))                   ;; shallow free: children moved to `new`
+  (local.get $new))
+"#;
+
+/// `__rt_hash_clone_shallow`: allocates a fresh hash with the same capacity and
+/// value_type, then copies every live entry in insertion order, giving the clone
+/// independent ownership: string keys and string values are re-persisted, refcounted
+/// container values are increfed (shared child / own reference), and scalar values
+/// are copied verbatim.
+const RT_HASH_CLONE_SHALLOW: &str = r#"(func $__rt_hash_clone_shallow (param $hash i32) (result i32)
+  (local $new i32)
+  (local $cur i64)
+  (local $oe i32)
+  (local $klo i64)
+  (local $khi i64)
+  (local $vlo i64)
+  (local $vhi i64)
+  (local $vtag i64)
+  (local $np i32)
+  (local $nl i64)
+  (local.set $new (call $__rt_hash_new
+    (i64.load (i32.add (local.get $hash) (i32.const 8)))
+    (i64.load (i32.add (local.get $hash) (i32.const 16)))))  ;; fresh hash, same capacity + value_type
+  (local.set $cur (i64.load (i32.add (local.get $hash) (i32.const 24))))  ;; cur = old head
+  (block $done (loop $walk
+    (br_if $done (i64.eq (local.get $cur) (i64.const -1)))   ;; reached end of insertion order
+    (local.set $oe (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 64)))))  ;; &old entry
+    (local.set $klo (i64.load (i32.add (local.get $oe) (i32.const 8))))   ;; key_lo
+    (local.set $khi (i64.load (i32.add (local.get $oe) (i32.const 16))))  ;; key_hi
+    (if (i64.ge_s (local.get $khi) (i64.const 0))            ;; string key -> own a fresh copy
+      (then
+        (call $__rt_str_persist (i32.wrap_i64 (local.get $klo)) (local.get $khi))  ;; persist key string
+        (local.set $nl)                                      ;; persisted length (unused; same length)
+        (local.set $np)                                      ;; persisted pointer
+        (local.set $klo (i64.extend_i32_u (local.get $np)))))  ;; clone's key_lo
+    (local.set $vlo (i64.load (i32.add (local.get $oe) (i32.const 24))))  ;; value_lo
+    (local.set $vhi (i64.load (i32.add (local.get $oe) (i32.const 32))))  ;; value_hi
+    (local.set $vtag (i64.load (i32.add (local.get $oe) (i32.const 40)))) ;; value_tag
+    (if (i64.eq (local.get $vtag) (i64.const 1))             ;; string value -> own a fresh copy
+      (then
+        (call $__rt_str_persist (i32.wrap_i64 (local.get $vlo)) (local.get $vhi))  ;; persist value string
+        (local.set $nl)                                      ;; persisted length
+        (local.set $np)                                      ;; persisted pointer
+        (local.set $vlo (i64.extend_i32_u (local.get $np)))  ;; clone's value_lo
+        (local.set $vhi (local.get $nl)))                    ;; clone's value_hi
+      (else
+        (if (i32.or (i32.or (i64.eq (local.get $vtag) (i64.const 4)) (i64.eq (local.get $vtag) (i64.const 5)))
+            (i32.or (i32.or (i64.eq (local.get $vtag) (i64.const 6)) (i64.eq (local.get $vtag) (i64.const 7)))
+                    (i64.eq (local.get $vtag) (i64.const 10))))  ;; refcounted container value
+          (then (call $__rt_incref (i32.wrap_i64 (local.get $vlo)))))))  ;; share, bump refcount
+    (drop (call $__rt_hash_insert_owned (local.get $new) (local.get $klo) (local.get $khi) (local.get $vlo) (local.get $vhi) (local.get $vtag)))  ;; place into clone
+    (local.set $cur (i64.load (i32.add (local.get $oe) (i32.const 56))))  ;; cur = next
+    (br $walk)))
+  (local.get $new))
+"#;
+
+/// `__rt_hash_ensure_unique`: the copy-on-write split point. Returns the hash
+/// unchanged when it has at most one owner (refcount <= 1); otherwise clones it
+/// shallowly, decrements the original's refcount, and returns the clone. COW is
+/// refcount-driven — the kind word's COW bit is only a marker.
+const RT_HASH_ENSURE_UNIQUE: &str = r#"(func $__rt_hash_ensure_unique (param $hash i32) (result i32)
+  (local $rc i32)
+  (local $clone i32)
+  (if (i32.eqz (local.get $hash))
+    (then (return (i32.const 0))))                           ;; null -> trivially unique
+  (local.set $rc (i32.load (i32.sub (local.get $hash) (i32.const 12))))  ;; refcount @ hash-12
+  (if (i32.le_s (local.get $rc) (i32.const 1))
+    (then (return (local.get $hash))))                       ;; sole owner -> mutate in place
+  (local.set $clone (call $__rt_hash_clone_shallow (local.get $hash)))  ;; duplicate before mutation
+  (i32.store (i32.sub (local.get $hash) (i32.const 12)) (i32.sub (local.get $rc) (i32.const 1)))  ;; original loses this reference
+  (local.get $clone))                                        ;; caller now owns the clone
+"#;
+
+/// `__rt_hash_set`: the user-facing `$h[k] = v`. Splits a shared hash (COW), grows
+/// when the load factor would exceed 75%, probes for the key, and either UPDATES the
+/// value in place (releasing the old heap child) or INSERTS a new entry. String keys
+/// and string values are persisted into owned copies; refcounted container values are
+/// increfed. Returns the (possibly cloned/reallocated) hash pointer.
+const RT_HASH_SET: &str = r#"(func $__rt_hash_set (param $hash i32) (param $key_lo i64) (param $key_hi i64) (param $val_lo i64) (param $val_hi i64) (param $val_tag i64) (result i32)
+  (local $cap i64)
+  (local $slot i64)
+  (local $probes i64)
+  (local $entry i32)
+  (local $occ i64)
+  (local $matched i32)
+  (local $mentry i32)
+  (local $oldtag i64)
+  (local $np i32)
+  (local $nl i64)
+  (local.set $hash (call $__rt_hash_ensure_unique (local.get $hash)))  ;; copy-on-write split
+  (if (i64.ge_u (i64.mul (i64.load (local.get $hash)) (i64.const 4))
+                (i64.mul (i64.load (i32.add (local.get $hash) (i32.const 8))) (i64.const 3)))  ;; count*4 >= capacity*3
+    (then (local.set $hash (call $__rt_hash_resize (local.get $hash)))))  ;; grow past 75% load
+  (local.set $cap (i64.load (i32.add (local.get $hash) (i32.const 8))))  ;; capacity (post-resize)
+  (local.set $slot (i64.rem_u (call $__rt_hash_key_hash (local.get $key_lo) (local.get $key_hi)) (local.get $cap)))  ;; initial bucket
+  (local.set $probes (i64.const 0))
+  (local.set $matched (i32.const 0))
+  (block $stop (loop $probe
+    (br_if $stop (i64.ge_u (local.get $probes) (local.get $cap)))  ;; probed every slot
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))  ;; &slot[slot]
+    (local.set $occ (i64.load (local.get $entry)))           ;; occupied flag
+    (br_if $stop (i64.eqz (local.get $occ)))                 ;; empty slot -> key absent
+    (if (i64.eq (local.get $occ) (i64.const 1))              ;; live entry?
+      (then (if (call $__rt_hash_key_eq (local.get $key_lo) (local.get $key_hi)
+                  (i64.load (i32.add (local.get $entry) (i32.const 8)))
+                  (i64.load (i32.add (local.get $entry) (i32.const 16))))  ;; keys equal?
+              (then
+                (local.set $matched (i32.const 1))
+                (local.set $mentry (local.get $entry))))))
+    (br_if $stop (i32.eq (local.get $matched) (i32.const 1)))  ;; found existing key
+    (local.set $slot (i64.rem_u (i64.add (local.get $slot) (i64.const 1)) (local.get $cap)))  ;; next bucket (wrap)
+    (local.set $probes (i64.add (local.get $probes) (i64.const 1)))
+    (br $probe)))
+  (if (i32.eq (local.get $matched) (i32.const 1))             ;; UPDATE existing entry
+    (then
+      (local.set $oldtag (i64.load (i32.add (local.get $mentry) (i32.const 40))))  ;; old value tag
+      (if (i64.eq (local.get $oldtag) (i64.const 1))          ;; old string -> free it
+        (then (call $__rt_heap_free_safe (i32.wrap_i64 (i64.load (i32.add (local.get $mentry) (i32.const 24)))))))
+      (if (i32.or (i32.or (i64.eq (local.get $oldtag) (i64.const 4)) (i64.eq (local.get $oldtag) (i64.const 5)))
+          (i32.or (i32.or (i64.eq (local.get $oldtag) (i64.const 6)) (i64.eq (local.get $oldtag) (i64.const 7)))
+                  (i64.eq (local.get $oldtag) (i64.const 10))))  ;; old container -> decref
+        (then (call $__rt_decref_any (i32.wrap_i64 (i64.load (i32.add (local.get $mentry) (i32.const 24)))))))
+      (if (i64.eq (local.get $val_tag) (i64.const 1))          ;; new string -> own a copy
+        (then
+          (call $__rt_str_persist (i32.wrap_i64 (local.get $val_lo)) (local.get $val_hi))
+          (local.set $nl)
+          (local.set $np)
+          (local.set $val_lo (i64.extend_i32_u (local.get $np)))
+          (local.set $val_hi (local.get $nl)))
+        (else
+          (if (i32.or (i32.or (i64.eq (local.get $val_tag) (i64.const 4)) (i64.eq (local.get $val_tag) (i64.const 5)))
+              (i32.or (i32.or (i64.eq (local.get $val_tag) (i64.const 6)) (i64.eq (local.get $val_tag) (i64.const 7)))
+                      (i64.eq (local.get $val_tag) (i64.const 10))))  ;; new container -> incref
+            (then (call $__rt_incref (i32.wrap_i64 (local.get $val_lo)))))))
+      (i64.store (i32.add (local.get $mentry) (i32.const 24)) (local.get $val_lo))  ;; value_lo
+      (i64.store (i32.add (local.get $mentry) (i32.const 32)) (local.get $val_hi))  ;; value_hi
+      (i64.store (i32.add (local.get $mentry) (i32.const 40)) (local.get $val_tag)) ;; value_tag
+      (return (local.get $hash))))
+  (if (i64.ge_s (local.get $key_hi) (i64.const 0))            ;; INSERT: own the string key
+    (then
+      (call $__rt_str_persist (i32.wrap_i64 (local.get $key_lo)) (local.get $key_hi))
+      (local.set $nl)
+      (local.set $np)
+      (local.set $key_lo (i64.extend_i32_u (local.get $np)))))  ;; key_hi unchanged
+  (if (i64.eq (local.get $val_tag) (i64.const 1))              ;; own the string value
+    (then
+      (call $__rt_str_persist (i32.wrap_i64 (local.get $val_lo)) (local.get $val_hi))
+      (local.set $nl)
+      (local.set $np)
+      (local.set $val_lo (i64.extend_i32_u (local.get $np)))
+      (local.set $val_hi (local.get $nl)))
+    (else
+      (if (i32.or (i32.or (i64.eq (local.get $val_tag) (i64.const 4)) (i64.eq (local.get $val_tag) (i64.const 5)))
+          (i32.or (i32.or (i64.eq (local.get $val_tag) (i64.const 6)) (i64.eq (local.get $val_tag) (i64.const 7)))
+                  (i64.eq (local.get $val_tag) (i64.const 10))))  ;; own the container value
+        (then (call $__rt_incref (i32.wrap_i64 (local.get $val_lo)))))))
+  (local.set $hash (call $__rt_hash_insert_owned (local.get $hash) (local.get $key_lo) (local.get $key_hi) (local.get $val_lo) (local.get $val_hi) (local.get $val_tag)))  ;; place the new entry
+  (local.get $hash))
 "#;
 
 /// `__rt_hash_free_deep`: releases the children of every live entry (string keys,
@@ -323,6 +589,258 @@ mod tests {
   (global.get $_gc_live))"#;
         if let Some(o) = run_driver(driver, "t") {
             assert_eq!(o, "0");
+        }
+    }
+
+    /// A lookup that misses returns found = 0 (and the PHP null tuple).
+    #[test]
+    fn get_misses_on_empty_hash() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (call $__rt_hash_get (local.get $h) (i64.const 7) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.extend_i32_u (local.get $found)) (local.get $vtag)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "8"); // found 0 + null tag 8
+        }
+    }
+
+    /// Insert an owned int key/value then read it back: `found*1000 + value_lo` =
+    /// 1*1000 + 100 = 1100.
+    #[test]
+    fn insert_owned_then_get_roundtrips() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 42) (i64.const -1) (i64.const 100) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $h) (i64.const 42) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 1000)) (local.get $vlo)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1100");
+        }
+    }
+
+    /// Three distinct int keys insert and resolve independently: looking up key 2
+    /// returns `found*1000 + value_lo` = 1*1000 + 20 = 1020.
+    #[test]
+    fn insert_owned_multiple_keys_resolve() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 2) (i64.const -1) (i64.const 20) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 3) (i64.const -1) (i64.const 30) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $h) (i64.const 2) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 1000)) (local.get $vlo)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1020");
+        }
+    }
+
+    /// Resize doubles capacity, rehashes in insertion order, and preserves entries:
+    /// after resizing a 3-of-4 table, the head entry's key is still 1 (first
+    /// inserted), count is 3, and key 3 still resolves to 30. Returns
+    /// `head_key*1000 + count*100 + get(3).value_lo` = 1000 + 300 + 30 = 1330.
+    #[test]
+    fn resize_preserves_entries_and_insertion_order() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $head i64) (local $headkey i64) (local $count i64)
+  (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 4) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 2) (i64.const -1) (i64.const 20) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 3) (i64.const -1) (i64.const 30) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_resize (local.get $h)))
+  (local.set $head (i64.load (i32.add (local.get $h) (i32.const 24))))
+  (local.set $headkey (i64.load (i32.add (i32.add (i32.add (local.get $h) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $head) (i64.const 64)))) (i32.const 8))))
+  (local.set $count (i64.load (local.get $h)))
+  (call $__rt_hash_get (local.get $h) (i64.const 3) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.add
+    (i64.mul (local.get $headkey) (i64.const 1000))
+    (i64.mul (local.get $count) (i64.const 100)))
+    (local.get $vlo)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1330");
+        }
+    }
+
+    /// `__rt_hash_clone_shallow` copies int entries into a distinct table: the clone
+    /// is a different pointer, has the same count, and resolves key 2 to 20. Returns
+    /// `(distinct)*1000 + count*100 + get(clone,2).value_lo` = 1000 + 200 + 20 = 1220.
+    #[test]
+    fn clone_shallow_copies_int_entries() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $c i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 2) (i64.const -1) (i64.const 20) (i64.const 0) (i64.const 0)))
+  (local.set $c (call $__rt_hash_clone_shallow (local.get $h)))
+  (call $__rt_hash_get (local.get $c) (i64.const 2) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.add
+    (i64.mul (i64.extend_i32_u (i32.ne (local.get $h) (local.get $c))) (i64.const 1000))
+    (i64.mul (i64.load (local.get $c)) (i64.const 100)))
+    (local.get $vlo)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1220");
+        }
+    }
+
+    /// `__rt_hash_clone_shallow` deep-copies string values: the clone's value pointer
+    /// differs from the source's (re-persisted) yet holds the same first byte 'H'(72).
+    /// Returns `(distinct_ptr)*1000 + byte0` = 1000 + 72 = 1072.
+    #[test]
+    fn clone_shallow_deep_copies_string_value() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $c i32) (local $sp i32) (local $sl i64)
+  (local $origptr i64) (local $cloneptr i64)
+  (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (i32.store8 (i32.const 400) (i32.const 72))
+  (i32.store8 (i32.const 401) (i32.const 105))
+  (call $__rt_str_persist (i32.const 400) (i64.const 2))
+  (local.set $sl) (local.set $sp)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 1)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.extend_i32_u (local.get $sp)) (local.get $sl) (i64.const 1)))
+  (call $__rt_hash_get (local.get $h) (i64.const 1) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $origptr) (local.set $found)
+  (local.set $c (call $__rt_hash_clone_shallow (local.get $h)))
+  (call $__rt_hash_get (local.get $c) (i64.const 1) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $cloneptr) (local.set $found)
+  (i64.add
+    (i64.mul (i64.extend_i32_u (i64.ne (local.get $origptr) (local.get $cloneptr))) (i64.const 1000))
+    (i64.extend_i32_u (i32.load8_u (i32.wrap_i64 (local.get $cloneptr))))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1072");
+        }
+    }
+
+    /// `__rt_hash_ensure_unique` on a sole-owner hash returns the SAME pointer.
+    #[test]
+    fn ensure_unique_returns_same_when_unshared() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (i64.extend_i32_u (i32.eq (local.get $h) (call $__rt_hash_ensure_unique (local.get $h)))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1");
+        }
+    }
+
+    /// `__rt_hash_ensure_unique` on a shared hash (refcount 2) returns a distinct
+    /// clone and decrements the original's refcount back to 1. Returns
+    /// `(distinct)*10 + original_refcount` = 1*10 + 1 = 11.
+    #[test]
+    fn ensure_unique_clones_when_shared() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $u i32)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 1) (i64.const -1) (i64.const 9) (i64.const 0) (i64.const 0)))
+  (call $__rt_incref (local.get $h))
+  (local.set $u (call $__rt_hash_ensure_unique (local.get $h)))
+  (i64.add
+    (i64.mul (i64.extend_i32_u (i32.ne (local.get $h) (local.get $u))) (i64.const 10))
+    (i64.extend_i32_s (i32.load (i32.sub (local.get $h) (i32.const 12))))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "11");
+        }
+    }
+
+    /// `__rt_hash_set` inserts an int key/value then `__rt_hash_get` reads it back:
+    /// `found*1000 + value_lo` = 1000 + 50 = 1050.
+    #[test]
+    fn set_insert_int_then_get() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 5) (i64.const -1) (i64.const 50) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $h) (i64.const 5) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 1000)) (local.get $vlo)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1050");
+        }
+    }
+
+    /// Setting the same key twice updates in place (no new entry): count stays 1 and
+    /// the value becomes 99. Returns `count*1000 + get.value_lo` = 1000 + 99 = 1099.
+    #[test]
+    fn set_update_existing_key() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 5) (i64.const -1) (i64.const 50) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 5) (i64.const -1) (i64.const 99) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $h) (i64.const 5) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.mul (i64.load (local.get $h)) (i64.const 1000)) (local.get $vlo)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1099");
+        }
+    }
+
+    /// A string key and string value round-trip through set + get: the persisted
+    /// value's first byte is 'Y'(89), and the lookup (by an independent copy of the
+    /// key bytes) hits. Returns `found*1000 + value_byte0` = 1000 + 89 = 1089.
+    #[test]
+    fn set_string_key_and_value() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (i32.store8 (i32.const 500) (i32.const 111)) (i32.store8 (i32.const 501) (i32.const 107))
+  (i32.store8 (i32.const 510) (i32.const 89)) (i32.store8 (i32.const 511) (i32.const 111))
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 1)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 500) (i64.const 2) (i64.const 510) (i64.const 2) (i64.const 1)))
+  (call $__rt_hash_get (local.get $h) (i64.const 500) (i64.const 2))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 1000))
+           (i64.extend_i32_u (i32.load8_u (i32.wrap_i64 (local.get $vlo))))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1089");
+        }
+    }
+
+    /// Inserting past the 75% load factor on a capacity-4 table triggers a resize;
+    /// all four keys still resolve and count is 4. Returns `count*1000 + get(4).vlo`
+    /// = 4000 + 40 = 4040.
+    #[test]
+    fn set_triggers_resize_keeps_keys() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 4) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 2) (i64.const -1) (i64.const 20) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 3) (i64.const -1) (i64.const 30) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 4) (i64.const -1) (i64.const 40) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $h) (i64.const 4) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.mul (i64.load (local.get $h)) (i64.const 1000)) (local.get $vlo)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "4040");
+        }
+    }
+
+    /// Setting a key on a shared hash (refcount 2) copies-on-write: the original is
+    /// untouched (key 1 stays 10) while the returned clone sees the new value (99).
+    /// Returns `original_value + clone_value*1000` = 10 + 99000 = 99010.
+    #[test]
+    fn set_cow_clones_shared_hash() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $b i32) (local $ov i64) (local $cv i64)
+  (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (call $__rt_incref (local.get $h))
+  (local.set $b (call $__rt_hash_set (local.get $h) (i64.const 1) (i64.const -1) (i64.const 99) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $h) (i64.const 1) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $ov) (local.set $found)
+  (call $__rt_hash_get (local.get $b) (i64.const 1) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $cv) (local.set $found)
+  (i64.add (local.get $ov) (i64.mul (local.get $cv) (i64.const 1000))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "99010");
         }
     }
 }
