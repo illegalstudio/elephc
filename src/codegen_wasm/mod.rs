@@ -19,6 +19,7 @@
 //!   containing instructions returns `WasmError::Unsupported` rather than emitting
 //!   silently-wrong code. Empty `main` (the P1 gate) lowers and runs end to end.
 
+mod arrays;
 mod context;
 mod function;
 mod heap;
@@ -106,6 +107,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     wm.set_memory(pages, Some("memory"));
     heap::emit_heap_runtime(&mut wm, heap_base, heap_end);
     refcount::emit_refcount_runtime(&mut wm);
+    arrays::emit_array_runtime(&mut wm);
 
     // Lower every user function; `main` becomes the WASI `_start` command entry.
     for func in &module.functions {
@@ -137,8 +139,8 @@ mod tests {
     use crate::codegen::platform::Target;
     use crate::codegen::Emit;
     use crate::ir::{
-        Builder, CmpPredicate, Function, FunctionParam, Immediate, IrType, LocalKind, Module, Op,
-        Ownership, Terminator, ValueId,
+        Builder, CmpPredicate, Function, FunctionParam, Immediate, IrHeapKind, IrType, LocalKind,
+        Module, Op, Ownership, Terminator, ValueId,
     };
     use crate::types::PhpType;
 
@@ -994,6 +996,148 @@ mod tests {
         });
         if let Some(o) = invoke(&m, "fn_mv", &["42"]) {
             assert_eq!(o, "42");
+        }
+    }
+
+    // ----- P5c: indexed-array lowering (ArrayNew / ArrayPush / ArrayLen / ArrayGet) -----
+
+    /// Builds an indexed array `[10, 20, 30]` (ArrayNew + three ArrayPush) reusing
+    /// the same array value, then returns `$a[1]` via ArrayGet — verifying the
+    /// push writeback and the bounded getter through the full lowering.
+    #[test]
+    fn array_new_push_get_lowers() {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("a".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(4)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            for v in [10_i64, 20, 30] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![arr, c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let idx = b.emit_const_i64(1);
+            let g = b
+                .emit(Op::ArrayGet, vec![arr, idx], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(g) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_a", &[]) {
+            assert_eq!(o, "20");
+        }
+    }
+
+    /// Verifies `ArrayLen` reads the element count after three pushes (= 3).
+    #[test]
+    fn array_len_lowers() {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("n".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(4)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            for v in [1_i64, 2, 3] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![arr, c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let len = b
+                .emit(Op::ArrayLen, vec![arr], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(len) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_n", &[]) {
+            assert_eq!(o, "3");
+        }
+    }
+
+    /// Verifies the slot writeback: a zero-capacity array stored in a local slot,
+    /// loaded, pushed (forcing a reallocation), then re-loaded from the SAME slot
+    /// still reads the pushed element — proving `ArrayPush` mirrors the new pointer
+    /// back to the variable's slot, not just the loaded SSA value.
+    #[test]
+    fn array_push_writes_back_to_slot_after_realloc() {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("s".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("a".to_string()),
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Int)),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arr0 = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(0)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, arr0);
+            let a1 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(PhpType::Int)));
+            let c = b.emit_const_i64(77);
+            let _ = b.emit(
+                Op::ArrayPush,
+                vec![a1, c],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let a2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(PhpType::Int)));
+            let idx = b.emit_const_i64(0);
+            let g = b
+                .emit(Op::ArrayGet, vec![a2, idx], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(g) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_s", &[]) {
+            assert_eq!(o, "77");
         }
     }
 }

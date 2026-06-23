@@ -21,7 +21,8 @@ use super::context::{wasm_fn_symbol, FnCtx, Result};
 use super::values::WasmRepr;
 use super::WasmError;
 use crate::ir::{
-    CmpPredicate, DataId, Immediate, InstId, Instruction, LocalSlotId, Op, Ownership, ValueId,
+    CmpPredicate, DataId, Immediate, InstId, Instruction, LocalSlotId, Op, Ownership, ValueDef,
+    ValueId,
 };
 use crate::types::PhpType;
 
@@ -79,6 +80,10 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::Acquire => lower_acquire(ctx, &inst),
         Op::Release => lower_release(ctx, &inst),
         Op::Move | Op::Borrow => lower_forward(ctx, &inst),
+        Op::ArrayNew => lower_array_new(ctx, &inst),
+        Op::ArrayLen => lower_array_len(ctx, &inst),
+        Op::ArrayGet => lower_array_get(ctx, &inst),
+        Op::ArrayPush => lower_array_push(ctx, &inst),
         other => Err(WasmError::Unsupported(format!("op {:?}", other))),
     }
 }
@@ -663,6 +668,99 @@ fn forward_value(ctx: &mut FnCtx, value: ValueId, inst: &Instruction) -> Result<
             .ins(&format!("local.get {}", r), "forward operand local");
     }
     ctx.emit_store_value(result)
+}
+
+/// Returns the local slot a value was loaded from, if its defining instruction is
+/// a `LoadLocal`. Used by `ArrayPush` to write a reallocated array pointer back to
+/// the variable's slot (mirroring the native `source_load_local_slot`).
+fn value_source_slot(ctx: &FnCtx, value: ValueId) -> Option<LocalSlotId> {
+    let v = ctx.function.value(value)?;
+    let ValueDef::Instruction { inst, .. } = v.def else {
+        return None;
+    };
+    let inst = ctx.function.instruction(inst)?;
+    if inst.op == Op::LoadLocal {
+        if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
+            return Some(slot);
+        }
+    }
+    None
+}
+
+/// Lowers `Op::ArrayNew`: allocates an empty indexed array with the immediate
+/// capacity. The element size defaults to 16 bytes; `__rt_array_push_int` shrinks
+/// it to 8 on the first scalar push, matching the native backend.
+fn lower_array_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let capacity = match &inst.immediate {
+        Some(Immediate::Capacity(c)) => *c as i64,
+        _ => return Err(WasmError::Unsupported("array_new without a capacity".to_string())),
+    };
+    ctx.fb
+        .ins(&format!("i64.const {}", capacity), "initial capacity");
+    ctx.fb
+        .ins("i64.const 16", "default elem_size (specialized on first push)");
+    ctx.fb.ins("call $__rt_array_new", "allocate indexed array");
+    store_result(ctx, inst)
+}
+
+/// Lowers `Op::ArrayLen`: reads the i64 length stored at the array header (A+0).
+fn lower_array_len(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb.ins("i64.load", "array length @ +0");
+    store_result(ctx, inst)
+}
+
+/// Lowers `Op::ArrayGet` for scalar (int) arrays via the bounded runtime getter,
+/// which returns the PHP null sentinel for an out-of-range index.
+fn lower_array_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let result = inst
+        .result
+        .ok_or_else(|| WasmError::Unsupported("array_get without a result".to_string()))?;
+    let result_repr = ctx.value_repr(result)?.clone();
+    match result_repr {
+        WasmRepr::I64(_) => {
+            ctx.emit_load_value(operand(inst, 0)?)?; // array pointer
+            ctx.emit_load_value(operand(inst, 1)?)?; // index (i64)
+            ctx.fb
+                .ins("call $__rt_array_get_int", "indexed array get (int)");
+            store_result(ctx, inst)
+        }
+        other => Err(WasmError::Unsupported(format!("array_get into {:?}", other))),
+    }
+}
+
+/// Lowers `Op::ArrayPush`. Appends via the runtime (which may reallocate) and
+/// writes the returned pointer back into the operand value's local and its source
+/// slot, so `$arr[] = v` keeps the variable pointing at the live array — exactly
+/// what the native backend does.
+fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let array = operand(inst, 0)?;
+    let value = operand(inst, 1)?;
+    let value_repr = ctx.value_repr(value)?.clone();
+    match value_repr {
+        WasmRepr::I64(_) => {
+            ctx.emit_load_value(array)?;
+            ctx.emit_load_value(value)?;
+            ctx.fb
+                .ins("call $__rt_array_push_int", "append int (may reallocate)");
+        }
+        other => return Err(WasmError::Unsupported(format!("array_push of {:?}", other))),
+    }
+    // The runtime returned the (possibly reallocated) pointer: store it back into
+    // the array operand value's local.
+    ctx.emit_store_value(array)?;
+    // And mirror it to the source slot so a later LoadLocal sees the live pointer.
+    if let Some(slot) = value_source_slot(ctx, array) {
+        let array_ref = ctx.value_repr(array)?.local_refs();
+        let slot_ref = ctx.slot_repr(slot)?.local_refs();
+        if array_ref.len() == 1 && slot_ref.len() == 1 {
+            ctx.fb
+                .ins(&format!("local.get {}", array_ref[0]), "reallocated array pointer");
+            ctx.fb
+                .ins(&format!("local.set {}", slot_ref[0]), "write back to the array slot");
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `IsNull` for i64 operands by comparing against the null sentinel.
