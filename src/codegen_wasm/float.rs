@@ -209,6 +209,56 @@ const RT_F64_DIGITS: &str = r#"(func $__rt_f64_digits (param $bits i64) (param $
     (local.get $p)))                                             ;; p = fractional digit count
 "#;
 
+/// Rounds an ASCII decimal digit string (most-significant first) to `$prec` significant
+/// digits in place, round-half-to-even.
+///
+/// Inspects the dropped tail (digits at index `$prec` and beyond): rounds up iff the
+/// first dropped digit is `> 5`, or it is `5` with a nonzero digit after it, or it is `5`
+/// exactly half-way and the last kept digit is odd. Otherwise truncates. On a carry that
+/// overflows all `$prec` digits (the prefix was all '9's) the buffer becomes `'1'` then
+/// `$prec-1` zeros and the routine returns 1 (the caller adds 1 to the decimal exponent);
+/// every other case returns 0. If `$ndigits <= $prec` nothing is rounded and it returns 0.
+const RT_ROUND_DIGITS: &str = r#"(func $__rt_round_digits (param $digptr i32) (param $ndigits i32) (param $prec i32) (result i32)
+  (local $rd i32) (local $up i32) (local $i i32) (local $sticky i32)
+  (if (i32.le_s (local.get $ndigits) (local.get $prec))            ;; already <= prec significant digits: nothing to round
+    (then (return (i32.const 0))))
+  (local.set $rd (i32.sub (i32.load8_u (i32.add (local.get $digptr) (local.get $prec))) (i32.const 48)))  ;; first dropped digit value
+  (local.set $up (i32.const 0))                                    ;; round-up flag = false
+  (if (i32.gt_s (local.get $rd) (i32.const 5))                     ;; dropped digit > 5 -> round up
+    (then (local.set $up (i32.const 1))))
+  (if (i32.eq (local.get $rd) (i32.const 5))                       ;; dropped digit exactly 5 -> half-way case
+    (then
+      (local.set $sticky (i32.const 0))                            ;; any nonzero digit after the round digit?
+      (local.set $i (i32.add (local.get $prec) (i32.const 1)))     ;; start just past the round digit
+      (block $se                                                   ;; sticky-scan exit target
+        (loop $sl                                                  ;; scan the remaining dropped digits
+          (br_if $se (i32.ge_s (local.get $i) (local.get $ndigits)))  ;; scanned all -> stop
+          (if (i32.ne (i32.load8_u (i32.add (local.get $digptr) (local.get $i))) (i32.const 48))  ;; found a nonzero digit
+            (then (local.set $sticky (i32.const 1)) (br $se)))     ;; sticky = true, stop scanning
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))    ;; next digit
+          (br $sl)))                                               ;; continue scanning
+      (if (local.get $sticky)                                      ;; nonzero tail -> definitely round up
+        (then (local.set $up (i32.const 1)))
+        (else
+          (if (i32.and (i32.sub (i32.load8_u (i32.add (local.get $digptr) (i32.sub (local.get $prec) (i32.const 1)))) (i32.const 48)) (i32.const 1))  ;; last kept digit is odd
+            (then (local.set $up (i32.const 1))))))))              ;; round half to even
+  (if (i32.eqz (local.get $up))                                    ;; not rounding up -> truncation suffices
+    (then (return (i32.const 0))))
+  (local.set $i (local.get $prec))                                 ;; carry walk starts one past the last kept digit
+  (block $ce                                                       ;; carry-loop exit target
+    (loop $cl                                                      ;; propagate the +1 carry leftward
+      (br_if $ce (i32.eqz (local.get $i)))                         ;; carried out of every digit -> overflow
+      (local.set $i (i32.sub (local.get $i) (i32.const 1)))        ;; pre-decrement to the current digit
+      (if (i32.lt_s (i32.load8_u (i32.add (local.get $digptr) (local.get $i))) (i32.const 57))  ;; digit < '9': increment and stop
+        (then
+          (i32.store8 (i32.add (local.get $digptr) (local.get $i)) (i32.add (i32.load8_u (i32.add (local.get $digptr) (local.get $i))) (i32.const 1)))  ;; digit += 1
+          (return (i32.const 0))))                                 ;; done, no exponent shift
+      (i32.store8 (i32.add (local.get $digptr) (local.get $i)) (i32.const 48))  ;; was '9' -> '0', carry continues
+      (br $cl)))                                                   ;; keep carrying
+  (i32.store8 (local.get $digptr) (i32.const 49))                  ;; overflow: prefix was all '9' -> leading '1'
+  (i32.const 1))                                                   ;; signal exponent shifts up by 1
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
 /// Currently emits `__rt_f64_decompose` (the float decoder) plus the big-integer
@@ -227,6 +277,7 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_BIGNUM_IS_ZERO);
     wm.add_raw_func(RT_U32_TO_9DIGITS);
     wm.add_raw_func(RT_F64_DIGITS);
+    wm.add_raw_func(RT_ROUND_DIGITS);
 }
 
 #[cfg(test)]
@@ -730,6 +781,117 @@ mod tests {
     fn f64_digits_two_pow60_integer_path() {
         if let Some(o) = run_float_driver(&f64_digits_driver("0x43B0000000000000"), "t") {
             assert_eq!(o, "101019000");
+        }
+    }
+
+    /// Emits `i32.store8` instructions writing the ASCII bytes of `s` at `base..`.
+    fn store_ascii(base: u32, s: &str) -> String {
+        s.bytes()
+            .enumerate()
+            .map(|(i, b)| {
+                format!(
+                    "  (i32.store8 (i32.const {}) (i32.const {}))\n",
+                    base + i as u32,
+                    b
+                )
+            })
+            .collect()
+    }
+
+    /// Builds a WAT expression reconstructing the `n`-digit decimal number stored as ASCII
+    /// bytes at `base..base+n` (most-significant first) via Horner's rule.
+    fn digits_value(base: u32, n: u32) -> String {
+        let digit = |off: u32| {
+            format!(
+                "(i64.extend_i32_u (i32.sub (i32.load8_u (i32.const {})) (i32.const 48)))",
+                base + off
+            )
+        };
+        let mut expr = digit(0);
+        for off in 1..n {
+            expr = format!("(i64.add (i64.mul {expr} (i64.const 10)) {})", digit(off));
+        }
+        expr
+    }
+
+    /// Builds a driver that writes `input` digits at 256, rounds them to `prec` significant
+    /// digits, and returns `flag*1000000 + value(first sig_len digits)` (flag is the
+    /// overflow/exponent-shift result of `__rt_round_digits`).
+    fn round_driver(input: &str, prec: u32, sig_len: u32) -> String {
+        format!(
+            r#"(func $t (export "t") (result i64)
+  (local $flag i32)
+{stores}  (local.set $flag (call $__rt_round_digits (i32.const 256) (i32.const {ndig}) (i32.const {prec})))
+  (i64.add (i64.mul (i64.extend_i32_u (local.get $flag)) (i64.const 1000000)) {horner}))"#,
+            stores = store_ascii(256, input),
+            ndig = input.len(),
+            horner = digits_value(256, sig_len),
+        )
+    }
+
+    /// ndigits <= prec: nothing is rounded, the digits are unchanged and the flag is 0.
+    #[test]
+    fn round_no_rounding_needed() {
+        if let Some(o) = run_float_driver(&round_driver("125", 5, 3), "t") {
+            assert_eq!(o, "125");
+        }
+    }
+
+    /// First dropped digit < 5 truncates: "12342" -> "1234".
+    #[test]
+    fn round_truncate_down() {
+        if let Some(o) = run_float_driver(&round_driver("12342", 4, 4), "t") {
+            assert_eq!(o, "1234");
+        }
+    }
+
+    /// First dropped digit > 5 rounds up: "12347" -> "1235".
+    #[test]
+    fn round_up_gt_five() {
+        if let Some(o) = run_float_driver(&round_driver("12347", 4, 4), "t") {
+            assert_eq!(o, "1235");
+        }
+    }
+
+    /// Exactly half with even last kept digit rounds DOWN: "12345" -> "1234" ('4' is even).
+    #[test]
+    fn round_half_to_even_down() {
+        if let Some(o) = run_float_driver(&round_driver("12345", 4, 4), "t") {
+            assert_eq!(o, "1234");
+        }
+    }
+
+    /// Exactly half with odd last kept digit rounds UP: "12355" -> "1236" ('5' is odd).
+    #[test]
+    fn round_half_to_even_up() {
+        if let Some(o) = run_float_driver(&round_driver("12355", 4, 4), "t") {
+            assert_eq!(o, "1236");
+        }
+    }
+
+    /// A nonzero digit after the round digit forces round up regardless of evenness:
+    /// "123451" -> "1235" (the trailing '1' makes it more than half).
+    #[test]
+    fn round_half_sticky_up() {
+        if let Some(o) = run_float_driver(&round_driver("123451", 4, 4), "t") {
+            assert_eq!(o, "1235");
+        }
+    }
+
+    /// All-nines overflow: "9999" rounded to 3 sig digits becomes "100" and the flag is 1
+    /// (exponent shifts up by one). witness = 1*1000000 + 100 = 1000100.
+    #[test]
+    fn round_overflow_all_nines() {
+        if let Some(o) = run_float_driver(&round_driver("9999", 3, 3), "t") {
+            assert_eq!(o, "1000100");
+        }
+    }
+
+    /// Carry propagation across interior nines: "12995" -> "1300" (round up, 9s carry).
+    #[test]
+    fn round_carry_propagation() {
+        if let Some(o) = run_float_driver(&round_driver("12995", 4, 4), "t") {
+            assert_eq!(o, "1300");
         }
     }
 }
