@@ -16,7 +16,11 @@
 use crate::parser::ast::Program;
 
 /// The PHP source prepended under `--web`. Phase 2 Task 2: extern declarations;
-/// Task 5: executable statements that build $_SERVER on every request.
+/// Task 5: $_SERVER; Task 6: $_GET parsed from the query string. The query
+/// parser is built inline (element-by-element into the $_GET superglobal),
+/// mirroring the $_SERVER pattern, to stay within the type checker's proven
+/// capabilities (a helper function returning a freshly-built assoc array trips
+/// return-type inference / union widening).
 const WEB_PRELUDE_SRC: &str = r#"<?php
 extern "elephc_web" {
     function elephc_web_method(): string;
@@ -41,6 +45,23 @@ for ($__elephc_i = 0; $__elephc_i < $__elephc_hc; $__elephc_i++) {
     $__elephc_up = strtoupper($__elephc_hn);
     if ($__elephc_up === 'CONTENT-TYPE') { $_SERVER['CONTENT_TYPE'] = $__elephc_hv; }
     if ($__elephc_up === 'CONTENT-LENGTH') { $_SERVER['CONTENT_LENGTH'] = $__elephc_hv; }
+}
+$_GET = [];
+$__elephc_qs = elephc_web_query_string();
+if ($__elephc_qs !== '') {
+    $__elephc_pairs = explode('&', $__elephc_qs);
+    foreach ($__elephc_pairs as $__elephc_pair) {
+        $__elephc_eq = strpos($__elephc_pair, '=');
+        if ($__elephc_eq === false) {
+            if ($__elephc_pair !== '') {
+                $_GET[rawurldecode($__elephc_pair)] = '';
+            }
+        } else {
+            $__elephc_gk = rawurldecode(substr($__elephc_pair, 0, $__elephc_eq));
+            $__elephc_gv = rawurldecode(substr($__elephc_pair, $__elephc_eq + 1));
+            $_GET[$__elephc_gk] = $__elephc_gv;
+        }
+    }
 }
 "#;
 

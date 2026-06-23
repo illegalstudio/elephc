@@ -257,3 +257,18 @@ fn web_server_superglobal_populated() {
     let _ = child.kill(); let _ = child.wait();
     assert!(resp.ends_with("GET /foo?a=1"), "body: {:?}", resp);
 }
+
+/// Verifies $_GET is parsed from the query string, with percent-decoding.
+#[test]
+fn web_get_superglobal_parsed() {
+    let dir = make_test_dir("web_get_sg");
+    let src = "<?php echo $_GET['name'] . '/' . $_GET['city'];";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(&addr, "GET", "/?name=bob&city=new%20york", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("bob/new york"), "body: {:?}", resp);
+}
