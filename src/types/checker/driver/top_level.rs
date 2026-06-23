@@ -111,6 +111,9 @@ impl Checker {
         let mut global_env: TypeEnv = HashMap::new();
         global_env.insert("argc".to_string(), PhpType::Int);
         global_env.insert("argv".to_string(), PhpType::Array(Box::new(PhpType::Str)));
+        for name in crate::superglobals::SUPERGLOBALS {
+            global_env.insert((*name).to_string(), crate::superglobals::superglobal_type());
+        }
         for (name, ty) in &self.extern_globals {
             global_env.insert(name.clone(), ty.clone());
         }

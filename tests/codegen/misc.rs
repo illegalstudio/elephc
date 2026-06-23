@@ -288,6 +288,21 @@ test(false);
     assert_eq!(out, "none");
 }
 
+// --- Superglobals ---
+
+/// Verifies `$_GET` is recognized as a superglobal (no undefined-variable error) and that
+/// reading it as an assoc array via null-coalescing works end-to-end.
+///
+/// Off-web, `$_GET` is seeded as an empty assoc array. `$_GET['x']` on the missing key
+/// returns null, and `?? 'none'` yields "none". The primary assertion is that it COMPILES
+/// without "Undefined variable: $_GET" — i.e. the superglobal is type-recognized at
+/// top level.
+#[test]
+fn superglobal_get_is_recognized() {
+    let out = compile_and_run("<?php $v = $_GET['x'] ?? 'none'; echo $v;");
+    assert_eq!(out, "none");
+}
+
 /// Verifies a ternary in a function where both branches return strings produces correct output
 /// for both positive and non-positive inputs.
 #[test]

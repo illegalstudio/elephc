@@ -48,6 +48,8 @@ pub mod resolver;
 /// Source span tracking.
 pub mod span;
 mod string_bytes;
+/// Canonical HTTP-request superglobal set and shared type helper.
+pub mod superglobals;
 /// Termination and exit handling.
 pub mod termination;
 /// Type system and checking.

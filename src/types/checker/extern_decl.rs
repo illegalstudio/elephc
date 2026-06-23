@@ -156,7 +156,7 @@ impl Checker {
         c_type: &CType,
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
-        if name == "argc" || name == "argv" {
+        if name == "argc" || name == "argv" || crate::superglobals::is_superglobal(name) {
             return Err(CompileError::new(
                 span,
                 &format!(

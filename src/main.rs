@@ -37,6 +37,7 @@ mod runtime_cache;
 mod source_map;
 mod span;
 mod string_bytes;
+mod superglobals;
 mod termination;
 mod timings;
 mod types;
