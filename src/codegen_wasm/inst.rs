@@ -86,6 +86,9 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ArrayGet => lower_array_get(ctx, &inst),
         Op::ArrayPush => lower_array_push(ctx, &inst),
         Op::ArraySet => lower_array_set(ctx, &inst),
+        Op::HashNew => super::inst_hash::lower_hash_new(ctx, &inst),
+        Op::HashGet => super::inst_hash::lower_hash_get(ctx, &inst),
+        Op::HashSet => super::inst_hash::lower_hash_set(ctx, &inst),
         Op::MixedBox => lower_mixed_box(ctx, &inst),
         Op::MixedTagOf => lower_mixed_tag_of(ctx, &inst),
         Op::IterStart => lower_iter_start(ctx, &inst),
@@ -98,7 +101,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
 }
 
 /// Stores the instruction's result into its value local(s), if it produces one.
-fn store_result(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+pub(super) fn store_result(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     if let Some(r) = inst.result {
         ctx.emit_store_value(r)?;
     }
@@ -106,7 +109,7 @@ fn store_result(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 }
 
 /// Returns the i-th operand of the instruction, or an error if missing.
-fn operand(inst: &Instruction, i: usize) -> Result<ValueId> {
+pub(super) fn operand(inst: &Instruction, i: usize) -> Result<ValueId> {
     inst.operands
         .get(i)
         .copied()
@@ -694,7 +697,7 @@ fn forward_value(ctx: &mut FnCtx, value: ValueId, inst: &Instruction) -> Result<
 /// Returns the local slot a value was loaded from, if its defining instruction is
 /// a `LoadLocal`. Used by `ArrayPush` to write a reallocated array pointer back to
 /// the variable's slot (mirroring the native `source_load_local_slot`).
-fn value_source_slot(ctx: &FnCtx, value: ValueId) -> Option<LocalSlotId> {
+pub(super) fn value_source_slot(ctx: &FnCtx, value: ValueId) -> Option<LocalSlotId> {
     let v = ctx.function.value(value)?;
     let ValueDef::Instruction { inst, .. } = v.def else {
         return None;

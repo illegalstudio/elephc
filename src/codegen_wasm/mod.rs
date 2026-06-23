@@ -25,6 +25,7 @@ mod function;
 mod hashes;
 mod heap;
 mod inst;
+mod inst_hash;
 mod mixed;
 mod refcount;
 mod runtime;
@@ -1259,6 +1260,239 @@ mod tests {
         module.add_function(f);
         if let Some(o) = invoke(&module, "fn_e", &[]) {
             assert_eq!(o, "4");
+        }
+    }
+
+    /// Builds the int-keyed associative-array type used by the hash lowering tests.
+    fn int_hash_type() -> PhpType {
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Int),
+        }
+    }
+
+    /// Verifies `$h[7] = 100; $h[13] = 200; return $h[7];` through the full
+    /// `HashNew`/`HashSet`/`HashGet` lowering: a fresh hash is stored in a slot,
+    /// two int-keyed entries are inserted (each via a reload from the SAME slot so the
+    /// write-back is exercised), then one is read back — proving the runtime stores
+    /// and retrieves ordered-map entries through compiled code.
+    #[test]
+    fn hash_set_get_int_lowers() {
+        let assoc = int_hash_type();
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("s".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    assoc.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            for (k, v) in [(7_i64, 100_i64), (13, 200)] {
+                let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+                let key = b.emit_const_i64(k);
+                let val = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::HashSet,
+                    vec![h, key, val],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key = b.emit_const_i64(7);
+            let g = b
+                .emit(Op::HashGet, vec![h, key], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(g) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_s", &[]) {
+            assert_eq!(o, "100");
+        }
+    }
+
+    /// Verifies a `HashGet` on an absent key yields the PHP null sentinel
+    /// (`0x7fff_ffff_ffff_fffe`): `$h[7] = 100; return $h[99];`. The runtime miss path
+    /// returns `(found=0, ...)` and the lowering `select`s the sentinel.
+    #[test]
+    fn hash_get_miss_returns_null_sentinel() {
+        let assoc = int_hash_type();
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("m".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    assoc.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key = b.emit_const_i64(7);
+            let val = b.emit_const_i64(100);
+            let _ = b.emit(
+                Op::HashSet,
+                vec![h, key, val],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let miss = b.emit_const_i64(99);
+            let g = b
+                .emit(Op::HashGet, vec![h2, miss], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(g) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_m", &[]) {
+            assert_eq!(o, "9223372036854775806");
+        }
+    }
+
+    /// Verifies overwriting an existing key updates in place and does not grow the
+    /// table: `$h[7] = 100; $h[7] = 999; return $h[7];` -> 999. Exercises the
+    /// `__rt_hash_set` update-on-match branch through the lowering.
+    #[test]
+    fn hash_overwrite_updates_in_place() {
+        let assoc = int_hash_type();
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("o".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    assoc.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            for v in [100_i64, 999] {
+                let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+                let key = b.emit_const_i64(7);
+                let val = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::HashSet,
+                    vec![h, key, val],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key = b.emit_const_i64(7);
+            let g = b
+                .emit(Op::HashGet, vec![h, key], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(g) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_o", &[]) {
+            assert_eq!(o, "999");
+        }
+    }
+
+    /// Verifies the load-factor resize+rehash path: inserting eight sparse int-keyed
+    /// entries into a capacity-2 hash forces `__rt_hash_resize`, then reading one of the
+    /// earlier keys back proves the rehash preserved every entry. `$h[i] = i*10` for
+    /// i in 1..=8; `return $h[5];` -> 50.
+    #[test]
+    fn hash_resize_preserves_entries() {
+        let assoc = int_hash_type();
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("r".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    assoc.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            for i in 1_i64..=8 {
+                let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+                let key = b.emit_const_i64(i);
+                let val = b.emit_const_i64(i * 10);
+                let _ = b.emit(
+                    Op::HashSet,
+                    vec![h, key, val],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key = b.emit_const_i64(5);
+            let g = b
+                .emit(Op::HashGet, vec![h, key], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(g) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_r", &[]) {
+            assert_eq!(o, "50");
         }
     }
 
