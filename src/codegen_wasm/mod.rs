@@ -1383,6 +1383,160 @@ mod tests {
         }
     }
 
+    /// Builds the int-keyed, bool-valued associative-array type used by the
+    /// mixed→concrete-storage cast tests (`array<int, bool>`).
+    fn bool_hash_type() -> PhpType {
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Bool),
+        }
+    }
+
+    /// Verifies `HashSet` of a boxed Mixed value into a concretely BOOL-typed hash
+    /// casts at runtime via `__rt_mixed_cast_bool` (P5d-2c): a Mixed cell holding the
+    /// int 5 stores `true`, one holding 0 stores `false`. Equivalent to
+    /// `$h[1] = (bool)$m5; $h[2] = (bool)$m0; return $h[1]*10 + $h[2];` -> 10. Without
+    /// the cast the lowering would mis-tag the Mixed-cell pointer as an inline scalar.
+    #[test]
+    fn hash_set_mixed_bool_cast_lowers() {
+        let assoc = bool_hash_type();
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("c".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    assoc.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            for (k, raw) in [(1_i64, 5_i64), (2, 0)] {
+                let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+                let key = b.emit_const_i64(k);
+                let scalar = b.emit_const_i64(raw);
+                let m = b
+                    .emit(
+                        Op::MixedBox,
+                        vec![scalar],
+                        None,
+                        IrType::Heap(IrHeapKind::Mixed),
+                        PhpType::Mixed,
+                        Ownership::Owned,
+                    )
+                    .unwrap();
+                let _ = b.emit(
+                    Op::HashSet,
+                    vec![h, key, m],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let h1 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let k1 = b.emit_const_i64(1);
+            let g1 = b
+                .emit(Op::HashGet, vec![h1, k1], None, IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                .unwrap();
+            let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let k2 = b.emit_const_i64(2);
+            let g2 = b
+                .emit(Op::HashGet, vec![h2, k2], None, IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                .unwrap();
+            let ten = b.emit_const_i64(10);
+            let scaled = b
+                .emit(Op::IMul, vec![g1, ten], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            let sum = b
+                .emit(Op::IAdd, vec![scaled, g2], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(sum) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_c", &[]) {
+            assert_eq!(o, "10");
+        }
+    }
+
+    /// Verifies `HashAppend` (`$h[] = v`) of a boxed Mixed value into a BOOL-typed hash
+    /// also routes through the `__rt_mixed_cast_bool` cast (the same shared
+    /// `materialize_hash_value_tagged` path as `HashSet`): appending a Mixed cell
+    /// holding the string "x" stores `true` at int key 0. Reads it back -> 1.
+    #[test]
+    fn hash_append_mixed_bool_cast_lowers() {
+        let assoc = bool_hash_type();
+        let mut module = Module::new(Target::wasm());
+        let x = module.data.intern_string("x");
+        let mut f = Function::new("a".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    assoc.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let s = b.emit_const_str(x);
+            let m = b
+                .emit(
+                    Op::MixedBox,
+                    vec![s],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::HashAppend,
+                vec![h, m],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let k0 = b.emit_const_i64(0);
+            let g = b
+                .emit(Op::HashGet, vec![h2, k0], None, IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(g) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_a", &[]) {
+            assert_eq!(o, "1");
+        }
+    }
+
     /// Verifies overwriting an existing key updates in place and does not grow the
     /// table: `$h[7] = 100; $h[7] = 999; return $h[7];` -> 999. Exercises the
     /// `__rt_hash_set` update-on-match branch through the lowering.

@@ -20,8 +20,11 @@
 //! - Each entry stores its value concretely plus a per-entry runtime tag (the same
 //!   `crate::codegen::runtime_value_tag` scheme as the native targets). A Mixed-valued
 //!   hash therefore stores concrete entries with their own tag; reads box back into a
-//!   Mixed cell on demand. Only `Mixed`/`Iterable`/`TaggedScalar` source values need a
-//!   real boxing step, which lands with string keys in P5d-2.
+//!   Mixed cell on demand. When a boxed Mixed source value flows into a CONCRETELY-typed
+//!   hash it must be cast to the storage element type: `materialize_hash_value_tagged`
+//!   applies the PHP `(bool)` cast via `__rt_mixed_cast_bool` (fully correct — it needs
+//!   no float formatting), while the int/float/string casts remain `Unsupported` pending
+//!   the deferred `strtod`/`%.14G` ftoa float↔string conversion.
 //! - KEYS: integer/bool/float keys pass through inline; string keys are classified by
 //!   `__rt_hash_normalize_key` (integer-like strings collapse to int keys); Mixed-cell
 //!   keys go through `__rt_hash_key_from_mixed` (unbox + per-tag classification).
@@ -92,23 +95,9 @@ pub(super) fn lower_hash_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
         .map(|v| v.php_type.codegen_repr())
         .unwrap_or(PhpType::Mixed);
 
-    // A Mixed/Union/Tagged source value flowing into a concretely-typed hash needs a
-    // runtime cast (`__rt_mixed_cast_*`); that lands in P5d-2. Reject it cleanly here
-    // rather than mis-tagging a Mixed-cell pointer as an inline scalar.
-    if !matches!(storage_value, PhpType::Mixed | PhpType::Iterable)
-        && matches!(
-            value_ty,
-            PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar
-        )
-    {
-        return Err(WasmError::Unsupported(
-            "hash_set of a mixed value into a concretely-typed hash".to_string(),
-        ));
-    }
-
     let (key_lo, key_hi) = materialize_hash_key(ctx, key)?;
-    let (val_lo, val_hi) = materialize_hash_value(ctx, value)?;
-    let val_tag = hash_value_tag(&value_ty, &storage_value);
+    let (val_lo, val_hi, val_tag) =
+        materialize_hash_value_tagged(ctx, value, &value_ty, &storage_value)?;
 
     // __rt_hash_set(hash, key_lo, key_hi, val_lo, val_hi, val_tag) -> hash'
     ctx.emit_load_value(hash)?;
@@ -199,22 +188,8 @@ pub(super) fn lower_hash_append(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
         .map(|v| v.php_type.codegen_repr())
         .unwrap_or(PhpType::Mixed);
 
-    // A Mixed/Union/Tagged source value flowing into a concretely-typed hash needs a
-    // runtime cast (`__rt_mixed_cast_*`); reject it cleanly here rather than mis-tagging a
-    // Mixed-cell pointer as an inline scalar (matches `lower_hash_set`).
-    if !matches!(storage_value, PhpType::Mixed | PhpType::Iterable)
-        && matches!(
-            value_ty,
-            PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar
-        )
-    {
-        return Err(WasmError::Unsupported(
-            "hash_append of a mixed value into a concretely-typed hash".to_string(),
-        ));
-    }
-
-    let (val_lo, val_hi) = materialize_hash_value(ctx, value)?;
-    let val_tag = hash_value_tag(&value_ty, &storage_value);
+    let (val_lo, val_hi, val_tag) =
+        materialize_hash_value_tagged(ctx, value, &value_ty, &storage_value)?;
 
     // __rt_hash_append(hash, val_lo, val_hi, val_tag) -> hash'
     ctx.emit_load_value(hash)?;
@@ -570,6 +545,73 @@ fn materialize_hash_value(ctx: &mut FnCtx, value: crate::ir::ValueId) -> Result<
         }
     }
     Ok((val_lo, val_hi))
+}
+
+/// Materializes a hash-store value into `(val_lo, val_hi, val_tag)`, applying a PHP
+/// runtime cast when a boxed Mixed source value flows into a concretely-typed hash.
+///
+/// For a heterogeneous (`Mixed`/`Iterable`) hash the value is stored concretely with
+/// its own per-entry tag — no cast (delegates to [`materialize_hash_value`] +
+/// [`hash_value_tag`]). For a concretely-typed hash a `Mixed`/`Union`/`TaggedScalar`
+/// source must be cast to the storage element type. Only the PHP `(bool)` cast is
+/// supported on wasm32-wasi today: it goes through `__rt_mixed_cast_bool`, which needs
+/// no float formatting and is fully PHP-correct. The int/float/string casts depend on
+/// the deferred `strtod` / `%.14G` ftoa float↔string conversion (a float-form numeric
+/// string casts to int via `strtod`, etc.), so they return a clean `Unsupported`
+/// rather than mis-tagging a Mixed-cell pointer as an inline scalar. The cast reads the
+/// borrowed Mixed cell non-destructively; the source temp's release is handled by the
+/// ownership pass, exactly as on the native backend.
+fn materialize_hash_value_tagged(
+    ctx: &mut FnCtx,
+    value: crate::ir::ValueId,
+    value_ty: &PhpType,
+    storage_value: &PhpType,
+) -> Result<(String, String, i64)> {
+    let needs_cast = !matches!(storage_value, PhpType::Mixed | PhpType::Iterable)
+        && matches!(
+            value_ty,
+            PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar
+        );
+    if !needs_cast {
+        let (val_lo, val_hi) = materialize_hash_value(ctx, value)?;
+        return Ok((val_lo, val_hi, hash_value_tag(value_ty, storage_value)));
+    }
+
+    // Concrete storage with a boxed Mixed source: cast at runtime. Only a real Mixed
+    // cell pointer can be cast; a Union/TaggedScalar that does not lower to one is not
+    // yet supported.
+    let value_ir = ctx.function.value(value).map(|v| v.ir_type);
+    let repr = ctx.value_repr(value)?.clone();
+    let is_mixed_cell = matches!(repr, WasmRepr::Ptr(_))
+        && matches!(value_ir, Some(IrType::Heap(IrHeapKind::Mixed)));
+
+    match storage_value {
+        PhpType::Bool if is_mixed_cell => {
+            let val_lo = ctx.fresh_temp(ValType::I64);
+            let val_hi = ctx.fresh_temp(ValType::I64);
+            ctx.emit_load_value(value)?; // i32 Mixed cell pointer
+            ctx.fb.ins(
+                "call $__rt_mixed_cast_bool",
+                "PHP (bool) cast of the boxed mixed value",
+            );
+            ctx.fb
+                .ins(&format!("local.set {}", val_lo), "cast bool -> value low word");
+            ctx.fb.ins("i64.const 0", "bool hash value high word unused");
+            ctx.fb
+                .ins(&format!("local.set {}", val_hi), "store value high word");
+            Ok((
+                val_lo,
+                val_hi,
+                crate::codegen::runtime_value_tag(&PhpType::Bool) as i64,
+            ))
+        }
+        _ => Err(WasmError::Unsupported(format!(
+            "hash store cast of a mixed value into {:?} storage (needs \
+             __rt_mixed_cast_int/float/string; deferred on the strtod/ftoa \
+             float<->string conversion)",
+            storage_value
+        ))),
+    }
 }
 
 /// Returns the per-entry runtime tag for a hash-set payload, mirroring the native

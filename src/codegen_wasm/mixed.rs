@@ -18,6 +18,10 @@
 //!   transparently unwraps nested (tag 7) cells. `free_deep` releases the owned
 //!   child (if any) then frees the cell; `decref_mixed` is the kind-5 branch of
 //!   `__rt_decref_any`.
+//! - `cast_bool` applies PHP `(bool)` truthiness to a boxed value, mirroring the
+//!   native `__rt_mixed_cast_bool` tag dispatch exactly. It needs no float
+//!   formatting, so unlike the int/float/string casts (which depend on the
+//!   deferred `strtod`/`%.14G` ftoa) it is fully PHP-correct on wasm32-wasi.
 
 use super::wat::WatModule;
 
@@ -29,6 +33,7 @@ pub(super) fn emit_mixed_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_MIXED_UNBOX);
     wm.add_raw_func(RT_MIXED_FREE_DEEP);
     wm.add_raw_func(RT_DECREF_MIXED);
+    wm.add_raw_func(RT_MIXED_CAST_BOOL);
 }
 
 /// `__rt_mixed_from_value`: boxes a `(tag, lo, hi)` triple into a fresh 24-byte
@@ -116,6 +121,52 @@ const RT_DECREF_MIXED: &str = r#"(func $__rt_decref_mixed (param $ptr i32)
   (i32.store (i32.sub (local.get $ptr) (i32.const 12)) (local.get $rc))
   (if (i32.eqz (local.get $rc))
     (then (call $__rt_mixed_free_deep (local.get $ptr)))))              ;; last owner -> deep free
+"#;
+
+/// `__rt_mixed_cast_bool`: casts a boxed Mixed cell to a PHP boolean (0 or 1)
+/// following PHP `(bool)` truthiness, mirroring the native `__rt_mixed_cast_bool`
+/// tag dispatch byte-for-byte. Unboxes via `__rt_mixed_unbox` (which already
+/// unwraps nested tag-7 cells and maps null to tag 8), then per tag: int/float are
+/// truthy when non-zero (float via an integer bit test, so NaN is truthy and ±0.0
+/// is falsy); a string is falsy only when "" or the single byte "0"; a bool returns
+/// its stored 0/1; an array/hash is truthy when non-null and its count (i64 at
+/// offset 0) is non-zero; an object or resource is always truthy; null, callable,
+/// and any other tag are falsy. Borrows the cell (never frees/mutates it).
+const RT_MIXED_CAST_BOOL: &str = r#"(func $__rt_mixed_cast_bool (param $ptr i32) (result i64)
+  (local $tag i64)
+  (local $lo i64)
+  (local $hi i64)
+  (local $cp i32)
+  (call $__rt_mixed_unbox (local.get $ptr))                            ;; unbox -> stack: tag, lo, hi
+  (local.set $hi)                                                      ;; pop value high word
+  (local.set $lo)                                                      ;; pop value low word
+  (local.set $tag)                                                     ;; pop runtime tag
+  (if (i64.eqz (local.get $tag))                                       ;; tag 0 = int
+    (then (return (i64.extend_i32_u (i64.ne (local.get $lo) (i64.const 0))))))  ;; truthy if non-zero
+  (if (i64.eq (local.get $tag) (i64.const 1))                          ;; tag 1 = string
+    (then (return (i64.extend_i32_u
+      (i32.and
+        (i64.ne (local.get $hi) (i64.const 0))                        ;; non-empty (len != 0)
+        (i32.or
+          (i64.ne (local.get $hi) (i64.const 1))                      ;; length != 1, OR
+          (i32.ne (i32.load8_u (i32.wrap_i64 (local.get $lo))) (i32.const 48))))))))  ;; first byte != '0'
+  (if (i64.eq (local.get $tag) (i64.const 2))                          ;; tag 2 = float (integer bit test)
+    (then (return (i64.extend_i32_u
+      (i32.and
+        (i64.ne (local.get $lo) (i64.const 0))                        ;; bits != +0.0
+        (i64.ne (local.get $lo) (i64.const 0x8000000000000000)))))))  ;; bits != -0.0
+  (if (i64.eq (local.get $tag) (i64.const 3))                          ;; tag 3 = bool
+    (then (return (local.get $lo))))                                   ;; already normalized 0/1
+  (if (i32.or (i64.eq (local.get $tag) (i64.const 4)) (i64.eq (local.get $tag) (i64.const 5)))  ;; tag 4/5 = array/hash
+    (then
+      (local.set $cp (i32.wrap_i64 (local.get $lo)))                  ;; container pointer
+      (return (i64.extend_i32_u
+        (i32.and
+          (i32.ne (local.get $cp) (i32.const 0))                      ;; non-null container
+          (i64.ne (i64.load (local.get $cp)) (i64.const 0)))))))      ;; element count != 0
+  (if (i32.or (i64.eq (local.get $tag) (i64.const 6)) (i64.eq (local.get $tag) (i64.const 9)))  ;; tag 6 object / 9 resource
+    (then (return (i64.const 1))))                                    ;; always truthy
+  (i64.const 0))                                                      ;; tag 8 null / 10 callable / other = false
 "#;
 
 #[cfg(test)]
@@ -246,6 +297,94 @@ mod tests {
   (global.get $_gc_live))"#;
         if let Some(o) = run_driver(driver, "t") {
             assert_eq!(o, "0");
+        }
+    }
+
+    /// `__rt_mixed_cast_bool` on int cells: a non-zero int is truthy (1), zero is
+    /// falsy (0). Driver returns `truthy*10 + falsy` = 10.
+    #[test]
+    fn cast_bool_int_zero_falsy_nonzero_truthy() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $tr i64) (local $fa i64)
+  (local.set $tr (call $__rt_mixed_cast_bool (call $__rt_mixed_from_value (i64.const 0) (i64.const 5) (i64.const 0))))
+  (local.set $fa (call $__rt_mixed_cast_bool (call $__rt_mixed_from_value (i64.const 0) (i64.const 0) (i64.const 0))))
+  (i64.add (i64.mul (local.get $tr) (i64.const 10)) (local.get $fa)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "10");
+        }
+    }
+
+    /// `__rt_mixed_cast_bool` on float cells (PHP truthiness via integer bit test):
+    /// 1.5 truthy, +0.0 falsy, -0.0 falsy, NaN truthy. Driver returns
+    /// `b(1.5)*1000 + b(+0.0)*100 + b(-0.0)*10 + b(NaN)` = 1001.
+    #[test]
+    fn cast_bool_float_zero_falsy_nan_truthy() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i64) (local $b i64) (local $c i64) (local $d i64)
+  (local.set $a (call $__rt_mixed_cast_bool (call $__rt_mixed_from_value (i64.const 2) (i64.const 0x3FF8000000000000) (i64.const 0))))
+  (local.set $b (call $__rt_mixed_cast_bool (call $__rt_mixed_from_value (i64.const 2) (i64.const 0) (i64.const 0))))
+  (local.set $c (call $__rt_mixed_cast_bool (call $__rt_mixed_from_value (i64.const 2) (i64.const 0x8000000000000000) (i64.const 0))))
+  (local.set $d (call $__rt_mixed_cast_bool (call $__rt_mixed_from_value (i64.const 2) (i64.const 0x7FF8000000000000) (i64.const 0))))
+  (i64.add
+    (i64.add (i64.mul (local.get $a) (i64.const 1000)) (i64.mul (local.get $b) (i64.const 100)))
+    (i64.add (i64.mul (local.get $c) (i64.const 10)) (local.get $d))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1001");
+        }
+    }
+
+    /// `__rt_mixed_cast_bool` on string cells: "00" truthy, the single byte "0"
+    /// falsy, "" falsy — matching PHP's `(bool)` string rule. The bytes are written
+    /// into scratch then boxed (persisted) as tag-1 cells. Driver returns
+    /// `b("00")*100 + b("0")*10 + b("")` = 100.
+    #[test]
+    fn cast_bool_string_empty_and_zero_falsy() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i64) (local $b i64) (local $c i64)
+  (i32.store8 (i32.const 300) (i32.const 48))
+  (i32.store8 (i32.const 301) (i32.const 48))
+  (local.set $a (call $__rt_mixed_cast_bool (call $__rt_mixed_from_value (i64.const 1) (i64.extend_i32_u (i32.const 300)) (i64.const 2))))
+  (local.set $b (call $__rt_mixed_cast_bool (call $__rt_mixed_from_value (i64.const 1) (i64.extend_i32_u (i32.const 300)) (i64.const 1))))
+  (local.set $c (call $__rt_mixed_cast_bool (call $__rt_mixed_from_value (i64.const 1) (i64.extend_i32_u (i32.const 300)) (i64.const 0))))
+  (i64.add (i64.add (i64.mul (local.get $a) (i64.const 100)) (i64.mul (local.get $b) (i64.const 10))) (local.get $c)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "100");
+        }
+    }
+
+    /// `__rt_mixed_cast_bool` on container cells (tag 4 array / tag 5 hash): truthy
+    /// when the element count (i64 at offset 0) is non-zero, falsy when empty. Two
+    /// heap blocks stand in for containers with counts 3 and 0. Driver returns
+    /// `truthy*10 + falsy` = 10.
+    #[test]
+    fn cast_bool_container_nonempty_truthy_empty_falsy() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a1 i32) (local $a2 i32) (local $tr i64) (local $fa i64)
+  (local.set $a1 (call $__rt_heap_alloc (i32.const 8)))
+  (i64.store (local.get $a1) (i64.const 3))
+  (local.set $a2 (call $__rt_heap_alloc (i32.const 8)))
+  (i64.store (local.get $a2) (i64.const 0))
+  (local.set $tr (call $__rt_mixed_cast_bool (call $__rt_mixed_from_value (i64.const 4) (i64.extend_i32_u (local.get $a1)) (i64.const 0))))
+  (local.set $fa (call $__rt_mixed_cast_bool (call $__rt_mixed_from_value (i64.const 5) (i64.extend_i32_u (local.get $a2)) (i64.const 0))))
+  (i64.add (i64.mul (local.get $tr) (i64.const 10)) (local.get $fa)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "10");
+        }
+    }
+
+    /// `__rt_mixed_cast_bool` on object (tag 6), resource (tag 9), and null (tag 8)
+    /// cells: objects and resources are always truthy, null is falsy. Driver returns
+    /// `b(object)*100 + b(resource)*10 + b(null)` = 110.
+    #[test]
+    fn cast_bool_object_resource_truthy_null_falsy() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $o i64) (local $r i64) (local $n i64)
+  (local.set $o (call $__rt_mixed_cast_bool (call $__rt_mixed_from_value (i64.const 6) (i64.const 0) (i64.const 0))))
+  (local.set $r (call $__rt_mixed_cast_bool (call $__rt_mixed_from_value (i64.const 9) (i64.const 7) (i64.const 0))))
+  (local.set $n (call $__rt_mixed_cast_bool (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0))))
+  (i64.add (i64.add (i64.mul (local.get $o) (i64.const 100)) (i64.mul (local.get $r) (i64.const 10))) (local.get $n)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "110");
         }
     }
 }
