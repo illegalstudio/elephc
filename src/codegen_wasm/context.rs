@@ -54,6 +54,10 @@ pub(super) struct FnCtx<'a> {
     pub(super) slot_locals: HashMap<u32, WasmRepr>,
     /// The `$__state` local holding the current block index for dispatch.
     pub(super) state_local: String,
+    /// Per-function local holding this frame's baseline value of the global
+    /// `$__concat_off` cursor, captured in the prologue. `ConcatReset` restores
+    /// `$__concat_off` to this so statement-boundary resets free temporaries.
+    pub(super) concat_base_local: String,
     /// Counter for generating unique temp local names (`$__tmp0`, `$__tmp1`, ...).
     pub(super) temp_counter: u32,
     /// String-literal layout indexed by `DataId.as_raw()`: `(byte_offset, byte_len)`

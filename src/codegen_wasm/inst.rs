@@ -41,6 +41,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ConstNull => lower_const_null(ctx, &inst),
         Op::ConstStr => lower_const_str(ctx, &inst),
         Op::StrLen => lower_strlen(ctx, &inst),
+        Op::StrConcat => lower_str_concat(ctx, &inst),
         Op::Nop => lower_nop(ctx),
         Op::ConcatReset => lower_concat_reset(ctx),
         Op::LoadLocal => lower_load_local(ctx, &inst),
@@ -70,6 +71,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::IsTruthy => lower_is_truthy(ctx, &inst),
         Op::IsNull => lower_is_null(ctx, &inst),
         Op::Call => lower_call(ctx, &inst),
+        Op::BuiltinCall => lower_builtin_call(ctx, &inst),
         Op::EchoValue | Op::PrintValue => lower_echo(ctx, &inst),
         other => Err(WasmError::Unsupported(format!("op {:?}", other))),
     }
@@ -275,11 +277,25 @@ fn lower_nop(ctx: &mut FnCtx) -> Result<()> {
     Ok(())
 }
 
-/// Lowers `ConcatReset`: a no-op until string concatenation is implemented.
+/// Lowers `ConcatReset`: restores the global concat cursor to this frame's
+/// baseline, freeing string temporaries built during the statement.
 fn lower_concat_reset(ctx: &mut FnCtx) -> Result<()> {
     ctx.fb
-        .comment("concat_reset (no-op until string concat is implemented)");
+        .ins(&format!("local.get {}", ctx.concat_base_local), "frame concat baseline");
+    ctx.fb
+        .ins("global.set $__concat_off", "reset concat cursor to baseline");
     Ok(())
+}
+
+/// Lowers `StrConcat`: appends two strings into the concat buffer via `__rt_concat`.
+///
+/// Pushes (a_ptr, a_len, b_ptr, b_len) — matching `__rt_concat`'s parameter order —
+/// and stores the returned `(ptr, len)` into the result string value.
+fn lower_str_concat(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.fb.ins("call $__rt_concat", "concatenate two strings");
+    store_result(ctx, inst)
 }
 
 /// Lowers `LoadLocal`: copies the slot's local(s) into the result value's local(s).
@@ -444,6 +460,44 @@ fn lower_is_truthy(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
     }
     store_result(ctx, inst)
+}
+
+/// Lowers `Op::BuiltinCall` by dispatching on the builtin's name.
+///
+/// Only `exit`/`die` are handled so far; other builtins return `Unsupported`.
+fn lower_builtin_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let data_id = data_immediate(inst)?;
+    let name = ctx
+        .module
+        .data
+        .function_names
+        .get(data_id.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| WasmError::Unsupported(format!("builtin: unknown name data {:?}", data_id)))?;
+    match name.as_str() {
+        "exit" | "die" => lower_exit(ctx, inst),
+        other => Err(WasmError::Unsupported(format!("builtin {}", other))),
+    }
+}
+
+/// Lowers `exit`/`die`: an integer argument becomes the WASI exit status; any
+/// other argument (a message string) or no argument exits with status 0. Matching
+/// the native backend, a string message is NOT printed.
+fn lower_exit(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let int_code = inst.operands.first().is_some_and(|arg| {
+        ctx.function
+            .value(*arg)
+            .map(|v| v.php_type.codegen_repr() == PhpType::Int)
+            .unwrap_or(false)
+    });
+    if int_code {
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        ctx.fb.ins("i32.wrap_i64", "exit code to i32");
+    } else {
+        ctx.fb.ins("i32.const 0", "exit status 0");
+    }
+    ctx.fb.ins("call $wasi_proc_exit", "WASI proc_exit(code)");
+    Ok(())
 }
 
 /// Lowers `EchoValue`/`PrintValue` by dispatching on the operand's PHP type.

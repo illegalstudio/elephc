@@ -72,6 +72,8 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // The WASI imports + `__rt_*` runtime are only added for command (main-bearing)
     // modules. Importing WASI makes a runtime treat the module as a command
     // (requiring `_start`), so a reactor/library module with no main must not.
+    // Import-free runtime (concat buffer + cursor) is needed by every module.
+    runtime::emit_common_runtime(&mut wm);
     let has_main = module.functions.iter().any(|f| f.flags.is_main);
     if has_main {
         runtime::emit_command_runtime(&mut wm);
@@ -388,6 +390,57 @@ mod tests {
         }
     }
 
+    /// Generates and validates a command module, runs it under `wasmer`, and
+    /// returns its process exit code (not asserting success). Returns `None` when
+    /// `wasmer` is absent.
+    fn run_main_exit_code(module: &Module) -> Option<i32> {
+        let wat = generate(module, Emit::Executable).expect("module should lower");
+        let bytes = assemble_and_validate(&wat);
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = unique_tmp_dir("exit");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        out.status.code()
+    }
+
+    /// Verifies `exit($code)` lowers to WASI `proc_exit` with the integer status.
+    #[test]
+    fn exit_with_code_sets_process_status() {
+        let mut module = Module::new(Target::wasm());
+        let exit_name = module.data.intern_function_name("exit");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let code = b.emit_const_i64(3);
+            let _ = b.emit(
+                Op::BuiltinCall,
+                vec![code],
+                Some(Immediate::Data(exit_name)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(code) = run_main_exit_code(&module) {
+            assert_eq!(code, 3);
+        }
+    }
+
     /// Verifies `echo` of booleans: true writes "1", false writes nothing.
     #[test]
     fn echo_booleans_writes_to_stdout() {
@@ -435,6 +488,47 @@ mod tests {
             let _ = b.emit(
                 Op::EchoValue,
                 vec![s],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "Hello, WASM!");
+        }
+    }
+
+    /// Verifies chained string concatenation `"Hello, " . "WASM" . "!"` produces the
+    /// correct bytes — exercising the concat buffer + `__rt_concat` and proving the
+    /// result pointer addresses the freshly-assembled region after two appends.
+    #[test]
+    fn chained_concat_echoes_correctly() {
+        let mut module = Module::new(Target::wasm());
+        let s1 = module.data.intern_string("Hello, ");
+        let s2 = module.data.intern_string("WASM");
+        let s3 = module.data.intern_string("!");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let v1 = b.emit_const_str(s1);
+            let v2 = b.emit_const_str(s2);
+            let c12 = b
+                .emit(Op::StrConcat, vec![v1, v2], None, IrType::Str, PhpType::Str, Ownership::Borrowed)
+                .unwrap();
+            let v3 = b.emit_const_str(s3);
+            let c123 = b
+                .emit(Op::StrConcat, vec![c12, v3], None, IrType::Str, PhpType::Str, Ownership::Borrowed)
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![c123],
                 None,
                 IrType::Void,
                 PhpType::Void,

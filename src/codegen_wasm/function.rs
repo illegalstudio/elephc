@@ -76,8 +76,9 @@ pub fn lower_function(
         }
     }
 
-    // Step d: Declare the dispatch state local.
+    // Step d: Declare the dispatch state local and the concat-base local.
     let state_local = fb.local("__state", ValType::I32);
+    let concat_base_local = fb.local("__concat_base", ValType::I32);
 
     // Step e: Declare local slots (slots 0..params.len() share the param locals).
     let mut slot_locals: HashMap<u32, WasmRepr> = HashMap::new();
@@ -106,12 +107,18 @@ pub fn lower_function(
         value_locals,
         slot_locals,
         state_local,
+        concat_base_local,
         temp_counter: 0,
         str_literals,
     };
 
-    // Prologue: set initial state to the entry block index.
-    // (For non-main, params and their slots share the same locals, so no copy is needed.)
+    // Prologue: capture this frame's concat-buffer baseline, then set the initial
+    // dispatch state. (For non-main, params and their slots share locals, so no
+    // parameter copy is needed.)
+    ctx.fb
+        .ins("global.get $__concat_off", "capture this frame's concat baseline");
+    ctx.fb
+        .ins(&format!("local.set {}", ctx.concat_base_local), "");
     let entry_index = function.entry.as_raw();
     ctx.fb.ins(
         &format!("i32.const {}", entry_index),
