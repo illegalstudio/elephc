@@ -1,11 +1,13 @@
 //! Purpose:
 //! Lowers the EIR associative-array (hash) instructions — `HashNew`, `HashSet`,
-//! and `HashGet` — to WebAssembly for the wasm32-wasi backend, materializing PHP
-//! keys/values into the `(key_lo, key_hi)` / `(val_lo, val_hi, val_tag)` shapes the
-//! `__rt_hash_*` runtime expects and reconstructing reads back into typed locals.
+//! `HashGet`, `HashAppend` (`$h[] = v`), and `HashUnion` (`$a + $b`) — to WebAssembly
+//! for the wasm32-wasi backend, materializing PHP keys/values into the
+//! `(key_lo, key_hi)` / `(val_lo, val_hi, val_tag)` shapes the `__rt_hash_*` runtime
+//! expects and reconstructing reads back into typed locals.
 //!
 //! Called from:
-//! - `crate::codegen_wasm::inst::lower_instruction` for `Op::HashNew/HashGet/HashSet`.
+//! - `crate::codegen_wasm::inst::lower_instruction` for
+//!   `Op::HashNew/HashGet/HashSet/HashAppend/HashUnion`.
 //!
 //! Key details:
 //! - The hash runtime (`crate::codegen_wasm::hashes`) owns inbound values itself:
@@ -136,6 +138,95 @@ pub(super) fn lower_hash_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
         }
     }
     Ok(())
+}
+
+/// Lowers `Op::HashAppend` (`$h[] = v`). Materializes the value into temp locals and
+/// computes its per-entry runtime tag exactly like `lower_hash_set`, but lets the runtime
+/// derive the integer append key: `__rt_hash_append` scans for the next free integer key,
+/// then delegates to the copy-on-write-aware `__rt_hash_set` (which persists/increfs the
+/// value). The returned pointer is written back into the hash operand's value local and
+/// its source slot, mirroring `lower_hash_set`. Produces no result value; the hash operand
+/// IS the in/out storage.
+pub(super) fn lower_hash_append(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let hash = operand(inst, 0)?;
+    let value = operand(inst, 1)?;
+
+    let storage_value = hash_storage_value_type(ctx, hash);
+    let value_ty = ctx
+        .function
+        .value(value)
+        .map(|v| v.php_type.codegen_repr())
+        .unwrap_or(PhpType::Mixed);
+
+    // A Mixed/Union/Tagged source value flowing into a concretely-typed hash needs a
+    // runtime cast (`__rt_mixed_cast_*`); reject it cleanly here rather than mis-tagging a
+    // Mixed-cell pointer as an inline scalar (matches `lower_hash_set`).
+    if !matches!(storage_value, PhpType::Mixed | PhpType::Iterable)
+        && matches!(
+            value_ty,
+            PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar
+        )
+    {
+        return Err(WasmError::Unsupported(
+            "hash_append of a mixed value into a concretely-typed hash".to_string(),
+        ));
+    }
+
+    let (val_lo, val_hi) = materialize_hash_value(ctx, value)?;
+    let val_tag = hash_value_tag(&value_ty, &storage_value);
+
+    // __rt_hash_append(hash, val_lo, val_hi, val_tag) -> hash'
+    ctx.emit_load_value(hash)?;
+    ctx.fb
+        .ins(&format!("local.get {}", val_lo), "append value low word");
+    ctx.fb
+        .ins(&format!("local.get {}", val_hi), "append value high word");
+    ctx.fb
+        .ins(&format!("i64.const {}", val_tag), "append value runtime tag");
+    ctx.fb.ins(
+        "call $__rt_hash_append",
+        "append at next int key (COW, persists/increfs value)",
+    );
+
+    // The runtime returned the (possibly cloned/resized) pointer: store it back into the
+    // hash operand value's local and mirror it to the source slot so a later LoadLocal
+    // sees the live pointer.
+    ctx.emit_store_value(hash)?;
+    if let Some(slot) = value_source_slot(ctx, hash) {
+        let hash_ref = ctx.value_repr(hash)?.local_refs();
+        let slot_ref = ctx.slot_repr(slot)?.local_refs();
+        if hash_ref.len() == 1 && slot_ref.len() == 1 {
+            ctx.fb
+                .ins(&format!("local.get {}", hash_ref[0]), "reallocated hash pointer");
+            ctx.fb
+                .ins(&format!("local.set {}", slot_ref[0]), "write back to the hash slot");
+        }
+    }
+    Ok(())
+}
+
+/// Lowers `Op::HashUnion` (`$a + $b` where both operands are associative arrays). Loads
+/// the two borrowed hash pointers and calls `__rt_hash_union`, which clones the left
+/// operand (left/order wins) and appends the right operand's key-absent entries. The
+/// result is a fresh OWNED hash, stored into the instruction's result local.
+///
+/// Unlike the native backend — which calls `__rt_hash_to_mixed` to re-box a concretely
+/// stored union result into Mixed cells when the result type is Mixed-valued — the wasm
+/// hash always stores entries concretely with a per-entry tag and boxes on read, so a
+/// heterogeneous result already matches what a later Mixed-valued `HashGet` expects. No
+/// conversion pass is emitted here.
+pub(super) fn lower_hash_union(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let left = operand(inst, 0)?;
+    let right = operand(inst, 1)?;
+
+    // __rt_hash_union(a, b) -> result; both operands are borrowed hash pointers.
+    ctx.emit_load_value(left)?;
+    ctx.emit_load_value(right)?;
+    ctx.fb.ins(
+        "call $__rt_hash_union",
+        "left-wins hash union (fresh owned result)",
+    );
+    store_result(ctx, inst)
 }
 
 /// Lowers `Op::HashGet` (`$h[k]`). Materializes the key, calls `__rt_hash_get` (which

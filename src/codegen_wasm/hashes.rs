@@ -3,7 +3,9 @@
 //! the wasm32-wasi backend. PHP arrays are *ordered* maps: this layer owns the
 //! hash-table allocation, the key hashing/equality primitives, and the teardown
 //! (deep free + refcount dispatch). The element operations (get/set), copy-on-write,
-//! iteration, and append/unset are layered on top in later sub-phases.
+//! iteration, auto-indexed append (`$h[] = v`), and the array-union operator (`$a + $b`)
+//! are layered on top. Element `unset($h[$k])` is a separate frontend gap (the EIR
+//! lowering never emits a hash-unset op for non-object receivers) and is not handled here.
 //!
 //! Called from:
 //! - `crate::codegen_wasm::generate()` for every module, after the indexed-array
@@ -42,6 +44,8 @@ pub(super) fn emit_hash_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_HASH_CLONE_SHALLOW);
     wm.add_raw_func(RT_HASH_ENSURE_UNIQUE);
     wm.add_raw_func(RT_HASH_SET);
+    wm.add_raw_func(RT_HASH_APPEND);
+    wm.add_raw_func(RT_HASH_UNION);
     wm.add_raw_func(RT_HASH_FREE_DEEP);
     wm.add_raw_func(RT_DECREF_HASH);
 }
@@ -495,6 +499,86 @@ const RT_HASH_SET: &str = r#"(func $__rt_hash_set (param $hash i32) (param $key_
         (then (call $__rt_incref (i32.wrap_i64 (local.get $val_lo)))))))
   (local.set $hash (call $__rt_hash_insert_owned (local.get $hash) (local.get $key_lo) (local.get $key_hi) (local.get $val_lo) (local.get $val_hi) (local.get $val_tag)))  ;; place the new entry
   (local.get $hash))
+"#;
+
+/// `__rt_hash_append`: the user-facing `$h[] = v`. Computes the next PHP integer append
+/// key by scanning every live entry for the largest integer key and adding one (or 0 when
+/// the hash has no integer keys — matching the native append-key scan, which likewise does
+/// not track a monotonic next-free index), then delegates to `__rt_hash_set` with that key
+/// and `key_hi = -1`. `__rt_hash_set` owns the copy-on-write split, resize, and value
+/// persist/incref, so this routine only derives the key. Returns the resulting hash pointer.
+const RT_HASH_APPEND: &str = r#"(func $__rt_hash_append (param $hash i32) (param $val_lo i64) (param $val_hi i64) (param $val_tag i64) (result i32)
+  (local $cap i64)
+  (local $i i64)
+  (local $key i64)
+  (local $seen i64)
+  (local $entry i32)
+  (local $cand i64)
+  (local.set $cap (i64.load (i32.add (local.get $hash) (i32.const 8))))   ;; capacity from header
+  (local.set $i (i64.const 0))                                            ;; scan from slot 0
+  (local.set $key (i64.const 0))                                          ;; default append key 0 (no int keys)
+  (local.set $seen (i64.const 0))                                         ;; no integer key seen yet
+  (block $end (loop $scan
+    (br_if $end (i64.ge_u (local.get $i) (local.get $cap)))               ;; scanned every slot -> stop
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 64)))))  ;; &slot[i] = hash+40+i*64
+    (if (i64.eq (i64.load (local.get $entry)) (i64.const 1))              ;; live entry?
+      (then
+        (if (i64.eq (i64.load (i32.add (local.get $entry) (i32.const 16))) (i64.const -1))  ;; integer key (key_hi == -1)?
+          (then
+            (local.set $cand (i64.add (i64.load (i32.add (local.get $entry) (i32.const 8))) (i64.const 1)))  ;; candidate = int key + 1
+            (if (i64.eqz (local.get $seen))                               ;; first integer key seen?
+              (then
+                (local.set $key (local.get $cand))                       ;; seed the append key
+                (local.set $seen (i64.const 1)))                         ;; remember we saw one
+              (else
+                (if (i64.gt_s (local.get $cand) (local.get $key))        ;; larger than current best?
+                  (then (local.set $key (local.get $cand))))))))))       ;; keep the maximum int key + 1
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))                 ;; advance to next slot
+    (br $scan)))                                                          ;; loop back-edge
+  (call $__rt_hash_set (local.get $hash) (local.get $key) (i64.const -1) (local.get $val_lo) (local.get $val_hi) (local.get $val_tag)))
+"#;
+
+/// `__rt_hash_union`: the PHP array-union operator `$a + $b` on two ordered-map hashes.
+/// Starts from a deep clone of `$a` (so the left operand's entries and order win), then
+/// walks `$b` in insertion order and appends every entry whose key is absent from the
+/// clone via `__rt_hash_set` (which persists/increfs the borrowed value). Borrows `$a`
+/// and `$b` (never frees/decrefs them) and returns a fresh OWNED hash. No Mixed-promotion
+/// pass is needed: unlike the native runtime's `__rt_hash_to_mixed`, the wasm hash always
+/// stores entries concretely with a per-entry tag and boxes on read, so a heterogeneous
+/// union result already has the representation a Mixed-valued read expects.
+const RT_HASH_UNION: &str = r#"(func $__rt_hash_union (param $a i32) (param $b i32) (result i32)
+  (local $result i32)
+  (local $cur i64)
+  (local $be i32)
+  (local $klo i64)
+  (local $khi i64)
+  (local $found i32)
+  (local $vlo i64)
+  (local $vhi i64)
+  (local $vtag i64)
+  (if (i32.eqz (local.get $a))                                          ;; null left operand?
+    (then (return (call $__rt_hash_clone_shallow (local.get $b)))))     ;; result is just a copy of b
+  (local.set $result (call $__rt_hash_clone_shallow (local.get $a)))    ;; start from an owned copy of a
+  (local.set $cur (i64.load (i32.add (local.get $b) (i32.const 24))))   ;; cur = b.head (insertion-order start)
+  (block $done (loop $walk
+    (br_if $done (i64.eq (local.get $cur) (i64.const -1)))              ;; end of b's insertion order
+    (local.set $be (i32.add (i32.add (local.get $b) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 64)))))  ;; &b entry
+    (local.set $klo (i64.load (i32.add (local.get $be) (i32.const 8))))   ;; b key_lo
+    (local.set $khi (i64.load (i32.add (local.get $be) (i32.const 16))))  ;; b key_hi
+    (call $__rt_hash_get (local.get $result) (local.get $klo) (local.get $khi))  ;; probe result for this key
+    (drop)                                                              ;; discard value_tag
+    (drop)                                                              ;; discard value_hi
+    (drop)                                                              ;; discard value_lo
+    (local.set $found)                                                  ;; keep the found flag
+    (if (i32.eqz (local.get $found))                                    ;; key absent in a -> take b's entry
+      (then
+        (local.set $vlo (i64.load (i32.add (local.get $be) (i32.const 24))))   ;; b value_lo
+        (local.set $vhi (i64.load (i32.add (local.get $be) (i32.const 32))))   ;; b value_hi
+        (local.set $vtag (i64.load (i32.add (local.get $be) (i32.const 40))))  ;; b value_tag
+        (local.set $result (call $__rt_hash_set (local.get $result) (local.get $klo) (local.get $khi) (local.get $vlo) (local.get $vhi) (local.get $vtag)))))  ;; append (set owns its copy)
+    (local.set $cur (i64.load (i32.add (local.get $be) (i32.const 56))))  ;; cur = b entry.next
+    (br $walk)))
+  (local.get $result))
 "#;
 
 /// `__rt_hash_free_deep`: releases the children of every live entry (string keys,
@@ -1089,6 +1173,93 @@ mod tests {
     (i64.extend_i32_u (i64.eq (local.get $c) (i64.const -1)))))"#;
         if let Some(o) = run_driver(driver, "t") {
             assert_eq!(o, "1");
+        }
+    }
+
+    /// `__rt_hash_append` into a fresh hash uses integer key 0: appending value 42 then
+    /// reading key 0 hits with `found*100 + value_lo` = 1*100 + 42 = 142.
+    #[test]
+    fn append_into_empty_uses_key_zero() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_append (local.get $h) (i64.const 42) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $h) (i64.const 0) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 100)) (local.get $vlo)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "142");
+        }
+    }
+
+    /// `__rt_hash_append`'s next-key scan tracks the largest integer key, not the entry
+    /// count: appending 100 (key 0) then 200 (key 1), explicitly setting key 5 = 500, then
+    /// appending 999 places it at key 6 (max int key 5 + 1). Reading key 6 returns
+    /// `found*1000 + value_lo` = 1*1000 + 999 = 1999.
+    #[test]
+    fn append_next_key_follows_max_int_key() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_append (local.get $h) (i64.const 100) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_append (local.get $h) (i64.const 200) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 5) (i64.const -1) (i64.const 500) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_append (local.get $h) (i64.const 999) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $h) (i64.const 6) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.mul (i64.extend_i32_u (local.get $found)) (i64.const 1000)) (local.get $vlo)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1999");
+        }
+    }
+
+    /// `__rt_hash_union` keeps the LEFT operand's value on a key collision and appends the
+    /// right operand's new keys. With a = {1:10, 2:20} and b = {2:99, 3:30}, the union is
+    /// {1:10, 2:20, 3:30}: key 2 stays 20 (left wins), key 3 is 30 (from b), count is 3.
+    /// Returns `get(2)*10000 + get(3)*100 + count` = 20*10000 + 30*100 + 3 = 203003.
+    #[test]
+    fn union_left_wins_and_merges() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32) (local $b i32) (local $u i32)
+  (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local $g2 i64) (local $g3 i64) (local $cnt i64)
+  (local.set $a (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $a (call $__rt_hash_set (local.get $a) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (local.set $a (call $__rt_hash_set (local.get $a) (i64.const 2) (i64.const -1) (i64.const 20) (i64.const 0) (i64.const 0)))
+  (local.set $b (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $b (call $__rt_hash_set (local.get $b) (i64.const 2) (i64.const -1) (i64.const 99) (i64.const 0) (i64.const 0)))
+  (local.set $b (call $__rt_hash_set (local.get $b) (i64.const 3) (i64.const -1) (i64.const 30) (i64.const 0) (i64.const 0)))
+  (local.set $u (call $__rt_hash_union (local.get $a) (local.get $b)))
+  (call $__rt_hash_get (local.get $u) (i64.const 2) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $g2) (local.set $found)
+  (call $__rt_hash_get (local.get $u) (i64.const 3) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $g3) (local.set $found)
+  (local.set $cnt (i64.load (local.get $u)))
+  (i64.add (i64.add (i64.mul (local.get $g2) (i64.const 10000)) (i64.mul (local.get $g3) (i64.const 100))) (local.get $cnt)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "203003");
+        }
+    }
+
+    /// `__rt_hash_union` BORROWS its left operand: after unioning a = {1:10, 2:20} with
+    /// b = {3:30}, the original `a` is unchanged — key 3 still misses in `a` and `a`'s
+    /// count is still 2. Returns `a_count*10 + get(a,3).found` = 2*10 + 0 = 20.
+    #[test]
+    fn union_borrows_left_operand() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32) (local $b i32) (local $u i32)
+  (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $a (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $a (call $__rt_hash_set (local.get $a) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (local.set $a (call $__rt_hash_set (local.get $a) (i64.const 2) (i64.const -1) (i64.const 20) (i64.const 0) (i64.const 0)))
+  (local.set $b (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $b (call $__rt_hash_set (local.get $b) (i64.const 3) (i64.const -1) (i64.const 30) (i64.const 0) (i64.const 0)))
+  (local.set $u (call $__rt_hash_union (local.get $a) (local.get $b)))
+  (call $__rt_hash_get (local.get $a) (i64.const 3) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.mul (i64.load (local.get $a)) (i64.const 10)) (i64.extend_i32_u (local.get $found))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "20");
         }
     }
 }

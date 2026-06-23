@@ -2292,4 +2292,178 @@ mod tests {
             assert_eq!(o, "xyz");
         }
     }
+
+    /// `$h[] = 10; $h[] = 20; $h[] = 30; return $h[2];` -> "30" through `Op::HashAppend`.
+    /// The hash lives in a PHP slot and is reloaded before each append, exercising the
+    /// runtime next-int-key scan AND the append write-back to the source slot. Reading
+    /// key 2 proves the three appends landed at sequential integer keys 0, 1, 2.
+    #[test]
+    fn hash_append_assigns_sequential_int_keys() {
+        let assoc = int_hash_type();
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("a".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(Op::HashNew, Vec::new(), Some(Immediate::Capacity(2)), IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            for v in [10_i64, 20, 30] {
+                let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+                let val = b.emit_const_i64(v);
+                let _ = b.emit(Op::HashAppend, vec![h, val], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key = b.emit_const_i64(2);
+            let g = b
+                .emit(Op::HashGet, vec![h, key], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(g) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_a", &[]) {
+            assert_eq!(o, "30");
+        }
+    }
+
+    /// `$h[5] = 500; $h[] = 7; return $h[6];` -> "7" through `Op::HashAppend`. The append
+    /// key is the largest existing integer key (5) plus one, NOT the entry count, proving
+    /// the backend's next-key scan matches PHP/native semantics through compiled code.
+    #[test]
+    fn hash_append_after_explicit_key_uses_max_plus_one() {
+        let assoc = int_hash_type();
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("b".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(Op::HashNew, Vec::new(), Some(Immediate::Capacity(8)), IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key5 = b.emit_const_i64(5);
+            let val500 = b.emit_const_i64(500);
+            let _ = b.emit(Op::HashSet, vec![h, key5, val500], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let val7 = b.emit_const_i64(7);
+            let _ = b.emit(Op::HashAppend, vec![h, val7], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key6 = b.emit_const_i64(6);
+            let g = b
+                .emit(Op::HashGet, vec![h, key6], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(g) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_b", &[]) {
+            assert_eq!(o, "7");
+        }
+    }
+
+    /// `$a = [1=>10, 2=>20]; $b = [2=>99, 3=>30]; return ($a + $b)[2];` -> "20" through
+    /// `Op::HashUnion`. The left operand wins on the shared key 2, proving the union
+    /// lowering produces a working left-wins merge through compiled code.
+    #[test]
+    fn hash_union_left_wins_lowers() {
+        let assoc = int_hash_type();
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("c".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let a = b
+                .emit(Op::HashNew, Vec::new(), Some(Immediate::Capacity(8)), IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            for (k, v) in [(1_i64, 10_i64), (2, 20)] {
+                let key = b.emit_const_i64(k);
+                let val = b.emit_const_i64(v);
+                let _ = b.emit(Op::HashSet, vec![a, key, val], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            let bb = b
+                .emit(Op::HashNew, Vec::new(), Some(Immediate::Capacity(8)), IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            for (k, v) in [(2_i64, 99_i64), (3, 30)] {
+                let key = b.emit_const_i64(k);
+                let val = b.emit_const_i64(v);
+                let _ = b.emit(Op::HashSet, vec![bb, key, val], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            let u = b
+                .emit(Op::HashUnion, vec![a, bb], None, IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            let key = b.emit_const_i64(2);
+            let g = b
+                .emit(Op::HashGet, vec![u, key], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(g) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_c", &[]) {
+            assert_eq!(o, "20");
+        }
+    }
+
+    /// `foreach (["a"=>"x"] + ["b"=>"y"] as $v) echo $v;` -> "xy" through `Op::HashUnion`.
+    /// Exercises a string-keyed/string-valued union whose merged result is iterated in
+    /// insertion order (left entries first, then the right operand's new keys), proving the
+    /// union result is a well-formed iterable hash with persisted string children.
+    #[test]
+    fn hash_union_foreach_echoes_merged() {
+        let assoc = PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Str),
+        };
+        let mut module = Module::new(Target::wasm());
+        let ak = module.data.intern_string("a");
+        let av = module.data.intern_string("x");
+        let bk = module.data.intern_string("b");
+        let bv = module.data.intern_string("y");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let a = b
+                .emit(Op::HashNew, Vec::new(), Some(Immediate::Capacity(8)), IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            let akey = b.emit_const_str(ak);
+            let aval = b.emit_const_str(av);
+            let _ = b.emit(Op::HashSet, vec![a, akey, aval], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            let bb = b
+                .emit(Op::HashNew, Vec::new(), Some(Immediate::Capacity(8)), IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            let bkey = b.emit_const_str(bk);
+            let bval = b.emit_const_str(bv);
+            let _ = b.emit(Op::HashSet, vec![bb, bkey, bval], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            let u = b
+                .emit(Op::HashUnion, vec![a, bb], None, IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            emit_hash_foreach_loop(&mut b, u, Op::IterCurrentValue);
+        }
+        module.add_function(f);
+        if let Some(o) = run_main(&module) {
+            assert_eq!(o, "xy");
+        }
+    }
 }
