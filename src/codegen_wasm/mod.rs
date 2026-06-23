@@ -23,6 +23,7 @@ mod context;
 mod function;
 mod heap;
 mod inst;
+mod refcount;
 mod runtime;
 mod values;
 mod wat;
@@ -104,6 +105,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     let heap_end = pages * PAGE;
     wm.set_memory(pages, Some("memory"));
     heap::emit_heap_runtime(&mut wm, heap_base, heap_end);
+    refcount::emit_refcount_runtime(&mut wm);
 
     // Lower every user function; `main` becomes the WASI `_start` command entry.
     for func in &module.functions {
@@ -902,6 +904,95 @@ mod tests {
                 .unwrap()
         });
         if let Some(o) = invoke(&m, "fn_c", &[]) {
+            assert_eq!(o, "42");
+        }
+    }
+
+    // ----- P5b: ownership lowering (Acquire / Release / Move) -----
+
+    /// Verifies `Op::Acquire` of a string literal persists it into an owned heap
+    /// copy (`__rt_str_persist`) whose bytes echo back correctly.
+    #[test]
+    fn acquire_string_persists_and_echoes() {
+        let mut module = Module::new(Target::wasm());
+        let hello = module.data.intern_string("hi there");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let lit = b.emit_const_str(hello);
+            let owned = b
+                .emit(Op::Acquire, vec![lit], None, IrType::Str, PhpType::Str, Ownership::Owned)
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![owned],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "hi there");
+        }
+    }
+
+    /// Verifies the full owned-string lifecycle — `Acquire` (persist to heap),
+    /// `EchoValue`, then `Release` (free via `__rt_heap_free_safe`) — echoes the
+    /// content and exits cleanly (a corrupt/double free would trap under wasmer).
+    #[test]
+    fn acquire_echo_release_string_roundtrip() {
+        let mut module = Module::new(Target::wasm());
+        let s = module.data.intern_string("bye");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let lit = b.emit_const_str(s);
+            let owned = b
+                .emit(Op::Acquire, vec![lit], None, IrType::Str, PhpType::Str, Ownership::Owned)
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![owned],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let _ = b.emit(
+                Op::Release,
+                vec![owned],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "bye");
+        }
+    }
+
+    /// Verifies `Op::Move` forwards a scalar value unchanged (no refcount work).
+    #[test]
+    fn move_forwards_int_value() {
+        let m = make_fn("mv", 1, IrType::I64, PhpType::Int, |b, p| {
+            b.emit(Op::Move, vec![p[0]], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap()
+        });
+        if let Some(o) = invoke(&m, "fn_mv", &["42"]) {
             assert_eq!(o, "42");
         }
     }

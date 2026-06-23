@@ -20,7 +20,9 @@
 use super::context::{wasm_fn_symbol, FnCtx, Result};
 use super::values::WasmRepr;
 use super::WasmError;
-use crate::ir::{CmpPredicate, DataId, Immediate, InstId, Instruction, LocalSlotId, Op, ValueId};
+use crate::ir::{
+    CmpPredicate, DataId, Immediate, InstId, Instruction, LocalSlotId, Op, Ownership, ValueId,
+};
 use crate::types::PhpType;
 
 /// Lowers one EIR instruction by id. Loads operands, computes the result on the
@@ -74,6 +76,9 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::BuiltinCall => lower_builtin_call(ctx, &inst),
         Op::EchoValue | Op::PrintValue => lower_echo(ctx, &inst),
+        Op::Acquire => lower_acquire(ctx, &inst),
+        Op::Release => lower_release(ctx, &inst),
+        Op::Move | Op::Borrow => lower_forward(ctx, &inst),
         other => Err(WasmError::Unsupported(format!("op {:?}", other))),
     }
 }
@@ -559,6 +564,105 @@ fn lower_echo(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
         other => Err(WasmError::Unsupported(format!("echo of {:?}", other))),
     }
+}
+
+/// Lowers `Op::Acquire`: makes the operand value safe to store as a new owner.
+///
+/// A PHP string is copied into an owned heap block (`__rt_str_persist`), matching
+/// PHP string value semantics; a heap pointer is increfed (`__rt_incref`); scalars
+/// forward unchanged. The result value receives the acquired value. A `Mixed`
+/// (tagged) value is not handled yet (its ownership lands with the boxing phase).
+fn lower_acquire(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let value = operand(inst, 0)?;
+    let repr = ctx.value_repr(value)?.clone();
+    match repr {
+        WasmRepr::Str { .. } => {
+            ctx.emit_load_value(value)?;
+            ctx.fb
+                .ins("call $__rt_str_persist", "persist string to an owned heap copy");
+            store_result(ctx, inst)
+        }
+        WasmRepr::Ptr(_) => {
+            ctx.emit_load_value(value)?;
+            ctx.fb.ins("call $__rt_incref", "incref the owned heap value");
+            forward_value(ctx, value, inst)
+        }
+        WasmRepr::I64(_) | WasmRepr::F64(_) | WasmRepr::Void => forward_value(ctx, value, inst),
+        WasmRepr::Tagged { .. } => {
+            Err(WasmError::Unsupported("acquire of a Mixed value".to_string()))
+        }
+    }
+}
+
+/// Lowers `Op::Release`: releases storage the value may own.
+///
+/// No-op for ownership states that cannot own heap storage (non-heap, borrowed,
+/// persistent, moved). A string is freed through the bounds/refcount-guarded
+/// `__rt_heap_free_safe` (so transient concat/literal pointers are skipped there);
+/// a heap pointer is released through the `__rt_decref_any` kind dispatcher. A
+/// `Mixed` (tagged) value is not handled yet.
+fn lower_release(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let value = operand(inst, 0)?;
+    let ownership = ctx
+        .function
+        .value(value)
+        .map(|v| v.ownership)
+        .unwrap_or(Ownership::NonHeap);
+    if matches!(
+        ownership,
+        Ownership::NonHeap | Ownership::Borrowed | Ownership::Persistent | Ownership::Moved
+    ) {
+        return Ok(());
+    }
+    let repr = ctx.value_repr(value)?.clone();
+    match repr {
+        WasmRepr::Str { ptr, .. } => {
+            ctx.fb
+                .ins(&format!("local.get {}", ptr), "string pointer to free");
+            ctx.fb
+                .ins("call $__rt_heap_free_safe", "free the owned string (skips non-heap)");
+            Ok(())
+        }
+        WasmRepr::Ptr(_) => {
+            ctx.emit_load_value(value)?;
+            ctx.fb
+                .ins("call $__rt_decref_any", "release the owned heap value by kind");
+            Ok(())
+        }
+        WasmRepr::I64(_) | WasmRepr::F64(_) | WasmRepr::Void => Ok(()),
+        WasmRepr::Tagged { .. } => {
+            Err(WasmError::Unsupported("release of a Mixed value".to_string()))
+        }
+    }
+}
+
+/// Lowers `Op::Move` / `Op::Borrow`: pure value forwarding, copying the operand's
+/// local(s) into the result's local(s) with no refcount change.
+fn lower_forward(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let value = operand(inst, 0)?;
+    forward_value(ctx, value, inst)
+}
+
+/// Copies `value`'s local(s) into the instruction result's local(s), if the
+/// instruction produces a result. Errors if the two reprs differ in local arity.
+fn forward_value(ctx: &mut FnCtx, value: ValueId, inst: &Instruction) -> Result<()> {
+    let Some(result) = inst.result else {
+        return Ok(());
+    };
+    let value_refs = ctx.value_repr(value)?.local_refs();
+    let result_refs = ctx.value_repr(result)?.local_refs();
+    if value_refs.len() != result_refs.len() {
+        return Err(WasmError::Unsupported(format!(
+            "forward repr mismatch: operand has {} local(s), result has {}",
+            value_refs.len(),
+            result_refs.len()
+        )));
+    }
+    for r in &value_refs {
+        ctx.fb
+            .ins(&format!("local.get {}", r), "forward operand local");
+    }
+    ctx.emit_store_value(result)
 }
 
 /// Lowers `IsNull` for i64 operands by comparing against the null sentinel.

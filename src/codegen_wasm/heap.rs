@@ -147,14 +147,19 @@ const RT_HEAP_FREE: &str = r#"(func $__rt_heap_free (param $ptr i32)
 "#;
 
 /// `__rt_heap_free_safe`: like `__rt_heap_free` but silently ignores a pointer
-/// that is null or outside the live heap window, so speculative releases of
-/// borrowed/foreign values cannot corrupt the heap.
+/// that is null, outside the live heap window, already free (refcount 0), or whose
+/// header size is implausible. This lets speculative releases of borrowed/foreign/
+/// data-segment/already-freed values be no-ops instead of corrupting the heap.
 const RT_HEAP_FREE_SAFE: &str = r#"(func $__rt_heap_free_safe (param $ptr i32)
   (if (i32.eq (local.get $ptr) (i32.const 0))                    ;; null -> ignore
     (then (return)))
   (if (i32.lt_u (local.get $ptr) (i32.add (global.get $__heap_base) (i32.const 16)))  ;; before the first payload
     (then (return)))
   (if (i32.ge_u (local.get $ptr) (global.get $__heap_ptr))       ;; at/after the bump cursor (not live)
+    (then (return)))
+  (if (i32.eqz (i32.load (i32.sub (local.get $ptr) (i32.const 12))))  ;; refcount 0 -> already free
+    (then (return)))
+  (if (i32.lt_u (i32.load (i32.sub (local.get $ptr) (i32.const 16))) (i32.const 8))  ;; implausible header size
     (then (return)))
   (call $__rt_heap_free (local.get $ptr)))
 "#;
