@@ -34,6 +34,7 @@ pub(super) fn emit_hash_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_HASH_KEY_EQ);
     wm.add_raw_func(RT_HASH_NORMALIZE_KEY);
     wm.add_raw_func(RT_HASH_KEY_FROM_MIXED);
+    wm.add_raw_func(RT_HASH_ITER_NEXT);
     wm.add_raw_func(RT_HASH_NEW);
     wm.add_raw_func(RT_HASH_GET);
     wm.add_raw_func(RT_HASH_INSERT_OWNED);
@@ -186,6 +187,27 @@ const RT_HASH_KEY_FROM_MIXED: &str = r#"(func $__rt_hash_key_from_mixed (param $
     (then (return (i64.const 0) (i64.const 0))))               ;; PHP $a[null] is the "" (zero-length string) key
   (local.get $lo)                                              ;; illegal offset type: use the payload word
   (i64.const -1))                                              ;; as an int key (no exceptions yet)
+"#;
+
+/// `__rt_hash_iter_next`: advances a foreach cursor over a hash in INSERTION ORDER and
+/// returns `(new_cursor, has_more)`. `cursor` is a slot index, with the sentinel `-2`
+/// meaning "before the first entry": on that first call the next slot is the list head
+/// (`hash+24`); on later calls it is the current entry's `next` link (`entry+56`). Both
+/// head and next store slot indices with `-1` as the end sentinel, and the insertion
+/// list holds only live entries (unset splices removed ones out), so walking never
+/// lands on an empty/tombstone slot. `has_more` is `1` while `new_cursor != -1`.
+const RT_HASH_ITER_NEXT: &str = r#"(func $__rt_hash_iter_next (param $hash i32) (param $cursor i64) (result i64 i64)
+  (local $next i64)                                            ;; next slot index to return
+  (local $entry i32)                                           ;; address of the current entry
+  (if (i64.eq (local.get $cursor) (i64.const -2))              ;; first call (before-first sentinel)?
+    (then
+      (local.set $next (i64.load (i32.add (local.get $hash) (i32.const 24)))))  ;; next = list head
+    (else
+      (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40))     ;; entry = hash+40+cursor*64
+                                 (i32.wrap_i64 (i64.mul (local.get $cursor) (i64.const 64)))))
+      (local.set $next (i64.load (i32.add (local.get $entry) (i32.const 56))))))  ;; next = entry.next
+  (local.get $next)                                            ;; result 0: new cursor (slot index, -1 at end)
+  (i64.extend_i32_u (i64.ne (local.get $next) (i64.const -1))))  ;; result 1: has_more (1 unless -1)
 "#;
 
 /// `__rt_hash_new`: allocates an empty hash with `capacity` entry slots and a
@@ -1019,6 +1041,54 @@ mod tests {
         }
         if let Some(o) = run_driver(&normalize_driver("-9223372036854775809"), "t") {
             assert_eq!(o, "20");
+        }
+    }
+
+    /// `__rt_hash_iter_next` walks three int-keyed entries in INSERTION ORDER. Inserting
+    /// keys 10, 20, 30 then walking from the `-2` sentinel and folding each visited
+    /// entry's `key_lo` as `acc = acc*100 + key` yields 102030 — proving both the
+    /// head→next traversal order and that the loop terminates (has_more flips to 0 after
+    /// the third entry, never re-reading).
+    #[test]
+    fn iter_next_walks_insertion_order() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $c i64) (local $m i64) (local $acc i64) (local $entry i32)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 10) (i64.const -1) (i64.const 0) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 20) (i64.const -1) (i64.const 0) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_insert_owned (local.get $h) (i64.const 30) (i64.const -1) (i64.const 0) (i64.const 0) (i64.const 0)))
+  (local.set $c (i64.const -2))
+  (local.set $acc (i64.const 0))
+  (block $end (loop $L
+    (call $__rt_hash_iter_next (local.get $h) (local.get $c))
+    (local.set $m)
+    (local.set $c)
+    (br_if $end (i64.eqz (local.get $m)))
+    (local.set $entry (i32.add (i32.add (local.get $h) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $c) (i64.const 64)))))
+    (local.set $acc (i64.add (i64.mul (local.get $acc) (i64.const 100)) (i64.load (i32.add (local.get $entry) (i32.const 8)))))
+    (br $L)))
+  (local.get $acc))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "102030");
+        }
+    }
+
+    /// `__rt_hash_iter_next` on an empty hash returns immediately: the first call with
+    /// the `-2` sentinel reads `head == -1`, so `new_cursor == -1` and `has_more == 0`.
+    /// Returns `has_more*10 + (new_cursor == -1)` = 0*10 + 1 = 1.
+    #[test]
+    fn iter_next_empty_hash_has_no_more() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $c i64) (local $m i64)
+  (local.set $h (call $__rt_hash_new (i64.const 4) (i64.const 0)))
+  (call $__rt_hash_iter_next (local.get $h) (i64.const -2))
+  (local.set $m)
+  (local.set $c)
+  (i64.add
+    (i64.mul (local.get $m) (i64.const 10))
+    (i64.extend_i32_u (i64.eq (local.get $c) (i64.const -1)))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1");
         }
     }
 }
