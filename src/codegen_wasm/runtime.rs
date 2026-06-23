@@ -63,10 +63,25 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
         params: vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
         results: vec![ValType::I32],
     });
+    wm.import_func(FuncImport {
+        module: "wasi_snapshot_preview1".to_string(),
+        field: "args_sizes_get".to_string(),
+        internal: "wasi_args_sizes_get".to_string(),
+        // argc_ptr, argv_buf_size_ptr -> errno
+        params: vec![ValType::I32, ValType::I32],
+        results: vec![ValType::I32],
+    });
     wm.add_raw_func(RT_ECHO_I64);
     wm.add_raw_func(RT_ECHO_STR);
     wm.add_raw_func(RT_ECHO_BOOL);
+    wm.add_raw_func(RT_ARGC);
 }
+
+/// `__rt_argc`: returns PHP's `$argc` (the process argument count) via WASI
+/// `args_sizes_get`, which writes the count to the number-buffer scratch region.
+const RT_ARGC: &str = r#"(func $__rt_argc (result i64)
+  (drop (call $wasi_args_sizes_get (i32.const 16) (i32.const 20))) ;; argc@16, argv_buf_size@20
+  (i64.extend_i32_u (i32.load (i32.const 16))))                    ;; return argc as i64"#;
 
 /// `__rt_concat`: appends `a` then `b` into the concat buffer at the current
 /// `$__concat_off` cursor and returns the freshly-written region as `(ptr, len)`,

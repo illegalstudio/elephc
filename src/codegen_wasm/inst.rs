@@ -71,6 +71,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::IsTruthy => lower_is_truthy(ctx, &inst),
         Op::IsNull => lower_is_null(ctx, &inst),
         Op::Call => lower_call(ctx, &inst),
+        Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::BuiltinCall => lower_builtin_call(ctx, &inst),
         Op::EchoValue | Op::PrintValue => lower_echo(ctx, &inst),
         other => Err(WasmError::Unsupported(format!("op {:?}", other))),
@@ -460,6 +461,32 @@ fn lower_is_truthy(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
     }
     store_result(ctx, inst)
+}
+
+/// Lowers `Op::LoadGlobal` for supported superglobals.
+///
+/// `$argc` is read via the `__rt_argc` runtime helper (WASI `args_sizes_get`).
+/// Other globals (including `$argv`, which needs the array runtime) are not yet
+/// supported.
+fn lower_load_global(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let data_id = match &inst.immediate {
+        Some(Immediate::GlobalName(d)) => *d,
+        _ => return Err(WasmError::Unsupported("load_global without a name".to_string())),
+    };
+    let name = ctx
+        .module
+        .data
+        .global_names
+        .get(data_id.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| WasmError::Unsupported(format!("load_global: unknown name {:?}", data_id)))?;
+    match name.as_str() {
+        "argc" => {
+            ctx.fb.ins("call $__rt_argc", "load $argc");
+            store_result(ctx, inst)
+        }
+        other => Err(WasmError::Unsupported(format!("global ${}", other))),
+    }
 }
 
 /// Lowers `Op::BuiltinCall` by dispatching on the builtin's name.

@@ -412,6 +412,73 @@ mod tests {
         out.status.code()
     }
 
+    /// Like `run_main`, but passes `args` to the program. Returns trimmed stdout,
+    /// or `None` when `wasmer` is absent.
+    fn run_main_with_args(module: &Module, args: &[&str]) -> Option<String> {
+        let wat = generate(module, Emit::Executable).expect("module should lower");
+        let bytes = assemble_and_validate(&wat);
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = unique_tmp_dir("args");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let mut cmd = std::process::Command::new("wasmer");
+        cmd.arg("run").arg(&path).arg("--");
+        for a in args {
+            cmd.arg(a);
+        }
+        let out = cmd.output().expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer run failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// Verifies `echo $argc` reports the process argument count (script + args),
+    /// via the `__rt_argc` runtime over WASI `args_sizes_get`.
+    #[test]
+    fn argc_reports_argument_count() {
+        let mut module = Module::new(Target::wasm());
+        let argc_name = module.data.intern_global_name("argc");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let argc = b
+                .emit(
+                    Op::LoadGlobal,
+                    Vec::new(),
+                    Some(Immediate::GlobalName(argc_name)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![argc],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        // script + two args = 3.
+        if let Some(out) = run_main_with_args(&module, &["foo", "bar"]) {
+            assert_eq!(out, "3");
+        }
+    }
+
     /// Verifies `exit($code)` lowers to WASI `proc_exit` with the integer status.
     #[test]
     fn exit_with_code_sets_process_status() {
