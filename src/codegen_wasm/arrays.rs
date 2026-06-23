@@ -31,7 +31,9 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_NEW);
     wm.add_raw_func(RT_ARRAY_GROW);
     wm.add_raw_func(RT_ARRAY_PUSH_INT);
+    wm.add_raw_func(RT_ARRAY_PUSH_STR);
     wm.add_raw_func(RT_ARRAY_GET_INT);
+    wm.add_raw_func(RT_ARRAY_GET_STR);
     wm.add_raw_func(RT_ARRAY_FREE_DEEP);
     wm.add_raw_func(RT_DECREF_ARRAY);
 }
@@ -121,6 +123,52 @@ const RT_ARRAY_GET_INT: &str = r#"(func $__rt_array_get_int (param $array i32) (
   (if (i64.ge_s (local.get $index) (local.get $len))        ;; out of bounds -> null
     (then (return (i64.const 9223372036854775806))))
   (i64.load (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 8))))))  ;; slot[index]
+"#;
+
+/// `__rt_array_push_str`: appends a string element, shaping an empty array to
+/// 16-byte string slots, persisting the (possibly transient) string into an owned
+/// heap block, and growing capacity when full. Returns the (possibly new) array.
+const RT_ARRAY_PUSH_STR: &str = r#"(func $__rt_array_push_str (param $array i32) (param $ptr i32) (param $len i64) (result i32)
+  (local $alen i64)
+  (local $cap i64)
+  (local $slot i32)
+  (local $newptr i32)
+  (local $plen i64)
+  (if (i64.eqz (i64.load (local.get $array)))             ;; empty -> shape as a string array
+    (then
+      (i64.store (i32.add (local.get $array) (i32.const 8))
+                 (i64.div_u (i64.mul (i64.load (i32.add (local.get $array) (i32.const 8))) (i64.load (i32.add (local.get $array) (i32.const 16)))) (i64.const 16)))  ;; rescale capacity to 16-byte slots
+      (i64.store (i32.add (local.get $array) (i32.const 16)) (i64.const 16))  ;; elem_size = 16
+      (i64.store (i32.sub (local.get $array) (i32.const 8))
+                 (i64.or (i64.and (i64.load (i32.sub (local.get $array) (i32.const 8))) (i64.const -32513)) (i64.const 256)))))  ;; value_type = 1 (string)
+  (call $__rt_str_persist (local.get $ptr) (local.get $len))  ;; copy string into an owned heap block
+  (local.set $plen)                                       ;; persisted length (top of stack)
+  (local.set $newptr)                                     ;; persisted heap pointer
+  (local.set $cap (i64.load (i32.add (local.get $array) (i32.const 8))))  ;; capacity
+  (local.set $alen (i64.load (local.get $array)))         ;; length
+  (if (i64.ge_u (local.get $alen) (local.get $cap))       ;; full -> grow
+    (then (local.set $array (call $__rt_array_grow (local.get $array)))))
+  (local.set $alen (i64.load (local.get $array)))         ;; reload length after grow
+  (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $alen) (i64.const 16)))))  ;; slot = A+24+len*16
+  (i64.store (local.get $slot) (i64.extend_i32_u (local.get $newptr)))     ;; pointer (zero-extended) at slot+0
+  (i64.store (i32.add (local.get $slot) (i32.const 8)) (local.get $plen))  ;; length at slot+8
+  (i64.store (local.get $array) (i64.add (local.get $alen) (i64.const 1))) ;; length++
+  (local.get $array))
+"#;
+
+/// `__rt_array_get_str`: reads the (pointer, length) string element at `index`,
+/// returning the null/empty pair (0, 0) for a negative or out-of-bounds index.
+const RT_ARRAY_GET_STR: &str = r#"(func $__rt_array_get_str (param $array i32) (param $index i64) (result i32) (result i64)
+  (local $len i64)
+  (local $slot i32)
+  (if (i64.lt_s (local.get $index) (i64.const 0))         ;; negative index -> null pair
+    (then (return (i32.const 0) (i64.const 0))))
+  (local.set $len (i64.load (local.get $array)))          ;; length
+  (if (i64.ge_u (local.get $index) (local.get $len))      ;; out of bounds -> null pair
+    (then (return (i32.const 0) (i64.const 0))))
+  (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 16)))))  ;; slot = A+24+index*16
+  (i32.wrap_i64 (i64.load (local.get $slot)))             ;; result 0: pointer (wrapped from i64)
+  (i64.load (i32.add (local.get $slot) (i32.const 8))))   ;; result 1: length
 "#;
 
 /// `__rt_array_free_deep`: releases each string/container child (value_type 1 or
@@ -321,6 +369,50 @@ mod tests {
   (global.get $_gc_live))"#;
         if let Some(o) = run_driver(driver, "t") {
             assert_eq!(o, "0");
+        }
+    }
+
+    /// Pushing the bytes "abc" then reading element 0 returns a heap copy whose
+    /// three bytes pack to `97<<16 | 98<<8 | 99 = 6382179`, proving `push_str`
+    /// persists and `get_str` returns the right pointer.
+    #[test]
+    fn push_str_get_str_copies_bytes() {
+        let driver = r#"(func $t (export "t") (result i32)
+  (local $a i32) (local $p i32) (local $l i64)
+  (i32.store8 (i32.const 200) (i32.const 97))
+  (i32.store8 (i32.const 201) (i32.const 98))
+  (i32.store8 (i32.const 202) (i32.const 99))
+  (local.set $a (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $a (call $__rt_array_push_str (local.get $a) (i32.const 200) (i64.const 3)))
+  (call $__rt_array_get_str (local.get $a) (i64.const 0))
+  (local.set $l)
+  (local.set $p)
+  (i32.add
+    (i32.add
+      (i32.mul (i32.load8_u (local.get $p)) (i32.const 65536))
+      (i32.mul (i32.load8_u (i32.add (local.get $p) (i32.const 1))) (i32.const 256)))
+    (i32.load8_u (i32.add (local.get $p) (i32.const 2)))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "6382179");
+        }
+    }
+
+    /// `get_str` returns the stored length (3 for "abc").
+    #[test]
+    fn get_str_returns_length() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32) (local $p i32) (local $l i64)
+  (i32.store8 (i32.const 200) (i32.const 97))
+  (i32.store8 (i32.const 201) (i32.const 98))
+  (i32.store8 (i32.const 202) (i32.const 99))
+  (local.set $a (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $a (call $__rt_array_push_str (local.get $a) (i32.const 200) (i64.const 3)))
+  (call $__rt_array_get_str (local.get $a) (i64.const 0))
+  (local.set $l)
+  (drop)
+  (local.get $l))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "3");
         }
     }
 }

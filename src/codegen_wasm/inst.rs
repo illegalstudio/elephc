@@ -725,6 +725,13 @@ fn lower_array_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 .ins("call $__rt_array_get_int", "indexed array get (int)");
             store_result(ctx, inst)
         }
+        WasmRepr::Str { .. } => {
+            ctx.emit_load_value(operand(inst, 0)?)?; // array pointer
+            ctx.emit_load_value(operand(inst, 1)?)?; // index (i64)
+            ctx.fb
+                .ins("call $__rt_array_get_str", "indexed array get (string)");
+            store_result(ctx, inst)
+        }
         other => Err(WasmError::Unsupported(format!("array_get into {:?}", other))),
     }
 }
@@ -743,6 +750,12 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.emit_load_value(value)?;
             ctx.fb
                 .ins("call $__rt_array_push_int", "append int (may reallocate)");
+        }
+        WasmRepr::Str { .. } => {
+            ctx.emit_load_value(array)?;
+            ctx.emit_load_value(value)?; // string pointer (i32) + length (i64)
+            ctx.fb
+                .ins("call $__rt_array_push_str", "append string (persists + may reallocate)");
         }
         other => return Err(WasmError::Unsupported(format!("array_push of {:?}", other))),
     }

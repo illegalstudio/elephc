@@ -1140,4 +1140,57 @@ mod tests {
             assert_eq!(o, "77");
         }
     }
+
+    /// Pushes a string literal into a string array, reads it back via ArrayGet,
+    /// and echoes it — exercising `__rt_array_push_str` (persist) + `get_str`
+    /// + `__rt_echo_str` through the full lowering.
+    #[test]
+    fn string_array_push_get_echo_lowers() {
+        let mut module = Module::new(Target::wasm());
+        let hello = module.data.intern_string("hello");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Str)),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let lit = b.emit_const_str(hello);
+            let _ = b.emit(
+                Op::ArrayPush,
+                vec![arr, lit],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let idx = b.emit_const_i64(0);
+            let g = b
+                .emit(Op::ArrayGet, vec![arr, idx], None, IrType::Str, PhpType::Str, Ownership::Borrowed)
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![g],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(o) = run_main(&module) {
+            assert_eq!(o, "hello");
+        }
+    }
 }
