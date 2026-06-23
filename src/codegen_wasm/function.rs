@@ -110,6 +110,7 @@ pub fn lower_function(
         concat_base_local,
         temp_counter: 0,
         str_literals,
+        iter_state: std::collections::HashMap::new(),
     };
 
     // Prologue: capture this frame's concat-buffer baseline, then set the initial

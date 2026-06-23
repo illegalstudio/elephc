@@ -19,6 +19,7 @@
 
 use super::context::{wasm_fn_symbol, FnCtx, Result};
 use super::values::WasmRepr;
+use super::wat::ValType;
 use super::WasmError;
 use crate::ir::{
     CmpPredicate, DataId, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalSlotId, Op,
@@ -86,6 +87,11 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ArrayPush => lower_array_push(ctx, &inst),
         Op::MixedBox => lower_mixed_box(ctx, &inst),
         Op::MixedTagOf => lower_mixed_tag_of(ctx, &inst),
+        Op::IterStart => lower_iter_start(ctx, &inst),
+        Op::IterNext => lower_iter_next(ctx, &inst),
+        Op::IterCurrentKey => lower_iter_current_key(ctx, &inst),
+        Op::IterCurrentValue => lower_iter_current_value(ctx, &inst),
+        Op::IterEnd => Ok(()),
         other => Err(WasmError::Unsupported(format!("op {:?}", other))),
     }
 }
@@ -867,6 +873,133 @@ fn lower_mixed_tag_of(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.fb.ins("drop", "discard hi");
     ctx.fb.ins("drop", "discard lo");
     store_result(ctx, inst)
+}
+
+/// Lowers `Op::IterStart`: records the iterator's source array + cursor locals.
+/// Only indexed arrays (`PhpType::Array`) are supported; associative iteration
+/// lands with the hash runtime.
+fn lower_iter_start(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let iter = inst
+        .result
+        .ok_or_else(|| WasmError::Unsupported("iter_start without a result".to_string()))?;
+    let source = operand(inst, 0)?;
+    let src_php = ctx
+        .function
+        .value(source)
+        .map(|v| v.php_type.codegen_repr());
+    let elem = match src_php {
+        Some(PhpType::Array(inner)) => inner.codegen_repr(),
+        Some(other) => {
+            return Err(WasmError::Unsupported(format!("foreach over {:?}", other)))
+        }
+        None => return Err(WasmError::Unsupported("iter_start source has no type".to_string())),
+    };
+    ctx.iter_declare(iter, source, elem)
+}
+
+/// Lowers `Op::IterNext`: pre-increments the cursor and pushes the i64 boolean
+/// `cursor < length`, which the loop header's `CondBr` consumes.
+fn lower_iter_next(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let iter = operand(inst, 0)?;
+    let slots = ctx.iter_slots(iter)?;
+    let (src, cur) = (slots.source.clone(), slots.cursor.clone());
+    ctx.fb.ins(&format!("local.get {}", cur), "current cursor");
+    ctx.fb.ins("i64.const 1", "advance by one");
+    ctx.fb.ins("i64.add", "cursor + 1");
+    ctx.fb.ins(&format!("local.set {}", cur), "store advanced cursor");
+    ctx.fb.ins(&format!("local.get {}", cur), "cursor");
+    ctx.fb.ins(&format!("local.get {}", src), "source array");
+    ctx.fb.ins("i64.load", "array length @ +0");
+    ctx.fb.ins("i64.lt_s", "cursor < length");
+    ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+    store_result(ctx, inst)
+}
+
+/// Lowers `Op::IterCurrentKey`: the key of an indexed array is the cursor. Boxes it
+/// into a Mixed int when the result is Mixed, else returns the raw i64.
+fn lower_iter_current_key(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let iter = operand(inst, 0)?;
+    let cur = ctx.iter_slots(iter)?.cursor.clone();
+    let result = inst
+        .result
+        .ok_or_else(|| WasmError::Unsupported("iter_current_key without a result".to_string()))?;
+    let result_repr = ctx.value_repr(result)?.clone();
+    match result_repr {
+        WasmRepr::I64(_) => {
+            ctx.fb.ins(&format!("local.get {}", cur), "key = cursor");
+            store_result(ctx, inst)
+        }
+        WasmRepr::Ptr(_) | WasmRepr::Tagged { .. } => {
+            ctx.fb.ins("i64.const 0", "mixed tag (int key)");
+            ctx.fb.ins(&format!("local.get {}", cur), "cursor -> lo");
+            ctx.fb.ins("i64.const 0", "hi unused");
+            ctx.fb
+                .ins("call $__rt_mixed_from_value", "box the integer key");
+            store_result(ctx, inst)
+        }
+        other => Err(WasmError::Unsupported(format!("iter key into {:?}", other))),
+    }
+}
+
+/// Lowers `Op::IterCurrentValue`: reads `source[cursor]` with the element getter
+/// picked from the array's element type, boxing the result into a Mixed cell when
+/// the value variable is Mixed (the usual case), else returning the raw element.
+fn lower_iter_current_value(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let iter = operand(inst, 0)?;
+    let slots = ctx.iter_slots(iter)?;
+    let (src, cur, elem) = (slots.source.clone(), slots.cursor.clone(), slots.elem.clone());
+    let result = inst
+        .result
+        .ok_or_else(|| WasmError::Unsupported("iter_current_value without a result".to_string()))?;
+    let result_repr = ctx.value_repr(result)?.clone();
+    let boxed = matches!(result_repr, WasmRepr::Ptr(_) | WasmRepr::Tagged { .. });
+    match &elem {
+        PhpType::Int | PhpType::Bool => {
+            let tag = if matches!(elem, PhpType::Bool) { 3 } else { 0 };
+            if boxed {
+                ctx.fb.ins(&format!("i64.const {}", tag), "mixed tag");
+            }
+            ctx.fb.ins(&format!("local.get {}", src), "source array");
+            ctx.fb.ins(&format!("local.get {}", cur), "cursor index");
+            ctx.fb
+                .ins("call $__rt_array_get_int", "foreach element (int)");
+            if boxed {
+                ctx.fb.ins("i64.const 0", "hi unused");
+                ctx.fb
+                    .ins("call $__rt_mixed_from_value", "box the element");
+            }
+            store_result(ctx, inst)
+        }
+        PhpType::Str => {
+            if boxed {
+                let tmp_len = ctx.fresh_temp(ValType::I64);
+                let tmp_ptr = ctx.fresh_temp(ValType::I32);
+                ctx.fb.ins(&format!("local.get {}", src), "source array");
+                ctx.fb.ins(&format!("local.get {}", cur), "cursor index");
+                ctx.fb
+                    .ins("call $__rt_array_get_str", "foreach element (string)");
+                ctx.fb.ins(&format!("local.set {}", tmp_len), "element length");
+                ctx.fb.ins(&format!("local.set {}", tmp_ptr), "element pointer");
+                ctx.fb.ins("i64.const 1", "mixed tag (string)");
+                ctx.fb.ins(&format!("local.get {}", tmp_ptr), "ptr");
+                ctx.fb.ins("i64.extend_i32_u", "ptr -> lo");
+                ctx.fb.ins(&format!("local.get {}", tmp_len), "len -> hi");
+                ctx.fb
+                    .ins("call $__rt_mixed_from_value", "box the string element");
+                store_result(ctx, inst)
+            } else {
+                ctx.fb.ins(&format!("local.get {}", src), "source array");
+                ctx.fb.ins(&format!("local.get {}", cur), "cursor index");
+                ctx.fb
+                    .ins("call $__rt_array_get_str", "foreach element (string)");
+                store_result(ctx, inst)
+            }
+        }
+        other => Err(WasmError::Unsupported(format!(
+            "foreach value of element type {:?}",
+            other
+        ))),
+    }
 }
 
 /// Lowers `IsNull` for i64 operands by comparing against the null sentinel.

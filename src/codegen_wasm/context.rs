@@ -19,6 +19,23 @@ use super::values::WasmRepr;
 use super::wat::{FuncBuilder, ValType};
 use super::WasmError;
 use crate::ir::{BlockId, DataId, Function, LocalSlotId, Module, ValueId};
+use crate::types::PhpType;
+
+/// The WebAssembly locals backing one `foreach` iterator.
+///
+/// WebAssembly has no addressable machine stack, so an iterator's state lives in
+/// per-function locals (private to each invocation, so recursion is safe and no
+/// teardown is needed): a `source` array pointer and a signed `cursor`. `elem` is
+/// the array's element PHP type, used to pick the element getter and whether the
+/// current value must be boxed into a Mixed cell.
+pub(super) struct IterSlots {
+    /// `$name` of the i32 local holding the source array pointer.
+    pub(super) source: String,
+    /// `$name` of the i64 local holding the current cursor (starts at -1).
+    pub(super) cursor: String,
+    /// The array's element type (its `codegen_repr`).
+    pub(super) elem: PhpType,
+}
 
 /// Result type for the lowering modules, using the parent module's `WasmError`.
 pub(super) type Result<T> = std::result::Result<T, WasmError>;
@@ -63,6 +80,10 @@ pub(super) struct FnCtx<'a> {
     /// String-literal layout indexed by `DataId.as_raw()`: `(byte_offset, byte_len)`
     /// of each interned string's data segment in linear memory.
     pub(super) str_literals: &'a [(u32, u32)],
+    /// Maps an `IterStart` result `ValueId::as_raw()` to its iterator locals, so the
+    /// loop's `IterNext`/`IterCurrent*` ops (which reference the iterator value by
+    /// dominance) recover its source/cursor without any heap state.
+    pub(super) iter_state: HashMap<u32, IterSlots>,
 }
 
 impl<'a> FnCtx<'a> {
@@ -113,6 +134,47 @@ impl<'a> FnCtx<'a> {
         let name = format!("__tmp{}", self.temp_counter);
         self.temp_counter += 1;
         self.fb.local(&name, ty)
+    }
+
+    /// Declares the iterator locals for an `IterStart`, emits the initialization
+    /// (capture the source pointer, set the cursor to -1 for indexed pre-increment),
+    /// and records them under the iterator value's id.
+    ///
+    /// `source` must already have a `WasmRepr` (a single i32 pointer for an array);
+    /// `elem` is the array's element type. The iterator result value's own local is
+    /// left untouched — downstream ops look the iterator up by id, not by its repr.
+    pub(super) fn iter_declare(
+        &mut self,
+        iter: ValueId,
+        source: ValueId,
+        elem: PhpType,
+    ) -> Result<()> {
+        let n = self.temp_counter;
+        self.temp_counter += 1;
+        let source_local = self.fb.local(&format!("__iter_src{}", n), ValType::I32);
+        let cursor_local = self.fb.local(&format!("__iter_cur{}", n), ValType::I64);
+        self.emit_load_value(source)?;
+        self.fb
+            .ins(&format!("local.set {}", source_local), "iterator source array");
+        self.fb.ins("i64.const -1", "indexed cursor (pre-increment to 0)");
+        self.fb
+            .ins(&format!("local.set {}", cursor_local), "init iterator cursor");
+        self.iter_state.insert(
+            iter.as_raw(),
+            IterSlots {
+                source: source_local,
+                cursor: cursor_local,
+                elem,
+            },
+        );
+        Ok(())
+    }
+
+    /// Looks up the iterator locals for an `IterStart` result value.
+    pub(super) fn iter_slots(&self, iter: ValueId) -> Result<&IterSlots> {
+        self.iter_state
+            .get(&iter.as_raw())
+            .ok_or_else(|| WasmError::Unsupported(format!("iterator {:?} has no state", iter)))
     }
 
     /// Emits `local.get` for each local in the value's `WasmRepr`, in canonical order.

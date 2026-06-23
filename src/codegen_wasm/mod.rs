@@ -1320,4 +1320,105 @@ mod tests {
             assert_eq!(o, "1");
         }
     }
+
+    // ----- P5c-5: foreach over an indexed array -----
+
+    /// Builds `foreach ([10,20,30] as $v) echo $v;` as the canonical foreach CFG
+    /// (entry builds the array + IterStart; a header runs IterNext into a CondBr; a
+    /// body reads IterCurrentValue as a Mixed and echoes it; an exit returns). The
+    /// concatenated output is "102030".
+    #[test]
+    fn foreach_echoes_indexed_int_array() {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            let header = b.create_named_block("header", Vec::new());
+            let body = b.create_named_block("body", Vec::new());
+            let exit = b.create_named_block("exit", Vec::new());
+            b.set_entry(entry);
+
+            b.position_at_end(entry);
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(3)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            for v in [10_i64, 20, 30] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![arr, c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let iter = b
+                .emit(
+                    Op::IterStart,
+                    vec![arr],
+                    None,
+                    IrType::Heap(IrHeapKind::Iterable),
+                    PhpType::Iterable,
+                    Ownership::Borrowed,
+                )
+                .unwrap();
+            b.terminate(Terminator::Br {
+                target: header,
+                args: Vec::new(),
+            });
+
+            b.position_at_end(header);
+            let has_next = b
+                .emit(Op::IterNext, vec![iter], None, IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::CondBr {
+                cond: has_next,
+                then_target: body,
+                then_args: Vec::new(),
+                else_target: exit,
+                else_args: Vec::new(),
+            });
+
+            b.position_at_end(body);
+            let val = b
+                .emit(
+                    Op::IterCurrentValue,
+                    vec![iter],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![val],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Br {
+                target: header,
+                args: Vec::new(),
+            });
+
+            b.position_at_end(exit);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(o) = run_main(&module) {
+            assert_eq!(o, "102030");
+        }
+    }
 }
