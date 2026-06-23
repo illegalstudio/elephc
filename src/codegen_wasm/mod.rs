@@ -21,6 +21,7 @@
 
 mod context;
 mod function;
+mod heap;
 mod inst;
 mod runtime;
 mod values;
@@ -94,10 +95,15 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
         cursor = (cursor + bytes.len() as u32 + 3) & !3;
     }
 
-    // Size memory to hold the scratch + data, plus headroom for the heap.
+    // The heap begins 16-aligned just above the string/data region; reserve two
+    // pages of initial headroom above it. The bump allocator grows beyond
+    // `heap_end` with `memory.grow` when this region is exhausted.
     const PAGE: u32 = 65536;
-    let pages = (cursor / PAGE) + 2;
+    let heap_base = (cursor + 15) & !15;
+    let pages = (heap_base / PAGE) + 2;
+    let heap_end = pages * PAGE;
     wm.set_memory(pages, Some("memory"));
+    heap::emit_heap_runtime(&mut wm, heap_base, heap_end);
 
     // Lower every user function; `main` becomes the WASI `_start` command entry.
     for func in &module.functions {
