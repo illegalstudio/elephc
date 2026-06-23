@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits user-assembly helpers that let libelephc-eval run public native
+//! Emits user-assembly helpers that let libelephc-magician run public native
 //! constructors after allocating AOT objects by class name.
 //!
 //! Called from:

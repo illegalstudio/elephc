@@ -51,8 +51,8 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         package: "elephc-image",
     },
     TestBridgeStaticlib {
-        lib_name: "elephc_eval",
-        package: "elephc-eval",
+        lib_name: "elephc_magician",
+        package: "elephc-magician",
     },
 ];
 

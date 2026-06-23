@@ -10,7 +10,7 @@ caller-visible local scope. It is a PHP language construct, not a normal
 callable: `function_exists("eval")` and `is_callable("eval")` return `false`,
 and first-class callable syntax for `eval` is rejected.
 
-Programs that call `eval()` link the optional `elephc_eval` bridge. Programs
+Programs that call `eval()` link the optional `elephc_magician` bridge. Programs
 that do not use `eval()` keep the ordinary fully native runtime path and do not
 link the bridge.
 
@@ -625,7 +625,7 @@ and nested values through eval value hooks.
 
 ## Current limitations
 
-Eval executes through the `elephc_eval` interpreter bridge, not through the full
+Eval executes through the `elephc_magician` interpreter bridge, not through the full
 static AST -> EIR -> native codegen pipeline used for ordinary elephc source.
 Unsupported constructs and missing class names during eval object construction
 fail at runtime with an eval fatal diagnostic.

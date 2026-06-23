@@ -583,8 +583,8 @@ dependencies = [
  "bitflags 2.13.0",
  "bzip2-rs",
  "elephc-crypto",
- "elephc-eval",
  "elephc-image",
+ "elephc-magician",
  "elephc-pdo",
  "elephc-phar",
  "elephc-tls",
@@ -617,7 +617,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "elephc-eval"
+name = "elephc-magician"
 version = "0.1.0"
 dependencies = [
  "elephc-crypto",

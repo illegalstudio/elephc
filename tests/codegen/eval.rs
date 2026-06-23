@@ -25,10 +25,10 @@ echo is_callable("eval") ? "1" : "0";
     assert_eq!(out, "00");
 }
 
-/// Verifies a program containing `eval()` references the bridge symbol and requests libelephc-eval.
+/// Verifies a program containing `eval()` references the bridge symbol and requests libelephc-magician.
 #[test]
 fn test_eval_codegen_requires_eval_bridge() {
-    let dir = make_cli_test_dir("elephc_eval_bridge_asm");
+    let dir = make_cli_test_dir("elephc_magician_bridge_asm");
     let (user_asm, _runtime_asm, required_libraries) =
         compile_source_to_asm_with_options("<?php eval('$x = 1;');", &dir, 8_388_608, false, false);
     assert!(
@@ -44,8 +44,8 @@ fn test_eval_codegen_requires_eval_bridge() {
         "user assembly should free the persistent eval context:\n{user_asm}"
     );
     assert!(
-        required_libraries.iter().any(|lib| lib == "elephc_eval"),
-        "required libraries should include elephc_eval: {required_libraries:?}"
+        required_libraries.iter().any(|lib| lib == "elephc_magician"),
+        "required libraries should include elephc_magician: {required_libraries:?}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
@@ -65,8 +65,8 @@ fn test_non_eval_program_does_not_request_eval_bridge() {
         "non-eval runtime assembly should not reference eval bridge:\n{runtime_asm}"
     );
     assert!(
-        !required_libraries.iter().any(|lib| lib == "elephc_eval"),
-        "non-eval required libraries should not include elephc_eval: {required_libraries:?}"
+        !required_libraries.iter().any(|lib| lib == "elephc_magician"),
+        "non-eval required libraries should not include elephc_magician: {required_libraries:?}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
@@ -2620,9 +2620,9 @@ fn test_eval_dispatches_realpath_builtin_call() {
     let out = compile_and_run(
         r#"<?php
 eval('echo realpath(".") !== false ? "resolved" : "bad"; echo ":";
-echo realpath(path: "elephc-eval-missing-path") === false ? "false" : "bad"; echo ":";
+echo realpath(path: "elephc-magician-missing-path") === false ? "false" : "bad"; echo ":";
 echo call_user_func("realpath", ".") !== false ? "call" : "bad"; echo ":";
-echo call_user_func_array("realpath", ["path" => "elephc-eval-missing-path"]) === false ? "array-false" : "bad";
+echo call_user_func_array("realpath", ["path" => "elephc-magician-missing-path"]) === false ? "array-false" : "bad";
 echo ":"; echo function_exists("realpath");');
 "#,
     );
@@ -2774,7 +2774,7 @@ fn test_eval_dispatches_disk_space_builtin_calls() {
 eval('echo disk_free_space(".") > 0 ? "free" : "bad"; echo ":";
 echo disk_total_space(directory: ".") > 0 ? "total" : "bad"; echo ":";
 echo disk_total_space(".") >= disk_free_space(".") ? "ordered" : "bad"; echo ":";
-echo disk_free_space("no/such/path/elephc-eval") === 0.0 ? "missing" : "bad"; echo ":";
+echo disk_free_space("no/such/path/elephc-magician") === 0.0 ? "missing" : "bad"; echo ":";
 echo call_user_func("disk_free_space", ".") > 0 ? "call" : "bad"; echo ":";
 echo call_user_func_array("disk_total_space", ["directory" => "."]) > 0 ? "spread" : "bad";
 echo ":"; echo function_exists("disk_free_space"); echo function_exists("disk_total_space");');

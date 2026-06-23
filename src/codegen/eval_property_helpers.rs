@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits user-assembly helpers that let libelephc-eval access properties on
+//! Emits user-assembly helpers that let libelephc-magician access properties on
 //! native objects using the current module's class metadata.
 //!
 //! Called from:

@@ -135,9 +135,9 @@ const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
     },
     BridgeStaticlib {
-        lib_name: "elephc_eval",
-        env_var: "ELEPHC_EVAL_LIB_DIR",
-        crate_name: "elephc-eval",
+        lib_name: "elephc_magician",
+        env_var: "ELEPHC_MAGICIAN_LIB_DIR",
+        crate_name: "elephc-magician",
         flag_name: "eval",
         whole_archive: false,
         macos_frameworks: &[],
@@ -794,14 +794,14 @@ mod tests {
 
     /// Verifies the optional eval bridge is registered for programs that use `eval()`.
     #[test]
-    fn bridges_includes_elephc_eval() {
+    fn bridges_includes_elephc_magician() {
         let entry = BRIDGES
             .iter()
-            .find(|b| b.lib_name == "elephc_eval")
-            .expect("elephc_eval must be a registered bridge");
-        assert_eq!(entry.crate_name, "elephc-eval");
-        assert_eq!(entry.env_var, "ELEPHC_EVAL_LIB_DIR");
-        assert_eq!(entry.archive_filename(), "libelephc_eval.a");
+            .find(|b| b.lib_name == "elephc_magician")
+            .expect("elephc_magician must be a registered bridge");
+        assert_eq!(entry.crate_name, "elephc-magician");
+        assert_eq!(entry.env_var, "ELEPHC_MAGICIAN_LIB_DIR");
+        assert_eq!(entry.archive_filename(), "libelephc_magician.a");
         assert!(!entry.whole_archive, "eval bridge must not force-load");
     }
 
@@ -834,26 +834,26 @@ mod tests {
         assert_eq!(crate_flag_names().len(), BRIDGES.len());
     }
 
-    /// Verifies the eval bridge honors `ELEPHC_EVAL_LIB_DIR` before filesystem discovery.
+    /// Verifies the eval bridge honors `ELEPHC_MAGICIAN_LIB_DIR` before filesystem discovery.
     #[test]
     fn eval_bridge_lib_dir_uses_env_override() {
         let _guard = ENV_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
             .expect("env lock should not be poisoned");
-        let previous = std::env::var_os("ELEPHC_EVAL_LIB_DIR");
-        let override_dir = "/tmp/elephc-eval-lib-dir-override";
-        std::env::set_var("ELEPHC_EVAL_LIB_DIR", override_dir);
+        let previous = std::env::var_os("ELEPHC_MAGICIAN_LIB_DIR");
+        let override_dir = "/tmp/elephc-magician-lib-dir-override";
+        std::env::set_var("ELEPHC_MAGICIAN_LIB_DIR", override_dir);
         let entry = BRIDGES
             .iter()
-            .find(|b| b.lib_name == "elephc_eval")
-            .expect("elephc_eval must be a registered bridge");
+            .find(|b| b.lib_name == "elephc_magician")
+            .expect("elephc_magician must be a registered bridge");
 
         let resolved = entry.lib_dir();
 
         match previous {
-            Some(value) => std::env::set_var("ELEPHC_EVAL_LIB_DIR", value),
-            None => std::env::remove_var("ELEPHC_EVAL_LIB_DIR"),
+            Some(value) => std::env::set_var("ELEPHC_MAGICIAN_LIB_DIR", value),
+            None => std::env::remove_var("ELEPHC_MAGICIAN_LIB_DIR"),
         }
         assert_eq!(resolved.as_deref(), Some(override_dir));
     }
