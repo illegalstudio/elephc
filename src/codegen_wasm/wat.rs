@@ -223,6 +223,8 @@ pub struct WatModule {
     globals: Vec<Global>,
     data_segments: Vec<DataSegment>,
     functions: Vec<FuncBuilder>,
+    /// Pre-written `(func ...)` s-expressions for the hand-authored WAT runtime.
+    raw_functions: Vec<String>,
 }
 
 impl Default for WatModule {
@@ -245,6 +247,7 @@ impl WatModule {
             globals: Vec::new(),
             data_segments: Vec::new(),
             functions: Vec::new(),
+            raw_functions: Vec::new(),
         }
     }
 
@@ -293,6 +296,15 @@ impl WatModule {
     /// * `f` - The function builder to add.
     pub fn add_func(&mut self, f: FuncBuilder) {
         self.functions.push(f);
+    }
+
+    /// Adds a pre-written `(func ...)` s-expression (the hand-authored WAT runtime).
+    ///
+    /// # Arguments
+    /// * `wat` - A complete `(func ...)` block. It is emitted verbatim in the
+    ///   function section, so it must be valid WAT.
+    pub fn add_raw_func(&mut self, wat: &str) {
+        self.raw_functions.push(wat.to_string());
     }
 
     /// Renders this module as a complete `(module ...)` s-expression.
@@ -359,7 +371,14 @@ impl WatModule {
             let _ = writeln!(out, "  (data (i32.const {}) \"{}\")", seg.offset, escaped);
         }
 
-        // 5. Functions
+        // 5. Hand-authored raw runtime functions (emitted verbatim).
+        for raw in &self.raw_functions {
+            for line in raw.lines() {
+                let _ = writeln!(out, "  {}", line);
+            }
+        }
+
+        // 6. Lowered functions.
         for func in &self.functions {
             let rendered = func.render("  ");
             out.push_str(&rendered);

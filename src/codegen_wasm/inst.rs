@@ -67,6 +67,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::IsTruthy => lower_is_truthy(ctx, &inst),
         Op::IsNull => lower_is_null(ctx, &inst),
         Op::Call => lower_call(ctx, &inst),
+        Op::EchoValue | Op::PrintValue => lower_echo(ctx, &inst),
         other => Err(WasmError::Unsupported(format!("op {:?}", other))),
     }
 }
@@ -417,6 +418,24 @@ fn lower_is_truthy(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
     }
     store_result(ctx, inst)
+}
+
+/// Lowers `EchoValue`/`PrintValue` by dispatching on the operand's representation.
+///
+/// Integers are written via the `__rt_echo_i64` runtime helper. Other types
+/// (float, string, bool, mixed, ...) need additional runtime support and are not
+/// handled yet.
+fn lower_echo(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let op0 = operand(inst, 0)?;
+    let repr = ctx.value_repr(op0)?.clone();
+    match repr {
+        WasmRepr::I64(_) => {
+            ctx.emit_load_value(op0)?;
+            ctx.fb.ins("call $__rt_echo_i64", "echo integer to stdout");
+            Ok(())
+        }
+        other => Err(WasmError::Unsupported(format!("echo of {:?}", other))),
+    }
 }
 
 /// Lowers `IsNull` for i64 operands by comparing against the null sentinel.

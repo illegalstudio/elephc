@@ -22,6 +22,7 @@
 mod context;
 mod function;
 mod inst;
+mod runtime;
 mod values;
 mod wat;
 
@@ -68,18 +69,12 @@ impl std::error::Error for WasmError {}
 pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     let _ = emit;
     let mut wm = wat::WatModule::new();
-    // `proc_exit` is only referenced by a `main`/`_start` command entry's return.
-    // Importing WASI makes a runtime treat the module as a command (requiring
-    // `_start`), so a reactor/library module with no main must not import it.
+    // The WASI imports + `__rt_*` runtime are only added for command (main-bearing)
+    // modules. Importing WASI makes a runtime treat the module as a command
+    // (requiring `_start`), so a reactor/library module with no main must not.
     let has_main = module.functions.iter().any(|f| f.flags.is_main);
     if has_main {
-        wm.import_func(wat::FuncImport {
-            module: "wasi_snapshot_preview1".to_string(),
-            field: "proc_exit".to_string(),
-            internal: "wasi_proc_exit".to_string(),
-            params: vec![wat::ValType::I32],
-            results: vec![],
-        });
+        runtime::emit_command_runtime(&mut wm);
     }
     wm.set_memory(1, Some("memory"));
 
@@ -252,7 +247,7 @@ mod tests {
         assemble_and_validate(&wat);
     }
 
-    /// Verifies an op that is not yet lowered (`EchoValue`, a later phase) is
+    /// Verifies an op that is not yet lowered (`VarDump`, a much later phase) is
     /// rejected with a clean error instead of emitting silently-wrong code.
     #[test]
     fn unsupported_op_is_rejected() {
@@ -265,9 +260,9 @@ mod tests {
             b.set_entry(entry);
             b.position_at_end(entry);
             let v = b.emit_const_i64(7);
-            // EchoValue needs the runtime (fd_write/itoa) and is not lowered yet.
+            // VarDump needs the full runtime and is not lowered yet.
             let _ = b.emit(
-                Op::EchoValue,
+                Op::VarDump,
                 vec![v],
                 None,
                 IrType::Void,
@@ -302,6 +297,65 @@ mod tests {
             .expect("run wasmer");
         let _ = std::fs::remove_dir_all(&dir);
         assert!(status.success(), "wasmer run failed: {status}");
+    }
+
+    /// Generates and validates a command (main-bearing) module, runs it under
+    /// `wasmer`, and returns its trimmed stdout. Validation always runs; the run
+    /// is skipped (returns `None`) when `wasmer` is absent.
+    fn run_main(module: &Module) -> Option<String> {
+        let wat = generate(module, Emit::Executable).expect("module should lower");
+        let bytes = assemble_and_validate(&wat);
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = std::env::temp_dir().join(format!("elephc_wasm_run_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer run failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            wat
+        );
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// Verifies `echo` of integers writes correct decimal text to stdout, covering
+    /// positive, negative, and zero values via the `__rt_echo_i64` runtime helper.
+    #[test]
+    fn echo_integers_writes_to_stdout() {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            for v in [42_i64, -7, 0, 1000000] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "42-701000000");
+        }
     }
 
     // ----- P2: scalar instruction lowering, observed via wasmer --invoke -----
