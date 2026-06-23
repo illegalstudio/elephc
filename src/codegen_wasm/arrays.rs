@@ -1,9 +1,10 @@
 //! Purpose:
 //! Emits the hand-authored WebAssembly (WAT) indexed-array runtime for the
 //! wasm32-wasi backend: allocation, capacity growth, integer/string append,
-//! bounded read, element assignment (`$a[i]=v`) with copy-on-write, deep free,
-//! and the array branch of the refcount dispatcher. Built on top of the
-//! linear-memory allocator (`heap`) and refcount layer (`refcount`).
+//! bounded read, element assignment (`$a[i]=v`) with copy-on-write, the indexed
+//! `+` union operator (`__rt_array_union`), deep free, and the array branch of
+//! the refcount dispatcher. Built on top of the linear-memory allocator (`heap`)
+//! and refcount layer (`refcount`).
 //!
 //! Called from:
 //! - `crate::codegen_wasm::generate()` for every module, after the refcount layer.
@@ -40,6 +41,7 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_SET_STR);
     wm.add_raw_func(RT_ARRAY_FREE_DEEP);
     wm.add_raw_func(RT_DECREF_ARRAY);
+    wm.add_raw_func(RT_ARRAY_UNION);
 }
 
 /// `__rt_array_new`: allocates an indexed array with `capacity` slots of
@@ -392,6 +394,44 @@ const RT_DECREF_ARRAY: &str = r#"(func $__rt_decref_array (param $array i32)
     (then (call $__rt_array_free_deep (local.get $array)))))  ;; last owner -> deep free
 "#;
 
+/// `__rt_array_union`: the PHP `+` operator on two DENSE INDEXED arrays. The left
+/// operand owns the lower integer keys `0..a.len-1`, so the result is a deep clone of
+/// the left, then the right operand's TAIL (entries at indices `a.len..b.len-1`) is
+/// appended — LEFT wins on key collision. Borrows `$a` and `$b` and returns a fresh
+/// OWNED array. String elements go through `__rt_array_push_str` (which persists their
+/// own copy); refcounted container/mixed elements (value_type 4..7) are increfed before
+/// `__rt_array_push_int` retains the borrowed child; scalars are copied bits-as-is. The
+/// value_type range 4..7 mirrors the native `__rt_array_union` dispatch.
+const RT_ARRAY_UNION: &str = r#"(func $__rt_array_union (param $a i32) (param $b i32) (result i32)
+  (local $result i32) (local $i i64) (local $blen i64) (local $vt i64)
+  (local $slot i32) (local $ptr i32) (local $slen i64) (local $val i64)
+  (local.set $i (i64.load (local.get $a)))                              ;; i = a.len (first missing right index)
+  (if (i64.eqz (local.get $i))                                          ;; left has no keys?
+    (then (return (call $__rt_array_clone_shallow (local.get $b)))))   ;; result is just a copy of b
+  (local.set $result (call $__rt_array_clone_shallow (local.get $a)))  ;; own a copy of the left operand
+  (local.set $blen (i64.load (local.get $b)))                           ;; right length
+  (local.set $vt (i64.and (i64.shr_u (i64.load (i32.sub (local.get $b) (i32.const 8))) (i64.const 8)) (i64.const 127)))  ;; right value_type tag
+  (block $done (loop $walk
+    (br_if $done (i64.ge_s (local.get $i) (local.get $blen)))           ;; appended the whole right tail
+    (if (i64.eq (local.get $vt) (i64.const 1))                          ;; string elements?
+      (then
+        (local.set $slot (i32.add (i32.add (local.get $b) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 16)))))  ;; &b string slot
+        (local.set $ptr (i32.wrap_i64 (i64.load (local.get $slot))))    ;; borrowed string pointer
+        (local.set $slen (i64.load (i32.add (local.get $slot) (i32.const 8))))  ;; string length
+        (local.set $result (call $__rt_array_push_str (local.get $result) (local.get $ptr) (local.get $slen))))  ;; persist + append
+      (else
+        (local.set $val (i64.load (i32.add (i32.add (local.get $b) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 8))))))  ;; scalar/container payload
+        (if (i32.and (i64.ge_u (local.get $vt) (i64.const 4)) (i64.le_u (local.get $vt) (i64.const 7)))  ;; refcounted container range 4..7?
+          (then
+            (call $__rt_incref (i32.wrap_i64 (local.get $val)))         ;; retain the borrowed child
+            (local.set $result (call $__rt_array_push_int (local.get $result) (local.get $val))))  ;; append container pointer
+          (else
+            (local.set $result (call $__rt_array_push_int (local.get $result) (local.get $val)))))))  ;; append scalar bits
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))               ;; next right index
+    (br $walk)))
+  (local.get $result))
+"#;
+
 #[cfg(test)]
 mod tests {
     //! Purpose:
@@ -708,6 +748,122 @@ mod tests {
   (global.get $_gc_live))"#;
         if let Some(o) = run_driver(driver, "t") {
             assert_eq!(o, "0");
+        }
+    }
+
+    /// `__rt_array_union` on `[10,20] + [99,88,77]` keeps the left elements and appends
+    /// only the right tail at index >= a.len, yielding `[10,20,77]` of length 3. Encoded
+    /// as `len*1000000 + u0*10000 + u1*100 + u2` = 3*1000000 + 10*10000 + 20*100 + 77.
+    #[test]
+    fn array_union_int_left_wins_appends_tail() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32) (local $b i32) (local $u i32)
+  (local.set $a (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $a (call $__rt_array_push_int (local.get $a) (i64.const 10)))
+  (local.set $a (call $__rt_array_push_int (local.get $a) (i64.const 20)))
+  (local.set $b (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $b (call $__rt_array_push_int (local.get $b) (i64.const 99)))
+  (local.set $b (call $__rt_array_push_int (local.get $b) (i64.const 88)))
+  (local.set $b (call $__rt_array_push_int (local.get $b) (i64.const 77)))
+  (local.set $u (call $__rt_array_union (local.get $a) (local.get $b)))
+  (i64.add (i64.add (i64.add
+    (i64.mul (i64.load (local.get $u)) (i64.const 1000000))
+    (i64.mul (call $__rt_array_get_int (local.get $u) (i64.const 0)) (i64.const 10000)))
+    (i64.mul (call $__rt_array_get_int (local.get $u) (i64.const 1)) (i64.const 100)))
+    (call $__rt_array_get_int (local.get $u) (i64.const 2))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "3102077");
+        }
+    }
+
+    /// `__rt_array_union` BORROWS both operands: after `[10,20] + [99,88,77]` the left
+    /// array still has length 2 and element 0 == 10 (it was cloned, never mutated).
+    #[test]
+    fn array_union_borrows_left_operand() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32) (local $b i32)
+  (local.set $a (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $a (call $__rt_array_push_int (local.get $a) (i64.const 10)))
+  (local.set $a (call $__rt_array_push_int (local.get $a) (i64.const 20)))
+  (local.set $b (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $b (call $__rt_array_push_int (local.get $b) (i64.const 99)))
+  (local.set $b (call $__rt_array_push_int (local.get $b) (i64.const 77)))
+  (drop (call $__rt_array_union (local.get $a) (local.get $b)))
+  (i64.add (i64.mul (i64.load (local.get $a)) (i64.const 100))
+           (call $__rt_array_get_int (local.get $a) (i64.const 0))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "210");
+        }
+    }
+
+    /// `__rt_array_union` with an EMPTY left operand returns a clone of the right operand:
+    /// `[] + [5,6]` yields `[5,6]` (length 2, element 1 == 6). Encoded as `len*100 + u1`.
+    #[test]
+    fn array_union_empty_left_copies_right() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32) (local $b i32) (local $u i32)
+  (local.set $a (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $b (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $b (call $__rt_array_push_int (local.get $b) (i64.const 5)))
+  (local.set $b (call $__rt_array_push_int (local.get $b) (i64.const 6)))
+  (local.set $u (call $__rt_array_union (local.get $a) (local.get $b)))
+  (i64.add (i64.mul (i64.load (local.get $u)) (i64.const 100))
+           (call $__rt_array_get_int (local.get $u) (i64.const 1))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "206");
+        }
+    }
+
+    /// `__rt_array_union` where the left is at least as long as the right appends no tail:
+    /// `[1,2,3] + [9]` yields `[1,2,3]` (length 3, element 2 == 3). Encoded `len*100 + u2`.
+    #[test]
+    fn array_union_left_longer_appends_nothing() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32) (local $b i32) (local $u i32)
+  (local.set $a (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $a (call $__rt_array_push_int (local.get $a) (i64.const 1)))
+  (local.set $a (call $__rt_array_push_int (local.get $a) (i64.const 2)))
+  (local.set $a (call $__rt_array_push_int (local.get $a) (i64.const 3)))
+  (local.set $b (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $b (call $__rt_array_push_int (local.get $b) (i64.const 9)))
+  (local.set $u (call $__rt_array_union (local.get $a) (local.get $b)))
+  (i64.add (i64.mul (i64.load (local.get $u)) (i64.const 100))
+           (call $__rt_array_get_int (local.get $u) (i64.const 2))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "303");
+        }
+    }
+
+    /// `__rt_array_union` on STRING arrays persists and appends the right tail: with the
+    /// bytes "a","b" on the left and "x","y","z" on the right, the result `["a","b","z"]`
+    /// has length 3 and `u[2]` == "z" (first byte 122, length 1). Encoded `len*1000000 +
+    /// u2_byte*1000 + u2_len`.
+    #[test]
+    fn array_union_string_appends_persisted_tail() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32) (local $b i32) (local $u i32) (local $p i32) (local $l i64)
+  (i32.store8 (i32.const 200) (i32.const 97))
+  (i32.store8 (i32.const 201) (i32.const 98))
+  (i32.store8 (i32.const 202) (i32.const 120))
+  (i32.store8 (i32.const 203) (i32.const 121))
+  (i32.store8 (i32.const 204) (i32.const 122))
+  (local.set $a (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $a (call $__rt_array_push_str (local.get $a) (i32.const 200) (i64.const 1)))
+  (local.set $a (call $__rt_array_push_str (local.get $a) (i32.const 201) (i64.const 1)))
+  (local.set $b (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $b (call $__rt_array_push_str (local.get $b) (i32.const 202) (i64.const 1)))
+  (local.set $b (call $__rt_array_push_str (local.get $b) (i32.const 203) (i64.const 1)))
+  (local.set $b (call $__rt_array_push_str (local.get $b) (i32.const 204) (i64.const 1)))
+  (local.set $u (call $__rt_array_union (local.get $a) (local.get $b)))
+  (call $__rt_array_get_str (local.get $u) (i64.const 2))
+  (local.set $l)
+  (local.set $p)
+  (i64.add (i64.add
+    (i64.mul (i64.load (local.get $u)) (i64.const 1000000))
+    (i64.mul (i64.extend_i32_u (i32.load8_u (local.get $p))) (i64.const 1000)))
+    (local.get $l)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "3122001");
         }
     }
 }

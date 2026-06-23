@@ -1,13 +1,15 @@
 //! Purpose:
 //! Lowers the EIR associative-array (hash) instructions — `HashNew`, `HashSet`,
-//! `HashGet`, `HashAppend` (`$h[] = v`), and `HashUnion` (`$a + $b`) — to WebAssembly
-//! for the wasm32-wasi backend, materializing PHP keys/values into the
-//! `(key_lo, key_hi)` / `(val_lo, val_hi, val_tag)` shapes the `__rt_hash_*` runtime
-//! expects and reconstructing reads back into typed locals.
+//! `HashGet`, `HashUnset`, `HashAppend` (`$h[] = v`), and the `$a + $b` union family
+//! (`HashUnion`, plus the cross-representation `ArrayUnion`, `ArrayHashUnion`, and
+//! `HashArrayUnion`) — to WebAssembly for the wasm32-wasi backend, materializing PHP
+//! keys/values into the `(key_lo, key_hi)` / `(val_lo, val_hi, val_tag)` shapes the
+//! `__rt_hash_*` runtime expects and reconstructing reads back into typed locals.
 //!
 //! Called from:
 //! - `crate::codegen_wasm::inst::lower_instruction` for
-//!   `Op::HashNew/HashGet/HashSet/HashAppend/HashUnion`.
+//!   `Op::HashNew/HashGet/HashSet/HashUnset/HashAppend/HashUnion/ArrayUnion/`
+//!   `ArrayHashUnion/HashArrayUnion`.
 //!
 //! Key details:
 //! - The hash runtime (`crate::codegen_wasm::hashes`) owns inbound values itself:
@@ -264,6 +266,62 @@ pub(super) fn lower_hash_union(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
     ctx.fb.ins(
         "call $__rt_hash_union",
         "left-wins hash union (fresh owned result)",
+    );
+    store_result(ctx, inst)
+}
+
+/// Lowers `Op::ArrayUnion` (`$a + $b` where both operands are dense indexed arrays).
+/// Loads the two borrowed array pointers and calls `__rt_array_union`, which clones the
+/// left operand and appends the right operand's index-`>= a.len` tail (left wins on key
+/// collision). The result is a fresh OWNED indexed array stored into the result local.
+pub(super) fn lower_array_union(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let left = operand(inst, 0)?;
+    let right = operand(inst, 1)?;
+
+    // __rt_array_union(a, b) -> result; both operands are borrowed indexed-array pointers.
+    ctx.emit_load_value(left)?;
+    ctx.emit_load_value(right)?;
+    ctx.fb.ins(
+        "call $__rt_array_union",
+        "left-wins indexed-array union (fresh owned result)",
+    );
+    store_result(ctx, inst)
+}
+
+/// Lowers `Op::ArrayHashUnion` (`$a + $b` with an indexed left operand and a hash right
+/// operand). Loads the borrowed indexed-array and hash pointers and calls
+/// `__rt_array_hash_union`, which promotes the left indexed entries to integer-keyed hash
+/// entries and then merges the right hash's key-absent entries (left wins). The result is
+/// a fresh OWNED hash. No Mixed-promotion pass is needed (see [`lower_hash_union`]).
+pub(super) fn lower_array_hash_union(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let left = operand(inst, 0)?;
+    let right = operand(inst, 1)?;
+
+    // __rt_array_hash_union(a, b) -> result; a = borrowed indexed array, b = borrowed hash.
+    ctx.emit_load_value(left)?;
+    ctx.emit_load_value(right)?;
+    ctx.fb.ins(
+        "call $__rt_array_hash_union",
+        "indexed+hash union promoting left positions to integer keys",
+    );
+    store_result(ctx, inst)
+}
+
+/// Lowers `Op::HashArrayUnion` (`$a + $b` with a hash left operand and an indexed right
+/// operand). Loads the borrowed hash and indexed-array pointers and calls
+/// `__rt_hash_array_union`, which clones the left hash and appends the right indexed
+/// entries whose integer positions are absent from the left (left wins). The result is a
+/// fresh OWNED hash. No Mixed-promotion pass is needed (see [`lower_hash_union`]).
+pub(super) fn lower_hash_array_union(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let left = operand(inst, 0)?;
+    let right = operand(inst, 1)?;
+
+    // __rt_hash_array_union(a, b) -> result; a = borrowed hash, b = borrowed indexed array.
+    ctx.emit_load_value(left)?;
+    ctx.emit_load_value(right)?;
+    ctx.fb.ins(
+        "call $__rt_hash_array_union",
+        "hash+indexed union appending missing integer keys",
     );
     store_result(ctx, inst)
 }

@@ -4,7 +4,10 @@
 //! hash-table allocation, the key hashing/equality primitives, and the teardown
 //! (deep free + refcount dispatch). The element operations (get/set), copy-on-write,
 //! iteration, auto-indexed append (`$h[] = v`), element removal (`unset($h[$k])` via
-//! `__rt_hash_unset`), and the array-union operator (`$a + $b`) are layered on top.
+//! `__rt_hash_unset`), and the `$a + $b` array-union operator — both same-shape
+//! (`__rt_hash_union`) and the cross-representation forms that promote an indexed
+//! operand to integer keys (`__rt_array_hash_union`, `__rt_hash_array_union`) — are
+//! layered on top.
 //!
 //! Called from:
 //! - `crate::codegen_wasm::generate()` for every module, after the indexed-array
@@ -46,6 +49,8 @@ pub(super) fn emit_hash_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_HASH_UNSET);
     wm.add_raw_func(RT_HASH_APPEND);
     wm.add_raw_func(RT_HASH_UNION);
+    wm.add_raw_func(RT_ARRAY_HASH_UNION);
+    wm.add_raw_func(RT_HASH_ARRAY_UNION);
     wm.add_raw_func(RT_HASH_FREE_DEEP);
     wm.add_raw_func(RT_DECREF_HASH);
 }
@@ -650,6 +655,122 @@ const RT_HASH_UNION: &str = r#"(func $__rt_hash_union (param $a i32) (param $b i
         (local.set $vtag (i64.load (i32.add (local.get $be) (i32.const 40))))  ;; b value_tag
         (local.set $result (call $__rt_hash_set (local.get $result) (local.get $klo) (local.get $khi) (local.get $vlo) (local.get $vhi) (local.get $vtag)))))  ;; append (set owns its copy)
     (local.set $cur (i64.load (i32.add (local.get $be) (i32.const 56))))  ;; cur = b entry.next
+    (br $walk)))
+  (local.get $result))
+"#;
+
+/// `__rt_array_hash_union`: the PHP `+` operator with a DENSE INDEXED left operand and
+/// an ASSOCIATIVE HASH right operand; the result is a fresh OWNED hash. The left indexed
+/// entries are promoted to integer-keyed hash entries (`key 0,1,2,...`), then each right
+/// hash entry whose key is not already present is appended in the right's insertion order
+/// (LEFT wins on collision). Borrows both operands. Unlike native — which pre-persists
+/// strings / pre-increfs containers before insertion because its `__rt_hash_set` does not
+/// take ownership — the wasm `__rt_hash_set` OWNS its value (persists tag-1 strings,
+/// increfs tag-4..7/10 containers), so the borrowed value words are passed straight
+/// through. The result hash carries header value_type 7 (mixed), since a cross-
+/// representation union may merge heterogeneous values.
+const RT_ARRAY_HASH_UNION: &str = r#"(func $__rt_array_hash_union (param $a i32) (param $b i32) (result i32)
+  (local $result i32)
+  (local $cap i64)
+  (local $avt i64)
+  (local $alen i64)
+  (local $i i64)
+  (local $slot i32)
+  (local $vlo i64)
+  (local $vhi i64)
+  (local $vtag i64)
+  (local $cur i64)
+  (local $be i32)
+  (local $klo i64)
+  (local $khi i64)
+  (local $found i32)
+  (local.set $cap (i64.mul (i64.add (i64.load (local.get $a)) (i64.load (local.get $b))) (i64.const 2)))  ;; (a.len + b.count) * 2
+  (if (i64.lt_s (local.get $cap) (i64.const 16))                        ;; below the minimum capacity?
+    (then (local.set $cap (i64.const 16))))                            ;; clamp to 16
+  (local.set $result (call $__rt_hash_new (local.get $cap) (i64.const 7)))  ;; fresh mixed-valued result hash
+  (local.set $avt (i64.and (i64.shr_u (i64.load (i32.sub (local.get $a) (i32.const 8))) (i64.const 8)) (i64.const 127)))  ;; left value_type tag
+  (local.set $alen (i64.load (local.get $a)))                          ;; left indexed length
+  (local.set $i (i64.const 0))                                         ;; left position cursor
+  (block $lend (loop $lwalk                                            ;; promote each left indexed entry
+    (br_if $lend (i64.ge_s (local.get $i) (local.get $alen)))          ;; promoted all left entries
+    (if (i64.eq (local.get $avt) (i64.const 1))                        ;; string element?
+      (then                                                           ;; 16-byte string slot
+        (local.set $slot (i32.add (i32.add (local.get $a) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 16)))))  ;; &a string slot
+        (local.set $vlo (i64.load (local.get $slot)))                  ;; zero-extended string pointer
+        (local.set $vhi (i64.load (i32.add (local.get $slot) (i32.const 8))))  ;; string length
+        (local.set $vtag (i64.const 1)))                              ;; value_tag = string
+      (else                                                           ;; 8-byte scalar/container slot
+        (local.set $slot (i32.add (i32.add (local.get $a) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 8)))))  ;; &a scalar/container slot
+        (local.set $vlo (i64.load (local.get $slot)))                  ;; payload bits / container pointer
+        (local.set $vhi (i64.const 0))                                ;; no high word
+        (local.set $vtag (local.get $avt))))                          ;; value_tag = left value_type
+    (local.set $result (call $__rt_hash_set (local.get $result) (local.get $i) (i64.const -1) (local.get $vlo) (local.get $vhi) (local.get $vtag)))  ;; insert under integer key (set owns the value)
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))              ;; next left position
+    (br $lwalk)))
+  (local.set $cur (i64.load (i32.add (local.get $b) (i32.const 24))))  ;; cur = b.head (insertion-order start)
+  (block $rend (loop $rwalk                                           ;; merge each right hash entry
+    (br_if $rend (i64.eq (local.get $cur) (i64.const -1)))             ;; end of b's insertion order
+    (local.set $be (i32.add (i32.add (local.get $b) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 64)))))  ;; &b entry
+    (local.set $klo (i64.load (i32.add (local.get $be) (i32.const 8))))   ;; b key_lo
+    (local.set $khi (i64.load (i32.add (local.get $be) (i32.const 16))))  ;; b key_hi
+    (call $__rt_hash_get (local.get $result) (local.get $klo) (local.get $khi))  ;; already present in result?
+    (drop)                                                            ;; discard value_tag
+    (drop)                                                            ;; discard value_hi
+    (drop)                                                            ;; discard value_lo
+    (local.set $found)                                                ;; keep the found flag
+    (if (i32.eqz (local.get $found))                                  ;; key absent -> take b's entry
+      (then
+        (local.set $vlo (i64.load (i32.add (local.get $be) (i32.const 24))))   ;; b value_lo
+        (local.set $vhi (i64.load (i32.add (local.get $be) (i32.const 32))))   ;; b value_hi
+        (local.set $vtag (i64.load (i32.add (local.get $be) (i32.const 40))))  ;; b value_tag
+        (local.set $result (call $__rt_hash_set (local.get $result) (local.get $klo) (local.get $khi) (local.get $vlo) (local.get $vhi) (local.get $vtag)))))  ;; append b's entry (set owns the value)
+    (local.set $cur (i64.load (i32.add (local.get $be) (i32.const 56))))  ;; cur = b entry.next
+    (br $rwalk)))
+  (local.get $result))
+"#;
+
+/// `__rt_hash_array_union`: the PHP `+` operator with an ASSOCIATIVE HASH left operand
+/// and a DENSE INDEXED right operand; the result is a fresh OWNED hash. It starts as a
+/// deep clone of the left hash (left/order wins), then each right indexed entry whose
+/// integer position is not already a key of the left is appended under that integer key.
+/// Borrows both operands. As with `__rt_array_hash_union`, the borrowed value words are
+/// passed straight to the value-owning `__rt_hash_set` (no pre-persist / pre-incref).
+const RT_HASH_ARRAY_UNION: &str = r#"(func $__rt_hash_array_union (param $a i32) (param $b i32) (result i32)
+  (local $result i32)
+  (local $bvt i64)
+  (local $blen i64)
+  (local $i i64)
+  (local $found i32)
+  (local $slot i32)
+  (local $vlo i64)
+  (local $vhi i64)
+  (local $vtag i64)
+  (local.set $result (call $__rt_hash_clone_shallow (local.get $a)))   ;; own a copy of the left hash
+  (local.set $bvt (i64.and (i64.shr_u (i64.load (i32.sub (local.get $b) (i32.const 8))) (i64.const 8)) (i64.const 127)))  ;; right value_type tag
+  (local.set $blen (i64.load (local.get $b)))                          ;; right indexed length
+  (local.set $i (i64.const 0))                                         ;; right position cursor
+  (block $done (loop $walk                                             ;; consider each right index
+    (br_if $done (i64.ge_s (local.get $i) (local.get $blen)))          ;; considered every right index
+    (call $__rt_hash_get (local.get $result) (local.get $i) (i64.const -1))  ;; integer key already present?
+    (drop)                                                            ;; discard value_tag
+    (drop)                                                            ;; discard value_hi
+    (drop)                                                            ;; discard value_lo
+    (local.set $found)                                                ;; keep the found flag
+    (if (i32.eqz (local.get $found))                                  ;; key absent on the left -> append b's entry
+      (then
+        (if (i64.eq (local.get $bvt) (i64.const 1))                   ;; string element?
+          (then                                                       ;; 16-byte string slot
+            (local.set $slot (i32.add (i32.add (local.get $b) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 16)))))  ;; &b string slot
+            (local.set $vlo (i64.load (local.get $slot)))             ;; zero-extended string pointer
+            (local.set $vhi (i64.load (i32.add (local.get $slot) (i32.const 8))))  ;; string length
+            (local.set $vtag (i64.const 1)))                          ;; value_tag = string
+          (else                                                       ;; 8-byte scalar/container slot
+            (local.set $slot (i32.add (i32.add (local.get $b) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 8)))))  ;; &b scalar/container slot
+            (local.set $vlo (i64.load (local.get $slot)))             ;; payload bits / container pointer
+            (local.set $vhi (i64.const 0))                            ;; no high word
+            (local.set $vtag (local.get $bvt))))                      ;; value_tag = right value_type
+        (local.set $result (call $__rt_hash_set (local.get $result) (local.get $i) (i64.const -1) (local.get $vlo) (local.get $vhi) (local.get $vtag)))))  ;; append under integer key (set owns the value)
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))             ;; next right index
     (br $walk)))
   (local.get $result))
 "#;
@@ -1430,6 +1551,99 @@ mod tests {
            (i64.extend_i32_u (i32.load8_u (i32.wrap_i64 (local.get $ghi))))))"#;
         if let Some(o) = run_driver(driver, "t") {
             assert_eq!(o, "1067");
+        }
+    }
+
+    /// `__rt_array_hash_union` promotes the left indexed entries to integer keys, then
+    /// merges the right hash's key-absent entries (LEFT wins). With a = [10,20] (→ keys
+    /// 0:10, 1:20) and b = {1:99, 5:30}: key 1 stays 20 (left wins over b's 99), key 5 is
+    /// 30 (from b), count is 3. Returns `count + get(0)*100 + get(1)*10000 + get(5)*1000000`
+    /// = 3 + 10*100 + 20*10000 + 30*1000000 = 30201003.
+    #[test]
+    fn array_hash_union_promotes_left_and_merges() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32) (local $b i32) (local $u i32)
+  (local $f i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local $g0 i64) (local $g1 i64) (local $g5 i64)
+  (local.set $a (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $a (call $__rt_array_push_int (local.get $a) (i64.const 10)))
+  (local.set $a (call $__rt_array_push_int (local.get $a) (i64.const 20)))
+  (local.set $b (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $b (call $__rt_hash_set (local.get $b) (i64.const 1) (i64.const -1) (i64.const 99) (i64.const 0) (i64.const 0)))
+  (local.set $b (call $__rt_hash_set (local.get $b) (i64.const 5) (i64.const -1) (i64.const 30) (i64.const 0) (i64.const 0)))
+  (local.set $u (call $__rt_array_hash_union (local.get $a) (local.get $b)))
+  (call $__rt_hash_get (local.get $u) (i64.const 0) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $g0) (local.set $f)
+  (call $__rt_hash_get (local.get $u) (i64.const 1) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $g1) (local.set $f)
+  (call $__rt_hash_get (local.get $u) (i64.const 5) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $g5) (local.set $f)
+  (i64.add (i64.add (i64.add
+    (i64.load (local.get $u))
+    (i64.mul (local.get $g0) (i64.const 100)))
+    (i64.mul (local.get $g1) (i64.const 10000)))
+    (i64.mul (local.get $g5) (i64.const 1000000))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "30201003");
+        }
+    }
+
+    /// `__rt_array_hash_union` routes a left STRING element through the value-owning
+    /// `__rt_hash_set`, persisting it under its integer position. With a = ["AB"] (bytes
+    /// 65,66) and an empty b, the result's key 0 is the string "AB": value_tag 1, and the
+    /// first byte of the OWNED copy is 65. Returns `value_tag*1000 + firstByte` = 1065.
+    #[test]
+    fn array_hash_union_persists_left_string_value() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32) (local $b i32) (local $u i32)
+  (local $f i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (i32.store8 (i32.const 200) (i32.const 65))
+  (i32.store8 (i32.const 201) (i32.const 66))
+  (local.set $a (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $a (call $__rt_array_push_str (local.get $a) (i32.const 200) (i64.const 2)))
+  (local.set $b (call $__rt_hash_new (i64.const 8) (i64.const 7)))
+  (local.set $u (call $__rt_array_hash_union (local.get $a) (local.get $b)))
+  (call $__rt_hash_get (local.get $u) (i64.const 0) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $f)
+  (i64.add (i64.mul (local.get $vtag) (i64.const 1000))
+           (i64.extend_i32_u (i32.load8_u (i32.wrap_i64 (local.get $vlo))))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1065");
+        }
+    }
+
+    /// `__rt_hash_array_union` clones the left hash, then appends right indexed entries
+    /// whose integer position is absent from the left (LEFT wins). With a = {0:10, 5:50}
+    /// and b = [99,88,77]: key 0 stays 10 (left wins over b's 99), keys 1:88 and 2:77 are
+    /// added, count is 4. Returns `count + get(0)*100 + get(2)*10000 + get(1)*1000000`
+    /// = 4 + 10*100 + 77*10000 + 88*1000000 = 88771004.
+    #[test]
+    fn hash_array_union_clones_left_and_appends_missing() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32) (local $b i32) (local $u i32)
+  (local $f i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local $g0 i64) (local $g1 i64) (local $g2 i64)
+  (local.set $a (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $a (call $__rt_hash_set (local.get $a) (i64.const 0) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (local.set $a (call $__rt_hash_set (local.get $a) (i64.const 5) (i64.const -1) (i64.const 50) (i64.const 0) (i64.const 0)))
+  (local.set $b (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $b (call $__rt_array_push_int (local.get $b) (i64.const 99)))
+  (local.set $b (call $__rt_array_push_int (local.get $b) (i64.const 88)))
+  (local.set $b (call $__rt_array_push_int (local.get $b) (i64.const 77)))
+  (local.set $u (call $__rt_hash_array_union (local.get $a) (local.get $b)))
+  (call $__rt_hash_get (local.get $u) (i64.const 0) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $g0) (local.set $f)
+  (call $__rt_hash_get (local.get $u) (i64.const 1) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $g1) (local.set $f)
+  (call $__rt_hash_get (local.get $u) (i64.const 2) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $g2) (local.set $f)
+  (i64.add (i64.add (i64.add
+    (i64.load (local.get $u))
+    (i64.mul (local.get $g0) (i64.const 100)))
+    (i64.mul (local.get $g2) (i64.const 10000)))
+    (i64.mul (local.get $g1) (i64.const 1000000))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "88771004");
         }
     }
 }

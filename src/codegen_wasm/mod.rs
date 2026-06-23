@@ -2467,6 +2467,148 @@ mod tests {
         }
     }
 
+    /// `[10,20] + [99,88,77]` through `Op::ArrayUnion`. The left elements are preserved and
+    /// only the right tail at index >= 2 is appended, yielding `[10,20,77]`. Returns
+    /// `u[0]*100 + u[2]` = 10*100 + 77 = 1077, proving the indexed-union lowering produces a
+    /// working left-wins, tail-append result through compiled code.
+    #[test]
+    fn array_union_lowers() {
+        let elem = PhpType::Array(Box::new(PhpType::Int));
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("a".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let a = b
+                .emit(Op::ArrayNew, Vec::new(), Some(Immediate::Capacity(4)), IrType::Heap(IrHeapKind::Array), elem.clone(), Ownership::Owned)
+                .unwrap();
+            for v in [10_i64, 20] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(Op::ArrayPush, vec![a, c], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            let bb = b
+                .emit(Op::ArrayNew, Vec::new(), Some(Immediate::Capacity(4)), IrType::Heap(IrHeapKind::Array), elem.clone(), Ownership::Owned)
+                .unwrap();
+            for v in [99_i64, 88, 77] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(Op::ArrayPush, vec![bb, c], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            let u = b
+                .emit(Op::ArrayUnion, vec![a, bb], None, IrType::Heap(IrHeapKind::Array), elem.clone(), Ownership::Owned)
+                .unwrap();
+            let i0 = b.emit_const_i64(0);
+            let g0 = b.emit(Op::ArrayGet, vec![u, i0], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let i2 = b.emit_const_i64(2);
+            let g2 = b.emit(Op::ArrayGet, vec![u, i2], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let hundred = b.emit_const_i64(100);
+            let g0x = b.emit(Op::IMul, vec![g0, hundred], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let total = b.emit(Op::IAdd, vec![g0x, g2], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            b.terminate(Terminator::Return { value: Some(total) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_a", &[]) {
+            assert_eq!(o, "1077");
+        }
+    }
+
+    /// `[10,20] + [1=>99, 5=>30]` through `Op::ArrayHashUnion`. The left indexed positions
+    /// promote to integer keys (0:10, 1:20); key 1 wins over the right's `1=>99`, and the
+    /// right's new key `5=>30` is merged. Returns `get(1)*100 + get(5)` = 20*100 + 30 = 2030,
+    /// proving the cross-representation lowering yields a usable left-wins hash result.
+    #[test]
+    fn array_hash_union_lowers() {
+        let elem = PhpType::Array(Box::new(PhpType::Int));
+        let assoc = int_hash_type();
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("a".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let a = b
+                .emit(Op::ArrayNew, Vec::new(), Some(Immediate::Capacity(4)), IrType::Heap(IrHeapKind::Array), elem.clone(), Ownership::Owned)
+                .unwrap();
+            for v in [10_i64, 20] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(Op::ArrayPush, vec![a, c], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            let bb = b
+                .emit(Op::HashNew, Vec::new(), Some(Immediate::Capacity(8)), IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            for (k, v) in [(1_i64, 99_i64), (5, 30)] {
+                let key = b.emit_const_i64(k);
+                let val = b.emit_const_i64(v);
+                let _ = b.emit(Op::HashSet, vec![bb, key, val], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            let u = b
+                .emit(Op::ArrayHashUnion, vec![a, bb], None, IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            let k1 = b.emit_const_i64(1);
+            let g1 = b.emit(Op::HashGet, vec![u, k1], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let k5 = b.emit_const_i64(5);
+            let g5 = b.emit(Op::HashGet, vec![u, k5], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let hundred = b.emit_const_i64(100);
+            let g1x = b.emit(Op::IMul, vec![g1, hundred], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let total = b.emit(Op::IAdd, vec![g1x, g5], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            b.terminate(Terminator::Return { value: Some(total) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_a", &[]) {
+            assert_eq!(o, "2030");
+        }
+    }
+
+    /// `[0=>10, 5=>50] + [99,88,77]` through `Op::HashArrayUnion`. The result clones the left
+    /// hash; key 0 wins over the right's index 0 (99), and the right's missing positions
+    /// `1=>88` and `2=>77` are appended under their integer keys. Returns `get(0)*100 + get(2)`
+    /// = 10*100 + 77 = 1077, proving the cross-representation lowering yields a usable result.
+    #[test]
+    fn hash_array_union_lowers() {
+        let elem = PhpType::Array(Box::new(PhpType::Int));
+        let assoc = int_hash_type();
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("a".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let a = b
+                .emit(Op::HashNew, Vec::new(), Some(Immediate::Capacity(8)), IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            for (k, v) in [(0_i64, 10_i64), (5, 50)] {
+                let key = b.emit_const_i64(k);
+                let val = b.emit_const_i64(v);
+                let _ = b.emit(Op::HashSet, vec![a, key, val], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            let bb = b
+                .emit(Op::ArrayNew, Vec::new(), Some(Immediate::Capacity(4)), IrType::Heap(IrHeapKind::Array), elem.clone(), Ownership::Owned)
+                .unwrap();
+            for v in [99_i64, 88, 77] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(Op::ArrayPush, vec![bb, c], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            let u = b
+                .emit(Op::HashArrayUnion, vec![a, bb], None, IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            let k0 = b.emit_const_i64(0);
+            let g0 = b.emit(Op::HashGet, vec![u, k0], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let k2 = b.emit_const_i64(2);
+            let g2 = b.emit(Op::HashGet, vec![u, k2], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let hundred = b.emit_const_i64(100);
+            let g0x = b.emit(Op::IMul, vec![g0, hundred], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let total = b.emit(Op::IAdd, vec![g0x, g2], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            b.terminate(Terminator::Return { value: Some(total) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_a", &[]) {
+            assert_eq!(o, "1077");
+        }
+    }
+
     /// `$h[1]=10; $h[2]=20; $h[3]=30; unset($h[2]);` then
     /// `return is_null($h[2])*10000 + $h[1]*100 + $h[3];` -> "11030" through `Op::HashUnset`.
     /// The hash lives in a PHP slot reloaded before the unset and each read, exercising the
