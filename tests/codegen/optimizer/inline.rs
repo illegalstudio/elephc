@@ -238,6 +238,69 @@ echo array_sum($p), ":", count($p);
     assert_eq!(on, off, "array-builder output must match with ir-opt on vs off");
 }
 
+/// Pipeline integration (fixed-point order): a callee that exceeds the 24-instruction
+/// inline threshold *before* optimization but collapses below it *after* constant
+/// folding and dead-code elimination is inlined only because `optimize_module`
+/// interleaves the inliner with the per-function passes to a module-level fixed point.
+/// The first round leaves `calc` too large; a later round, after folding shrinks it,
+/// inlines it. Behavior is correct and identical with ir-opt on vs off.
+#[test]
+fn test_fixed_point_inlines_callee_shrunk_by_folding() {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    let src = r#"<?php
+function calc(int $n): int {
+  $a = ($n * 0) + 1+2+3+4+5+6+7+8+9+10+11+12+13+14+15+16+17+18+19+20;
+  return $a;
+}
+echo calc($argc);
+"#;
+    let on = compile_and_run(src);
+    let off = compile_run_with_ir_opt(src, false);
+    assert_eq!(on, "210");
+    assert_eq!(on, off, "fixed-point pipeline must preserve behavior");
+
+    // Structural proof that the later round actually inlined `calc` (which is 48
+    // non-nop instructions before folding, well over the threshold).
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_inline_fp_{}_{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let php_path: PathBuf = dir.join("t.php");
+    fs::write(&php_path, src).unwrap();
+    let elephc = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("elephc")))
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| PathBuf::from("target/debug/elephc"));
+    let ir = Command::new(&elephc)
+        .arg("--emit-ir")
+        .arg(&php_path)
+        .output()
+        .expect("emit-ir");
+    assert!(ir.status.success(), "emit-ir failed");
+    let text = String::from_utf8_lossy(&ir.stdout);
+    let main_body = text
+        .split("function main(")
+        .nth(1)
+        .expect("main present");
+    let main_body = main_body.split("\n  function ").next().unwrap_or(main_body);
+    assert!(
+        !main_body.contains("= call "),
+        "calc must be inlined after folding shrinks it below the threshold; IR:\n{}",
+        main_body
+    );
+    assert!(
+        main_body.contains("inline_cont"),
+        "expected an inlined return join block in main; IR:\n{}",
+        main_body
+    );
+}
+
 /// Regression: a typed helper with a default parameter, called with a spread, has its
 /// `age` argument materialized as a boxed `mixed` that the typed `int` parameter would
 /// unbox in the callee prologue. The inliner must NOT bind that boxed operand directly
