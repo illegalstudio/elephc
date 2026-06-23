@@ -99,9 +99,81 @@ You can see the effect with [`--emit-ir`](output-and-diagnostics.md#--emit-ir):
 `$x = $argc; echo $x;` forwards the load so the `echo` reads the stored value and
 the `load_local` becomes a `nop`.
 
+### Constant folding
+
+The third registered pass folds operations whose operands are all compile-time
+constants into a single constant, in place. It covers integer arithmetic
+(`iadd`, `isub`, `imul`), bitwise ops, in-range shifts, unary `ineg`/`ibit_not`,
+float `fadd`/`fsub`/`fmul`/`fneg`, signed integer comparisons (`icmp`), and the
+`is_null`/`is_truthy` predicates. A constant value in EIR is the same constant at
+every use, so a single forward scan discovers constant operands and collapses
+chains like `(2 + 3) * 4` in one sweep.
+
+Each fold reproduces exactly what the op's lowering computes at runtime, so the
+compiled result never changes: integers wrap at 64 bits (matching the native
+`add`/`sub`/`mul`), shifts fold only for counts in `0..=63`, and the trapping
+integer division/modulo and `NaN`-sensitive float division are left untouched.
+
+Together with the peephole's scalar load/store forwarding — which moves a
+constant assigned to a local onto its later uses — this realizes per-block
+constant propagation over EIR value ids *and* local slots: the peephole carries
+the constant through the slot, and this pass folds the constant-operand
+operation built on it. Constants surfaced by identity arithmetic feed it too:
+`($argc * 0 + 5) * ($argc * 0 + 5)` reduces to `$argc * 0` → `const_i64 0`
+(identity), then `0 + 5` → `5`, then `5 * 5` → `const_i64 25` (this pass), with
+the three `imul`s eliminated.
+
+### Common subexpression elimination
+
+The fourth registered pass removes a pure computation when an identical one is
+already available on every path to it, redirecting its uses to the earlier
+value. It does both per-block and cross-block elimination in one dominator-tree
+value-numbering traversal: a scoped table maps each pure instruction's
+`(op, result type, immediate, operands)` to the value that first computed it, and
+because blocks are visited in dominator-tree order the table holds exactly the
+definitions that dominate the current block. A match is therefore an earlier,
+dominating value, so the redirection is safe; the redundant instruction becomes a
+`nop`.
+
+Only pure (side-effect-free) instructions that have at least one operand and a
+`NonHeap` or `Persistent` result are eligible — their value depends on their
+operands alone and they carry no owned-heap cleanup, so the rewrite is
+refcount-neutral. SSA operands are equal-by-value, so identical pure ops on
+identical operands compute identical results. Bare constant and address
+materializations (`const_*`, `data_addr`) are *not* deduplicated: they are
+cheaper to rematerialize than to keep live, so CSE only targets computations.
+Functions that use exception handling are skipped, because a dominator over the
+terminator graph can be bypassed at runtime by a throw to a handler.
+
+Combined with the peephole's load forwarding, `($n + 1) * ($n + 1)` loads `$n`
+once and computes `$n + 1` once. The redundant instructions it neutralizes leave
+dead operands that dead-instruction elimination then removes.
+
+### Loop-invariant code motion
+
+The fifth registered pass moves a pure computation whose operands do not change
+across a loop out of the loop body and into the loop's preheader, so it runs once
+instead of every iteration. It builds the loop forest on the dominator tree, then
+for each loop grows an invariant set to a fixed point: an instruction is invariant
+when each operand is either defined outside the loop (its definition dominates the
+preheader) or is itself being hoisted.
+
+Only pure instructions with at least one operand and a `NonHeap`/`Persistent`
+result are hoisted — purity means the result depends only on the operands and the
+op neither reads mutable state nor faults, so evaluating it once in the preheader
+(unconditionally, even if its original block ran only on some iterations) is safe.
+Loops are processed innermost-first, so a value invariant in several nested loops
+moves all the way to the outermost preheader. Loops without a detected preheader,
+and functions using exception handling, are skipped.
+
+Because PHP loop variables live in local slots and are reloaded through impure
+`load_local` each iteration, an invariant *source* expression is not yet a
+pure-operand computation this pass can hoist; its reach grows as more values flow
+as SSA across loops.
+
 ### Dead instruction elimination
 
-The third registered pass computes CFG liveness and neutralizes unused
+The sixth registered pass computes CFG liveness and neutralizes unused
 result-producing instructions whose effect metadata says they are pure. This
 cleans up dead values exposed by earlier EIR rewrites. For example, identity
 folding can turn `$argc + 0` into `$argc`; dead-instruction elimination then
@@ -122,7 +194,7 @@ elephc --emit-ir --no-ir-opt app.php
 
 ### Dead store elimination
 
-The fourth registered pass removes `store_local` writes whose value is never read
+The seventh registered pass removes `store_local` writes whose value is never read
 before the slot is overwritten or the function exits. It computes backward,
 CFG-aware liveness over local slots (a `load_local` makes a slot live, a
 `store_local` kills it) so a dead store is dropped even when the overwrite is in a
@@ -138,7 +210,7 @@ left untouched to keep reference counting and aliasing semantics intact.
 
 ### Branch simplification
 
-The fifth registered pass prunes the control-flow graph three ways:
+The eighth registered pass prunes the control-flow graph three ways:
 
 - **Constant-condition folding** — a `cond_br` whose condition is a constant
   (`const_bool`, non-zero `const_i64`, or `const_null`) becomes an unconditional
