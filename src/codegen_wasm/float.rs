@@ -115,6 +115,24 @@ const RT_BIGNUM_MUL_SMALL_N_TIMES: &str = r#"(func $__rt_bignum_mul_small_n_time
       (br $top))))                                                  ;; continue the loop
 "#;
 
+/// Tests whether a fixed-width big integer is zero (all `$n` limbs zero).
+///
+/// Scans the little-endian limbs at `$ptr` low-to-high and short-circuits: returns 0
+/// (i32) the moment any limb is non-zero, or 1 if every limb is zero. Used as the
+/// termination test for the divmod-by-1e9 digit-extraction loop.
+const RT_BIGNUM_IS_ZERO: &str = r#"(func $__rt_bignum_is_zero (param $ptr i32) (param $n i32) (result i32)
+  (local $i i32)
+  (local.set $i (i32.const 0))                                      ;; limb index = 0
+  (block $end                                                       ;; loop exit target
+    (loop $top                                                      ;; scan limbs low-to-high
+      (br_if $end (i32.ge_u (local.get $i) (local.get $n)))         ;; stop once i >= n (all scanned)
+      (if (i32.load (i32.add (local.get $ptr) (i32.shl (local.get $i) (i32.const 2))))  ;; if limb[i] != 0
+        (then (return (i32.const 0))))                              ;; a non-zero limb -> not zero
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))         ;; i = i + 1
+      (br $top)))                                                   ;; continue the loop
+  (i32.const 1))                                                    ;; every limb was zero -> 1
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
 /// Currently emits `__rt_f64_decompose` (the float decoder) plus the big-integer
@@ -130,6 +148,7 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_BIGNUM_MUL_U32);
     wm.add_raw_func(RT_BIGNUM_DIVMOD_U32);
     wm.add_raw_func(RT_BIGNUM_MUL_SMALL_N_TIMES);
+    wm.add_raw_func(RT_BIGNUM_IS_ZERO);
 }
 
 #[cfg(test)]
@@ -486,6 +505,38 @@ mod tests {
   (i64.load32_u (i32.const 256)))"#;
         if let Some(o) = run_float_driver(driver, "t") {
             assert_eq!(o, "125");
+        }
+    }
+
+    /// An all-zero buffer (linear memory is zero-initialized) is zero; result = 1.
+    #[test]
+    fn is_zero_all_zero() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (i64.extend_i32_u (call $__rt_bignum_is_zero (i32.const 256) (i32.const 4))))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "1");
+        }
+    }
+
+    /// A non-zero low limb makes the integer non-zero; result = 0.
+    #[test]
+    fn is_zero_low_limb_set() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (i64.store32 (i32.const 256) (i64.const 5))
+  (i64.extend_i32_u (call $__rt_bignum_is_zero (i32.const 256) (i32.const 4))))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// A non-zero HIGH limb (limb 3 at byte 268) is detected by the full scan; result = 0.
+    #[test]
+    fn is_zero_high_limb_set() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (i64.store32 (i32.const 268) (i64.const 1))
+  (i64.extend_i32_u (call $__rt_bignum_is_zero (i32.const 256) (i32.const 4))))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "0");
         }
     }
 }
