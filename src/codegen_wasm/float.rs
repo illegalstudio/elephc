@@ -97,6 +97,24 @@ const RT_BIGNUM_DIVMOD_U32: &str = r#"(func $__rt_bignum_divmod_u32 (param $ptr 
   (local.get $rem))                                                 ;; return the final remainder
 "#;
 
+/// Multiplies a fixed-width big integer in place by a small factor, `$count` times.
+///
+/// Reuses `__rt_bignum_mul_u32`. The caller must pre-zero a buffer of `$n` limbs large
+/// enough that the final product still fits (high limbs absorb every carry), so each
+/// multiply's carry-out is 0 and is dropped — there is no limb-append. Used to build the
+/// exact integer J = value * 10^P: J = mantissa, then `*2` exp2 times (exp2 >= 0) or `*5`
+/// (-exp2) times (exp2 < 0). Returns nothing.
+const RT_BIGNUM_MUL_SMALL_N_TIMES: &str = r#"(func $__rt_bignum_mul_small_n_times (param $ptr i32) (param $n i32) (param $factor i64) (param $count i32)
+  (local $c i32)                                                    ;; iteration counter
+  (local.set $c (i32.const 0))                                      ;; iteration counter = 0
+  (block $end                                                       ;; loop exit target
+    (loop $top                                                      ;; repeat the multiply $count times
+      (br_if $end (i32.ge_u (local.get $c) (local.get $count)))     ;; stop once c >= count
+      (drop (call $__rt_bignum_mul_u32 (local.get $ptr) (local.get $n) (local.get $factor)))  ;; multiply in place; carry is 0 (drop it)
+      (local.set $c (i32.add (local.get $c) (i32.const 1)))         ;; c = c + 1
+      (br $top))))                                                  ;; continue the loop
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
 /// Currently emits `__rt_f64_decompose` (the float decoder) plus the big-integer
@@ -111,6 +129,7 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_F64_DECOMPOSE);
     wm.add_raw_func(RT_BIGNUM_MUL_U32);
     wm.add_raw_func(RT_BIGNUM_DIVMOD_U32);
+    wm.add_raw_func(RT_BIGNUM_MUL_SMALL_N_TIMES);
 }
 
 #[cfg(test)]
@@ -417,6 +436,56 @@ mod tests {
   (i64.add (i64.mul (local.get $rem) (i64.const 1000000000)) (i64.load32_u (i32.const 256))))"#;
         if let Some(o) = run_float_driver(driver, "t") {
             assert_eq!(o, "4613566756");
+        }
+    }
+
+    /// [1] multiplied by 10 five times = 100000 (linear memory is zero-initialized, so
+    /// only limb0 is stored; the high limbs absorb carries). witness = limb0 = 100000.
+    #[test]
+    fn mul_ntimes_ten() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (i64.store32 (i32.const 256) (i64.const 1))
+  (call $__rt_bignum_mul_small_n_times (i32.const 256) (i32.const 4) (i64.const 10) (i32.const 5))
+  (i64.load32_u (i32.const 256)))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "100000");
+        }
+    }
+
+    /// [1] doubled 40 times = 2^40 = 1099511627776, spanning two limbs (limb0 = 0,
+    /// limb1 = 256). witness reconstructs the i64 = (limb1 << 32) | limb0.
+    #[test]
+    fn mul_ntimes_two_pow40() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (i64.store32 (i32.const 256) (i64.const 1))
+  (call $__rt_bignum_mul_small_n_times (i32.const 256) (i32.const 3) (i64.const 2) (i32.const 40))
+  (i64.or (i64.shl (i64.load32_u (i32.const 260)) (i64.const 32)) (i64.load32_u (i32.const 256))))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "1099511627776");
+        }
+    }
+
+    /// count = 0 leaves the big integer unchanged. witness = limb0 = 7.
+    #[test]
+    fn mul_ntimes_zero_count() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (i64.store32 (i32.const 256) (i64.const 7))
+  (call $__rt_bignum_mul_small_n_times (i32.const 256) (i32.const 3) (i64.const 2) (i32.const 0))
+  (i64.load32_u (i32.const 256)))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "7");
+        }
+    }
+
+    /// [1] multiplied by 5 three times = 125 (the exp2<0 J-construction factor). witness = limb0.
+    #[test]
+    fn mul_ntimes_five() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (i64.store32 (i32.const 256) (i64.const 1))
+  (call $__rt_bignum_mul_small_n_times (i32.const 256) (i32.const 3) (i64.const 5) (i32.const 3))
+  (i64.load32_u (i32.const 256)))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "125");
         }
     }
 }
