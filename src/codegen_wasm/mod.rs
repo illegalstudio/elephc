@@ -21,6 +21,7 @@
 
 mod arrays;
 mod context;
+mod float;
 mod function;
 mod hashes;
 mod heap;
