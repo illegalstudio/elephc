@@ -413,3 +413,142 @@ fn hash_storage_value_type(ctx: &FnCtx, hash: crate::ir::ValueId) -> PhpType {
         .map(assoc_storage_value_type)
         .unwrap_or(PhpType::Mixed)
 }
+
+/// Emits the byte address of hash entry `cursor` — `hash + 40 + cursor*64` (a 40-byte
+/// header then 64-byte entries) — into a fresh i32 temp local and returns its name.
+/// `src` is the hash pointer local; `cursor` is the i64 slot-index local.
+fn hash_entry_addr(ctx: &mut FnCtx, src: &str, cursor: &str) -> String {
+    let entry = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(&format!("local.get {}", src), "hash base pointer");
+    ctx.fb.ins("i32.const 40", "skip the 40-byte header");
+    ctx.fb.ins("i32.add", "address of the first entry");
+    ctx.fb.ins(&format!("local.get {}", cursor), "current slot index");
+    ctx.fb.ins("i64.const 64", "entry stride (bytes)");
+    ctx.fb.ins("i64.mul", "slot * 64");
+    ctx.fb.ins("i32.wrap_i64", "byte offset -> i32");
+    ctx.fb.ins("i32.add", "entry = first_entry + slot*64");
+    ctx.fb.ins(&format!("local.set {}", entry), "hash entry address");
+    entry
+}
+
+/// Emits a load of the i64 field at `offset` from the entry whose address is in `entry`.
+fn load_entry_field(ctx: &mut FnCtx, entry: &str, offset: i32, comment: &str) {
+    ctx.fb.ins(&format!("local.get {}", entry), "hash entry address");
+    ctx.fb.ins(&format!("i32.const {}", offset), "field offset");
+    ctx.fb.ins("i32.add", "field address");
+    ctx.fb.ins("i64.load", comment);
+}
+
+/// Lowers a hash `foreach` VALUE read (`Op::IterCurrentValue` over an associative array).
+/// Reads `value_lo@+24` / `value_hi@+32` / `value_tag@+40` from the entry at (`src`,
+/// `cursor`) and reconstructs the result exactly as `lower_hash_get` does on a hit — no
+/// miss is possible, since the cursor points at a live entry: a scalar yields the raw
+/// payload, a float reinterprets it, a string is copied owned via `__rt_str_persist`, a
+/// Mixed value is (re)boxed via `__rt_mixed_from_value`, and a container is increfed.
+/// Refcounted results are OWNED (a foreach value variable is `MaybeOwned`).
+pub(super) fn lower_hash_iter_value(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    src: &str,
+    cursor: &str,
+) -> Result<()> {
+    let result = inst
+        .result
+        .ok_or_else(|| WasmError::Unsupported("iter value without a result".to_string()))?;
+    let result_repr = ctx.value_repr(result)?.clone();
+    let result_ir = ctx.function.value(result).map(|v| v.ir_type);
+    let entry = hash_entry_addr(ctx, src, cursor);
+    match result_repr {
+        WasmRepr::I64(_) => {
+            load_entry_field(ctx, &entry, 24, "scalar element payload");
+            store_result(ctx, inst)
+        }
+        WasmRepr::F64(_) => {
+            load_entry_field(ctx, &entry, 24, "float element payload bits");
+            ctx.fb.ins("f64.reinterpret_i64", "payload bits -> float");
+            store_result(ctx, inst)
+        }
+        WasmRepr::Str { .. } => {
+            load_entry_field(ctx, &entry, 24, "stored string ptr (extended)");
+            ctx.fb.ins("i32.wrap_i64", "string ptr -> i32");
+            load_entry_field(ctx, &entry, 32, "stored string length");
+            ctx.fb
+                .ins("call $__rt_str_persist", "own a copy of the hash string");
+            store_result(ctx, inst)
+        }
+        WasmRepr::Ptr(_) => match result_ir {
+            Some(IrType::Heap(IrHeapKind::Mixed)) => {
+                load_entry_field(ctx, &entry, 40, "element tag");
+                load_entry_field(ctx, &entry, 24, "element low word");
+                load_entry_field(ctx, &entry, 32, "element high word");
+                ctx.fb
+                    .ins("call $__rt_mixed_from_value", "box hash element into a Mixed cell");
+                store_result(ctx, inst)
+            }
+            Some(IrType::Heap(_)) => {
+                let ptr = ctx.fresh_temp(ValType::I32);
+                load_entry_field(ctx, &entry, 24, "stored container ptr (extended)");
+                ctx.fb.ins("i32.wrap_i64", "container ptr -> i32");
+                ctx.fb
+                    .ins(&format!("local.set {}", ptr), "captured container pointer");
+                ctx.fb
+                    .ins(&format!("local.get {}", ptr), "container pointer to retain");
+                ctx.fb
+                    .ins("call $__rt_incref", "retain the borrowed container (null-safe)");
+                ctx.fb.ins(&format!("local.get {}", ptr), "owned container pointer");
+                store_result(ctx, inst)
+            }
+            _ => Err(WasmError::Unsupported(
+                "iter value into a non-heap pointer".to_string(),
+            )),
+        },
+        other => Err(WasmError::Unsupported(format!("iter value into {:?}", other))),
+    }
+}
+
+/// Lowers a hash `foreach` KEY read (`Op::IterCurrentKey` over an associative array).
+/// Reads `key_lo@+8` / `key_hi@+16` from the entry at (`src`, `cursor`) and reconstructs
+/// the result: an int-typed key yields the raw `key_lo`; a string-typed key is copied
+/// owned via `__rt_str_persist`; a Mixed/boxed key is boxed via `__rt_mixed_from_value`
+/// with the tag chosen at runtime (`key_hi == -1` ⇒ int tag 0, else string tag 1), so a
+/// heterogeneous int/string key set boxes correctly.
+pub(super) fn lower_hash_iter_key(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    src: &str,
+    cursor: &str,
+) -> Result<()> {
+    let result = inst
+        .result
+        .ok_or_else(|| WasmError::Unsupported("iter key without a result".to_string()))?;
+    let result_repr = ctx.value_repr(result)?.clone();
+    let entry = hash_entry_addr(ctx, src, cursor);
+    match result_repr {
+        WasmRepr::I64(_) => {
+            load_entry_field(ctx, &entry, 8, "int key value");
+            store_result(ctx, inst)
+        }
+        WasmRepr::Str { .. } => {
+            load_entry_field(ctx, &entry, 8, "stored key ptr (extended)");
+            ctx.fb.ins("i32.wrap_i64", "key ptr -> i32");
+            load_entry_field(ctx, &entry, 16, "stored key length");
+            ctx.fb
+                .ins("call $__rt_str_persist", "own a copy of the string key");
+            store_result(ctx, inst)
+        }
+        WasmRepr::Ptr(_) | WasmRepr::Tagged { .. } => {
+            // Box the key: tag = (key_hi != -1) ? 1 (string) : 0 (int).
+            load_entry_field(ctx, &entry, 16, "key high word (-1 marks an int key)");
+            ctx.fb.ins("i64.const -1", "int-key sentinel");
+            ctx.fb.ins("i64.ne", "string key? (key_hi != -1)");
+            ctx.fb
+                .ins("i64.extend_i32_u", "tag = 1 (string) or 0 (int)");
+            load_entry_field(ctx, &entry, 8, "key low word (int value or string ptr)");
+            load_entry_field(ctx, &entry, 16, "key high word (length, ignored for int)");
+            ctx.fb
+                .ins("call $__rt_mixed_from_value", "box the hash key into a Mixed cell");
+            store_result(ctx, inst)
+        }
+        other => Err(WasmError::Unsupported(format!("iter key into {:?}", other))),
+    }
+}

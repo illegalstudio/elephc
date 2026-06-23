@@ -25,16 +25,23 @@ use crate::types::PhpType;
 ///
 /// WebAssembly has no addressable machine stack, so an iterator's state lives in
 /// per-function locals (private to each invocation, so recursion is safe and no
-/// teardown is needed): a `source` array pointer and a signed `cursor`. `elem` is
-/// the array's element PHP type, used to pick the element getter and whether the
-/// current value must be boxed into a Mixed cell.
+/// teardown is needed): a `source` pointer and a signed `cursor`. `elem` is the
+/// element PHP type, used to pick the element getter and whether the current value
+/// must be boxed into a Mixed cell.
+///
+/// For an indexed ARRAY the cursor is the element index (starts at -1, pre-incremented
+/// to 0). For an associative HASH the cursor is the current entry's slot index (starts
+/// at the `-2` "before first" sentinel, advanced by `__rt_hash_iter_next`); `is_hash`
+/// selects between the two lowering paths.
 pub(super) struct IterSlots {
-    /// `$name` of the i32 local holding the source array pointer.
+    /// `$name` of the i32 local holding the source array/hash pointer.
     pub(super) source: String,
-    /// `$name` of the i64 local holding the current cursor (starts at -1).
+    /// `$name` of the i64 local holding the current cursor (array index, or hash slot index).
     pub(super) cursor: String,
-    /// The array's element type (its `codegen_repr`).
+    /// The element type (its `codegen_repr`): an array's element type, or a hash's value type.
     pub(super) elem: PhpType,
+    /// Whether the source is an associative hash (vs an indexed array).
+    pub(super) is_hash: bool,
 }
 
 /// Result type for the lowering modules, using the parent module's `WasmError`.
@@ -137,17 +144,21 @@ impl<'a> FnCtx<'a> {
     }
 
     /// Declares the iterator locals for an `IterStart`, emits the initialization
-    /// (capture the source pointer, set the cursor to -1 for indexed pre-increment),
-    /// and records them under the iterator value's id.
+    /// (capture the source pointer, set the cursor to its start sentinel), and records
+    /// them under the iterator value's id.
     ///
-    /// `source` must already have a `WasmRepr` (a single i32 pointer for an array);
-    /// `elem` is the array's element type. The iterator result value's own local is
-    /// left untouched — downstream ops look the iterator up by id, not by its repr.
+    /// `source` must already have a `WasmRepr` (a single i32 pointer for an array or a
+    /// hash); `elem` is the array's element type or the hash's value type. The cursor is
+    /// seeded to `-1` for an indexed array (pre-incremented to 0 by `IterNext`) or to the
+    /// `-2` "before first" sentinel for a hash (`__rt_hash_iter_next` maps it to the list
+    /// head). The iterator result value's own local is left untouched — downstream ops
+    /// look the iterator up by id, not by its repr.
     pub(super) fn iter_declare(
         &mut self,
         iter: ValueId,
         source: ValueId,
         elem: PhpType,
+        is_hash: bool,
     ) -> Result<()> {
         let n = self.temp_counter;
         self.temp_counter += 1;
@@ -155,8 +166,13 @@ impl<'a> FnCtx<'a> {
         let cursor_local = self.fb.local(&format!("__iter_cur{}", n), ValType::I64);
         self.emit_load_value(source)?;
         self.fb
-            .ins(&format!("local.set {}", source_local), "iterator source array");
-        self.fb.ins("i64.const -1", "indexed cursor (pre-increment to 0)");
+            .ins(&format!("local.set {}", source_local), "iterator source pointer");
+        if is_hash {
+            self.fb
+                .ins("i64.const -2", "hash cursor (before-first sentinel)");
+        } else {
+            self.fb.ins("i64.const -1", "indexed cursor (pre-increment to 0)");
+        }
         self.fb
             .ins(&format!("local.set {}", cursor_local), "init iterator cursor");
         self.iter_state.insert(
@@ -165,6 +181,7 @@ impl<'a> FnCtx<'a> {
                 source: source_local,
                 cursor: cursor_local,
                 elem,
+                is_hash,
             },
         );
         Ok(())

@@ -934,9 +934,10 @@ fn lower_mixed_tag_of(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
-/// Lowers `Op::IterStart`: records the iterator's source array + cursor locals.
-/// Only indexed arrays (`PhpType::Array`) are supported; associative iteration
-/// lands with the hash runtime.
+/// Lowers `Op::IterStart`: records the iterator's source pointer + cursor locals.
+/// Indexed arrays (`PhpType::Array`) iterate by element index; associative arrays
+/// (`PhpType::AssocArray`) iterate over the insertion-order entry list (cursor = slot
+/// index), with `elem` set to the hash's value type.
 fn lower_iter_start(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let iter = inst
         .result
@@ -946,22 +947,38 @@ fn lower_iter_start(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         .function
         .value(source)
         .map(|v| v.php_type.codegen_repr());
-    let elem = match src_php {
-        Some(PhpType::Array(inner)) => inner.codegen_repr(),
+    let (elem, is_hash) = match src_php {
+        Some(PhpType::Array(inner)) => (inner.codegen_repr(), false),
+        Some(PhpType::AssocArray { value, .. }) => (value.codegen_repr(), true),
         Some(other) => {
             return Err(WasmError::Unsupported(format!("foreach over {:?}", other)))
         }
         None => return Err(WasmError::Unsupported("iter_start source has no type".to_string())),
     };
-    ctx.iter_declare(iter, source, elem)
+    ctx.iter_declare(iter, source, elem, is_hash)
 }
 
-/// Lowers `Op::IterNext`: pre-increments the cursor and pushes the i64 boolean
-/// `cursor < length`, which the loop header's `CondBr` consumes.
+/// Lowers `Op::IterNext` and pushes the i64 loop-continue boolean the header's `CondBr`
+/// consumes. For an indexed array it pre-increments the cursor and tests `cursor <
+/// length`. For a hash it calls `__rt_hash_iter_next(source, cursor)`, which advances the
+/// slot cursor in insertion order and returns `(new_cursor, has_more)`; the new cursor is
+/// stored back and `has_more` becomes the loop condition.
 fn lower_iter_next(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let iter = operand(inst, 0)?;
     let slots = ctx.iter_slots(iter)?;
-    let (src, cur) = (slots.source.clone(), slots.cursor.clone());
+    let (src, cur, is_hash) = (slots.source.clone(), slots.cursor.clone(), slots.is_hash);
+    if is_hash {
+        ctx.fb.ins(&format!("local.get {}", src), "hash source");
+        ctx.fb.ins(&format!("local.get {}", cur), "current slot cursor");
+        ctx.fb
+            .ins("call $__rt_hash_iter_next", "advance to the next entry in insertion order");
+        // Returns (new_cursor, has_more) with has_more on top.
+        let has_more = ctx.fresh_temp(ValType::I64);
+        ctx.fb.ins(&format!("local.set {}", has_more), "captured has_more");
+        ctx.fb.ins(&format!("local.set {}", cur), "store advanced slot cursor");
+        ctx.fb.ins(&format!("local.get {}", has_more), "has_more for the loop CondBr");
+        return store_result(ctx, inst);
+    }
     ctx.fb.ins(&format!("local.get {}", cur), "current cursor");
     ctx.fb.ins("i64.const 1", "advance by one");
     ctx.fb.ins("i64.add", "cursor + 1");
@@ -974,11 +991,17 @@ fn lower_iter_next(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
-/// Lowers `Op::IterCurrentKey`: the key of an indexed array is the cursor. Boxes it
-/// into a Mixed int when the result is Mixed, else returns the raw i64.
+/// Lowers `Op::IterCurrentKey`. For an indexed array the key is the cursor (boxed into a
+/// Mixed int when the result is Mixed, else the raw i64). For a hash it delegates to
+/// `inst_hash::lower_hash_iter_key`, which reads the key fields from the current entry.
 fn lower_iter_current_key(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let iter = operand(inst, 0)?;
-    let cur = ctx.iter_slots(iter)?.cursor.clone();
+    let slots = ctx.iter_slots(iter)?;
+    if slots.is_hash {
+        let (src, cur) = (slots.source.clone(), slots.cursor.clone());
+        return super::inst_hash::lower_hash_iter_key(ctx, inst, &src, &cur);
+    }
+    let cur = slots.cursor.clone();
     let result = inst
         .result
         .ok_or_else(|| WasmError::Unsupported("iter_current_key without a result".to_string()))?;
@@ -1000,12 +1023,18 @@ fn lower_iter_current_key(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     }
 }
 
-/// Lowers `Op::IterCurrentValue`: reads `source[cursor]` with the element getter
-/// picked from the array's element type, boxing the result into a Mixed cell when
-/// the value variable is Mixed (the usual case), else returning the raw element.
+/// Lowers `Op::IterCurrentValue`. For an indexed array it reads `source[cursor]` with the
+/// element getter picked from the element type, boxing into a Mixed cell when the value
+/// variable is Mixed (the usual case). For a hash it delegates to
+/// `inst_hash::lower_hash_iter_value`, which reads the value fields from the current
+/// entry and reconstructs an owned result.
 fn lower_iter_current_value(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let iter = operand(inst, 0)?;
     let slots = ctx.iter_slots(iter)?;
+    if slots.is_hash {
+        let (src, cur) = (slots.source.clone(), slots.cursor.clone());
+        return super::inst_hash::lower_hash_iter_value(ctx, inst, &src, &cur);
+    }
     let (src, cur, elem) = (slots.source.clone(), slots.cursor.clone(), slots.elem.clone());
     let result = inst
         .result

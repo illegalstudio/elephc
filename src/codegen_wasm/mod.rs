@@ -2145,4 +2145,151 @@ mod tests {
             assert_eq!(o, "102030");
         }
     }
+
+    // ----- P5d-3: foreach over an associative hash -----
+
+    /// Emits the canonical foreach loop CFG (entry already positioned with `hash` built
+    /// and three string keys inserted) that walks `hash`, emits `op` (IterCurrentKey or
+    /// IterCurrentValue) as a Mixed in the body, and echoes it. Shared by the hash-foreach
+    /// tests so each only differs in what it inserts and which current-op it reads.
+    fn emit_hash_foreach_loop(b: &mut Builder, hash: ValueId, op: Op) {
+        let header = b.create_named_block("header", Vec::new());
+        let body = b.create_named_block("body", Vec::new());
+        let exit = b.create_named_block("exit", Vec::new());
+        let iter = b
+            .emit(
+                Op::IterStart,
+                vec![hash],
+                None,
+                IrType::Heap(IrHeapKind::Iterable),
+                PhpType::Iterable,
+                Ownership::Borrowed,
+            )
+            .unwrap();
+        b.terminate(Terminator::Br { target: header, args: Vec::new() });
+
+        b.position_at_end(header);
+        let has_next = b
+            .emit(Op::IterNext, vec![iter], None, IrType::I64, PhpType::Bool, Ownership::NonHeap)
+            .unwrap();
+        b.terminate(Terminator::CondBr {
+            cond: has_next,
+            then_target: body,
+            then_args: Vec::new(),
+            else_target: exit,
+            else_args: Vec::new(),
+        });
+
+        b.position_at_end(body);
+        let cur = b
+            .emit(op, vec![iter], None, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned)
+            .unwrap();
+        let _ = b.emit(Op::EchoValue, vec![cur], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+        b.terminate(Terminator::Br { target: header, args: Vec::new() });
+
+        b.position_at_end(exit);
+        b.terminate(Terminator::Return { value: None });
+    }
+
+    /// `foreach (["a"=>10, "b"=>20, "c"=>30] as $v) echo $v;` -> "102030". Exercises the
+    /// hash iterator advancing in insertion order and the scalar-through-Mixed box-on-read
+    /// value path (`IterCurrentValue`, tag 0).
+    #[test]
+    fn foreach_hash_int_values() {
+        let assoc = PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Int),
+        };
+        let mut module = Module::new(Target::wasm());
+        let keys: Vec<_> = ["a", "b", "c"].iter().map(|s| module.data.intern_string(s)).collect();
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(Op::HashNew, Vec::new(), Some(Immediate::Capacity(8)), IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            for (i, &k) in keys.iter().enumerate() {
+                let key = b.emit_const_str(k);
+                let val = b.emit_const_i64(((i as i64) + 1) * 10);
+                let _ = b.emit(Op::HashSet, vec![hash, key, val], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            emit_hash_foreach_loop(&mut b, hash, Op::IterCurrentValue);
+        }
+        module.add_function(f);
+        if let Some(o) = run_main(&module) {
+            assert_eq!(o, "102030");
+        }
+    }
+
+    /// `foreach (["a"=>"x", "b"=>"y", "c"=>"z"] as $k => $v) echo $k;` -> "abc". Exercises
+    /// the string-key box-on-read path (`IterCurrentKey`) over the insertion-order walk.
+    #[test]
+    fn foreach_hash_string_keys() {
+        let assoc = PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Str),
+        };
+        let mut module = Module::new(Target::wasm());
+        let keys: Vec<_> = ["a", "b", "c"].iter().map(|s| module.data.intern_string(s)).collect();
+        let vals: Vec<_> = ["x", "y", "z"].iter().map(|s| module.data.intern_string(s)).collect();
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(Op::HashNew, Vec::new(), Some(Immediate::Capacity(8)), IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            for (&k, &v) in keys.iter().zip(vals.iter()) {
+                let key = b.emit_const_str(k);
+                let val = b.emit_const_str(v);
+                let _ = b.emit(Op::HashSet, vec![hash, key, val], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            emit_hash_foreach_loop(&mut b, hash, Op::IterCurrentKey);
+        }
+        module.add_function(f);
+        if let Some(o) = run_main(&module) {
+            assert_eq!(o, "abc");
+        }
+    }
+
+    /// `foreach (["a"=>"x", "b"=>"y", "c"=>"z"] as $v) echo $v;` -> "xyz". Exercises the
+    /// string-value persist path through box-on-read (`IterCurrentValue`, tag 1).
+    #[test]
+    fn foreach_hash_string_values() {
+        let assoc = PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Str),
+        };
+        let mut module = Module::new(Target::wasm());
+        let keys: Vec<_> = ["a", "b", "c"].iter().map(|s| module.data.intern_string(s)).collect();
+        let vals: Vec<_> = ["x", "y", "z"].iter().map(|s| module.data.intern_string(s)).collect();
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(Op::HashNew, Vec::new(), Some(Immediate::Capacity(8)), IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            for (&k, &v) in keys.iter().zip(vals.iter()) {
+                let key = b.emit_const_str(k);
+                let val = b.emit_const_str(v);
+                let _ = b.emit(Op::HashSet, vec![hash, key, val], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            emit_hash_foreach_loop(&mut b, hash, Op::IterCurrentValue);
+        }
+        module.add_function(f);
+        if let Some(o) = run_main(&module) {
+            assert_eq!(o, "xyz");
+        }
+    }
 }
