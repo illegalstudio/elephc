@@ -89,6 +89,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::HashNew => super::inst_hash::lower_hash_new(ctx, &inst),
         Op::HashGet => super::inst_hash::lower_hash_get(ctx, &inst),
         Op::HashSet => super::inst_hash::lower_hash_set(ctx, &inst),
+        Op::HashUnset => super::inst_hash::lower_hash_unset(ctx, &inst),
         Op::HashAppend => super::inst_hash::lower_hash_append(ctx, &inst),
         Op::HashUnion => super::inst_hash::lower_hash_union(ctx, &inst),
         Op::MixedBox => lower_mixed_box(ctx, &inst),

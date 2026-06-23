@@ -140,6 +140,45 @@ pub(super) fn lower_hash_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
     Ok(())
 }
 
+/// Lowers `Op::HashUnset` (`unset($h[$k])`). Materializes the key into temp locals and calls
+/// `__rt_hash_unset`, which copy-on-write splits the table, removes the matching entry (releasing
+/// its owned key/value payloads), splices it out of the insertion-order chain, tombstones the
+/// slot, and returns the unique (possibly cloned) pointer. That pointer is written back into the
+/// hash operand's value local and its source slot, mirroring `lower_hash_set`. A missing key is a
+/// runtime no-op. Produces no result value; the hash operand IS the in/out storage.
+pub(super) fn lower_hash_unset(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let hash = operand(inst, 0)?;
+    let key = operand(inst, 1)?;
+
+    let (key_lo, key_hi) = materialize_hash_key(ctx, key)?;
+
+    // __rt_hash_unset(hash, key_lo, key_hi) -> hash'
+    ctx.emit_load_value(hash)?;
+    ctx.fb
+        .ins(&format!("local.get {}", key_lo), "hash key low word");
+    ctx.fb
+        .ins(&format!("local.get {}", key_hi), "hash key high word");
+    ctx.fb.ins(
+        "call $__rt_hash_unset",
+        "remove hash element (COW, releases key/value, tombstones slot)",
+    );
+
+    // The runtime returned the (possibly cloned) pointer: store it back into the hash operand
+    // value's local and mirror it to the source slot so a later LoadLocal sees the live pointer.
+    ctx.emit_store_value(hash)?;
+    if let Some(slot) = value_source_slot(ctx, hash) {
+        let hash_ref = ctx.value_repr(hash)?.local_refs();
+        let slot_ref = ctx.slot_repr(slot)?.local_refs();
+        if hash_ref.len() == 1 && slot_ref.len() == 1 {
+            ctx.fb
+                .ins(&format!("local.get {}", hash_ref[0]), "rewritten hash pointer");
+            ctx.fb
+                .ins(&format!("local.set {}", slot_ref[0]), "write back to the hash slot");
+        }
+    }
+    Ok(())
+}
+
 /// Lowers `Op::HashAppend` (`$h[] = v`). Materializes the value into temp locals and
 /// computes its per-entry runtime tag exactly like `lower_hash_set`, but lets the runtime
 /// derive the integer append key: `__rt_hash_append` scans for the next free integer key,

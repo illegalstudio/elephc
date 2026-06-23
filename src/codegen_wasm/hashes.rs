@@ -3,9 +3,8 @@
 //! the wasm32-wasi backend. PHP arrays are *ordered* maps: this layer owns the
 //! hash-table allocation, the key hashing/equality primitives, and the teardown
 //! (deep free + refcount dispatch). The element operations (get/set), copy-on-write,
-//! iteration, auto-indexed append (`$h[] = v`), and the array-union operator (`$a + $b`)
-//! are layered on top. Element `unset($h[$k])` is a separate frontend gap (the EIR
-//! lowering never emits a hash-unset op for non-object receivers) and is not handled here.
+//! iteration, auto-indexed append (`$h[] = v`), element removal (`unset($h[$k])` via
+//! `__rt_hash_unset`), and the array-union operator (`$a + $b`) are layered on top.
 //!
 //! Called from:
 //! - `crate::codegen_wasm::generate()` for every module, after the indexed-array
@@ -44,6 +43,7 @@ pub(super) fn emit_hash_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_HASH_CLONE_SHALLOW);
     wm.add_raw_func(RT_HASH_ENSURE_UNIQUE);
     wm.add_raw_func(RT_HASH_SET);
+    wm.add_raw_func(RT_HASH_UNSET);
     wm.add_raw_func(RT_HASH_APPEND);
     wm.add_raw_func(RT_HASH_UNION);
     wm.add_raw_func(RT_HASH_FREE_DEEP);
@@ -498,6 +498,79 @@ const RT_HASH_SET: &str = r#"(func $__rt_hash_set (param $hash i32) (param $key_
                   (i64.eq (local.get $val_tag) (i64.const 10))))  ;; own the container value
         (then (call $__rt_incref (i32.wrap_i64 (local.get $val_lo)))))))
   (local.set $hash (call $__rt_hash_insert_owned (local.get $hash) (local.get $key_lo) (local.get $key_hi) (local.get $val_lo) (local.get $val_hi) (local.get $val_tag)))  ;; place the new entry
+  (local.get $hash))
+"#;
+
+/// `__rt_hash_unset`: the user-facing `unset($h[$k])`. Copy-on-write splits the table, then
+/// linear-probes for the key exactly like `__rt_hash_set`/`__rt_hash_get` (a `$matched` flag
+/// breaks the loop on the hit). The flat post-loop removal releases the owned string key and
+/// value payloads using the same rules as `__rt_hash_set`'s update branch and
+/// `__rt_hash_free_deep` (string -> `__rt_heap_free_safe`, container tags 4/5/6/7/10 ->
+/// `__rt_decref_any`), splices the entry out of the insertion-order doubly-linked list,
+/// tombstones the slot (occupied = 2, preserving probe chains), and decrements the live count.
+/// A missing key or null/empty table is a no-op. Returns the unique (possibly cloned) hash ptr.
+const RT_HASH_UNSET: &str = r#"(func $__rt_hash_unset (param $hash i32) (param $key_lo i64) (param $key_hi i64) (result i32)
+  (local $cap i64)
+  (local $slot i64)
+  (local $probes i64)
+  (local $entry i32)
+  (local $occ i64)
+  (local $matched i32)
+  (local $mentry i32)
+  (local $vtag i64)
+  (local $prev i64)
+  (local $next i64)
+  (local $pe i32)
+  (local $ne i32)
+  (local.set $hash (call $__rt_hash_ensure_unique (local.get $hash)))   ;; copy-on-write split
+  (if (i32.eqz (local.get $hash)) (then (return (local.get $hash))))    ;; null hash -> nothing to remove
+  (local.set $cap (i64.load (i32.add (local.get $hash) (i32.const 8)))) ;; capacity
+  (if (i64.eqz (local.get $cap)) (then (return (local.get $hash))))     ;; empty table -> nothing to remove
+  (local.set $slot (i64.rem_u (call $__rt_hash_key_hash (local.get $key_lo) (local.get $key_hi)) (local.get $cap)))  ;; initial bucket
+  (local.set $probes (i64.const 0))                                    ;; probe counter
+  (local.set $matched (i32.const 0))                                   ;; no match yet
+  (block $stop (loop $probe
+    (br_if $stop (i64.ge_u (local.get $probes) (local.get $cap)))      ;; probed every slot -> stop (absent)
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))  ;; &slot[slot]
+    (local.set $occ (i64.load (local.get $entry)))                     ;; occupied flag
+    (br_if $stop (i64.eqz (local.get $occ)))                           ;; empty slot -> key absent, stop
+    (if (i64.eq (local.get $occ) (i64.const 1))                        ;; live entry?
+      (then (if (call $__rt_hash_key_eq (local.get $key_lo) (local.get $key_hi)
+                  (i64.load (i32.add (local.get $entry) (i32.const 8)))
+                  (i64.load (i32.add (local.get $entry) (i32.const 16))))  ;; keys equal?
+              (then
+                (local.set $matched (i32.const 1))                     ;; record the hit
+                (local.set $mentry (local.get $entry))))))             ;; save matched entry address
+    (br_if $stop (i32.eq (local.get $matched) (i32.const 1)))          ;; found -> leave loop
+    (local.set $slot (i64.rem_u (i64.add (local.get $slot) (i64.const 1)) (local.get $cap)))  ;; next bucket (wrap)
+    (local.set $probes (i64.add (local.get $probes) (i64.const 1)))    ;; bump probe count
+    (br $probe)))                                                      ;; loop back-edge
+  (if (i32.eq (local.get $matched) (i32.const 1))                      ;; REMOVE the matched entry
+    (then
+      (if (i64.ge_s (i64.load (i32.add (local.get $mentry) (i32.const 16))) (i64.const 0))  ;; string key?
+        (then (call $__rt_heap_free_safe (i32.wrap_i64 (i64.load (i32.add (local.get $mentry) (i32.const 8)))))))  ;; free key string
+      (local.set $vtag (i64.load (i32.add (local.get $mentry) (i32.const 40))))  ;; value tag
+      (if (i64.eq (local.get $vtag) (i64.const 1))                     ;; string value?
+        (then (call $__rt_heap_free_safe (i32.wrap_i64 (i64.load (i32.add (local.get $mentry) (i32.const 24))))))  ;; free value string
+        (else
+          (if (i32.or (i32.or (i64.eq (local.get $vtag) (i64.const 4)) (i64.eq (local.get $vtag) (i64.const 5)))
+                      (i32.or (i32.or (i64.eq (local.get $vtag) (i64.const 6)) (i64.eq (local.get $vtag) (i64.const 7)))
+                              (i64.eq (local.get $vtag) (i64.const 10))))  ;; container value?
+            (then (call $__rt_decref_any (i32.wrap_i64 (i64.load (i32.add (local.get $mentry) (i32.const 24)))))))))  ;; release container child
+      (local.set $prev (i64.load (i32.add (local.get $mentry) (i32.const 48))))  ;; prev slot index
+      (local.set $next (i64.load (i32.add (local.get $mentry) (i32.const 56))))  ;; next slot index
+      (if (i64.ne (local.get $prev) (i64.const -1))                    ;; has a predecessor?
+        (then
+          (local.set $pe (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $prev) (i64.const 64)))))  ;; &slot[prev]
+          (i64.store (i32.add (local.get $pe) (i32.const 56)) (local.get $next)))  ;; predecessor.next = next
+        (else (i64.store (i32.add (local.get $hash) (i32.const 24)) (local.get $next))))  ;; head = next
+      (if (i64.ne (local.get $next) (i64.const -1))                    ;; has a successor?
+        (then
+          (local.set $ne (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $next) (i64.const 64)))))  ;; &slot[next]
+          (i64.store (i32.add (local.get $ne) (i32.const 48)) (local.get $prev)))  ;; successor.prev = prev
+        (else (i64.store (i32.add (local.get $hash) (i32.const 32)) (local.get $prev))))  ;; tail = prev
+      (i64.store (local.get $mentry) (i64.const 2))                    ;; tombstone the slot (NOT 0 - keeps probe chains)
+      (i64.store (local.get $hash) (i64.sub (i64.load (local.get $hash)) (i64.const 1)))))  ;; count -= 1
   (local.get $hash))
 "#;
 
@@ -1260,6 +1333,103 @@ mod tests {
   (i64.add (i64.mul (i64.load (local.get $a)) (i64.const 10)) (i64.extend_i32_u (local.get $found))))"#;
         if let Some(o) = run_driver(driver, "t") {
             assert_eq!(o, "20");
+        }
+    }
+
+    /// `__rt_hash_unset` removes the matching entry and decrements the live count while
+    /// leaving the other entries intact. With {1:10, 2:20, 3:30}, unset(2) leaves count 2,
+    /// get(2) misses (found 0), and get(1)/get(3) still hit. Returns
+    /// `count*100000 + get(1).vlo*1000 + get(2).found*100 + get(3).vlo`
+    /// = 2*100000 + 10*1000 + 0 + 30 = 210030.
+    #[test]
+    fn unset_removes_entry_and_decrements_count() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local $g1 i64) (local $f2 i32) (local $g3 i64) (local $cnt i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 2) (i64.const -1) (i64.const 20) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 3) (i64.const -1) (i64.const 30) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 2) (i64.const -1)))
+  (call $__rt_hash_get (local.get $h) (i64.const 1) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $g1) (local.set $found)
+  (call $__rt_hash_get (local.get $h) (i64.const 2) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $f2)
+  (call $__rt_hash_get (local.get $h) (i64.const 3) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $g3) (local.set $found)
+  (local.set $cnt (i64.load (local.get $h)))
+  (i64.add (i64.add (i64.mul (local.get $cnt) (i64.const 100000)) (i64.mul (local.get $g1) (i64.const 1000)))
+           (i64.add (i64.mul (i64.extend_i32_u (local.get $f2)) (i64.const 100)) (local.get $g3))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "210030");
+        }
+    }
+
+    /// `__rt_hash_unset` on a key the table does not contain is a no-op: the count and the
+    /// existing entry are unchanged. With {1:10}, unset(99) keeps count 1 and get(1)=10.
+    /// Returns `count*100 + get(1).vlo` = 1*100 + 10 = 110.
+    #[test]
+    fn unset_missing_key_is_noop() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 1) (i64.const -1) (i64.const 10) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 99) (i64.const -1)))
+  (call $__rt_hash_get (local.get $h) (i64.const 1) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.mul (i64.load (local.get $h)) (i64.const 100)) (local.get $vlo)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "110");
+        }
+    }
+
+    /// `__rt_hash_unset` tombstones the removed slot (occupied = 2, not 0) so the probe
+    /// chain stays intact; re-setting the same key inserts a fresh entry that resolves
+    /// correctly. With {5:50}, unset(5) then set(5)=55 leaves count 1 and get(5)=55.
+    /// Returns `count*1000 + get(5).vlo` = 1*1000 + 55 = 1055.
+    #[test]
+    fn unset_then_reinsert_same_key() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 0)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 5) (i64.const -1) (i64.const 50) (i64.const 0) (i64.const 0)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 5) (i64.const -1)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 5) (i64.const -1) (i64.const 55) (i64.const 0) (i64.const 0)))
+  (call $__rt_hash_get (local.get $h) (i64.const 5) (i64.const -1))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $found)
+  (i64.add (i64.mul (i64.load (local.get $h)) (i64.const 1000)) (local.get $vlo)))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1055");
+        }
+    }
+
+    /// `__rt_hash_unset` frees an owned string key and string value while a sibling entry
+    /// survives. With a string-valued hash {"ok":"AB", "hi":"CD"}, unset("ok") leaves count
+    /// 1, get("ok") misses, and get("hi") returns the persisted "CD" (first byte 'C' = 67).
+    /// Returns `count*1000 + get("ok").found*100 + firstByte(get("hi").vlo)`
+    /// = 1*1000 + 0 + 67 = 1067.
+    #[test]
+    fn unset_string_key_frees_and_keeps_sibling() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $h i32) (local $found i32) (local $vlo i64) (local $vhi i64) (local $vtag i64)
+  (local $fok i32) (local $ghi i64)
+  (i32.store8 (i32.const 500) (i32.const 111)) (i32.store8 (i32.const 501) (i32.const 107))
+  (i32.store8 (i32.const 510) (i32.const 104)) (i32.store8 (i32.const 511) (i32.const 105))
+  (i32.store8 (i32.const 520) (i32.const 65)) (i32.store8 (i32.const 521) (i32.const 66))
+  (i32.store8 (i32.const 530) (i32.const 67)) (i32.store8 (i32.const 531) (i32.const 68))
+  (local.set $h (call $__rt_hash_new (i64.const 8) (i64.const 1)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 500) (i64.const 2) (i64.const 520) (i64.const 2) (i64.const 1)))
+  (local.set $h (call $__rt_hash_set (local.get $h) (i64.const 510) (i64.const 2) (i64.const 530) (i64.const 2) (i64.const 1)))
+  (local.set $h (call $__rt_hash_unset (local.get $h) (i64.const 500) (i64.const 2)))
+  (call $__rt_hash_get (local.get $h) (i64.const 500) (i64.const 2))
+  (local.set $vtag) (local.set $vhi) (local.set $vlo) (local.set $fok)
+  (call $__rt_hash_get (local.get $h) (i64.const 510) (i64.const 2))
+  (local.set $vtag) (local.set $vhi) (local.set $ghi) (local.set $found)
+  (i64.add (i64.add (i64.mul (i64.load (local.get $h)) (i64.const 1000))
+                    (i64.mul (i64.extend_i32_u (local.get $fok)) (i64.const 100)))
+           (i64.extend_i32_u (i32.load8_u (i32.wrap_i64 (local.get $ghi))))))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "1067");
         }
     }
 }

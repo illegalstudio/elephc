@@ -2466,4 +2466,110 @@ mod tests {
             assert_eq!(o, "xy");
         }
     }
+
+    /// `$h[1]=10; $h[2]=20; $h[3]=30; unset($h[2]);` then
+    /// `return is_null($h[2])*10000 + $h[1]*100 + $h[3];` -> "11030" through `Op::HashUnset`.
+    /// The hash lives in a PHP slot reloaded before the unset and each read, exercising the
+    /// removal write-back to the source slot: key 2 now misses (reads the null sentinel, so
+    /// `is_null` is 1) while keys 1 and 3 still resolve. Without the unset the result is 1030.
+    #[test]
+    fn hash_unset_removes_element_lowers() {
+        let assoc = int_hash_type();
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("a".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(Op::HashNew, Vec::new(), Some(Immediate::Capacity(8)), IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            for (k, v) in [(1_i64, 10_i64), (2, 20), (3, 30)] {
+                let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+                let key = b.emit_const_i64(k);
+                let val = b.emit_const_i64(v);
+                let _ = b.emit(Op::HashSet, vec![h, key, val], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key2 = b.emit_const_i64(2);
+            let _ = b.emit(Op::HashUnset, vec![h, key2], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let k1 = b.emit_const_i64(1);
+            let g1 = b.emit(Op::HashGet, vec![h, k1], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let k3 = b.emit_const_i64(3);
+            let g3 = b.emit(Op::HashGet, vec![h, k3], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let k2 = b.emit_const_i64(2);
+            let g2 = b.emit(Op::HashGet, vec![h, k2], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let removed = b.emit(Op::IsNull, vec![g2], None, IrType::I64, PhpType::Bool, Ownership::NonHeap).unwrap();
+            let ten_k = b.emit_const_i64(10000);
+            let removed_x = b.emit(Op::IMul, vec![removed, ten_k], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let hundred = b.emit_const_i64(100);
+            let g1x = b.emit(Op::IMul, vec![g1, hundred], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let sum = b.emit(Op::IAdd, vec![removed_x, g1x], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let total = b.emit(Op::IAdd, vec![sum, g3], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            b.terminate(Terminator::Return { value: Some(total) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_a", &[]) {
+            assert_eq!(o, "11030");
+        }
+    }
+
+    /// `$h = ["a"=>10, "b"=>20, "c"=>30]; unset($h["b"]); foreach ($h as $v) echo $v;` -> "1030"
+    /// through `Op::HashUnset`. The removed entry is spliced out of the insertion-order chain,
+    /// so the post-unset foreach walks only "a" and "c" in order, proving the linked-list
+    /// unlink is correct through compiled iteration.
+    #[test]
+    fn hash_unset_then_foreach_skips_removed() {
+        let assoc = PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Int),
+        };
+        let mut module = Module::new(Target::wasm());
+        let keys: Vec<_> = ["a", "b", "c"].iter().map(|s| module.data.intern_string(s)).collect();
+        let bkey = module.data.intern_string("b");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(Op::HashNew, Vec::new(), Some(Immediate::Capacity(8)), IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            for (i, &k) in keys.iter().enumerate() {
+                let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+                let key = b.emit_const_str(k);
+                let val = b.emit_const_i64(((i as i64) + 1) * 10);
+                let _ = b.emit(Op::HashSet, vec![h, key, val], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key = b.emit_const_str(bkey);
+            let _ = b.emit(Op::HashUnset, vec![h, key], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            emit_hash_foreach_loop(&mut b, h, Op::IterCurrentValue);
+        }
+        module.add_function(f);
+        if let Some(o) = run_main(&module) {
+            assert_eq!(o, "1030");
+        }
+    }
 }
