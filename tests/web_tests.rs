@@ -227,3 +227,20 @@ fn web_extern_method_getter() {
     let _ = child.kill(); let _ = child.wait();
     assert!(resp.ends_with("POST"), "body: {:?}", resp);
 }
+
+/// Verifies a superglobal is READABLE inside a function without `global` (full
+/// visibility + global-storage routing). $_SERVER is not populated until Task 5,
+/// so the read is ??-guarded and we assert a clean 200 (no type error / no crash).
+#[test]
+fn web_superglobal_visible_in_function() {
+    let dir = make_test_dir("web_sg_fn");
+    let src = "<?php function rm() { return $_SERVER['REQUEST_METHOD'] ?? 'unset'; } echo rm();";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(&addr, "DELETE", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.starts_with("HTTP/1.1 200"), "status: {:?}", resp);
+}

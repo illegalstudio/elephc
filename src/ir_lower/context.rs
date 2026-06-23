@@ -235,7 +235,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns the checker-known top-level type for a `global` alias name.
+    ///
+    /// Request superglobals resolve to their fixed `AssocArray{Str, Mixed}` type
+    /// directly: inside a function the `top_level_env` snapshot may not carry
+    /// them, but their global slot must still be a Hash pointer (not a boxed
+    /// Mixed cell) so the function read agrees with the prelude's StoreGlobal.
     pub(crate) fn global_alias_type(&self, name: &str) -> PhpType {
+        if crate::superglobals::is_superglobal(name) {
+            return crate::superglobals::superglobal_type();
+        }
         self.top_level_env
             .get(name)
             .cloned()
@@ -456,7 +464,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if let Some(php_type) = self.extern_global_type(name) {
             return self.load_extern_global(name, php_type, span);
         }
-        let php_type = self.local_type(name);
+        // Superglobals carry a fixed `AssocArray{Str, Mixed}` type in every scope
+        // so the global-storage load is a Hash pointer, not a boxed Mixed cell.
+        let php_type = if crate::superglobals::is_superglobal(name) {
+            self.global_alias_type(name)
+        } else {
+            self.local_type(name)
+        };
         let slot = self.declare_local(name, php_type.clone());
         let ir_type = value_ir_type(&php_type);
         let ownership = Ownership::for_php_type(&php_type);
@@ -910,8 +924,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns whether the named PHP variable should use program-global storage.
+    ///
+    /// Request superglobals (`$_SERVER`/`$_GET`/`$_POST`) route to the shared
+    /// `_eir_global_*` symbol in EVERY scope — main and functions alike — so a
+    /// function read targets the same storage the top-level `--web` prelude writes.
     fn uses_global_storage(&self, name: &str, kind: LocalKind) -> bool {
         kind == LocalKind::GlobalAlias
+            || crate::superglobals::is_superglobal(name)
             || (self.in_main && self.all_global_var_names.contains(name))
     }
 

@@ -36,6 +36,14 @@ impl Checker {
         for (pname, pty) in &param_types {
             local_env.insert(pname.clone(), pty.clone());
         }
+        // Seed the request superglobals so a function body can read/write
+        // `$_SERVER`/`$_GET`/`$_POST` without a `global` declaration. `or_insert`
+        // never clobbers a parameter that happens to share a superglobal name.
+        for name in crate::superglobals::SUPERGLOBALS {
+            local_env
+                .entry((*name).to_string())
+                .or_insert_with(crate::superglobals::superglobal_type);
+        }
         let function_key = name.to_string();
         let callable_param_names: Vec<String> = param_types
             .iter()
