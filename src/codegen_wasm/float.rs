@@ -70,18 +70,47 @@ const RT_BIGNUM_MUL_U32: &str = r#"(func $__rt_bignum_mul_u32 (param $ptr i32) (
   (local.get $carry))                                                ;; return the final carry
 "#;
 
+/// Divides a fixed-width big integer in place by a small unsigned 32-bit divisor.
+///
+/// The big integer is `$n` little-endian limbs of base 2^32 at `$ptr`; `$d` is the
+/// divisor in [1, 2^32-1] (caller guarantees non-zero) passed in an i64. Processes
+/// limbs most-significant to least, carrying a running remainder: the array becomes
+/// `floor(value / d)` and the function returns `value mod d` (i64 in [0, d-1]). This
+/// is the decimal digit-extraction primitive (repeated divmod by 1e9). Overflow-safe:
+/// `(rem << 32) | limb < d*2^32 < 2^64` fits one i64.
+const RT_BIGNUM_DIVMOD_U32: &str = r#"(func $__rt_bignum_divmod_u32 (param $ptr i32) (param $n i32) (param $d i64) (result i64)
+  (local $i i32) (local $rem i64) (local $cur i64) (local $addr i32)
+  (local.set $i (local.get $n))                                     ;; i = n (one past the top limb)
+  (local.set $rem (i64.const 0))                                    ;; running remainder = 0
+  (block $end                                                       ;; loop exit target
+    (loop $top                                                      ;; iterate limbs high-to-low
+      (br_if $end (i32.eqz (local.get $i)))                         ;; stop once i == 0 (all limbs done)
+      (local.set $i (i32.sub (local.get $i) (i32.const 1)))         ;; pre-decrement: now i indexes the current limb
+      (local.set $addr (i32.add (local.get $ptr) (i32.shl (local.get $i) (i32.const 2))))  ;; &limb[i] = ptr + i*4
+      (local.set $cur                                               ;; cur = (rem << 32) | limb[i]
+        (i64.or
+          (i64.shl (local.get $rem) (i64.const 32))
+          (i64.load32_u (local.get $addr))))
+      (i64.store32 (local.get $addr) (i64.div_u (local.get $cur) (local.get $d)))  ;; limb[i] = cur / d
+      (local.set $rem (i64.rem_u (local.get $cur) (local.get $d)))  ;; rem = cur % d
+      (br $top)))                                                   ;; continue the loop
+  (local.get $rem))                                                 ;; return the final remainder
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
-/// Currently emits `__rt_f64_decompose` (the float decoder) and `__rt_bignum_mul_u32`
-/// (a big-integer primitive). Later stages append the remaining bignum primitives,
-/// digit-extraction, `%.14G` formatting, and string-to-float parsing routines here.
-/// Must be called before rendering any function that references these symbols.
+/// Currently emits `__rt_f64_decompose` (the float decoder) plus the big-integer
+/// primitives `__rt_bignum_mul_u32` and `__rt_bignum_divmod_u32`. Later stages append
+/// the remaining primitives, digit-extraction, `%.14G` formatting, and string-to-float
+/// parsing routines here. Must be called before rendering any function that references
+/// these symbols.
 // Not yet referenced by a non-test caller: PHP-visible float formatting wires this
 // into the command/reactor runtime in stage S6. Exercised by the unit tests below.
 #[allow(dead_code)]
 pub(super) fn emit_float_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_F64_DECOMPOSE);
     wm.add_raw_func(RT_BIGNUM_MUL_U32);
+    wm.add_raw_func(RT_BIGNUM_DIVMOD_U32);
 }
 
 #[cfg(test)]
@@ -320,6 +349,74 @@ mod tests {
   (i64.add (i64.add (i64.load32_u (i32.const 256)) (i64.load32_u (i32.const 260))) (local.get $carry)))"#;
         if let Some(o) = run_float_driver(driver, "t") {
             assert_eq!(o, "0");
+        }
+    }
+
+    /// [15] / 4 = quotient 3 remainder 3; witness = rem*1000 + limb0 = 3003.
+    #[test]
+    fn divmod_u32_basic() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $rem i64)
+  (i64.store32 (i32.const 256) (i64.const 15))
+  (local.set $rem (call $__rt_bignum_divmod_u32 (i32.const 256) (i32.const 1) (i64.const 4)))
+  (i64.add (i64.mul (local.get $rem) (i64.const 1000)) (i64.load32_u (i32.const 256))))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "3003");
+        }
+    }
+
+    /// [100] / 10 = quotient 10 remainder 0; witness = rem*1000 + limb0 = 10.
+    #[test]
+    fn divmod_u32_exact() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $rem i64)
+  (i64.store32 (i32.const 256) (i64.const 100))
+  (local.set $rem (call $__rt_bignum_divmod_u32 (i32.const 256) (i32.const 1) (i64.const 10)))
+  (i64.add (i64.mul (local.get $rem) (i64.const 1000)) (i64.load32_u (i32.const 256))))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "10");
+        }
+    }
+
+    /// [12345] / 1 = quotient 12345 remainder 0; witness = rem*100000 + limb0 = 12345.
+    #[test]
+    fn divmod_u32_by_one() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $rem i64)
+  (i64.store32 (i32.const 256) (i64.const 12345))
+  (local.set $rem (call $__rt_bignum_divmod_u32 (i32.const 256) (i32.const 1) (i64.const 1)))
+  (i64.add (i64.mul (local.get $rem) (i64.const 100000)) (i64.load32_u (i32.const 256))))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "12345");
+        }
+    }
+
+    /// [5] / 10 = quotient 0 remainder 5; witness = rem*1000 + limb0 = 5000.
+    #[test]
+    fn divmod_u32_smaller_than_divisor() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $rem i64)
+  (i64.store32 (i32.const 256) (i64.const 5))
+  (local.set $rem (call $__rt_bignum_divmod_u32 (i32.const 256) (i32.const 1) (i64.const 10)))
+  (i64.add (i64.mul (local.get $rem) (i64.const 1000)) (i64.load32_u (i32.const 256))))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "5000");
+        }
+    }
+
+    /// Two-limb high->low remainder carry: [0, 1] (= 2^32 = 4294967296) / 7 = quotient
+    /// 613566756 remainder 4 (the top limb divides to 0 with remainder 1, carried into the
+    /// low limb). limb1 becomes 0; witness = rem*1000000000 + limb0 = 4613566756.
+    #[test]
+    fn divmod_u32_two_limb_remainder_carry() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $rem i64)
+  (i64.store32 (i32.const 256) (i64.const 0))
+  (i64.store32 (i32.const 260) (i64.const 1))
+  (local.set $rem (call $__rt_bignum_divmod_u32 (i32.const 256) (i32.const 2) (i64.const 7)))
+  (i64.add (i64.mul (local.get $rem) (i64.const 1000000000)) (i64.load32_u (i32.const 256))))"#;
+        if let Some(o) = run_float_driver(driver, "t") {
+            assert_eq!(o, "4613566756");
         }
     }
 }
