@@ -154,6 +154,61 @@ const RT_U32_TO_9DIGITS: &str = r#"(func $__rt_u32_to_9digits (param $value i32)
       (br $top)))                                                  ;; continue the loop
 )"#;
 
+/// Produces the exact decimal digits of an IEEE-754 double — the heart of the float
+/// formatter. Orchestrates `__rt_f64_decompose`, the bignum primitives, and
+/// `__rt_u32_to_9digits`.
+///
+/// Builds the exact integer `J = magnitude * 10^p` (so `value == J / 10^p`): with
+/// `exp2 >= 0`, `J = mantissa * 2^exp2` and `p = 0`; with `exp2 < 0`, `J = mantissa *
+/// 5^(-exp2)` and `p = -exp2` (an exact integer, no rounding). It then peels 9-digit
+/// chunks via repeated divmod-by-1e9 into `$dbuf`, strips leading zeros, and returns
+/// `(sign, class, digptr, ndigits, p)` where `digptr`/`ndigits` are the significant
+/// decimal digits most-significant-first and `p` is the fractional digit count. For
+/// non-finite/zero inputs (`class != 0`) it returns no digits. `$big` must be a
+/// pre-zeroed buffer of `$nlimbs` limbs large enough to hold `J` (80 limbs covers every
+/// double), and `$dbuf` must be at least 768 bytes (the smallest subnormal has 751 digits).
+const RT_F64_DIGITS: &str = r#"(func $__rt_f64_digits (param $bits i64) (param $big i32) (param $nlimbs i32) (param $dbuf i32) (param $dmax i32) (result i32 i32 i32 i32 i32)
+  (local $sign i32) (local $mant i64) (local $exp2 i32) (local $class i32)
+  (local $p i32) (local $wp i32) (local $rem i64) (local $start i32)
+  (call $__rt_f64_decompose (local.get $bits))                     ;; -> sign, mantissa, exp2, class
+  (local.set $class)                                               ;; pop class
+  (local.set $exp2)                                                ;; pop exp2
+  (local.set $mant)                                                ;; pop mantissa
+  (local.set $sign)                                                ;; pop sign
+  (if (i32.ne (local.get $class) (i32.const 0))                    ;; non-finite or zero: no digits
+    (then (return (local.get $sign) (local.get $class) (local.get $dbuf) (i32.const 0) (i32.const 0))))
+  (i64.store32 (local.get $big) (local.get $mant))                 ;; big[0] = mantissa low 32 bits
+  (i64.store32 (i32.add (local.get $big) (i32.const 4)) (i64.shr_u (local.get $mant) (i64.const 32)))  ;; big[1] = mantissa high bits
+  (local.set $p (i32.const 0))                                     ;; default p = 0 (exp2 >= 0 case)
+  (if (i32.ge_s (local.get $exp2) (i32.const 0))                   ;; exp2 >= 0: J = mantissa * 2^exp2
+    (then (call $__rt_bignum_mul_small_n_times (local.get $big) (local.get $nlimbs) (i64.const 2) (local.get $exp2))))
+  (if (i32.lt_s (local.get $exp2) (i32.const 0))                   ;; exp2 < 0: J = mantissa * 5^(-exp2), p = -exp2
+    (then
+      (local.set $p (i32.sub (i32.const 0) (local.get $exp2)))     ;; p = -exp2
+      (call $__rt_bignum_mul_small_n_times (local.get $big) (local.get $nlimbs) (i64.const 5) (local.get $p))))
+  (local.set $wp (local.get $dmax))                               ;; write cursor starts past the buffer end
+  (block $pend                                                    ;; chunk-loop exit target
+    (loop $ptop                                                   ;; do-while: peel at least one 9-digit chunk
+      (local.set $rem (call $__rt_bignum_divmod_u32 (local.get $big) (local.get $nlimbs) (i64.const 1000000000)))  ;; low 9 digits
+      (local.set $wp (i32.sub (local.get $wp) (i32.const 9)))     ;; reserve 9 bytes to the left
+      (call $__rt_u32_to_9digits (i32.wrap_i64 (local.get $rem)) (i32.add (local.get $dbuf) (local.get $wp)))  ;; write the chunk
+      (br_if $pend (call $__rt_bignum_is_zero (local.get $big) (local.get $nlimbs)))  ;; stop when J reaches 0
+      (br $ptop)))                                                ;; otherwise peel another chunk
+  (local.set $start (local.get $wp))                             ;; first written byte (most significant chunk)
+  (block $send                                                    ;; strip-loop exit target
+    (loop $stop                                                   ;; advance start over leading '0' bytes
+      (br_if $send (i32.ge_u (local.get $start) (i32.sub (local.get $dmax) (i32.const 1))))  ;; keep at least one digit
+      (br_if $send (i32.ne (i32.load8_u (i32.add (local.get $dbuf) (local.get $start))) (i32.const 48)))  ;; stop at first non-'0'
+      (local.set $start (i32.add (local.get $start) (i32.const 1)))  ;; skip this leading zero
+      (br $stop)))                                                ;; keep stripping
+  (return                                                        ;; sign, class(0), digptr, ndigits, p
+    (local.get $sign)
+    (local.get $class)
+    (i32.add (local.get $dbuf) (local.get $start))               ;; digptr = dbuf + start
+    (i32.sub (local.get $dmax) (local.get $start))               ;; ndigits = dmax - start
+    (local.get $p)))                                             ;; p = fractional digit count
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
 /// Currently emits `__rt_f64_decompose` (the float decoder) plus the big-integer
@@ -171,6 +226,7 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_BIGNUM_MUL_SMALL_N_TIMES);
     wm.add_raw_func(RT_BIGNUM_IS_ZERO);
     wm.add_raw_func(RT_U32_TO_9DIGITS);
+    wm.add_raw_func(RT_F64_DIGITS);
 }
 
 #[cfg(test)]
@@ -605,6 +661,75 @@ mod tests {
         );
         if let Some(o) = run_float_driver(&driver, "t") {
             assert_eq!(o, "42");
+        }
+    }
+
+    /// Builds a driver that runs `__rt_f64_digits` on a raw bit pattern (big scratch at
+    /// 1024 with 80 limbs, digit buffer at 2048 with 768 bytes) and returns a witness
+    /// `d0*1e8 + d1*1e6 + ndigits*1000 + p` pinning the leading two digits, the digit
+    /// count, and the fractional digit count.
+    fn f64_digits_driver(bits_hex: &str) -> String {
+        format!(
+            r#"(func $t (export "t") (result i64)
+  (local $sign i32) (local $class i32) (local $digptr i32) (local $ndig i32) (local $p i32)
+  (call $__rt_f64_digits (i64.const {bits_hex}) (i32.const 1024) (i32.const 80) (i32.const 2048) (i32.const 768))
+  (local.set $p)
+  (local.set $ndig)
+  (local.set $digptr)
+  (local.set $class)
+  (local.set $sign)
+  (i64.add
+    (i64.add
+      (i64.mul (i64.extend_i32_u (i32.sub (i32.load8_u (local.get $digptr)) (i32.const 48))) (i64.const 100000000))
+      (i64.mul (i64.extend_i32_u (i32.sub (i32.load8_u (i32.add (local.get $digptr) (i32.const 1))) (i32.const 48))) (i64.const 1000000)))
+    (i64.add
+      (i64.mul (i64.extend_i32_u (local.get $ndig)) (i64.const 1000))
+      (i64.extend_i32_u (local.get $p)))))"#
+        )
+    }
+
+    /// 2.0 -> J = 2*10^51 (digits "2" then 51 zeros, 52 digits), p = 51. Leading digit 2,
+    /// second 0; witness = 2*1e8 + 0 + 52*1000 + 51 = 200052051.
+    #[test]
+    fn f64_digits_two() {
+        if let Some(o) = run_float_driver(&f64_digits_driver("0x4000000000000000"), "t") {
+            assert_eq!(o, "200052051");
+        }
+    }
+
+    /// 0.5 -> J = 5*10^52 (53 digits), p = 53. Leading digit 5, second 0;
+    /// witness = 5*1e8 + 0 + 53*1000 + 53 = 500053053.
+    #[test]
+    fn f64_digits_half() {
+        if let Some(o) = run_float_driver(&f64_digits_driver("0x3FE0000000000000"), "t") {
+            assert_eq!(o, "500053053");
+        }
+    }
+
+    /// 1.5 -> J = 15*10^51 (digits "15" then 51 zeros, 53 digits), p = 52. Leading digits
+    /// 1 and 5; witness = 1*1e8 + 5*1e6 + 53*1000 + 52 = 105053052.
+    #[test]
+    fn f64_digits_one_point_five() {
+        if let Some(o) = run_float_driver(&f64_digits_driver("0x3FF8000000000000"), "t") {
+            assert_eq!(o, "105053052");
+        }
+    }
+
+    /// 100.0 -> J = 10^48 (digits "1" then 48 zeros, 49 digits), p = 46. Leading digit 1,
+    /// second 0; witness = 1*1e8 + 0 + 49*1000 + 46 = 100049046.
+    #[test]
+    fn f64_digits_hundred() {
+        if let Some(o) = run_float_driver(&f64_digits_driver("0x4059000000000000"), "t") {
+            assert_eq!(o, "100049046");
+        }
+    }
+
+    /// 2^60 exercises the exp2 >= 0 path: J = 2^60 = 1152921504606846976 (19 digits), p = 0.
+    /// Leading digits 1 and 1; witness = 1*1e8 + 1*1e6 + 19*1000 + 0 = 101019000.
+    #[test]
+    fn f64_digits_two_pow60_integer_path() {
+        if let Some(o) = run_float_driver(&f64_digits_driver("0x43B0000000000000"), "t") {
+            assert_eq!(o, "101019000");
         }
     }
 }
