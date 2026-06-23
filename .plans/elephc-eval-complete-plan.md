@@ -1,4 +1,4 @@
-# Piano dettagliato: supporto completo a eval tramite libelephc-eval
+# Piano dettagliato: supporto completo a eval tramite libelephc-magician
 
 Nota percorso: la richiesta indicava `~/Downlaods`, che sembra un refuso. Questo file e' stato scritto in `~/Downloads`.
 
@@ -17,7 +17,7 @@ programma senza eval
 
 programma con eval
   -> runtime elephc normale
-  -> + libelephc-eval linkata condizionalmente
+  -> + libelephc-magician linkata condizionalmente
   -> solo gli scope che arrivano a eval pagano il costo dinamico
 ```
 
@@ -31,9 +31,9 @@ al punto eval
   -> valuta l'argomento in source order
   -> materializza lo scope se non esiste
   -> flush dei locals vivi nello scope dinamico
-  -> chiama libelephc-eval
+  -> chiama libelephc-magician
 
-libelephc-eval
+libelephc-magician
   -> parse della stringa PHP
   -> lowering a EvalIR/EIR dinamico
   -> interpretazione usando lo scope ricevuto
@@ -45,7 +45,7 @@ dopo eval
 
 ## Decisioni architetturali
 
-1. `libelephc-eval` e' una bridge staticlib, come `elephc_tls`, `elephc_pdo`, `elephc_crypto` e `elephc_phar`.
+1. `libelephc-magician` e' una bridge staticlib, come `elephc_tls`, `elephc_pdo`, `elephc_crypto` e `elephc_phar`.
 2. Il linker la include solo quando il programma contiene una chiamata PHP a `eval`.
 3. Il backend attivo resta AST -> EIR -> `src/codegen_ir/`; non si estende il backend AST legacy.
 4. Il codice statico resta nativo. Non si interpreta tutta la funzione salvo dove necessario.
@@ -94,7 +94,7 @@ var_dump(function_exists('A\\f_eval_test'), function_exists('f_eval_test'));
 Aggiungere una nuova crate:
 
 ```text
-crates/elephc-eval/
+crates/elephc-magician/
   Cargo.toml
   src/lib.rs
   src/abi.rs
@@ -118,7 +118,7 @@ members = [
   "crates/elephc-pdo",
   "crates/elephc-crypto",
   "crates/elephc-phar",
-  "crates/elephc-eval",
+  "crates/elephc-magician",
 ]
 default-members = [
   ".",
@@ -126,7 +126,7 @@ default-members = [
   "crates/elephc-pdo",
   "crates/elephc-crypto",
   "crates/elephc-phar",
-  "crates/elephc-eval",
+  "crates/elephc-magician",
 ]
 ```
 
@@ -138,9 +138,9 @@ In `src/linker.rs`, aggiungere una entry a `BRIDGES`:
 
 ```rust
 BridgeStaticlib {
-    lib_name: "elephc_eval",
-    env_var: "ELEPHC_EVAL_LIB_DIR",
-    crate_name: "elephc-eval",
+    lib_name: "elephc_magician",
+    env_var: "ELEPHC_MAGICIAN_LIB_DIR",
+    crate_name: "elephc-magician",
     whole_archive: false,
     macos_frameworks: &[],
     needs_libdl: true,
@@ -173,13 +173,13 @@ Required libraries:
 
 ```rust
 if features.eval {
-    libs.push("elephc_eval".to_string());
+    libs.push("elephc_magician".to_string());
 }
 ```
 
 Importante: `eval` deve essere rilevato anche se scritto con casing diverso, se PHP lo consente, e anche in presenza di namespace fallback.
 
-## ABI nativa verso libelephc-eval
+## ABI nativa verso libelephc-magician
 
 L'ABI deve essere piccola, stabile e target-aware. Non passare enum Rust non `repr(C)` attraverso il confine staticlib.
 
@@ -315,7 +315,7 @@ Il codice nativo non deve fidarsi dei valori statici precedenti.
 Strategia consigliata:
 
 1. Marcare invalidi tutti i locals flushati.
-2. Se libelephc-eval restituisce una dirty set affidabile, invalidare almeno quella.
+2. Se libelephc-magician restituisce una dirty set affidabile, invalidare almeno quella.
 3. Se non c'e' dirty set o se eval usa variabili variabili, references, `unset`, `global`, invalidare tutto lo scope materializzato.
 4. Al prossimo uso statico di `$x`, fare reload lazy:
 
@@ -571,7 +571,7 @@ Per chiamate statiche a simboli non risolti dopo eval:
 1. Il checker deve permettere lookup dinamico se il path di controllo puo' aver attraversato eval.
 2. Il lowering deve generare `__rt_dynamic_call("dyn", args)` invece di direct symbol call.
 3. `__rt_dynamic_call` cerca prima funzioni native note, poi funzioni eval-defined.
-4. Le funzioni definite da eval possono essere interpretate da libelephc-eval.
+4. Le funzioni definite da eval possono essere interpretate da libelephc-magician.
 
 Per chiamate note staticamente:
 
@@ -646,12 +646,12 @@ Deliverable:
 
 ### Fase 1: link condizionale e stub ABI
 
-Obiettivo: linkare `libelephc-eval` solo quando serve.
+Obiettivo: linkare `libelephc-magician` solo quando serve.
 
 Modifiche:
 
-1. Aggiungere crate `crates/elephc-eval`.
-2. Aggiungere `elephc_eval` a `BRIDGES` in `src/linker.rs`.
+1. Aggiungere crate `crates/elephc-magician`.
+2. Aggiungere `elephc_magician` a `BRIDGES` in `src/linker.rs`.
 3. Aggiungere `RuntimeFeatures.eval`.
 4. Aggiungere detection `program_requires_eval`.
 5. Aggiungere builtin/language construct `eval` al checker.
@@ -659,9 +659,9 @@ Modifiche:
 
 Test:
 
-1. Programma senza eval non linka `elephc_eval`.
-2. Programma con eval linka `elephc_eval`.
-3. Test linker per `ELEPHC_EVAL_LIB_DIR`.
+1. Programma senza eval non linka `elephc_magician`.
+2. Programma con eval linka `elephc_magician`.
+3. Test linker per `ELEPHC_MAGICIAN_LIB_DIR`.
 4. Errore chiaro se la libreria non e' trovata.
 
 ### Fase 2: MaterializedScope minimo
@@ -698,7 +698,7 @@ Obiettivo: parse della stringa eval.
 Opzioni:
 
 1. Estrarre lexer/parser in crate riusabile, ad esempio `crates/elephc-frontend`.
-2. Oppure duplicare temporaneamente solo il parser necessario in `crates/elephc-eval`, ma e' sconsigliato.
+2. Oppure duplicare temporaneamente solo il parser necessario in `crates/elephc-magician`, ma e' sconsigliato.
 
 Regole:
 
@@ -957,9 +957,9 @@ git diff --check
 
 La feature e' considerata completa solo quando:
 
-1. Programmi senza eval non linkano `elephc_eval`.
+1. Programmi senza eval non linkano `elephc_magician`.
 2. Programmi senza eval non cambiano assembly/performance in modo osservabile.
-3. Programmi con eval linkano `elephc_eval` automaticamente.
+3. Programmi con eval linkano `elephc_magician` automaticamente.
 4. Le funzioni con eval usano flush/invalidate/reload corretto.
 5. Eval modifica, crea e unsetta variabili dello scope chiamante.
 6. `return` dentro eval ritorna il valore di `eval`.
@@ -972,7 +972,7 @@ La feature e' considerata completa solo quando:
 
 Sequenza pragmatica:
 
-1. Link condizionale `elephc_eval` + stub ABI.
+1. Link condizionale `elephc_magician` + stub ABI.
 2. `contains_eval` + lowering call runtime nel backend EIR.
 3. `MaterializedScope` + flush/invalidate/reload con stub test-only.
 4. Parser runtime per fragment eval.

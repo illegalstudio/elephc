@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits user-assembly helpers that let libelephc-eval materialize
+//! Emits user-assembly helpers that let libelephc-magician materialize
 //! ReflectionClass, ReflectionFunction, ReflectionMethod, ReflectionParameter,
 //! ReflectionProperty, ReflectionClassConstant, ReflectionEnum*, and ReflectionType objects
 //! with private metadata slots populated from runtime eval declarations.

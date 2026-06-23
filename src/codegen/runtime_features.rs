@@ -15,7 +15,7 @@
 //! - The dynamic builtin dispatcher (descriptor invoker) emits per-builtin
 //!   wrappers — including md5/sha1/hash — that reference the `elephc_crypto`
 //!   staticlib, so its detection forces that crate to link.
-//! - `eval()` enables the optional libelephc-eval bridge only when lowered EIR
+//! - `eval()` enables the optional libelephc-magician bridge only when lowered EIR
 //!   actually references the eval bridge call path.
 
 use std::collections::HashMap;
@@ -95,7 +95,7 @@ pub fn required_libraries_for_runtime_features(features: RuntimeFeatures) -> Vec
         libs.push("elephc_crypto".to_string());
     }
     if features.eval {
-        libs.push("elephc_eval".to_string());
+        libs.push("elephc_magician".to_string());
     }
     libs
 }
@@ -919,15 +919,15 @@ mod tests {
         assert!(required_libraries_for_runtime_features(RuntimeFeatures::none()).is_empty());
     }
 
-    /// Verifies eval runtime features request the eval bridge staticlib for final linking.
+    /// Verifies eval runtime features request the magician bridge staticlib for final linking.
     #[test]
-    fn test_eval_runtime_features_require_elephc_eval_library() {
+    fn test_eval_runtime_features_require_elephc_magician_library() {
         assert_eq!(
             required_libraries_for_runtime_features(RuntimeFeatures {
                 eval: true,
                 ..RuntimeFeatures::none()
             }),
-            vec!["elephc_eval".to_string()]
+            vec!["elephc_magician".to_string()]
         );
     }
 

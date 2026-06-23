@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits C-ABI wrappers used by the optional `elephc-eval` bridge crate.
+//! Emits C-ABI wrappers used by the optional `elephc-magician` bridge crate.
 //! Adapts Rust staticlib calls to elephc's internal runtime value helper ABI.
 //!
 //! Called from:
@@ -21,7 +21,7 @@ fn x86_64_mixed_heap_kind_instruction() -> String {
     format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)
 }
 
-/// Emits every eval value wrapper required by `libelephc-eval`.
+/// Emits every eval value wrapper required by `libelephc-magician`.
 pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: eval bridge value wrappers ---");

@@ -1,5 +1,5 @@
 //! Purpose:
-//! Lowers PHP `eval()` calls to the optional libelephc-eval bridge ABI.
+//! Lowers PHP `eval()` calls to the optional libelephc-magician bridge ABI.
 //! Materializes a persistent per-function eval scope handle, flushes visible
 //! locals into that scope, calls the bridge, and reloads synchronized locals
 //! from boxed Mixed cells after the call returns.
@@ -128,7 +128,7 @@ struct EvalNativeMemberAttributeRegistration {
     attribute_args: Option<Vec<AttrArgValue>>,
 }
 
-/// Scalar native callable default that can be registered with libelephc-eval.
+/// Scalar native callable default that can be registered with libelephc-magician.
 enum EvalNativeCallableDefault {
     Scalar { kind: i64, payload: i64 },
     String(String),

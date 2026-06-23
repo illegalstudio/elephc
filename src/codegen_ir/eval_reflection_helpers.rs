@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits user-assembly helpers that let libelephc-eval materialize selected
+//! Emits user-assembly helpers that let libelephc-magician materialize selected
 //! synthetic reflection objects using the current module's private layouts.
 //!
 //! Called from:

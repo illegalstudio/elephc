@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits user-assembly helpers that let libelephc-eval call native instance and
+//! Emits user-assembly helpers that let libelephc-magician call native instance and
 //! static methods known to the current module.
 //!
 //! Called from:

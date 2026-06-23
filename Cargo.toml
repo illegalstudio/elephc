@@ -14,11 +14,11 @@ categories = ["compilers", "command-line-utilities"]
 # `cargo test` materialize libelephc_tls.a (https:// wrapper),
 # libelephc_pdo.a (PDO: SQLite + PostgreSQL), libelephc_crypto.a
 # (hash/HMAC family), libelephc_phar.a (runtime phar:// archive reads), and
-# libelephc_eval.a (optional eval runtime) into target/<profile>/, where
+# libelephc_magician.a (optional eval runtime) into target/<profile>/, where
 # linker.rs locates them for programs that use those features.
 [workspace]
-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-eval"]
-default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-eval"]
+members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-magician"]
+default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-magician"]
 resolver = "2"
 
 [[bin]]
@@ -48,7 +48,7 @@ elephc-tls = { path = "crates/elephc-tls" }
 elephc-pdo = { path = "crates/elephc-pdo" }
 elephc-crypto = { path = "crates/elephc-crypto" }
 elephc-phar = { path = "crates/elephc-phar" }
-elephc-eval = { path = "crates/elephc-eval" }
+elephc-magician = { path = "crates/elephc-magician" }
 # flate2 lets the phar:// codegen tests build gzip (raw-DEFLATE) fixture entries
 # with the same encoder the compiler decodes, guaranteeing a version-stable
 # round-trip without shelling out to php.
