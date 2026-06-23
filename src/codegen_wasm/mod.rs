@@ -1193,4 +1193,48 @@ mod tests {
             assert_eq!(o, "hello");
         }
     }
+
+    /// Verifies `echo $argv[1]` reads the first command-line argument: `$argv` is
+    /// built from WASI `args_get` into an indexed string array, indexed, and echoed.
+    #[test]
+    fn argv_index_one_echoes_first_arg() {
+        let mut module = Module::new(Target::wasm());
+        let argv_name = module.data.intern_global_name("argv");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let argv = b
+                .emit(
+                    Op::LoadGlobal,
+                    Vec::new(),
+                    Some(Immediate::GlobalName(argv_name)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Str)),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let idx = b.emit_const_i64(1);
+            let g = b
+                .emit(Op::ArrayGet, vec![argv, idx], None, IrType::Str, PhpType::Str, Ownership::Borrowed)
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![g],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        // script + ["foo","bar"]; $argv[1] is the first user argument "foo".
+        if let Some(o) = run_main_with_args(&module, &["foo", "bar"]) {
+            assert_eq!(o, "foo");
+        }
+    }
 }

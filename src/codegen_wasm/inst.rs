@@ -475,9 +475,9 @@ fn lower_is_truthy(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 
 /// Lowers `Op::LoadGlobal` for supported superglobals.
 ///
-/// `$argc` is read via the `__rt_argc` runtime helper (WASI `args_sizes_get`).
-/// Other globals (including `$argv`, which needs the array runtime) are not yet
-/// supported.
+/// `$argc` is read via `__rt_argc` (WASI `args_sizes_get`); `$argv` is built as an
+/// indexed string array via `__rt_argv` (WASI `args_get`). Other globals are not
+/// yet supported.
 fn lower_load_global(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let data_id = match &inst.immediate {
         Some(Immediate::GlobalName(d)) => *d,
@@ -493,6 +493,11 @@ fn lower_load_global(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     match name.as_str() {
         "argc" => {
             ctx.fb.ins("call $__rt_argc", "load $argc");
+            store_result(ctx, inst)
+        }
+        "argv" => {
+            ctx.fb
+                .ins("call $__rt_argv", "build $argv (indexed string array)");
             store_result(ctx, inst)
         }
         other => Err(WasmError::Unsupported(format!("global ${}", other))),

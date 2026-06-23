@@ -71,10 +71,20 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
         params: vec![ValType::I32, ValType::I32],
         results: vec![ValType::I32],
     });
+    wm.import_func(FuncImport {
+        module: "wasi_snapshot_preview1".to_string(),
+        field: "args_get".to_string(),
+        internal: "wasi_args_get".to_string(),
+        // argv_ptr_array, argv_buf -> errno
+        params: vec![ValType::I32, ValType::I32],
+        results: vec![ValType::I32],
+    });
     wm.add_raw_func(RT_ECHO_I64);
     wm.add_raw_func(RT_ECHO_STR);
     wm.add_raw_func(RT_ECHO_BOOL);
     wm.add_raw_func(RT_ARGC);
+    wm.add_raw_func(RT_STRLEN_C);
+    wm.add_raw_func(RT_ARGV);
 }
 
 /// `__rt_argc`: returns PHP's `$argc` (the process argument count) via WASI
@@ -82,6 +92,49 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
 const RT_ARGC: &str = r#"(func $__rt_argc (result i64)
   (drop (call $wasi_args_sizes_get (i32.const 16) (i32.const 20))) ;; argc@16, argv_buf_size@20
   (i64.extend_i32_u (i32.load (i32.const 16))))                    ;; return argc as i64"#;
+
+/// `__rt_strlen_c`: byte length of a NUL-terminated C string (used to measure the
+/// WASI argv entries before copying them into PHP strings).
+const RT_STRLEN_C: &str = r#"(func $__rt_strlen_c (param $p i32) (result i32)
+  (local $n i32)
+  (local.set $n (i32.const 0))
+  (block $end (loop $scan
+    (br_if $end (i32.eqz (i32.load8_u (i32.add (local.get $p) (local.get $n)))))  ;; stop at the NUL terminator
+    (local.set $n (i32.add (local.get $n) (i32.const 1)))
+    (br $scan)))
+  (local.get $n))"#;
+
+/// `__rt_argv`: builds PHP's `$argv` as an indexed string array via WASI
+/// `args_sizes_get` + `args_get`. Temporary heap buffers hold the WASI pointer
+/// array and argument byte buffer; each argument is copied (persisted) into the
+/// array via `__rt_array_push_str`, after which the temporaries are freed.
+const RT_ARGV: &str = r#"(func $__rt_argv (result i32)
+  (local $argc i32)
+  (local $bufsize i32)
+  (local $ptrs i32)
+  (local $buf i32)
+  (local $arr i32)
+  (local $i i32)
+  (local $argp i32)
+  (local $len i32)
+  (drop (call $wasi_args_sizes_get (i32.const 16) (i32.const 20)))   ;; argc@16, argv_buf_size@20
+  (local.set $argc (i32.load (i32.const 16)))
+  (local.set $bufsize (i32.load (i32.const 20)))
+  (local.set $ptrs (call $__rt_heap_alloc (i32.mul (local.get $argc) (i32.const 4))))  ;; argc i32 pointers
+  (local.set $buf (call $__rt_heap_alloc (local.get $bufsize)))      ;; argv byte buffer
+  (drop (call $wasi_args_get (local.get $ptrs) (local.get $buf)))    ;; fill the pointer array + buffer
+  (local.set $arr (call $__rt_array_new (i64.extend_i32_u (local.get $argc)) (i64.const 16)))  ;; string array
+  (local.set $i (i32.const 0))
+  (block $end (loop $loop
+    (br_if $end (i32.ge_u (local.get $i) (local.get $argc)))
+    (local.set $argp (i32.load (i32.add (local.get $ptrs) (i32.mul (local.get $i) (i32.const 4)))))  ;; argv[i] (C string)
+    (local.set $len (call $__rt_strlen_c (local.get $argp)))         ;; its byte length
+    (local.set $arr (call $__rt_array_push_str (local.get $arr) (local.get $argp) (i64.extend_i32_u (local.get $len))))  ;; append a persisted copy
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br $loop)))
+  (call $__rt_heap_free (local.get $ptrs))                          ;; temporaries no longer needed (args were copied)
+  (call $__rt_heap_free (local.get $buf))
+  (local.get $arr))"#;
 
 /// `__rt_concat`: appends `a` then `b` into the concat buffer at the current
 /// `$__concat_off` cursor and returns the freshly-written region as `(ptr, len)`,
