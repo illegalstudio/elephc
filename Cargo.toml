@@ -64,6 +64,11 @@ flate2 = "1"
 # success coverage does not depend on outbound network access.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-pemfile = "2"
+# wasmparser fully validates (type-checks) the WebAssembly the wasm32-wasi backend
+# emits, so the dispatch-loop/terminator lowering tests assert real wasm validity
+# rather than mere textual assembly. Version matches the wasmparser that `wat`
+# already pulls in, so the dependency graph is deduplicated.
+wasmparser = "0.252"
 
 # Local test-speed tuning. The dev profile (which `test` inherits) keeps full
 # `debug = 2` info by default, which inflates both rustc codegen and the link of
