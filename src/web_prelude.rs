@@ -16,8 +16,10 @@
 use crate::parser::ast::Program;
 
 /// The PHP source prepended under `--web`. Phase 2 Task 2: extern declarations;
-/// Task 5: $_SERVER; Task 6: $_GET parsed from the query string. The query
-/// parser is built inline (element-by-element into the $_GET superglobal),
+/// Task 5: $_SERVER; Task 6: $_GET parsed from the query string; Task 7: $_POST
+/// parsed from a `application/x-www-form-urlencoded` body (read binary-safe via
+/// `ptr_read_string(elephc_web_body_ptr(), elephc_web_body_len())`). The query/
+/// body parsers are built inline (element-by-element into the superglobal),
 /// mirroring the $_SERVER pattern, to stay within the type checker's proven
 /// capabilities (a helper function returning a freshly-built assoc array trips
 /// return-type inference / union widening).
@@ -60,6 +62,26 @@ if ($__elephc_qs !== '') {
             $__elephc_gk = rawurldecode(substr($__elephc_pair, 0, $__elephc_eq));
             $__elephc_gv = rawurldecode(substr($__elephc_pair, $__elephc_eq + 1));
             $_GET[$__elephc_gk] = $__elephc_gv;
+        }
+    }
+}
+$_POST = [];
+$__elephc_ct = isset($_SERVER['CONTENT_TYPE']) ? $_SERVER['CONTENT_TYPE'] : '';
+if (strpos(strtoupper($__elephc_ct), 'APPLICATION/X-WWW-FORM-URLENCODED') !== false) {
+    $__elephc_body = ptr_read_string(elephc_web_body_ptr(), elephc_web_body_len());
+    if ($__elephc_body !== '') {
+        $__elephc_ppairs = explode('&', $__elephc_body);
+        foreach ($__elephc_ppairs as $__elephc_ppair) {
+            $__elephc_peq = strpos($__elephc_ppair, '=');
+            if ($__elephc_peq === false) {
+                if ($__elephc_ppair !== '') {
+                    $_POST[rawurldecode($__elephc_ppair)] = '';
+                }
+            } else {
+                $__elephc_pk = rawurldecode(substr($__elephc_ppair, 0, $__elephc_peq));
+                $__elephc_pv = rawurldecode(substr($__elephc_ppair, $__elephc_peq + 1));
+                $_POST[$__elephc_pk] = $__elephc_pv;
+            }
         }
     }
 }

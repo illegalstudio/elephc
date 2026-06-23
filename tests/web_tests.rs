@@ -272,3 +272,24 @@ fn web_get_superglobal_parsed() {
     let _ = child.wait();
     assert!(resp.ends_with("bob/new york"), "body: {:?}", resp);
 }
+
+/// Verifies $_POST is parsed from a urlencoded body when the Content-Type matches.
+#[test]
+fn web_post_superglobal_parsed() {
+    let dir = make_test_dir("web_post_sg");
+    let src = "<?php echo $_POST['user'] . ':' . $_POST['pw'];";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(
+        &addr,
+        "POST",
+        "/",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        "user=alice&pw=s%40fe",
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("alice:s@fe"), "body: {:?}", resp);
+}
