@@ -133,6 +133,27 @@ const RT_BIGNUM_IS_ZERO: &str = r#"(func $__rt_bignum_is_zero (param $ptr i32) (
   (i32.const 1))                                                    ;; every limb was zero -> 1
 "#;
 
+/// Writes a 32-bit value in [0, 999999999] as exactly 9 ASCII decimal digits.
+///
+/// Stores 9 bytes at `$ptr`, most-significant digit first, zero-padded: `ptr[0]` is
+/// `value / 10^8 mod 10` and `ptr[8]` is `value mod 10`. This emits one divmod-by-1e9
+/// chunk into the digit buffer; intermediate chunks keep their leading zeros (the most
+/// significant chunk's leading zeros are stripped by the caller). Returns nothing.
+const RT_U32_TO_9DIGITS: &str = r#"(func $__rt_u32_to_9digits (param $value i32) (param $ptr i32)
+  (local $i i32) (local $v i32)
+  (local.set $v (local.get $value))                                ;; working copy of the value
+  (local.set $i (i32.const 9))                                     ;; one past the last byte index
+  (block $end                                                      ;; loop exit target
+    (loop $top                                                     ;; write 9 digits right-to-left
+      (br_if $end (i32.eqz (local.get $i)))                        ;; stop after writing all 9
+      (local.set $i (i32.sub (local.get $i) (i32.const 1)))        ;; pre-decrement: i is the current byte index
+      (i32.store8                                                  ;; ptr[i] = ASCII digit (v mod 10)
+        (i32.add (local.get $ptr) (local.get $i))
+        (i32.add (i32.const 48) (i32.rem_u (local.get $v) (i32.const 10))))
+      (local.set $v (i32.div_u (local.get $v) (i32.const 10)))     ;; drop the digit just written
+      (br $top)))                                                  ;; continue the loop
+)"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
 /// Currently emits `__rt_f64_decompose` (the float decoder) plus the big-integer
@@ -149,6 +170,7 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_BIGNUM_DIVMOD_U32);
     wm.add_raw_func(RT_BIGNUM_MUL_SMALL_N_TIMES);
     wm.add_raw_func(RT_BIGNUM_IS_ZERO);
+    wm.add_raw_func(RT_U32_TO_9DIGITS);
 }
 
 #[cfg(test)]
@@ -537,6 +559,52 @@ mod tests {
   (i64.extend_i32_u (call $__rt_bignum_is_zero (i32.const 256) (i32.const 4))))"#;
         if let Some(o) = run_float_driver(driver, "t") {
             assert_eq!(o, "0");
+        }
+    }
+
+    /// Builds a WAT expression that reconstructs the 9-digit decimal number stored as
+    /// ASCII bytes at `base..base+9` (most-significant first) via Horner's rule. Used to
+    /// validate both digit ordering and zero-padding of `__rt_u32_to_9digits`.
+    fn nine_digit_horner(base: u32) -> String {
+        let digit = |off: u32| {
+            format!(
+                "(i64.extend_i32_u (i32.sub (i32.load8_u (i32.const {})) (i32.const 48)))",
+                base + off
+            )
+        };
+        let mut expr = digit(0);
+        for off in 1..9 {
+            expr = format!("(i64.add (i64.mul {expr} (i64.const 10)) {})", digit(off));
+        }
+        expr
+    }
+
+    /// 123456789 writes as the 9 digits "123456789" (MSB-first, no padding); the Horner
+    /// reconstruction returns the original value.
+    #[test]
+    fn u32_to_9digits_full() {
+        let driver = format!(
+            r#"(func $t (export "t") (result i64)
+  (call $__rt_u32_to_9digits (i32.const 123456789) (i32.const 256))
+  {})"#,
+            nine_digit_horner(256)
+        );
+        if let Some(o) = run_float_driver(&driver, "t") {
+            assert_eq!(o, "123456789");
+        }
+    }
+
+    /// 42 writes as "000000042" — leading zeros pad to 9 digits; Horner returns 42.
+    #[test]
+    fn u32_to_9digits_zero_padded() {
+        let driver = format!(
+            r#"(func $t (export "t") (result i64)
+  (call $__rt_u32_to_9digits (i32.const 42) (i32.const 256))
+  {})"#,
+            nine_digit_horner(256)
+        );
+        if let Some(o) = run_float_driver(&driver, "t") {
+            assert_eq!(o, "42");
         }
     }
 }
