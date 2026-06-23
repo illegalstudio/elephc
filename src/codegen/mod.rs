@@ -170,10 +170,17 @@ pub(crate) use prescan::collect_constants;
 /// PHP functions marked with `#[Export]` under their unmangled PHP names plus
 /// the `elephc_init` / `elephc_shutdown` / `elephc_last_error` / `elephc_free`
 /// lifecycle entry points for embedding hosts.
+///
+/// `NpmPackage` is only valid with the `wasm32-wasi` target: it produces a
+/// directory containing the compiled `.wasm` module, an ESM loader that runs it
+/// under `node:wasi`, a `package.json`, and a README. For all native codegen and
+/// linking decisions it behaves exactly like `Executable` (a command module with
+/// a `_start` entry); the difference is purely in how the artifact is packaged.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Emit {
     Executable,
     Cdylib,
+    NpmPackage,
 }
 use prescan::{collect_global_var_names, collect_static_vars};
 use program_usage::{
@@ -216,7 +223,9 @@ pub fn generate_user_asm(
     sentinels::set_null_repr(null_repr);
     let mut emitter = match emit {
         Emit::Cdylib => Emitter::new_pic(target),
-        Emit::Executable => Emitter::new(target),
+        // NpmPackage is wasm-only and never reaches the native AST backend, but it
+        // behaves like Executable for codegen; keep the match exhaustive.
+        Emit::Executable | Emit::NpmPackage => Emitter::new(target),
     };
     if target.arch == platform::Arch::X86_64 {
         emitter.emit_text_prelude();

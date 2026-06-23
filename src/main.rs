@@ -12,6 +12,7 @@ mod autoload;
 mod cli;
 mod codegen;
 mod codegen_ir;
+mod codegen_wasm;
 mod conditional;
 mod errors;
 mod exports;

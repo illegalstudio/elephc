@@ -13,6 +13,8 @@ pub mod autoload;
 pub mod codegen;
 /// EIR-consuming assembly backend track.
 pub mod codegen_ir;
+/// EIR-consuming WebAssembly (`wasm32-wasi`) backend track.
+pub mod codegen_wasm;
 /// Conditional compilation directives.
 pub mod conditional;
 /// Error and warning reporting.

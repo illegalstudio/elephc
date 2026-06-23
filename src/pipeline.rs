@@ -18,9 +18,10 @@ use crate::codegen::platform::{Platform, Target};
 use crate::codegen::Emit;
 use crate::timings::CompileTimings;
 use crate::{
-    autoload, codegen, codegen_ir, conditional, errors, exports, ir, ir_lower, ir_passes, lexer,
-    linker, list_id_prelude, magic_constants, name_resolver, optimize, parser, pdo_prelude,
-    resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude, web_prelude,
+    autoload, codegen, codegen_ir, codegen_wasm, conditional, errors, exports, ir, ir_lower,
+    ir_passes, lexer, linker, list_id_prelude, magic_constants, name_resolver, optimize, parser,
+    pdo_prelude, resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude,
+    web_prelude,
 };
 
 /// Holds the paths for all compilation output files (assembly, object, binary, source map).
@@ -301,6 +302,23 @@ pub(crate) fn compile(config: CliConfig) {
         None
     };
 
+    // WebAssembly target: lower EIR to a `.wat` module and emit `.wat`/`.wasm`.
+    // This bypasses the native runtime object, assembler, and linker entirely.
+    if target.is_wasm() {
+        let module = ir_module
+            .as_ref()
+            .expect("the wasm32-wasi target requires the EIR backend");
+        emit_wasm_artifacts(
+            module,
+            emit,
+            emit_asm,
+            filename,
+            &output_paths,
+            &mut timings,
+        );
+        return;
+    }
+
     let mut runtime_features = ir_module
         .as_ref()
         .map(|module| module.required_runtime_features)
@@ -447,6 +465,70 @@ pub(crate) fn compile(config: CliConfig) {
     println!("Compiled '{}' -> '{}'", filename, output_paths.bin.display());
 }
 
+/// Lowers an EIR module to WebAssembly and writes the target artifacts.
+///
+/// Always writes the `.wat` text module (the readable form, kept like a native
+/// `.s` file). When `emit_asm` is set, stops there. Otherwise encodes the `.wat`
+/// to a `.wasm` binary with the pure-Rust `wat` crate and writes it. The native
+/// runtime object, assembler, and linker are never involved. Exits the process
+/// with a diagnostic on any backend, encoding, or write error.
+fn emit_wasm_artifacts(
+    module: &ir::Module,
+    emit: Emit,
+    emit_asm: bool,
+    filename: &str,
+    output_paths: &OutputPaths,
+    timings: &mut CompileTimings,
+) {
+    let phase_started = Instant::now();
+    let wat = match codegen_wasm::generate(module, emit) {
+        Ok(wat) => wat,
+        Err(err) => {
+            eprintln!("WebAssembly backend error: {}", err);
+            process::exit(1);
+        }
+    };
+    timings.record_since("codegen-wasm", phase_started);
+
+    let phase_started = Instant::now();
+    if let Err(e) = fs::write(&output_paths.asm, &wat) {
+        eprintln!("Error writing '{}': {}", output_paths.asm.display(), e);
+        process::exit(1);
+    }
+    timings.record_since("write-wat", phase_started);
+
+    if emit_asm {
+        timings.report();
+        println!(
+            "Emitted WebAssembly text '{}' -> '{}'",
+            filename,
+            output_paths.asm.display()
+        );
+        return;
+    }
+
+    let phase_started = Instant::now();
+    let wasm_bytes = match wat::parse_str(&wat) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            eprintln!(
+                "WebAssembly encoding error while assembling '{}': {}",
+                output_paths.asm.display(),
+                err
+            );
+            process::exit(1);
+        }
+    };
+    if let Err(e) = fs::write(&output_paths.bin, &wasm_bytes) {
+        eprintln!("Error writing '{}': {}", output_paths.bin.display(), e);
+        process::exit(1);
+    }
+    timings.record_since("encode-wasm", phase_started);
+
+    timings.report();
+    println!("Compiled '{}' -> '{}'", filename, output_paths.bin.display());
+}
+
 /// Computes output paths for .s (assembly), .o (object), binary, and .map (source map) files
 /// derived from the input filename.
 ///
@@ -457,8 +539,24 @@ fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
     let path = Path::new(filename);
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
     let parent = path.parent().unwrap_or(Path::new("."));
+
+    // The WebAssembly target emits a `.wat` text module (the readable form, the
+    // analogue of `.s`) and a `.wasm` binary (the artifact). It never produces a
+    // `.o` object or runs the native linker. NPM packaging writes into a `<stem>/`
+    // directory and is finalized in a later phase.
+    if target.is_wasm() {
+        return OutputPaths {
+            asm: parent.join(format!("{}.wat", stem)),
+            obj: parent.join(format!("{}.o", stem)),
+            bin: parent.join(format!("{}.wasm", stem)),
+            source_map: parent.join(format!("{}.map", stem)),
+        };
+    }
+
     let bin_name = match emit {
-        Emit::Executable => stem.to_string(),
+        // NpmPackage is wasm-only; for any native build it never occurs, but keep
+        // the match exhaustive by treating it like an executable.
+        Emit::Executable | Emit::NpmPackage => stem.to_string(),
         Emit::Cdylib => match target.platform {
             Platform::MacOS => format!("lib{}.dylib", stem),
             Platform::Linux => format!("lib{}.so", stem),

@@ -30,11 +30,32 @@ pub enum Arch {
     X86_64,
 }
 
+/// Distinguishes native targets (assembled with `as`, linked with `ld`/`gcc`)
+/// from the WebAssembly target, which bypasses the native assembler and linker
+/// and emits a `.wat`/`.wasm` module through `crate::codegen_wasm` instead.
+///
+/// Adding a discriminator field to `Target` — rather than a new `Platform`/`Arch`
+/// variant — keeps the hundreds of exhaustive `match … .platform`/`.arch` sites
+/// across the backend untouched: WebAssembly is selected through `is_wasm()`,
+/// and the native codegen/linker paths are skipped before they are ever reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetKind {
+    /// Native target: emits target assembly, then runs `as` + `ld`/`gcc`.
+    Native,
+    /// WebAssembly System Interface target (`wasm32-wasi`): emits a WebAssembly
+    /// module and never invokes the native assembler or linker.
+    Wasm,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Target representation.
 pub struct Target {
     pub platform: Platform,
     pub arch: Arch,
+    /// Whether this is a native target or the WebAssembly target. Defaults to
+    /// `TargetKind::Native` for every `Target::new(...)`; only `Target::wasm()`
+    /// sets `Wasm`.
+    pub kind: TargetKind,
 }
 
 impl Platform {
@@ -520,9 +541,37 @@ impl Arch {
 }
 
 impl Target {
-    /// Constructs a `Target` from a `Platform` and `Arch`.
+    /// Constructs a native `Target` from a `Platform` and `Arch`.
+    ///
+    /// `kind` defaults to `TargetKind::Native`; use `Target::wasm()` for the
+    /// WebAssembly target.
     pub const fn new(platform: Platform, arch: Arch) -> Self {
-        Self { platform, arch }
+        Self {
+            platform,
+            arch,
+            kind: TargetKind::Native,
+        }
+    }
+
+    /// Constructs the WebAssembly (`wasm32-wasi`) target.
+    ///
+    /// The `platform`/`arch` fields carry placeholder native conventions
+    /// (`Linux`/`X86_64`) that the WebAssembly backend never consults — the
+    /// WebAssembly path is selected through `TargetKind::Wasm` (`is_wasm()`),
+    /// which bypasses native assembly emission, the assembler, and the linker.
+    /// Keeping a valid native base means any incidental frontend query (e.g.
+    /// struct-layout constants during type checking) still returns a sane value.
+    pub const fn wasm() -> Self {
+        Self {
+            platform: Platform::Linux,
+            arch: Arch::X86_64,
+            kind: TargetKind::Wasm,
+        }
+    }
+
+    /// Returns `true` when this is the WebAssembly (`wasm32-wasi`) target.
+    pub fn is_wasm(&self) -> bool {
+        matches!(self.kind, TargetKind::Wasm)
     }
 
     /// Detects the host platform and architecture from the Rust compile-time target.
@@ -552,8 +601,9 @@ impl Target {
             "linux-x86_64" | "x86_64-unknown-linux-gnu" => {
                 Ok(Self::new(Platform::Linux, Arch::X86_64))
             }
+            "wasm32-wasi" | "wasm32-wasip1" | "wasm32-unknown-wasi" | "wasm" => Ok(Self::wasm()),
             _ => Err(format!(
-                "unsupported target '{}'; expected one of: macos-aarch64, macos-x86_64, linux-aarch64, linux-x86_64",
+                "unsupported target '{}'; expected one of: macos-aarch64, macos-x86_64, linux-aarch64, linux-x86_64, wasm32-wasi",
                 value
             )),
         }
@@ -561,8 +611,12 @@ impl Target {
 
     /// Returns the canonical string representation of this target.
     ///
-    /// Returns one of: `"macos-aarch64"`, `"macos-x86_64"`, `"linux-aarch64"`, `"linux-x86_64"`.
+    /// Returns one of: `"macos-aarch64"`, `"macos-x86_64"`, `"linux-aarch64"`,
+    /// `"linux-x86_64"`, `"wasm32-wasi"`.
     pub fn as_str(&self) -> &'static str {
+        if self.is_wasm() {
+            return "wasm32-wasi";
+        }
         match (self.platform, self.arch) {
             (Platform::MacOS, Arch::AArch64) => "macos-aarch64",
             (Platform::MacOS, Arch::X86_64) => "macos-x86_64",
@@ -573,8 +627,13 @@ impl Target {
 
     /// Returns `true` if this target has a working codegen backend.
     ///
-    /// Currently returns `true` for all targets except `macos-x86_64`, which is not yet implemented.
+    /// Returns `true` for `macos-aarch64`, `linux-aarch64`, `linux-x86_64`, and
+    /// the `wasm32-wasi` WebAssembly target; `false` for `macos-x86_64`, which is
+    /// not yet implemented.
     pub fn supports_current_backend(&self) -> bool {
+        if self.is_wasm() {
+            return true;
+        }
         matches!(
             (self.platform, self.arch),
             (Platform::MacOS, Arch::AArch64)

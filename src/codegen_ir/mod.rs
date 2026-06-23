@@ -124,7 +124,9 @@ pub fn generate_user_asm_from_ir_with_options(
 ) -> Result<String> {
     let mut emitter = match emit {
         Emit::Cdylib => Emitter::new_pic(module.target),
-        Emit::Executable => Emitter::new(module.target),
+        // NpmPackage is wasm-only and never reaches the native EIR backend, but it
+        // behaves like Executable for codegen; keep the match exhaustive.
+        Emit::Executable | Emit::NpmPackage => Emitter::new(module.target),
     };
     if module.target.arch == Arch::X86_64 {
         emitter.emit_text_prelude();

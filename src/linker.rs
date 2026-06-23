@@ -265,7 +265,9 @@ pub(crate) fn link(
             let mut cmd = Command::new("ld");
             cmd.args(["-arch", target.darwin_arch_name()]);
             match emit {
-                Emit::Executable => {
+                // NpmPackage is wasm-only and never reaches the native linker, but
+                // keep the match exhaustive and treat it like an executable.
+                Emit::Executable | Emit::NpmPackage => {
                     cmd.args(["-e", "_main"]);
                     // The runtime object is emitted with `.subsections_via_symbols`
                     // and `L`-prefixed (assembler-local) internal labels, so
@@ -311,6 +313,9 @@ pub(crate) fn link(
                 Emit::Executable => {
                     cmd.arg("-Wl,--gc-sections");
                 }
+                // NpmPackage is wasm-only and never reaches the native linker;
+                // keep the match exhaustive and treat it like an executable.
+                Emit::NpmPackage => {}
             }
             cmd.arg("-o").arg(bin_path).arg(obj_path).arg(runtime_object_path);
             if matches!(emit, Emit::Executable) && extra_link_libs.is_empty() {
