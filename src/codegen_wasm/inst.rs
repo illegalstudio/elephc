@@ -21,8 +21,8 @@ use super::context::{wasm_fn_symbol, FnCtx, Result};
 use super::values::WasmRepr;
 use super::WasmError;
 use crate::ir::{
-    CmpPredicate, DataId, Immediate, InstId, Instruction, LocalSlotId, Op, Ownership, ValueDef,
-    ValueId,
+    CmpPredicate, DataId, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalSlotId, Op,
+    Ownership, ValueDef, ValueId,
 };
 use crate::types::PhpType;
 
@@ -84,6 +84,8 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ArrayLen => lower_array_len(ctx, &inst),
         Op::ArrayGet => lower_array_get(ctx, &inst),
         Op::ArrayPush => lower_array_push(ctx, &inst),
+        Op::MixedBox => lower_mixed_box(ctx, &inst),
+        Op::MixedTagOf => lower_mixed_tag_of(ctx, &inst),
         other => Err(WasmError::Unsupported(format!("op {:?}", other))),
     }
 }
@@ -572,6 +574,13 @@ fn lower_echo(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb.ins("call $__rt_echo_str", "echo string to stdout");
             Ok(())
         }
+        PhpType::Mixed => {
+            // The Mixed pointer; the runtime dispatches on the cell's tag.
+            ctx.emit_load_value(op0)?;
+            ctx.fb
+                .ins("call $__rt_mixed_write_stdout", "echo mixed value (tag-dispatched)");
+            Ok(())
+        }
         other => Err(WasmError::Unsupported(format!("echo of {:?}", other))),
     }
 }
@@ -779,6 +788,85 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Lowers `Op::MixedBox`: boxes a scalar/string/heap value into a Mixed cell via
+/// `__rt_mixed_from_value`, picking the runtime tag from the operand's type. A
+/// value that is already a Mixed cell is forwarded unchanged.
+fn lower_mixed_box(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let value = operand(inst, 0)?;
+    let repr = ctx.value_repr(value)?.clone();
+    let php = ctx.function.value(value).map(|v| v.php_type.codegen_repr());
+    let ir = ctx.function.value(value).map(|v| v.ir_type);
+    match repr {
+        WasmRepr::I64(local) => {
+            // Int -> tag 0, Bool -> tag 3 (both i64-represented).
+            let tag = if matches!(php, Some(PhpType::Bool)) { 3 } else { 0 };
+            ctx.fb.ins(&format!("i64.const {}", tag), "mixed tag (int/bool)");
+            ctx.fb.ins(&format!("local.get {}", local), "scalar -> lo");
+            ctx.fb.ins("i64.const 0", "hi unused");
+            ctx.fb
+                .ins("call $__rt_mixed_from_value", "box scalar into a mixed cell");
+            store_result(ctx, inst)
+        }
+        WasmRepr::F64(local) => {
+            ctx.fb.ins("i64.const 2", "mixed tag (float)");
+            ctx.fb.ins(&format!("local.get {}", local), "float value");
+            ctx.fb.ins("i64.reinterpret_f64", "float bits -> lo");
+            ctx.fb.ins("i64.const 0", "hi unused");
+            ctx.fb.ins("call $__rt_mixed_from_value", "box float");
+            store_result(ctx, inst)
+        }
+        WasmRepr::Str { ptr, len } => {
+            ctx.fb.ins("i64.const 1", "mixed tag (string)");
+            ctx.fb.ins(&format!("local.get {}", ptr), "string pointer");
+            ctx.fb.ins("i64.extend_i32_u", "ptr -> lo");
+            ctx.fb.ins(&format!("local.get {}", len), "string length -> hi");
+            ctx.fb
+                .ins("call $__rt_mixed_from_value", "box string (persists a copy)");
+            store_result(ctx, inst)
+        }
+        WasmRepr::Ptr(local) => match ir {
+            // A value that is already a Mixed cell: forward it unchanged.
+            Some(IrType::Heap(IrHeapKind::Mixed)) => forward_value(ctx, value, inst),
+            Some(IrType::Heap(kind)) => {
+                let tag = match kind {
+                    IrHeapKind::Array => 4,
+                    IrHeapKind::Hash => 5,
+                    IrHeapKind::Object => 6,
+                    other => {
+                        return Err(WasmError::Unsupported(format!(
+                            "mixed_box of heap kind {:?}",
+                            other
+                        )))
+                    }
+                };
+                ctx.fb.ins(&format!("i64.const {}", tag), "mixed tag (heap kind)");
+                ctx.fb.ins(&format!("local.get {}", local), "heap pointer");
+                ctx.fb.ins("i64.extend_i32_u", "ptr -> lo");
+                ctx.fb.ins("i64.const 0", "hi unused");
+                ctx.fb
+                    .ins("call $__rt_mixed_from_value", "box heap value (increfs the child)");
+                store_result(ctx, inst)
+            }
+            _ => Err(WasmError::Unsupported("mixed_box of a non-heap pointer".to_string())),
+        },
+        WasmRepr::Tagged { .. } => {
+            Err(WasmError::Unsupported("mixed_box of a tagged scalar".to_string()))
+        }
+        WasmRepr::Void => Err(WasmError::Unsupported("mixed_box of void".to_string())),
+    }
+}
+
+/// Lowers `Op::MixedTagOf`: returns the runtime tag integer of a Mixed value by
+/// unboxing it and keeping only the tag result.
+fn lower_mixed_tag_of(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb
+        .ins("call $__rt_mixed_unbox", "unbox -> (tag, lo, hi)");
+    ctx.fb.ins("drop", "discard hi");
+    ctx.fb.ins("drop", "discard lo");
+    store_result(ctx, inst)
 }
 
 /// Lowers `IsNull` for i64 operands by comparing against the null sentinel.

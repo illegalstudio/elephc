@@ -85,6 +85,7 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARGC);
     wm.add_raw_func(RT_STRLEN_C);
     wm.add_raw_func(RT_ARGV);
+    wm.add_raw_func(RT_MIXED_WRITE_STDOUT);
 }
 
 /// `__rt_argc`: returns PHP's `$argc` (the process argument count) via WASI
@@ -135,6 +136,32 @@ const RT_ARGV: &str = r#"(func $__rt_argv (result i32)
   (call $__rt_heap_free (local.get $ptrs))                          ;; temporaries no longer needed (args were copied)
   (call $__rt_heap_free (local.get $buf))
   (local.get $arr))"#;
+
+/// `__rt_mixed_write_stdout`: echoes a boxed Mixed value by dispatching on its tag:
+/// int (0) via `__rt_echo_i64`, string (1) via `__rt_echo_str`, bool (3) via
+/// `__rt_echo_bool`; null (8) and non-scalar tags print nothing (PHP semantics).
+/// Float (tag 2) needs `%.14G` formatting (ftoa), which is deferred — the same gap
+/// as scalar float `echo`; it currently prints nothing rather than wrong output.
+const RT_MIXED_WRITE_STDOUT: &str = r#"(func $__rt_mixed_write_stdout (param $ptr i32)
+  (local $tag i64)
+  (if (i32.eqz (local.get $ptr))
+    (then (return)))                                                ;; null pointer -> nothing
+  (local.set $tag (i64.load (local.get $ptr)))                      ;; tag @ +0
+  (if (i64.eqz (local.get $tag))                                    ;; tag 0 = int
+    (then
+      (call $__rt_echo_i64 (i64.load (i32.add (local.get $ptr) (i32.const 8))))
+      (return)))
+  (if (i64.eq (local.get $tag) (i64.const 1))                       ;; tag 1 = string
+    (then
+      (call $__rt_echo_str
+        (i32.wrap_i64 (i64.load (i32.add (local.get $ptr) (i32.const 8))))
+        (i64.load (i32.add (local.get $ptr) (i32.const 16))))
+      (return)))
+  (if (i64.eq (local.get $tag) (i64.const 3))                       ;; tag 3 = bool
+    (then
+      (call $__rt_echo_bool (i64.load (i32.add (local.get $ptr) (i32.const 8))))
+      (return))))
+"#;
 
 /// `__rt_concat`: appends `a` then `b` into the concat buffer at the current
 /// `$__concat_off` cursor and returns the freshly-written region as `(ptr, len)`,

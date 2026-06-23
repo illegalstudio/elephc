@@ -48,8 +48,9 @@ const RT_INCREF: &str = r#"(func $__rt_incref (param $ptr i32)
 
 /// `__rt_decref_any`: the kind-dispatched release entry. Frees a string (kind 1)
 /// directly (copy-on-acquire model); decrefs an indexed array (kind 2) via
-/// `__rt_decref_array`. Kinds 3..5 (hash/object/mixed) get their branches in later
-/// phases; any other kind is a no-op. No-ops on non-heap pointers.
+/// `__rt_decref_array` and a boxed Mixed cell (kind 5) via `__rt_decref_mixed`.
+/// Kinds 3 (hash) and 4 (object) get their branches in later phases; any other kind
+/// is a no-op. No-ops on non-heap pointers.
 const RT_DECREF_ANY: &str = r#"(func $__rt_decref_any (param $ptr i32)
   (local $kind i32)
   (if (i32.eqz (local.get $ptr))                  ;; guard: null pointer
@@ -67,6 +68,10 @@ const RT_DECREF_ANY: &str = r#"(func $__rt_decref_any (param $ptr i32)
   (if (i32.eq (local.get $kind) (i32.const 2))    ;; kind 2 = indexed array
     (then
       (call $__rt_decref_array (local.get $ptr))   ;; decrement; deep-free at zero
+      (return)))
+  (if (i32.eq (local.get $kind) (i32.const 5))    ;; kind 5 = boxed mixed cell
+    (then
+      (call $__rt_decref_mixed (local.get $ptr))   ;; decrement; deep-free at zero
       (return)))
   (return))
 "#;
@@ -110,6 +115,7 @@ mod tests {
     use super::emit_refcount_runtime;
     use super::super::arrays::emit_array_runtime;
     use super::super::heap::emit_heap_runtime;
+    use super::super::mixed::emit_mixed_runtime;
     use super::super::wat::WatModule;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -137,9 +143,11 @@ mod tests {
         wm.set_memory(3, Some("memory"));
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
-        // `__rt_decref_any` dispatches to `__rt_decref_array`, so the array runtime
-        // must be present for the module to validate (generate() emits both).
+        // `__rt_decref_any` dispatches to `__rt_decref_array` / `__rt_decref_mixed`,
+        // so the array and mixed runtimes must be present to validate (generate()
+        // emits all of them).
         emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
         wm.add_raw_func(driver);
         let wat = wm.render();
         let bytes = ::wat::parse_str(&wat)

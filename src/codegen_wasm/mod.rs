@@ -24,6 +24,7 @@ mod context;
 mod function;
 mod heap;
 mod inst;
+mod mixed;
 mod refcount;
 mod runtime;
 mod values;
@@ -108,6 +109,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     heap::emit_heap_runtime(&mut wm, heap_base, heap_end);
     refcount::emit_refcount_runtime(&mut wm);
     arrays::emit_array_runtime(&mut wm);
+    mixed::emit_mixed_runtime(&mut wm);
 
     // Lower every user function; `main` becomes the WASI `_start` command entry.
     for func in &module.functions {
@@ -1235,6 +1237,87 @@ mod tests {
         // script + ["foo","bar"]; $argv[1] is the first user argument "foo".
         if let Some(o) = run_main_with_args(&module, &["foo", "bar"]) {
             assert_eq!(o, "foo");
+        }
+    }
+
+    // ----- P5c-4: Mixed boxing (MixedBox + echo of a Mixed value) -----
+
+    /// Helper: builds a `main` that boxes one operand value into a Mixed cell and
+    /// echoes it. `build` returns the value to box.
+    fn box_and_echo_module(build: impl FnOnce(&mut Builder) -> ValueId) -> Module {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let v = build(&mut b);
+            let m = b
+                .emit(
+                    Op::MixedBox,
+                    vec![v],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![m],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        module
+    }
+
+    /// Boxing an int and echoing the Mixed value prints the decimal integer.
+    #[test]
+    fn mixed_box_int_echoes() {
+        let m = box_and_echo_module(|b| b.emit_const_i64(42));
+        if let Some(o) = run_main(&m) {
+            assert_eq!(o, "42");
+        }
+    }
+
+    /// Boxing a string (persisted into the cell) and echoing prints the bytes.
+    #[test]
+    fn mixed_box_string_echoes() {
+        let mut module = Module::new(Target::wasm());
+        let yo = module.data.intern_string("yo");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let v = b.emit_const_str(yo);
+            let m = b
+                .emit(Op::MixedBox, vec![v], None, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned)
+                .unwrap();
+            let _ = b.emit(Op::EchoValue, vec![m], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(o) = run_main(&module) {
+            assert_eq!(o, "yo");
+        }
+    }
+
+    /// Boxing a `true` bool and echoing prints "1" (PHP bool echo semantics).
+    #[test]
+    fn mixed_box_bool_echoes() {
+        let m = box_and_echo_module(|b| b.emit_const_bool(true));
+        if let Some(o) = run_main(&m) {
+            assert_eq!(o, "1");
         }
     }
 }
