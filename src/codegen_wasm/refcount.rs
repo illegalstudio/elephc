@@ -48,8 +48,9 @@ const RT_INCREF: &str = r#"(func $__rt_incref (param $ptr i32)
 
 /// `__rt_decref_any`: the kind-dispatched release entry. Frees a string (kind 1)
 /// directly (copy-on-acquire model); decrefs an indexed array (kind 2) via
-/// `__rt_decref_array` and a boxed Mixed cell (kind 5) via `__rt_decref_mixed`.
-/// Kinds 3 (hash) and 4 (object) get their branches in later phases; any other kind
+/// `__rt_decref_array`, an associative hash (kind 3) via `__rt_decref_hash`, and a
+/// boxed Mixed cell (kind 5) via `__rt_decref_mixed`. Kind 4 (object) gets its
+/// branch in a later phase; any other kind
 /// is a no-op. No-ops on non-heap pointers.
 const RT_DECREF_ANY: &str = r#"(func $__rt_decref_any (param $ptr i32)
   (local $kind i32)
@@ -68,6 +69,10 @@ const RT_DECREF_ANY: &str = r#"(func $__rt_decref_any (param $ptr i32)
   (if (i32.eq (local.get $kind) (i32.const 2))    ;; kind 2 = indexed array
     (then
       (call $__rt_decref_array (local.get $ptr))   ;; decrement; deep-free at zero
+      (return)))
+  (if (i32.eq (local.get $kind) (i32.const 3))    ;; kind 3 = associative hash
+    (then
+      (call $__rt_decref_hash (local.get $ptr))    ;; decrement; deep-free at zero
       (return)))
   (if (i32.eq (local.get $kind) (i32.const 5))    ;; kind 5 = boxed mixed cell
     (then
@@ -143,11 +148,12 @@ mod tests {
         wm.set_memory(3, Some("memory"));
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
-        // `__rt_decref_any` dispatches to `__rt_decref_array` / `__rt_decref_mixed`,
-        // so the array and mixed runtimes must be present to validate (generate()
-        // emits all of them).
+        // `__rt_decref_any` dispatches to `__rt_decref_array` / `__rt_decref_hash` /
+        // `__rt_decref_mixed`, so the array, hash, and mixed runtimes must be present
+        // to validate (generate() emits all of them).
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm);
         wm.add_raw_func(driver);
         let wat = wm.render();
         let bytes = ::wat::parse_str(&wat)

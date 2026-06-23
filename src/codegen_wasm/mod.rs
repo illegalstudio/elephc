@@ -22,6 +22,7 @@
 mod arrays;
 mod context;
 mod function;
+mod hashes;
 mod heap;
 mod inst;
 mod mixed;
@@ -110,6 +111,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     refcount::emit_refcount_runtime(&mut wm);
     arrays::emit_array_runtime(&mut wm);
     mixed::emit_mixed_runtime(&mut wm);
+    hashes::emit_hash_runtime(&mut wm);
 
     // Lower every user function; `main` becomes the WASI `_start` command entry.
     for func in &module.functions {

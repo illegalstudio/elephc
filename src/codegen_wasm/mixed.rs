@@ -164,6 +164,7 @@ mod tests {
         emit_refcount_runtime(&mut wm);
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm);
+        super::super::hashes::emit_hash_runtime(&mut wm);
         wm.add_raw_func(driver);
         let wat = wm.render();
         let bytes = ::wat::parse_str(&wat)
