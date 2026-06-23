@@ -226,8 +226,40 @@ The eighth registered pass prunes the control-flow graph three ways:
 Functions that use exception handling are skipped, because their handler blocks
 are reachable through implicit edges that the terminator graph does not show.
 
-Later releases add more EIR passes (common-subexpression elimination,
-loop-invariant code motion, small-function inlining) to this same driver.
+### Small-function inlining
+
+Before the per-function fixed-point loop runs, a module-level pass inlines calls to
+small user functions directly into their callers, so the per-function passes then
+optimize the expanded bodies. A callee is inlined only when **all** of the following
+hold:
+
+- its body is at most **24** non-`nop` instructions;
+- it is **non-recursive**, directly *or* mutually — a call-graph cycle analysis
+  excludes any function that can reach itself, and a per-caller fuel cap backstops
+  termination;
+- it contains no exception-handling ops and is not a generator or fiber wrapper;
+- it exposes a **destructor-free boundary and body**: no by-reference or variadic
+  parameters, and every parameter, the return value and every local slot has a
+  destructor-free type — scalars (`int`/`float`/`bool`/`string`) and arrays/unions
+  whose elements are themselves destructor-free. Objects, packed classes, closures,
+  resources, generic `iterable`/`mixed`, buffers, and ref-cell/static/global/capture
+  locals are excluded.
+
+The last rule is a correctness requirement, not just a heuristic. The splice replaces
+the callee's `return` with a jump, bypassing the callee's implicit epilogue cleanup, so
+the inliner reproduces that cleanup's per-slot decisions: parameter slots and
+directly-returned slots (which the callee excludes — the argument is borrowed and the
+return value's ownership moves to the caller) are transplanted so the host epilogue
+ignores them, while ordinary refcounted internal locals are still freed by the host
+epilogue. The only residual difference is *when* those internal locals are freed
+(deferred to the host epilogue), which is unobservable precisely because the types are
+destructor-free — no `__destruct` runs and arrays carry no observable identity. Types
+that can run a destructor (objects, or arrays/mixed that may hold them) and by-reference
+parameters (which alias caller storage) are therefore excluded, because a value-copy
+splice cannot reproduce their cleanup timing or aliasing. As with all EIR passes,
+inlining is gated by `--ir-opt` and changes only performance, never observable behavior.
+
+Later releases extend this driver with further EIR passes.
 
 ## Register allocation
 
