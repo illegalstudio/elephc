@@ -30,6 +30,18 @@ const CONCAT_SIZE: u32 = 65536;
 /// below this is reserved runtime scratch (number buffer + concat buffer).
 pub(super) const RT_SCRATCH_END: u32 = CONCAT_BASE + CONCAT_SIZE;
 
+/// Base of the dedicated float<->string scratch region. The strtod bignum buffers
+/// (`__rt_digits_to_f64` / `__rt_str_to_f64`) and the later ftoa/itoa scratch live
+/// here, above the concat buffer, so a parse or format never collides with an
+/// in-flight string concatenation whose cursor would otherwise run through 0x4000.
+/// Callers reach this base via the immutable `$__float_scratch` global.
+pub(super) const FLOAT_SCRATCH_BASE: u32 = RT_SCRATCH_END;
+
+/// Size of the float<->string scratch region. The strtod path uses offsets
+/// 0..0x1200 (four 96-limb bignums at +0/+1024/+2048/+3072 and the digit buffer at
+/// +4096); the ftoa/itoa scratch lands at +0x2000..+0x3000. 16 KiB bounds both.
+pub(super) const FLOAT_SCRATCH_SIZE: u32 = 0x4000;
+
 /// Adds the import-free runtime every module needs: the concat-buffer cursor
 /// global and the `__rt_concat` helper. Safe for reactor modules (no WASI).
 pub(super) fn emit_common_runtime(wm: &mut WatModule) {

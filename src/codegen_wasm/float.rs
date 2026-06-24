@@ -14,7 +14,7 @@
 //! - Mantissa carries the implicit leading 1 for normals (`frac | 1<<52`) and the bare
 //!   fraction for subnormals (`exp2 = -1074`).
 
-use super::wat::WatModule;
+use super::wat::{Global, ValType, WatModule};
 
 /// Decomposes an IEEE-754 binary64 (raw i64 bits) into four results, in order:
 /// sign (i32 0/1), integer mantissa (i64), signed base-2 exponent (i32), and a class
@@ -666,9 +666,9 @@ const RT_BIGNUM_ZERO: &str = r#"  (func $__rt_bignum_zero (param $ptr i32) (para
 /// subnormal ulp; magnitudes `>= 1e309` short-circuit to `+/-inf` and `< 1e-308` (the
 /// deferred subnormal range) to `+/-0`. Bignums use 96-limb fixed buffers at
 /// `0x4000`/`0x4400`/`0x4800`/`0x4C00` (zero-initialized).
-const RT_DIGITS_TO_F64: &str = r#"  (func $__rt_digits_to_f64 (param $sign i32) (param $ndig i32) (param $K i32) (param $digptr i32) (result i64) (local $i i32) (local $d i32) (local $a i32) (local $b i32) (local $dd i32) (local $cmp i32) (local $Q i64) (local $exp i32) (local $biased i32) (local $drop i32) (local $kc i32) ;; correctly-rounded decimal M*10^K -> f64 bits (sign,ndig,K,digptr)
-    (call $__rt_bignum_zero (i32.const 16384) (i32.const 96))                    ;; clear NUM (96 limbs) so a repeated call sees no stale mantissa
-    (call $__rt_bignum_zero (i32.const 17408) (i32.const 96))                    ;; clear DEN (96 limbs) so a repeated call sees no stale denominator
+const RT_DIGITS_TO_F64: &str = r#"  (func $__rt_digits_to_f64 (param $sign i32) (param $ndig i32) (param $K i32) (param $digptr i32) (param $scratch i32) (result i64) (local $i i32) (local $d i32) (local $a i32) (local $b i32) (local $dd i32) (local $cmp i32) (local $Q i64) (local $exp i32) (local $biased i32) (local $drop i32) (local $kc i32) ;; correctly-rounded decimal M*10^K -> f64 bits (sign,ndig,K,digptr)
+    (call $__rt_bignum_zero (i32.add (local.get $scratch) (i32.const 0)) (i32.const 96)) ;; clear NUM (96 limbs) so a repeated call sees no stale mantissa
+    (call $__rt_bignum_zero (i32.add (local.get $scratch) (i32.const 1024)) (i32.const 96)) ;; clear DEN (96 limbs) so a repeated call sees no stale denominator
     (if (i32.gt_s (local.get $ndig) (i32.const 400))                             ;; keep at most KEEP significant digits
       (then                                                                      ;; then: input longer than KEEP
         (local.set $drop (i32.sub (local.get $ndig) (i32.const 400)))            ;; drop = ndig - KEEP
@@ -696,70 +696,70 @@ const RT_DIGITS_TO_F64: &str = r#"  (func $__rt_digits_to_f64 (param $sign i32) 
       (loop $mt                                                                  ;; iterate digits low-to-high
         (br_if $mb (i32.ge_s (local.get $i) (local.get $ndig)))                  ;; stop once i >= ndig
         (local.set $d (i32.sub (i32.load8_u (i32.add (local.get $digptr) (local.get $i))) (i32.const 48))) ;; d = digit byte minus ASCII '0'
-        (drop (call $__rt_bignum_mul_u32 (i32.const 16384) (i32.const 96) (i64.const 10))) ;; M = M * 10
-        (drop (call $__rt_bignum_add_u32 (i32.const 16384) (i32.const 96) (i64.extend_i32_u (local.get $d)))) ;; M = M + d
+        (drop (call $__rt_bignum_mul_u32 (i32.add (local.get $scratch) (i32.const 0)) (i32.const 96) (i64.const 10))) ;; M = M * 10
+        (drop (call $__rt_bignum_add_u32 (i32.add (local.get $scratch) (i32.const 0)) (i32.const 96) (i64.extend_i32_u (local.get $d)))) ;; M = M + d
         (local.set $i (i32.add (local.get $i) (i32.const 1)))                    ;; i = i + 1
         (br $mt)                                                                 ;; continue the mantissa-build loop
       )                                                                          ;; end loop $mt
     )                                                                            ;; end block $mb
-    (if (call $__rt_bignum_is_zero (i32.const 16384) (i32.const 96))             ;; mantissa M == 0 ?
+    (if (call $__rt_bignum_is_zero (i32.add (local.get $scratch) (i32.const 0)) (i32.const 96)) ;; mantissa M == 0 ?
       (then (return (i64.shl (i64.extend_i32_u (local.get $sign)) (i64.const 63)))) ;; return +/-0
     )                                                                            ;; end if
     (if (i32.ge_s (local.get $K) (i32.const 0))                                  ;; K >= 0 ?
       (then                                                                      ;; then: K >= 0 -> num = M*5^K*2^K, den = 1
-        (i32.store (i32.const 17408) (i32.const 1))                              ;; den = 1 (limb0 = 1, rest zero-init)
-        (call $__rt_bignum_mul_small_n_times (i32.const 16384) (i32.const 96) (i64.const 5) (local.get $K)) ;; num *= 5^K
-        (call $__rt_bignum_mul_small_n_times (i32.const 16384) (i32.const 96) (i64.const 2) (local.get $K)) ;; num *= 2^K (= *10^K total)
+        (i32.store (i32.add (local.get $scratch) (i32.const 1024)) (i32.const 1)) ;; den = 1 (limb0 = 1, rest zero-init)
+        (call $__rt_bignum_mul_small_n_times (i32.add (local.get $scratch) (i32.const 0)) (i32.const 96) (i64.const 5) (local.get $K)) ;; num *= 5^K
+        (call $__rt_bignum_mul_small_n_times (i32.add (local.get $scratch) (i32.const 0)) (i32.const 96) (i64.const 2) (local.get $K)) ;; num *= 2^K (= *10^K total)
       )                                                                          ;; end then
       (else                                                                      ;; else: K < 0 -> den = 10^|K|, num = M
-        (i32.store (i32.const 17408) (i32.const 1))                              ;; den = 1 (start)
+        (i32.store (i32.add (local.get $scratch) (i32.const 1024)) (i32.const 1)) ;; den = 1 (start)
         (local.set $kc (i32.sub (i32.const 0) (local.get $K)))                   ;; kc = |K| = -K
-        (call $__rt_bignum_mul_small_n_times (i32.const 17408) (i32.const 96) (i64.const 5) (local.get $kc)) ;; den *= 5^|K|
-        (call $__rt_bignum_mul_small_n_times (i32.const 17408) (i32.const 96) (i64.const 2) (local.get $kc)) ;; den *= 2^|K| (= 10^|K|)
+        (call $__rt_bignum_mul_small_n_times (i32.add (local.get $scratch) (i32.const 1024)) (i32.const 96) (i64.const 5) (local.get $kc)) ;; den *= 5^|K|
+        (call $__rt_bignum_mul_small_n_times (i32.add (local.get $scratch) (i32.const 1024)) (i32.const 96) (i64.const 2) (local.get $kc)) ;; den *= 2^|K| (= 10^|K|)
       )                                                                          ;; end else
     )                                                                            ;; end if
     (local.set $a (i32.const 0))                                                 ;; num double-shifts a = 0
     (local.set $b (i32.const 0))                                                 ;; den double-shifts b = 0
-    (local.set $dd (i32.sub (call $__rt_bignum_bitlen (i32.const 16384) (i32.const 96)) (call $__rt_bignum_bitlen (i32.const 17408) (i32.const 96)))) ;; dd = bitlen(num) - bitlen(den) (~ floor log2 value)
+    (local.set $dd (i32.sub (call $__rt_bignum_bitlen (i32.add (local.get $scratch) (i32.const 0)) (i32.const 96)) (call $__rt_bignum_bitlen (i32.add (local.get $scratch) (i32.const 1024)) (i32.const 96)))) ;; dd = bitlen(num) - bitlen(den) (~ floor log2 value)
     (if (i32.gt_s (local.get $dd) (i32.const 52))                                ;; dd > 52 ? (value too large)
       (then                                                                      ;; then: shrink quotient by scaling den up
         (local.set $b (i32.sub (local.get $dd) (i32.const 52)))                  ;; b = dd - 52
-        (call $__rt_bignum_mul_small_n_times (i32.const 17408) (i32.const 96) (i64.const 2) (local.get $b)) ;; den *= 2^b
+        (call $__rt_bignum_mul_small_n_times (i32.add (local.get $scratch) (i32.const 1024)) (i32.const 96) (i64.const 2) (local.get $b)) ;; den *= 2^b
       )                                                                          ;; end then
     )                                                                            ;; end if
     (if (i32.lt_s (local.get $dd) (i32.const 52))                                ;; dd < 52 ? (value too small)
       (then                                                                      ;; then: grow quotient by scaling num up
         (local.set $a (i32.sub (i32.const 52) (local.get $dd)))                  ;; a = 52 - dd
-        (call $__rt_bignum_mul_small_n_times (i32.const 16384) (i32.const 96) (i64.const 2) (local.get $a)) ;; num *= 2^a
+        (call $__rt_bignum_mul_small_n_times (i32.add (local.get $scratch) (i32.const 0)) (i32.const 96) (i64.const 2) (local.get $a)) ;; num *= 2^a
       )                                                                          ;; end then
     )                                                                            ;; end if
-    (call $__rt_bignum_copy (i32.const 19456) (i32.const 17408) (i32.const 96))  ;; den_shl = copy(den)
-    (call $__rt_bignum_mul_small_n_times (i32.const 19456) (i32.const 96) (i64.const 2) (i32.const 52)) ;; den_shl <<= 52
-    (if (i32.lt_s (call $__rt_bignum_cmp (i32.const 16384) (i32.const 96) (i32.const 19456) (i32.const 96)) (i32.const 0)) ;; num < den_shl ? (Q would be < 2^52)
+    (call $__rt_bignum_copy (i32.add (local.get $scratch) (i32.const 3072)) (i32.add (local.get $scratch) (i32.const 1024)) (i32.const 96)) ;; den_shl = copy(den)
+    (call $__rt_bignum_mul_small_n_times (i32.add (local.get $scratch) (i32.const 3072)) (i32.const 96) (i64.const 2) (i32.const 52)) ;; den_shl <<= 52
+    (if (i32.lt_s (call $__rt_bignum_cmp (i32.add (local.get $scratch) (i32.const 0)) (i32.const 96) (i32.add (local.get $scratch) (i32.const 3072)) (i32.const 96)) (i32.const 0)) ;; num < den_shl ? (Q would be < 2^52)
       (then                                                                      ;; then: scale num up once more
-        (call $__rt_bignum_mul_small_n_times (i32.const 16384) (i32.const 96) (i64.const 2) (i32.const 1)) ;; num *= 2
+        (call $__rt_bignum_mul_small_n_times (i32.add (local.get $scratch) (i32.const 0)) (i32.const 96) (i64.const 2) (i32.const 1)) ;; num *= 2
         (local.set $a (i32.add (local.get $a) (i32.const 1)))                    ;; a += 1 (exp stays correct)
       )                                                                          ;; end then
     )                                                                            ;; end if
-    (call $__rt_bignum_copy (i32.const 18432) (i32.const 16384) (i32.const 96))  ;; work = copy(num) (running remainder)
+    (call $__rt_bignum_copy (i32.add (local.get $scratch) (i32.const 2048)) (i32.add (local.get $scratch) (i32.const 0)) (i32.const 96)) ;; work = copy(num) (running remainder)
     (local.set $Q (i64.const 0))                                                 ;; quotient Q = 0
     (local.set $i (i32.const 52))                                                ;; bit index = 52 (top of 53-bit mantissa)
     (block $ld                                                                   ;; long-division loop exit
       (loop $lt                                                                  ;; iterate bit index 52 down to 0
         (br_if $ld (i32.lt_s (local.get $i) (i32.const 0)))                      ;; stop once i < 0
-        (if (i32.ge_s (call $__rt_bignum_cmp (i32.const 18432) (i32.const 96) (i32.const 19456) (i32.const 96)) (i32.const 0)) ;; work >= den_shl ?
+        (if (i32.ge_s (call $__rt_bignum_cmp (i32.add (local.get $scratch) (i32.const 2048)) (i32.const 96) (i32.add (local.get $scratch) (i32.const 3072)) (i32.const 96)) (i32.const 0)) ;; work >= den_shl ?
           (then                                                                  ;; then: this bit of the quotient is 1
             (local.set $Q (i64.or (local.get $Q) (i64.shl (i64.const 1) (i64.extend_i32_u (local.get $i))))) ;; Q |= (1 << i)
-            (drop (call $__rt_bignum_sub (i32.const 18432) (i32.const 19456) (i32.const 96))) ;; work -= den_shl
+            (drop (call $__rt_bignum_sub (i32.add (local.get $scratch) (i32.const 2048)) (i32.add (local.get $scratch) (i32.const 3072)) (i32.const 96))) ;; work -= den_shl
           )                                                                      ;; end then
         )                                                                        ;; end if
-        (call $__rt_bignum_shr1 (i32.const 19456) (i32.const 96))                ;; den_shl >>= 1 (next lower bit)
+        (call $__rt_bignum_shr1 (i32.add (local.get $scratch) (i32.const 3072)) (i32.const 96)) ;; den_shl >>= 1 (next lower bit)
         (local.set $i (i32.sub (local.get $i) (i32.const 1)))                    ;; i = i - 1
         (br $lt)                                                                 ;; continue the long-division loop
       )                                                                          ;; end loop $lt
     )                                                                            ;; end block $ld
-    (call $__rt_bignum_mul_small_n_times (i32.const 18432) (i32.const 96) (i64.const 2) (i32.const 1)) ;; work = 2 * rem
-    (local.set $cmp (call $__rt_bignum_cmp (i32.const 18432) (i32.const 96) (i32.const 17408) (i32.const 96))) ;; cmp = compare(2*rem, den)
+    (call $__rt_bignum_mul_small_n_times (i32.add (local.get $scratch) (i32.const 2048)) (i32.const 96) (i64.const 2) (i32.const 1)) ;; work = 2 * rem
+    (local.set $cmp (call $__rt_bignum_cmp (i32.add (local.get $scratch) (i32.const 2048)) (i32.const 96) (i32.add (local.get $scratch) (i32.const 1024)) (i32.const 96))) ;; cmp = compare(2*rem, den)
     (if (i32.gt_s (local.get $cmp) (i32.const 0))                                ;; 2*rem > den ? (round up)
       (then (local.set $Q (i64.add (local.get $Q) (i64.const 1))))               ;; Q += 1 (round up)
     )                                                                            ;; end if
@@ -794,14 +794,14 @@ const RT_DIGITS_TO_F64: &str = r#"  (func $__rt_digits_to_f64 (param $sign i32) 
 /// The result is stored as an i64 at `*out` (the raw bit pattern; callers reinterpret it
 /// as f64). This is the wasm32-wasi `strtod` equivalent used by `(float)`/`(int)`-of-
 /// float-string casts.
-const RT_STR_TO_F64: &str = r#"  (func $__rt_str_to_f64 (param $ptr i32) (param $len i32) (param $out i32) (local $sign i32) (local $ndig i32) (local $K i32) (local $class i32) (local $bits i64) ;; parse a decimal string and store its f64 bits at out
-    (call $__rt_parse_decimal (local.get $ptr) (local.get $len) (i32.const 20480)) ;; parse_decimal -> sign,ndig,K,class
+const RT_STR_TO_F64: &str = r#"  (func $__rt_str_to_f64 (param $ptr i32) (param $len i32) (param $out i32) (param $scratch i32) (local $sign i32) (local $ndig i32) (local $K i32) (local $class i32) (local $bits i64) ;; parse a decimal string and store its f64 bits at out (scratch = bignum region base)
+    (call $__rt_parse_decimal (local.get $ptr) (local.get $len) (i32.add (local.get $scratch) (i32.const 4096))) ;; parse_decimal -> sign,ndig,K,class (digits -> scratch+DIGBUF)
     (local.set $class)                                                           ;; pop class
     (local.set $K)                                                               ;; pop K
     (local.set $ndig)                                                            ;; pop ndig
     (local.set $sign)                                                            ;; pop sign
     (if (i32.eq (local.get $class) (i32.const 0))                                ;; class 0 (finite decimal)?
-      (then (local.set $bits (call $__rt_digits_to_f64 (local.get $sign) (local.get $ndig) (local.get $K) (i32.const 20480)))) ;; bits = correctly-rounded finite M*10^K
+      (then (local.set $bits (call $__rt_digits_to_f64 (local.get $sign) (local.get $ndig) (local.get $K) (i32.add (local.get $scratch) (i32.const 4096)) (local.get $scratch)))) ;; bits = correctly-rounded finite M*10^K
       (else (local.set $bits (i64.const 0)))                                     ;; class 1/2/3 (invalid/inf/nan token) -> +0.0 (PHP non-numeric -> 0.0)
     )                                                                            ;; end if (finite vs non-numeric)
     (i64.store (local.get $out) (local.get $bits))                               ;; *(out) = bits
@@ -812,13 +812,20 @@ const RT_STR_TO_F64: &str = r#"  (func $__rt_str_to_f64 (param $ptr i32) (param 
 ///
 /// Currently emits the full float<->string pipeline: the `__rt_f64_decompose` decoder,
 /// the big-integer primitives, exact decimal digit extraction, round-to-14-significant,
-/// the `__rt_ftoa_scientific`/`__rt_ftoa_fixed` formatters, and the `__rt_ftoa`
-/// top-level orchestrator. String-to-float parsing lands here in a later stage. Must be
-/// called before rendering any function that references these symbols.
-// Not yet referenced by a non-test caller: PHP-visible float formatting wires this
-// into the command/reactor runtime in stage S6. Exercised by the unit tests below.
-#[allow(dead_code)]
-pub(super) fn emit_float_runtime(wm: &mut WatModule) {
+/// the `__rt_ftoa_scientific`/`__rt_ftoa_fixed` formatters, the `__rt_ftoa` top-level
+/// orchestrator, and the `__rt_str_to_f64` parser. The four strtod bignum buffers and
+/// the digit buffer are no longer hardcoded: `__rt_digits_to_f64` and `__rt_str_to_f64`
+/// take a `$scratch` base, and `base` is published as the immutable `$__float_scratch`
+/// global so runtime callers (casts, echo, mixed stdout) pass
+/// `(global.get $__float_scratch)`. Must be called before rendering any function that
+/// references these symbols.
+pub(super) fn emit_float_runtime(wm: &mut WatModule, base: i32) {
+    wm.add_global(Global {
+        name: "__float_scratch".to_string(),
+        ty: ValType::I32,
+        mutable: false,
+        init: base as i64,
+    });
     wm.add_raw_func(RT_F64_DECOMPOSE);
     wm.add_raw_func(RT_BIGNUM_MUL_U32);
     wm.add_raw_func(RT_BIGNUM_DIVMOD_U32);
@@ -884,7 +891,7 @@ mod tests {
     fn run_float_driver(driver: &str, export: &str) -> Option<String> {
         let mut wm = WatModule::new();
         wm.set_memory(1, Some("memory"));
-        emit_float_runtime(&mut wm);
+        emit_float_runtime(&mut wm, 0x4000);
         wm.add_raw_func(driver);
         let wat = wm.render();
         let bytes = ::wat::parse_str(&wat)
@@ -2358,23 +2365,26 @@ mod tests {
         format!("{}", bits as i64)
     }
 
-    /// Stores ASCII `digs` at 512 and calls `__rt_digits_to_f64(sign, ndig, K, 512)`,
-    /// returning the i64 bits. `ndig` must equal `digs.len()`.
+    /// Stores ASCII `digs` at 512 and calls `__rt_digits_to_f64(sign, ndig, K, 512,
+    /// scratch)`, returning the i64 bits. `ndig` must equal `digs.len()`. The scratch
+    /// base comes from the `$__float_scratch` global (init 0x4000 in the 1-page test
+    /// module), mirroring how real runtime callers pass the bignum region.
     fn digits_driver(sign: u32, ndig: u32, k: i32, digs: &str) -> String {
         let stores = store_ascii(512, digs);
         format!(
             r#"(func $t (export "t") (result i64)
-{stores}  (call $__rt_digits_to_f64 (i32.const {sign}) (i32.const {ndig}) (i32.const {k}) (i32.const 512)))"#,
+{stores}  (call $__rt_digits_to_f64 (i32.const {sign}) (i32.const {ndig}) (i32.const {k}) (i32.const 512) (global.get $__float_scratch)))"#,
         )
     }
 
-    /// Stores string `s` at 256, calls `__rt_str_to_f64(256, len, 600)`, and loads the
-    /// i64 bits the routine stored at 600 (the full parse + dispatch + rounding path).
+    /// Stores string `s` at 256, calls `__rt_str_to_f64(256, len, 600, scratch)`, and
+    /// loads the i64 bits the routine stored at 600 (the full parse + dispatch +
+    /// rounding path). The scratch base comes from the `$__float_scratch` global.
     fn strtod_driver(s: &str) -> String {
         let stores = store_ascii(256, s);
         format!(
             r#"(func $t (export "t") (result i64)
-{stores}  (call $__rt_str_to_f64 (i32.const 256) (i32.const {len}) (i32.const 600))
+{stores}  (call $__rt_str_to_f64 (i32.const 256) (i32.const {len}) (i32.const 600) (global.get $__float_scratch))
   (i64.load (i32.const 600)))"#,
             len = s.len(),
         )
@@ -2388,8 +2398,8 @@ mod tests {
         let s2 = store_ascii(320, second);
         format!(
             r#"(func $t (export "t") (result i64)
-{s1}  (call $__rt_str_to_f64 (i32.const 256) (i32.const {len1}) (i32.const 600))
-{s2}  (call $__rt_str_to_f64 (i32.const 320) (i32.const {len2}) (i32.const 600))
+{s1}  (call $__rt_str_to_f64 (i32.const 256) (i32.const {len1}) (i32.const 600) (global.get $__float_scratch))
+{s2}  (call $__rt_str_to_f64 (i32.const 320) (i32.const {len2}) (i32.const 600) (global.get $__float_scratch))
   (i64.load (i32.const 600)))"#,
             len1 = first.len(),
             len2 = second.len(),

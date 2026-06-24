@@ -87,9 +87,11 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     }
 
     // Lay out every interned string literal as a data segment above the runtime
-    // scratch region, recording (offset, byte_len) per DataId for ConstStr.
+    // scratch region, recording (offset, byte_len) per DataId for ConstStr. The
+    // float<->string scratch region sits between the concat buffer and the string
+    // literals so a strtod/ftoa never runs through an in-flight concatenation.
     let mut str_literals: Vec<(u32, u32)> = Vec::with_capacity(module.data.strings.len());
-    let mut cursor = runtime::RT_SCRATCH_END;
+    let mut cursor = runtime::RT_SCRATCH_END + runtime::FLOAT_SCRATCH_SIZE;
     for s in &module.data.strings {
         let bytes = s.as_bytes();
         wm.add_data(wat::DataSegment {
@@ -114,6 +116,10 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     arrays::emit_array_runtime(&mut wm);
     mixed::emit_mixed_runtime(&mut wm);
     hashes::emit_hash_runtime(&mut wm);
+    // Float<->string runtime (ftoa + strtod). Published with the `$__float_scratch`
+    // global set to `FLOAT_SCRATCH_BASE` so cast/echo/mixed-stdout callers pass
+    // `(global.get $__float_scratch)` as the bignum scratch base.
+    float::emit_float_runtime(&mut wm, runtime::FLOAT_SCRATCH_BASE as i32);
 
     // Lower every user function; `main` becomes the WASI `_start` command entry.
     for func in &module.functions {
