@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::codegen::abi;
+use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -127,6 +127,7 @@ fn property_type_supported(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
+            | PhpType::TaggedScalar
             | PhpType::Mixed
             | PhpType::Union(_)
             | PhpType::Object(_)
@@ -545,6 +546,11 @@ fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot
             emitter.instruction("mov x0, #1");                                  // runtime tag 1 = string
             emitter.instruction("bl __rt_mixed_from_value");                    // persist and box the string property payload
         }
+        PhpType::TaggedScalar => {
+            emitter.instruction(&format!("ldr x0, [x9, #{}]", slot.offset));    // load the nullable integer property payload
+            emitter.instruction(&format!("ldr x1, [x9, #{}]", slot.offset + 8)); //load the nullable integer property tag
+            emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             let null_label = format!("{}_mixed_null", label_fragment(&slot_body_label_raw(slot, "get")));
             let done_label = format!("{}_mixed_done", label_fragment(&slot_body_label_raw(slot, "get")));
@@ -587,6 +593,11 @@ fn emit_x86_64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot)
             emitter.instruction("mov eax, 1");                                  // runtime tag 1 = string
             emitter.instruction("call __rt_mixed_from_value");                  // persist and box the string property payload
         }
+        PhpType::TaggedScalar => {
+            emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)); //load the nullable integer property payload
+            emitter.instruction(&format!("mov rdx, QWORD PTR [r11 + {}]", slot.offset + 8)); //load the nullable integer property tag
+            emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             let null_label = format!("{}_mixed_null_x", label_fragment(&slot_body_label_raw(slot, "get")));
             let done_label = format!("{}_mixed_done_x", label_fragment(&slot_body_label_raw(slot, "get")));
@@ -625,6 +636,7 @@ fn emit_aarch64_store_property_slot(emitter: &mut Emitter, slot: &EvalPropertySl
             emitter.instruction(&format!("str x1, [x9, #{}]", slot.offset));    // store the coerced string pointer into the property slot
             emitter.instruction(&format!("str x2, [x9, #{}]", slot.offset + 8)); // store the coerced string length into the property slot
         }
+        PhpType::TaggedScalar => emit_aarch64_store_tagged_scalar_property(emitter, slot),
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("ldr x0, [sp, #24]");                           // reload the boxed eval value being assigned
             emitter.instruction("bl __rt_incref");                              // retain the Mixed cell for property ownership
@@ -654,6 +666,7 @@ fn emit_x86_64_store_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlo
             emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset)); // store the coerced string pointer into the property slot
             emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)); // store the coerced string length into the property slot
         }
+        PhpType::TaggedScalar => emit_x86_64_store_tagged_scalar_property(emitter, slot),
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value being assigned
             emitter.instruction("call __rt_incref");                            // retain the Mixed cell for property ownership
@@ -678,6 +691,32 @@ fn emit_aarch64_store_cast_scalar(
     emitter.instruction(&format!("str {}, [x9, #{}]", result_reg, slot.offset)); // store the coerced scalar into the property slot
 }
 
+/// Stores a boxed eval value into an ARM64 nullable-int tagged-scalar property slot.
+fn emit_aarch64_store_tagged_scalar_property(emitter: &mut Emitter, slot: &EvalPropertySlot) {
+    let null_label = format!(
+        "{}_tagged_scalar_null",
+        label_fragment(&slot_body_label_raw(slot, "set"))
+    );
+    let done_label = format!(
+        "{}_tagged_scalar_done",
+        label_fragment(&slot_body_label_raw(slot, "set"))
+    );
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed eval value for nullable-int inspection
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the assigned value tag and payload words
+    emitter.instruction("cmp x0, #8");                                          // runtime tag 8 means the assigned value is null
+    emitter.instruction(&format!("b.eq {}", null_label));                       // materialize a tagged null for null property writes
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed eval value for integer coercion
+    emitter.instruction("bl __rt_mixed_cast_int");                              // coerce non-null eval values to a PHP int payload
+    crate::codegen::sentinels::emit_tagged_scalar_from_int_result(emitter);
+    emitter.instruction(&format!("b {}", done_label));                          // skip tagged-null materialization after integer coercion
+    emitter.label(&null_label);
+    crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+    emitter.label(&done_label);
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for the store
+    emitter.instruction(&format!("str x0, [x9, #{}]", slot.offset));            // store the nullable integer payload into the property slot
+    emitter.instruction(&format!("str x1, [x9, #{}]", slot.offset + 8));        // store the nullable integer tag into the property slot
+}
+
 /// Emits an x86_64 scalar property store after Mixed coercion.
 fn emit_x86_64_store_cast_scalar(
     emitter: &mut Emitter,
@@ -689,6 +728,32 @@ fn emit_x86_64_store_cast_scalar(
     emitter.instruction(&format!("call {}", helper));                           // coerce the eval value to the declared property type
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the store
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], {}", slot.offset, result_reg)); // store the coerced scalar into the property slot
+}
+
+/// Stores a boxed eval value into an x86_64 nullable-int tagged-scalar property slot.
+fn emit_x86_64_store_tagged_scalar_property(emitter: &mut Emitter, slot: &EvalPropertySlot) {
+    let null_label = format!(
+        "{}_tagged_scalar_null_x",
+        label_fragment(&slot_body_label_raw(slot, "set"))
+    );
+    let done_label = format!(
+        "{}_tagged_scalar_done_x",
+        label_fragment(&slot_body_label_raw(slot, "set"))
+    );
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed eval value for nullable-int inspection
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the assigned value tag and payload words
+    emitter.instruction("cmp rax, 8");                                          // runtime tag 8 means the assigned value is null
+    emitter.instruction(&format!("je {}", null_label));                         // materialize a tagged null for null property writes
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed eval value for integer coercion
+    emitter.instruction("call __rt_mixed_cast_int");                            // coerce non-null eval values to a PHP int payload
+    crate::codegen::sentinels::emit_tagged_scalar_from_int_result(emitter);
+    emitter.instruction(&format!("jmp {}", done_label));                        // skip tagged-null materialization after integer coercion
+    emitter.label(&null_label);
+    crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+    emitter.label(&done_label);
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the store
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset)); //store the nullable integer payload into the property slot
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)); //store the nullable integer tag into the property slot
 }
 
 /// Groups property slots by class id while preserving sorted class order.
