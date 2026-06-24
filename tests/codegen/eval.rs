@@ -10615,6 +10615,44 @@ try {
     );
 }
 
+/// Verifies eval ReflectionClass static-property APIs bridge generated/AOT values.
+#[test]
+fn test_eval_reflection_class_static_property_values_aot() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectStaticPropertyTarget {
+    public static string $label = "start";
+    public static int $count = 2;
+    public string $instance = "plain";
+}
+echo eval('$ref = new ReflectionClass("EvalAotReflectStaticPropertyTarget");
+$statics = $ref->getStaticProperties();
+echo count($statics) . ":";
+echo $statics["label"] . ":";
+echo $statics["count"] . ":";
+echo $ref->getStaticPropertyValue("label") . ":";
+$ref->setStaticPropertyValue("label", "changed");
+echo EvalAotReflectStaticPropertyTarget::$label . ":";
+$ref->setStaticPropertyValue(name: "count", value: 9);
+echo $ref->getStaticPropertyValue("count") . ":";
+echo EvalAotReflectStaticPropertyTarget::$count . ":";
+echo $ref->getStaticPropertyValue("instance", "fallback") . ":";
+try {
+    $ref->setStaticPropertyValue("instance", "bad");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo "S";
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "2:start:2:start:changed:9:9:fallback:S");
+}
+
 /// Verifies eval ReflectionParameter exposes the declaring class for method parameters.
 #[test]
 fn test_eval_reflection_parameter_reports_declaring_class() {
