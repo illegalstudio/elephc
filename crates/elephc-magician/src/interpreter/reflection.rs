@@ -599,10 +599,11 @@ pub(in crate::interpreter) fn eval_reflection_class_get_default_properties_resul
     else {
         return Ok(None);
     };
-    let property_names = eval_reflection_default_property_names(&reflected_name, context);
+    let property_names = eval_reflection_default_property_names(&reflected_name, context, values)?;
     let mut result = values.assoc_new(property_names.len())?;
     for name in property_names {
-        let Some(member) = eval_reflection_property_metadata(&reflected_name, &name, context)
+        let Some(member) =
+            eval_reflection_default_property_metadata(&reflected_name, &name, context, values)?
         else {
             continue;
         };
@@ -5054,6 +5055,35 @@ fn eval_reflection_property_metadata(
 fn eval_reflection_default_property_names(
     reflected_name: &str,
     context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    if context.has_class(reflected_name)
+        || context.has_enum(reflected_name)
+        || context.has_trait(reflected_name)
+        || context.has_interface(reflected_name)
+    {
+        return Ok(eval_reflection_eval_property_names(reflected_name, context));
+    }
+    eval_reflection_aot_member_names(EVAL_REFLECTION_OWNER_PROPERTY, reflected_name, values)
+}
+
+/// Returns eval or generated/AOT property metadata for default-property materialization.
+fn eval_reflection_default_property_metadata(
+    reflected_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalReflectionMemberMetadata>, EvalStatus> {
+    if let Some(member) = eval_reflection_property_metadata(reflected_name, property_name, context) {
+        return Ok(Some(member));
+    }
+    eval_reflection_aot_property_metadata_if_exists(reflected_name, property_name, context, values)
+}
+
+/// Returns eval-declared property names for reflection APIs that do not use AOT lists.
+fn eval_reflection_eval_property_names(
+    reflected_name: &str,
+    context: &ElephcEvalContext,
 ) -> Vec<String> {
     if context.has_trait(reflected_name) {
         return context.trait_property_names(reflected_name);
@@ -5069,7 +5099,7 @@ fn eval_reflection_static_property_names(
     reflected_name: &str,
     context: &ElephcEvalContext,
 ) -> Vec<String> {
-    eval_reflection_default_property_names(reflected_name, context)
+    eval_reflection_eval_property_names(reflected_name, context)
         .into_iter()
         .filter(|name| {
             eval_reflection_property_metadata(reflected_name, name, context)
