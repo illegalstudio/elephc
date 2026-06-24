@@ -884,6 +884,15 @@ function-like body (functions, methods, closures, trampolines, invokers)
 repeatedly until a full sweep reports no change, capped at a fixed iteration
 budget.
 
+The whole pipeline runs to a **module-level fixed point**: `optimize_module`
+interleaves the cross-function [small-function inliner](#small-function-inlining)
+with these per-function passes and repeats the round until neither layer changes
+anything (capped by a separate module-iteration budget). Interleaving lets the two
+feed each other — inlined bodies expose new constants and dead code for the
+per-function passes, and the simplified functions expose new (smaller) inline
+candidates. The first round reproduces the prior "inline once, then optimize"
+behavior, so later rounds only optimize further and never change semantics.
+
 In debug and test builds (`debug_assertions`), the driver re-validates the
 function with `validate_function` after every pass and panics — naming the
 offending pass — if any pass produced malformed IR. The same builds panic if a
@@ -1126,6 +1135,44 @@ terminator graph, so terminator-only reachability could wrongly neutralize a liv
 handler. Removing edges only enlarges dominator sets and threaded forwarding blocks
 carry no definitions, so simplification never invalidates a use that was valid
 before; cross-block cascades converge through the fixed-point driver.
+
+### Small-Function Inlining
+
+`src/ir_passes/inline.rs` is a **cross-function**, module-level pass (not a member
+of the per-function `IrPass` set) that splices a small callee's body into its
+caller at the call site. The original call is removed; the callee's blocks are
+transplanted with fresh ids, arguments are bound into the remapped parameter slots
+with `store_local`, the caller block jumps into the transplanted entry, and each
+callee `return` becomes a `br` to a fresh continuation block that carries the
+result through a block parameter.
+
+A callee is inlined only when it is at most **24** non-`nop` instructions, has a
+0-parameter entry block, contains no exception-handling ops, is not a
+generator/fiber wrapper, and is **non-recursive** — directly or mutually, via a
+call-graph cycle analysis that excludes any function reachable from itself (a
+per-caller fuel cap backstops termination). Eligibility is further restricted to a
+provably ownership-safe **destructor-free** boundary and body (scalars, strings,
+and arrays/unions of destructor-free types; no by-ref/variadic params and no
+ref-cell/static/global/capture locals).
+
+Correctness across the boundary is preserved without an explicit epilogue: the
+splice replaces `return` with `br`, bypassing the callee's implicit codegen
+epilogue cleanup, so the transplant reproduces that cleanup's per-slot decisions —
+parameter slots and directly-returned slots become epilogue-excluded `HiddenTemp`
+(matching the callee, whose argument is borrowed and whose return ownership is
+moved to the caller), while ordinary refcounted internal locals stay `PhpLocal` and
+are still freed by the host epilogue. The destructor-free restriction makes the one
+residual difference — deferring those internal frees to the host epilogue —
+unobservable (no `__destruct`, no array identity), so reference-counting and
+copy-on-write behaviour are byte-for-byte preserved. Two call-site guards complete
+correctness: arguments must bind to parameter slots without coercion (matching
+storage types, so spread/named-boxed-`mixed` and `int`↔`float` sites stay ordinary
+calls), and any `string` argument must come from a non-scratch source
+(`const_str`/`load_local`), because the spliced body runs the callee's
+statement-boundary concat-buffer reset in the host frame and would otherwise free an
+in-flight scratch string argument. Call-site name resolution (`call` Data immediates
+and `function_variant_call` include-variant refs) uses snapshots taken before
+mutation, so the rewrite loop never aliases the module while holding a function.
 
 ## Dominance Analysis
 
