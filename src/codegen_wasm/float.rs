@@ -855,6 +855,76 @@ const RT_ITOA: &str = r#"  (func $__rt_itoa (param $value i64) (param $out i32) 
     (return (local.get $out) (i32.add (local.get $len) (local.get $neg))))       ;; return (out, digits + sign)
 "#;
 
+/// `__rt_str_to_int`: PHP `(int)$str` for a bounded string. Mirrors the native
+/// `__rt_str_to_int` (strtoll + strtod) without libc: scan leading whitespace + an
+/// optional sign, then accumulate integer digits with PHP saturating overflow to
+/// `INT64_MAX`/`INT64_MIN` (the cap is 2^63 for negatives so `-INT64_MIN`'s magnitude
+/// 2^63 is representable). A `.` or `e`/`E` right after the integer digits marks the
+/// prefix float-form, in which case the string is parsed as a double via
+/// `__rt_str_to_f64` and PHP's float->int rule is applied: finite -> `trunc_sat` toward
+/// zero with saturation, but `±INF`/`NaN` -> `0` (matching `php -r`, where
+/// `(int)"1e400"` / `(int)"INF"` / `(int)"NAN"` are all `0`, unlike `trunc_sat(±INF)`
+/// which yields `±INT64_MAX`/`MIN`). Non-numeric / no-digit prefixes return `0`.
+/// `scratch` is the float-scratch base (`$__float_scratch`); the parsed f64 bits land at
+/// `scratch+10240` (clear of the strtod bignum buffers at 0..0x1400).
+const RT_STR_TO_INT: &str = r#"  (func $__rt_str_to_int (param $ptr i32) (param $len i32) (param $scratch i32) (result i64) (local $i i32) (local $sign i32) (local $c i32) (local $val i64) (local $sat i32) (local $ndig i32) (local $float i32) (local $bits i64) (local $cap i64) (local $d i64) ;; parse a leading numeric string -> i64 (PHP (int)string)
+    (block $wse                                                                  ;; whitespace-skip block
+      (loop $wsl                                                                 ;; whitespace loop
+        (br_if $wse (i32.ge_s (local.get $i) (local.get $len)))
+        (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
+        (if (i32.or (i32.and (i32.ge_s (local.get $c) (i32.const 9)) (i32.le_s (local.get $c) (i32.const 13))) (i32.eq (local.get $c) (i32.const 32)))
+          (then (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $wsl))
+          (else (br $wse)))))
+    (if (i32.lt_s (local.get $i) (local.get $len))                               ;; optional sign
+      (then
+        (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
+        (if (i32.eq (local.get $c) (i32.const 45))
+          (then (local.set $sign (i32.const 1)) (local.set $i (i32.add (local.get $i) (i32.const 1))))
+          (else
+            (if (i32.eq (local.get $c) (i32.const 43))
+              (then (local.set $i (i32.add (local.get $i) (i32.const 1)))))))))
+    (if (i32.eq (local.get $sign) (i32.const 1))                                 ;; saturation cap: 2^63 (neg) or 2^63-1 (pos)
+      (then (local.set $cap (i64.const -9223372036854775808)))
+      (else (local.set $cap (i64.const 9223372036854775807))))
+    (block $ide                                                                  ;; integer-digit block
+      (loop $idl                                                                 ;; integer-digit loop
+        (br_if $ide (i32.ge_s (local.get $i) (local.get $len)))
+        (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
+        (br_if $ide (i32.or (i32.lt_s (local.get $c) (i32.const 48)) (i32.gt_s (local.get $c) (i32.const 57))))
+        (local.set $ndig (i32.add (local.get $ndig) (i32.const 1)))
+        (if (i32.eqz (local.get $sat))                                           ;; still within range?
+          (then
+            (local.set $d (i64.extend_i32_u (i32.sub (local.get $c) (i32.const 48))))
+            (if (i64.gt_u (local.get $val) (i64.div_u (i64.sub (local.get $cap) (local.get $d)) (i64.const 10)))
+              (then (local.set $sat (i32.const 1)) (local.set $val (local.get $cap))) ;; overflow -> clamp to the cap
+              (else (local.set $val (i64.add (i64.mul (local.get $val) (i64.const 10)) (local.get $d)))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $idl)))
+    (if (i32.lt_s (local.get $i) (local.get $len))                               ;; float continuation? ('.' or 'e'/'E')
+      (then
+        (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
+        (if (i32.eq (local.get $c) (i32.const 46))
+          (then (local.set $float (i32.const 1)))
+          (else
+            (if (i32.or (i32.eq (local.get $c) (i32.const 101)) (i32.eq (local.get $c) (i32.const 69)))
+              (then (local.set $float (i32.const 1))))))))
+    (if (i32.eq (local.get $float) (i32.const 1))                                ;; float-form -> parse double, INF/NaN -> 0
+      (then
+        (call $__rt_str_to_f64 (local.get $ptr) (local.get $len) (i32.add (local.get $scratch) (i32.const 10240)) (local.get $scratch))
+        (local.set $bits (i64.load (i32.add (local.get $scratch) (i32.const 10240))))
+        (if (i32.eq (i32.and (i32.wrap_i64 (i64.shr_u (local.get $bits) (i64.const 52))) (i32.const 2047)) (i32.const 2047))
+          (then (return (i64.const 0)))                                          ;; INF or NaN -> 0 (PHP (int)INF/NAN)
+          (else (return (i64.trunc_sat_f64_s (f64.reinterpret_i64 (local.get $bits))))))) ;; finite -> truncate toward zero, saturate
+      (else                                                                      ;; int-form: no digits -> 0, else apply sign
+        (if (i32.eqz (local.get $ndig))
+          (then (return (i64.const 0)))
+          (else
+            (if (i32.eq (local.get $sign) (i32.const 1))
+              (then (return (i64.sub (i64.const 0) (local.get $val))))           ;; negate (wrapping for INT_MIN)
+              (else (return (local.get $val))))))))
+    (i64.const 0))
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
 /// Currently emits the full float<->string pipeline: the `__rt_f64_decompose` decoder,
@@ -896,6 +966,7 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule, base: i32) {
     wm.add_raw_func(RT_DIGITS_TO_F64);
     wm.add_raw_func(RT_STR_TO_F64);
     wm.add_raw_func(RT_ITOA);
+    wm.add_raw_func(RT_STR_TO_INT);
 }
 
 #[cfg(test)]
@@ -1959,6 +2030,75 @@ mod tests {
         }
     }
 
+    /// Builds a driver that stores `s` at 512 and calls
+    /// `__rt_str_to_int(512, s.len(), $__float_scratch)`, returning the i64 PHP `(int)$s`
+    /// (wasmer prints the signed decimal). Used by the table-driven parity test below.
+    fn str_to_int_driver(s: &str) -> String {
+        format!(
+            r#"(func $t (export "t") (result i64)
+{stores}  (call $__rt_str_to_int (i32.const 512) (i32.const {len}) (global.get $__float_scratch)))"#,
+            stores = store_ascii(512, s),
+            len = s.len(),
+        )
+    }
+
+    /// `(int)$str` parity vs `php -r`: integer-form (saturating), float-form (truncate),
+    /// `±INF`/`NaN`/overflow-to-`±INF` -> 0, whitespace, sign, leading zeros, hex-reject,
+    /// trailing garbage. Each row is `(input, expected)`. Verified against PHP 8.5.
+    #[test]
+    fn str_to_int_parity() {
+        const CASES: &[(&str, &str)] = &[
+            ("10", "10"),
+            ("-10", "-10"),
+            ("+10", "10"),
+            ("0", "0"),
+            ("00010", "10"),
+            ("123abc", "123"),
+            ("123abc456", "123"),
+            ("abc", "0"),
+            ("0x1A", "0"),
+            ("  123", "123"),
+            ("  -45  ", "-45"),
+            ("", "0"),
+            ("  ", "0"),
+            ("9223372036854775807", "9223372036854775807"),
+            ("9223372036854775808", "9223372036854775807"),
+            ("-9223372036854775808", "-9223372036854775808"),
+            ("-9223372036854775809", "-9223372036854775808"),
+            ("999999999999999999999", "9223372036854775807"),
+            ("-999999999999999999999", "-9223372036854775808"),
+            ("1e3", "1000"),
+            ("1.9", "1"),
+            ("1.9e2", "190"),
+            ("1.5E2", "150"),
+            ("123e2", "12300"),
+            ("2e-3", "0"),
+            (".5", "0"),
+            ("-.5", "0"),
+            ("1.", "1"),
+            (".e1", "0"),
+            ("1e20", "9223372036854775807"),
+            ("1.5e308", "9223372036854775807"),
+            ("1.7976931348623e308", "9223372036854775807"),
+            ("9223372036854775807.0", "9223372036854775807"),
+            ("1e400", "0"),
+            ("-1e400", "0"),
+            ("INF", "0"),
+            ("+INF", "0"),
+            ("-INF", "0"),
+            ("NAN", "0"),
+        ];
+        let mut failed = String::new();
+        for &(input, expected) in CASES {
+            if let Some(o) = run_float_driver(&str_to_int_driver(input), "t") {
+                if o != expected {
+                    failed.push_str(&format!("  ({:?}, got {}, want {})\n", input, o, expected));
+                }
+            }
+        }
+        assert!(failed.is_empty(), "str_to_int parity failures vs php:\n{failed}");
+    }
+
     /// Builds a driver that stores two little-endian base-2^32 big integers (`a` at 256,
     /// `b` at 4096) and calls `__rt_bignum_cmp(256, a.len, 4096, b.len)`, returning the
     /// signed i32 result (-1/0/1) extended to i64 so wasmer prints `-1`/`0`/`1`.
@@ -2826,4 +2966,5 @@ mod tests {
     }
 
 }
+
 
