@@ -450,13 +450,7 @@ pub(in crate::interpreter) fn eval_reflection_class_has_constant_result(
     };
     let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
     let constant_name = eval_reflection_string_arg(args[0], values)?;
-    let constant_names = if context.has_interface(&reflected_name) {
-        context.interface_constant_names(&reflected_name)
-    } else if context.has_trait(&reflected_name) {
-        context.trait_constant_names(&reflected_name)
-    } else {
-        context.class_constant_names(&reflected_name)
-    };
+    let constant_names = eval_reflection_constant_names(&reflected_name, context, values)?;
     values
         .bool_value(constant_names.iter().any(|name| name == &constant_name))
         .map(Some)
@@ -542,7 +536,9 @@ pub(in crate::interpreter) fn eval_reflection_class_get_constant_result(
     };
     let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
     let constant_name = eval_reflection_string_arg(args[0], values)?;
-    if let Some(value) = eval_reflection_constant_value(&reflected_name, &constant_name, context) {
+    if let Some(value) =
+        eval_reflection_constant_value(&reflected_name, &constant_name, context, values)?
+    {
         return Ok(Some(value));
     }
     values.bool_value(false).map(Some)
@@ -566,13 +562,15 @@ pub(in crate::interpreter) fn eval_reflection_class_get_constants_result(
     else {
         return Ok(None);
     };
-    let names = eval_reflection_constant_names(&reflected_name, context);
+    let names = eval_reflection_constant_names(&reflected_name, context, values)?;
     let mut result = values.assoc_new(names.len())?;
     for name in names {
-        if !eval_reflection_constant_matches_filter(&reflected_name, &name, filter, context) {
+        if !eval_reflection_constant_matches_filter(&reflected_name, &name, filter, context, values)?
+        {
             continue;
         }
-        let Some(value) = eval_reflection_constant_value(&reflected_name, &name, context) else {
+        let Some(value) = eval_reflection_constant_value(&reflected_name, &name, context, values)?
+        else {
             continue;
         };
         let key = values.string(&name)?;
@@ -1542,7 +1540,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constant_resu
     };
     let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
     let requested_name = eval_reflection_string_arg(args[0], values)?;
-    if !eval_reflection_constant_names(&reflected_name, context)
+    if !eval_reflection_constant_names(&reflected_name, context, values)?
         .iter()
         .any(|name| name == &requested_name)
     {
@@ -1570,11 +1568,12 @@ pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constants_res
     else {
         return Ok(None);
     };
-    let names = eval_reflection_constant_names(&reflected_name, context);
+    let names = eval_reflection_constant_names(&reflected_name, context, values)?;
     let mut result = values.array_new(names.len())?;
     let mut index = 0;
     for name in &names {
-        if !eval_reflection_constant_matches_filter(&reflected_name, name, filter, context) {
+        if !eval_reflection_constant_matches_filter(reflected_name.as_str(), name, filter, context, values)?
+        {
             continue;
         }
         let object =
@@ -1715,22 +1714,37 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
         .map(Some)
 }
 
-/// Returns the constant names visible through eval-backed `ReflectionClass`.
+/// Returns generated/AOT constant names visible through eval ReflectionClass.
+fn eval_reflection_aot_constant_names(
+    reflected_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let runtime_class_name = reflected_name.trim_start_matches('\\');
+    let names_array = values.reflection_constant_names(runtime_class_name)?;
+    let names = eval_reflection_string_array_to_vec(names_array, values)?;
+    values.release(names_array)?;
+    Ok(names)
+}
+
+/// Returns constant names from eval metadata or generated/AOT runtime metadata.
 fn eval_reflection_constant_names(
     reflected_name: &str,
     context: &ElephcEvalContext,
-) -> Vec<String> {
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
     if context.has_interface(reflected_name) {
-        context.interface_constant_names(reflected_name)
+        Ok(context.interface_constant_names(reflected_name))
     } else if context.has_trait(reflected_name) {
-        context.trait_constant_names(reflected_name)
+        Ok(context.trait_constant_names(reflected_name))
+    } else if context.has_class(reflected_name) || context.has_enum(reflected_name) {
+        Ok(context.class_constant_names(reflected_name))
     } else {
-        context.class_constant_names(reflected_name)
+        eval_reflection_aot_constant_names(reflected_name, values)
     }
 }
 
 /// Returns a materialized eval constant value for Reflection without visibility checks.
-fn eval_reflection_constant_value(
+fn eval_reflection_eval_constant_value(
     reflected_name: &str,
     constant_name: &str,
     context: &ElephcEvalContext,
@@ -1742,6 +1756,24 @@ fn eval_reflection_constant_value(
     context.class_constant_cell(&declaring_class, constant.name())
 }
 
+/// Returns a materialized eval or AOT constant value for Reflection without visibility checks.
+fn eval_reflection_constant_value(
+    reflected_name: &str,
+    constant_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if eval_reflection_class_like_exists(reflected_name, context) {
+        return Ok(eval_reflection_eval_constant_value(
+            reflected_name,
+            constant_name,
+            context,
+        ));
+    }
+    let runtime_class_name = reflected_name.trim_start_matches('\\');
+    values.reflection_constant_value(runtime_class_name, constant_name)
+}
+
 /// Builds one eval-backed `ReflectionClassConstant` object for a visible constant name.
 fn eval_reflection_class_constant_object_result(
     reflected_name: &str,
@@ -1750,10 +1782,11 @@ fn eval_reflection_class_constant_object_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (declaring_class_name, attributes, visibility, is_final, is_enum_case) =
-        eval_reflection_class_constant_metadata(reflected_name, constant_name, context)
+        eval_reflection_class_constant_metadata(reflected_name, constant_name, context, values)?
             .ok_or(EvalStatus::RuntimeFatal)?;
-    let constant_value = eval_reflection_constant_value(reflected_name, constant_name, context)
-        .ok_or(EvalStatus::RuntimeFatal)?;
+    let constant_value =
+        eval_reflection_constant_value(reflected_name, constant_name, context, values)?
+            .ok_or(EvalStatus::RuntimeFatal)?;
     let mut flags = eval_reflection_member_flags(visibility, false, is_final, false, false);
     if is_enum_case {
         flags |= EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE;
@@ -1787,15 +1820,15 @@ fn eval_reflection_constant_matches_filter(
     constant_name: &str,
     filter: Option<u64>,
     context: &ElephcEvalContext,
-) -> bool {
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
     let Some(filter) = filter else {
-        return true;
+        return Ok(true);
     };
-    eval_reflection_class_constant_metadata(reflected_name, constant_name, context).is_some_and(
-        |(_, _, visibility, is_final, _)| {
+    Ok(eval_reflection_class_constant_metadata(reflected_name, constant_name, context, values)?
+        .is_some_and(|(_, _, visibility, is_final, _)| {
             eval_reflection_class_constant_modifiers(visibility, is_final) & filter != 0
-        },
-    )
+        }))
 }
 
 /// Resolves the declared member spelling for eval `ReflectionClass` single-member lookups.
@@ -2870,14 +2903,17 @@ fn eval_reflection_class_constant_new(
         evaluated_args,
     )?;
     let class_name = eval_reflection_string_arg(args[0], values)?;
-    if !eval_reflection_class_like_exists(&class_name, context) {
-        return Ok(None);
-    }
     let constant_name = eval_reflection_string_arg(args[1], values)?;
-    let (declaring_class_name, attributes, visibility, is_final, is_enum_case) =
-        eval_reflection_class_constant_metadata(&class_name, &constant_name, context)
-            .ok_or(EvalStatus::RuntimeFatal)?;
-    let constant_value = eval_reflection_constant_value(&class_name, &constant_name, context)
+    let Some((declaring_class_name, attributes, visibility, is_final, is_enum_case)) =
+        eval_reflection_class_constant_metadata(&class_name, &constant_name, context, values)?
+    else {
+        return if eval_reflection_class_like_exists(&class_name, context) {
+            Err(EvalStatus::RuntimeFatal)
+        } else {
+            Ok(None)
+        };
+    };
+    let constant_value = eval_reflection_constant_value(&class_name, &constant_name, context, values)?
         .ok_or(EvalStatus::RuntimeFatal)?;
     let mut flags = eval_reflection_member_flags(visibility, false, is_final, false, false);
     if is_enum_case {
@@ -4538,19 +4574,20 @@ fn eval_reflection_class_constant_metadata(
     class_name: &str,
     constant_name: &str,
     context: &ElephcEvalContext,
-) -> Option<(String, Vec<EvalAttribute>, EvalVisibility, bool, bool)> {
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, Vec<EvalAttribute>, EvalVisibility, bool, bool)>, EvalStatus> {
     if let Some(enum_decl) = context.enum_decl(class_name) {
         if let Some(case) = enum_decl.case(constant_name) {
-            return Some((
+            return Ok(Some((
                 enum_decl.name().to_string(),
                 case.attributes().to_vec(),
                 EvalVisibility::Public,
                 false,
                 true,
-            ));
+            )));
         }
     }
-    context
+    if let Some(metadata) = context
         .class_constant(class_name, constant_name)
         .map(|(declaring_class, constant)| {
             (
@@ -4560,7 +4597,30 @@ fn eval_reflection_class_constant_metadata(
                 constant.is_final(),
                 false,
             )
-        })
+        }) {
+        return Ok(Some(metadata));
+    }
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let Some(flags) = values.reflection_constant_flags(runtime_class_name, constant_name)? else {
+        return Ok(None);
+    };
+    let declaring_class = values
+        .reflection_constant_declaring_class(runtime_class_name, constant_name)?
+        .unwrap_or_else(|| runtime_class_name.to_string());
+    let visibility = if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
+        EvalVisibility::Private
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED != 0 {
+        EvalVisibility::Protected
+    } else {
+        EvalVisibility::Public
+    };
+    Ok(Some((
+        declaring_class,
+        Vec::new(),
+        visibility,
+        flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL != 0,
+        flags & EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE != 0,
+    )))
 }
 
 /// Returns true when a name resolves to an eval-declared class-like symbol.

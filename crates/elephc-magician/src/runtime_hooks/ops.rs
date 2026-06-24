@@ -177,6 +177,30 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Ok(ok != 0)
     }
 
+    /// Reads an AOT class-like constant through the generated user helper.
+    fn class_constant_get(
+        &mut self,
+        class_name: &str,
+        constant: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let ptr = unsafe {
+            __elephc_eval_value_class_constant_get(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+                constant.as_ptr(),
+                constant.len() as u64,
+                scope_ptr,
+                scope_len,
+            )
+        };
+        if ptr.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(RuntimeCellHandle::from_raw(ptr)))
+        }
+    }
+
     /// Creates a shallow clone of a boxed Mixed stdClass/eval object through the generated wrapper.
     fn object_clone_shallow(
         &mut self,
@@ -424,6 +448,79 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe {
             __elephc_eval_reflection_property_names(class_name.as_ptr(), class_name.len() as u64)
+        })
+    }
+
+    /// Returns generated AOT ReflectionClassConstant values without visibility checks.
+    fn reflection_constant_value(
+        &mut self,
+        class_name: &str,
+        constant_name: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let ptr = unsafe {
+            __elephc_eval_reflection_constant_value(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+                constant_name.as_ptr(),
+                constant_name.len() as u64,
+            )
+        };
+        if ptr.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(RuntimeCellHandle::from_raw(ptr)))
+        }
+    }
+
+    /// Returns generated AOT ReflectionClassConstant flags for one constant.
+    fn reflection_constant_flags(
+        &mut self,
+        class_name: &str,
+        constant_name: &str,
+    ) -> Result<Option<u64>, EvalStatus> {
+        let flags = unsafe {
+            __elephc_eval_reflection_constant_flags(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+                constant_name.as_ptr(),
+                constant_name.len() as u64,
+            )
+        };
+        Ok((flags != 0).then_some(flags))
+    }
+
+    /// Returns generated AOT ReflectionClassConstant declaring class metadata.
+    fn reflection_constant_declaring_class(
+        &mut self,
+        class_name: &str,
+        constant_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        let ptr = unsafe {
+            __elephc_eval_reflection_constant_declaring_class(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+                constant_name.as_ptr(),
+                constant_name.len() as u64,
+            )
+        };
+        if ptr.is_null() {
+            return Ok(None);
+        }
+        let handle = RuntimeCellHandle::from_raw(ptr);
+        let bytes = self.string_bytes(handle)?;
+        self.release(handle)?;
+        String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| EvalStatus::RuntimeFatal)
+    }
+
+    /// Returns generated AOT ReflectionClassConstant names visible for one class.
+    fn reflection_constant_names(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_reflection_constant_names(class_name.as_ptr(), class_name.len() as u64)
         })
     }
 

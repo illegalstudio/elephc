@@ -100,6 +100,14 @@ impl RuntimeValueOps for FakeOps {
     ) -> Result<bool, EvalStatus> {
         Ok(false)
     }
+    /// Reports no fake AOT class constant match.
+    fn class_constant_get(
+        &mut self,
+        _class_name: &str,
+        _constant: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(None)
+    }
     /// Creates one shallow fake object clone.
     fn object_clone_shallow(
         &mut self,
@@ -235,6 +243,37 @@ impl RuntimeValueOps for FakeOps {
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_reflection_property_names(class_name)
+    }
+    /// Reports no fake generated AOT ReflectionClassConstant value.
+    fn reflection_constant_value(
+        &mut self,
+        _class_name: &str,
+        _constant_name: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(None)
+    }
+    /// Reports no fake generated AOT ReflectionClassConstant flags.
+    fn reflection_constant_flags(
+        &mut self,
+        _class_name: &str,
+        _constant_name: &str,
+    ) -> Result<Option<u64>, EvalStatus> {
+        Ok(None)
+    }
+    /// Reports no fake generated AOT ReflectionClassConstant declaring class.
+    fn reflection_constant_declaring_class(
+        &mut self,
+        _class_name: &str,
+        _constant_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        Ok(None)
+    }
+    /// Reports an empty fake generated AOT ReflectionClassConstant name list.
+    fn reflection_constant_names(
+        &mut self,
+        _class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_string_array_new(0)
     }
     /// Reports fake generated/AOT ReflectionClass interface names for metadata bridge tests.
     fn reflection_class_interface_names(
