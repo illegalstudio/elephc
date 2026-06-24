@@ -4456,6 +4456,61 @@ $box->run();
     assert_eq!(out, "N:I7:I42:N");
 }
 
+/// Verifies eval fragments can replace public array AOT properties through `$this`.
+#[test]
+fn test_eval_fragment_can_mutate_this_array_property() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalArrayPropBox {
+    public array $items = [1];
+
+    public function run(): void {
+        echo eval('$this->items = [3, 4];
+            return count($this->items) . ":" . $this->items[0] . ":" . $this->items[1];');
+    }
+}
+
+$box = new EvalArrayPropBox();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "2:3:4");
+}
+
+/// Verifies eval fragments can replace public object AOT properties through `$this`.
+#[test]
+fn test_eval_fragment_can_mutate_this_object_property() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalObjectPropValue {
+    public int $n;
+
+    public function __construct(int $n) {
+        $this->n = $n;
+    }
+}
+
+class EvalObjectPropBox {
+    public EvalObjectPropValue $value;
+
+    public function __construct() {
+        $this->value = new EvalObjectPropValue(1);
+    }
+
+    public function run(): void {
+        echo eval('$this->value = new EvalObjectPropValue(7);
+            $value = $this->value;
+            return $value->n;');
+    }
+}
+
+$box = new EvalObjectPropBox();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
 /// Verifies eval fragments can read and write public nullable-int AOT static properties.
 #[test]
 fn test_eval_fragment_can_mutate_aot_nullable_int_static_property() {
@@ -4475,6 +4530,50 @@ echo eval('$out = (EvalNullableIntStaticPropBox::$count === null) ? "N" : "n";
 "#,
     );
     assert_eq!(out, "N:I9:I33:N");
+}
+
+/// Verifies eval fragments can replace public array AOT static properties.
+#[test]
+fn test_eval_fragment_can_mutate_aot_array_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalArrayStaticPropBox {
+    public static array $items = [1];
+}
+
+echo eval('EvalArrayStaticPropBox::$items = [5, 6];
+    return count(EvalArrayStaticPropBox::$items) . ":" .
+        EvalArrayStaticPropBox::$items[0] . ":" . EvalArrayStaticPropBox::$items[1];');
+"#,
+    );
+    assert_eq!(out, "2:5:6");
+}
+
+/// Verifies eval fragments can replace public object AOT static properties.
+#[test]
+fn test_eval_fragment_can_mutate_aot_object_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalObjectStaticPropValue {
+    public int $n;
+
+    public function __construct(int $n) {
+        $this->n = $n;
+    }
+}
+
+class EvalObjectStaticPropBox {
+    public static EvalObjectStaticPropValue $value;
+}
+
+EvalObjectStaticPropBox::$value = new EvalObjectStaticPropValue(1);
+
+echo eval('EvalObjectStaticPropBox::$value = new EvalObjectStaticPropValue(8);
+    $value = EvalObjectStaticPropBox::$value;
+    return $value->n;');
+"#,
+    );
+    assert_eq!(out, "8");
 }
 
 /// Verifies eval keeps PHP property names case-sensitive while parsing keywords case-insensitively.

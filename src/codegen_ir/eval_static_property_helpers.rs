@@ -136,6 +136,9 @@ fn static_property_type_supported(ty: &PhpType) -> bool {
             | PhpType::TaggedScalar
             | PhpType::Mixed
             | PhpType::Union(_)
+            | PhpType::Object(_)
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
     )
 }
 
@@ -240,7 +243,7 @@ fn emit_static_property_set_aarch64(
     emitter.instruction("str x4, [sp, #32]");                                   // save the boxed value being assigned
     emit_aarch64_static_property_dispatch(module, emitter, data, slots, "set");
     emitter.instruction(&format!("b {}", fail_label));                          // no supported public static property matched the request
-    emit_aarch64_set_slot_bodies(module, emitter, slots, done_label);
+    emit_aarch64_set_slot_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("mov x0, #0");                                          // report a failed eval static-property write to Rust
     emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after failure
@@ -269,7 +272,7 @@ fn emit_static_property_set_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the boxed value being assigned
     emit_x86_64_static_property_dispatch(module, emitter, data, slots, "set");
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported public static property matched the request
-    emit_x86_64_set_slot_bodies(module, emitter, slots, done_label);
+    emit_x86_64_set_slot_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // report a failed eval static-property write to Rust
     emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after failure
@@ -427,12 +430,14 @@ fn emit_x86_64_get_slot_bodies(
 fn emit_aarch64_set_slot_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalStaticPropertySlot],
     done_label: &str,
+    fail_label: &str,
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "set"));
-        emit_aarch64_store_static_property_slot(emitter, slot);
+        emit_aarch64_store_static_property_slot(module, emitter, data, slot, fail_label);
         emitter.instruction("mov x0, #1");                                      // report a successful eval static-property write to Rust
         emitter.instruction(&format!("b {}", done_label));                      // return after storing the static property value
     }
@@ -442,12 +447,14 @@ fn emit_aarch64_set_slot_bodies(
 fn emit_x86_64_set_slot_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalStaticPropertySlot],
     done_label: &str,
+    fail_label: &str,
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "set"));
-        emit_x86_64_store_static_property_slot(emitter, slot);
+        emit_x86_64_store_static_property_slot(module, emitter, data, slot, fail_label);
         emitter.instruction("mov rax, 1");                                      // report a successful eval static-property write to Rust
         emitter.instruction(&format!("jmp {}", done_label));                    // return after storing the static property value
     }
@@ -500,7 +507,7 @@ fn emit_x86_64_uninitialized_guard(
 /// Boxes an ARM64 static property symbol payload into a Mixed cell.
 fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
     match slot.ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool => {
+        PhpType::Int | PhpType::Bool | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_load_symbol_to_reg(emitter, "x0", &slot.symbol, 0);
             emit_box_current_value_as_mixed(emitter, &slot.ty);
         }
@@ -546,7 +553,7 @@ fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStati
 /// Boxes an x86_64 static property symbol payload into a Mixed cell.
 fn emit_x86_64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
     match slot.ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool => {
+        PhpType::Int | PhpType::Bool | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_load_symbol_to_reg(emitter, "rax", &slot.symbol, 0);
             emit_box_current_value_as_mixed(emitter, &slot.ty);
         }
@@ -591,7 +598,13 @@ fn emit_x86_64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStatic
 }
 
 /// Stores a boxed Mixed eval value into an ARM64 static property symbol.
-fn emit_aarch64_store_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
+fn emit_aarch64_store_static_property_slot(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalStaticPropertySlot,
+    fail_label: &str,
+) {
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0"),
         PhpType::Bool => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_bool", "x0"),
@@ -608,6 +621,22 @@ fn emit_aarch64_store_static_property_slot(emitter: &mut Emitter, slot: &EvalSta
             abi::emit_store_reg_to_symbol(emitter, "x2", &slot.symbol, 8);
         }
         PhpType::TaggedScalar => emit_aarch64_store_tagged_scalar_static_property(emitter, slot),
+        PhpType::Array(_) => {
+            emit_aarch64_store_heap_static_property_slot(emitter, slot, 4, fail_label);
+        }
+        PhpType::AssocArray { .. } => {
+            emit_aarch64_store_heap_static_property_slot(emitter, slot, 5, fail_label);
+        }
+        PhpType::Object(class_name) => {
+            emit_aarch64_store_object_static_property_slot(
+                module,
+                emitter,
+                data,
+                slot,
+                &class_name,
+                fail_label,
+            );
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("ldr x0, [sp, #32]");                           // reload the boxed eval value being assigned
             emitter.instruction("bl __rt_incref");                              // retain the Mixed cell for static-property ownership
@@ -619,7 +648,13 @@ fn emit_aarch64_store_static_property_slot(emitter: &mut Emitter, slot: &EvalSta
 }
 
 /// Stores a boxed Mixed eval value into an x86_64 static property symbol.
-fn emit_x86_64_store_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
+fn emit_x86_64_store_static_property_slot(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalStaticPropertySlot,
+    fail_label: &str,
+) {
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax"),
         PhpType::Bool => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_bool", "rax"),
@@ -636,6 +671,22 @@ fn emit_x86_64_store_static_property_slot(emitter: &mut Emitter, slot: &EvalStat
             abi::emit_store_reg_to_symbol(emitter, "rdx", &slot.symbol, 8);
         }
         PhpType::TaggedScalar => emit_x86_64_store_tagged_scalar_static_property(emitter, slot),
+        PhpType::Array(_) => {
+            emit_x86_64_store_heap_static_property_slot(emitter, slot, 4, fail_label);
+        }
+        PhpType::AssocArray { .. } => {
+            emit_x86_64_store_heap_static_property_slot(emitter, slot, 5, fail_label);
+        }
+        PhpType::Object(class_name) => {
+            emit_x86_64_store_object_static_property_slot(
+                module,
+                emitter,
+                data,
+                slot,
+                &class_name,
+                fail_label,
+            );
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval value being assigned
             emitter.instruction("call __rt_incref");                            // retain the Mixed cell for static-property ownership
@@ -670,6 +721,87 @@ fn emit_x86_64_store_cast_scalar(
     emitter.instruction(&format!("call {}", helper));                           // coerce the eval value to the declared static-property type
     abi::emit_store_reg_to_symbol(emitter, result_reg, &slot.symbol, 0);
     clear_uninitialized_marker_after_static_store(emitter, slot);
+}
+
+/// Stores a boxed ARM64 eval heap value into an array-like static property symbol.
+fn emit_aarch64_store_heap_static_property_slot(
+    emitter: &mut Emitter,
+    slot: &EvalStaticPropertySlot,
+    expected_tag: i64,
+    fail_label: &str,
+) {
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the boxed eval value for heap payload inspection
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the assigned heap value tag and payload pointer
+    abi::emit_load_int_immediate(emitter, "x10", expected_tag);
+    emitter.instruction("cmp x0, x10");                                         // compare the assigned value tag with the static-property ABI
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject heap values with an incompatible ABI shape
+    emitter.instruction("mov x0, x1");                                          // move the unboxed heap pointer into the retained-result register
+    abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
+    abi::emit_store_reg_to_symbol(emitter, "x0", &slot.symbol, 0);
+    clear_uninitialized_marker_after_static_store(emitter, slot);
+}
+
+/// Validates and stores a boxed ARM64 eval object into an object static property symbol.
+fn emit_aarch64_store_object_static_property_slot(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalStaticPropertySlot,
+    class_name: &str,
+    fail_label: &str,
+) {
+    if !class_name.is_empty() {
+        let (label, len) = data.add_string(class_name.as_bytes());
+        let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+        emitter.instruction("ldr x0, [sp, #32]");                               // reload the boxed eval value for object type validation
+        abi::emit_symbol_address(emitter, "x1", &label);
+        abi::emit_load_int_immediate(emitter, "x2", len as i64);
+        emitter.instruction("mov x3, xzr");                                     // allow exact class matches for object static-property hints
+        abi::emit_call_label(emitter, &is_a_symbol);
+        emitter.instruction(&format!("cbz x0, {}", fail_label));                // reject values that fail the object static-property type hint
+    }
+    emit_aarch64_store_heap_static_property_slot(emitter, slot, 6, fail_label);
+}
+
+/// Stores a boxed x86_64 eval heap value into an array-like static property symbol.
+fn emit_x86_64_store_heap_static_property_slot(
+    emitter: &mut Emitter,
+    slot: &EvalStaticPropertySlot,
+    expected_tag: i64,
+    fail_label: &str,
+) {
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval value for heap payload inspection
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the assigned heap value tag and payload pointer
+    abi::emit_load_int_immediate(emitter, "r10", expected_tag);
+    emitter.instruction("cmp rax, r10");                                        // compare the assigned value tag with the static-property ABI
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject heap values with an incompatible ABI shape
+    emitter.instruction("mov rax, rdi");                                        // move the unboxed heap pointer into the retained-result register
+    abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
+    abi::emit_store_reg_to_symbol(emitter, "rax", &slot.symbol, 0);
+    clear_uninitialized_marker_after_static_store(emitter, slot);
+}
+
+/// Validates and stores a boxed x86_64 eval object into an object static property symbol.
+fn emit_x86_64_store_object_static_property_slot(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalStaticPropertySlot,
+    class_name: &str,
+    fail_label: &str,
+) {
+    if !class_name.is_empty() {
+        let (label, len) = data.add_string(class_name.as_bytes());
+        let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                   // reload the boxed eval value for object type validation
+        abi::emit_symbol_address(emitter, "rsi", &label);
+        abi::emit_load_int_immediate(emitter, "rdx", len as i64);
+        emitter.instruction("xor ecx, ecx");                                    // allow exact class matches for object static-property hints
+        abi::emit_call_label(emitter, &is_a_symbol);
+        emitter.instruction("test rax, rax");                                   // check whether the value satisfied the static-property hint
+        emitter.instruction(&format!("je {}", fail_label));                     // reject values that fail the object static-property type hint
+    }
+    emit_x86_64_store_heap_static_property_slot(emitter, slot, 6, fail_label);
 }
 
 /// Stores a boxed eval value into an ARM64 nullable-int static property symbol.
