@@ -694,3 +694,56 @@ fn web_env_superglobal_populated() {
     let _ = child.wait();
     assert!(resp.ends_with("present"), "$_ENV not populated: {:?}", resp);
 }
+
+/// Verifies the produced binary answers --help and --version (exit 0) (D4).
+#[test]
+fn web_help_and_version() {
+    let dir = make_test_dir("web_help");
+    let bin = compile_web(&dir, "<?php echo 'x';", "app");
+    let help = Command::new(&bin).arg("--help").output().expect("help");
+    assert!(help.status.success(), "--help should exit 0");
+    assert!(
+        String::from_utf8_lossy(&help.stdout).contains("--listen"),
+        "--help should describe --listen"
+    );
+    let ver = Command::new(&bin).arg("--version").output().expect("version");
+    assert!(ver.status.success(), "--version should exit 0");
+    assert!(
+        String::from_utf8_lossy(&ver.stdout).to_lowercase().contains("elephc-web"),
+        "--version should name elephc-web"
+    );
+    // Missing --listen is a usage error (non-zero exit).
+    let none = Command::new(&bin).output().expect("noargs");
+    assert!(!none.status.success(), "missing --listen must exit non-zero");
+}
+
+/// Verifies --max-requests recycles a single worker yet the server keeps serving
+/// across the recycle (the master respawns it) (B5).
+#[test]
+fn web_max_requests_recycles_and_keeps_serving() {
+    let dir = make_test_dir("web_maxreq");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1", "--max-requests", "2"])
+        .spawn()
+        .expect("spawn");
+    wait_until_ready(&addr);
+    // More requests than the cap: the server must keep serving across recycles.
+    // A single-worker recycle has a brief no-listener window, so tolerate transient
+    // connection-refused and retry — every logical request must eventually succeed.
+    for _ in 0..6 {
+        let mut ok = false;
+        for _ in 0..40 {
+            if try_http_get(&addr, "/").ends_with("ok") {
+                ok = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(ok, "server stopped serving across a --max-requests recycle");
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
