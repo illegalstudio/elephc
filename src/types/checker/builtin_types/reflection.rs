@@ -3744,7 +3744,7 @@ fn reflection_parameter_get_default_object_body(span: crate::span::Span) -> Vec<
             span,
         ),
     ];
-    for arg_count in 1..=3 {
+    for arg_count in 1..=8 {
         body.push(reflection_parameter_default_object_arg_count_branch(
             arg_count,
             arg_count_var,

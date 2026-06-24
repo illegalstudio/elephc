@@ -65,7 +65,7 @@ const NATIVE_ATTRIBUTE_ARG_INT: u8 = 2;
 const NATIVE_ATTRIBUTE_ARG_STRING: u8 = 3;
 const NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
-const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = 3;
+const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = 8;
 
 /// Local slot metadata needed for conservative eval scope synchronization.
 #[derive(Clone)]
