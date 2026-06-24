@@ -549,3 +549,30 @@ fn web_worker_respawns_after_crash() {
     let _ = child.wait();
     assert!(served, "worker was not respawned after a crash");
 }
+
+/// Verifies HTTP/1.1 keep-alive: two requests on ONE TCP connection both succeed.
+#[test]
+fn web_keep_alive_reuses_connection() {
+    use std::io::{Read, Write};
+    let dir = make_test_dir("web_keepalive");
+    let bin = compile_web(&dir, "<?php echo \"hi\";", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    wait_until_ready(&addr);
+    let mut sock = TcpStream::connect(&addr).expect("connect");
+    sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let req = format!("GET / HTTP/1.1\r\nHost: {}\r\n\r\n", addr);
+    sock.write_all(req.as_bytes()).unwrap();
+    let mut buf = [0u8; 512];
+    let n1 = sock.read(&mut buf).unwrap();
+    let resp1 = String::from_utf8_lossy(&buf[..n1]).to_string();
+    // Second request on the SAME socket (only works if keep-alive kept it open).
+    sock.write_all(req.as_bytes()).unwrap();
+    let n2 = sock.read(&mut buf).unwrap();
+    let resp2 = String::from_utf8_lossy(&buf[..n2]).to_string();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp1.contains("200") && resp1.contains("hi"), "resp1: {:?}", resp1);
+    assert!(resp2.contains("200") && resp2.contains("hi"), "keep-alive reuse failed: {:?}", resp2);
+}

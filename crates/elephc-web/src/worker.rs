@@ -12,13 +12,14 @@
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::TcpListener;
 
@@ -58,6 +59,8 @@ pub fn serve(listen: &str, handler: extern "C" fn(), max_body: usize) {
             // Serve this connection on the current thread; the blocking handler
             // call below holds the thread, serializing requests in this worker.
             if let Err(_e) = http1::Builder::new()
+                .timer(TokioTimer::new())
+                .header_read_timeout(Duration::from_secs(30))
                 .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| async move {
                     let method = req.method().as_str().to_string();
                     let uri = req.uri().to_string();

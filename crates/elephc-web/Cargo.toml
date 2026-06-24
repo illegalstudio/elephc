@@ -17,7 +17,7 @@ http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["tokio"] }
 # tokio current-thread runtime only: each prefork worker runs single-threaded,
 # so PHP execution (a blocking call) never overlaps within a worker.
-tokio = { version = "1", default-features = false, features = ["net", "rt", "io-util", "sync"] }
+tokio = { version = "1", default-features = false, features = ["net", "rt", "io-util", "sync", "time"] }
 # socket2 sets SO_REUSEPORT before bind so N workers share one port and the
 # kernel load-balances connections across them.
 socket2 = { version = "0.5", features = ["all"] }
