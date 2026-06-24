@@ -598,3 +598,22 @@ fn web_get_many_params_not_corrupted() {
     let _ = child.wait();
     assert!(resp.ends_with("30|29"), "many-param $_GET corrupted: {:?}", resp);
 }
+
+/// Verifies the extended $_SERVER keys (A1): REMOTE_ADDR, SERVER_PORT,
+/// SERVER_PROTOCOL, REQUEST_SCHEME, SERVER_SOFTWARE, REQUEST_TIME.
+#[test]
+fn web_server_vars_populated() {
+    let dir = make_test_dir("web_server_vars");
+    let src = "<?php echo $_SERVER['REMOTE_ADDR'].'|'.$_SERVER['SERVER_PORT'].'|'\
+        .$_SERVER['SERVER_PROTOCOL'].'|'.$_SERVER['REQUEST_SCHEME'].'|'\
+        .$_SERVER['SERVER_SOFTWARE'].'|'.($_SERVER['REQUEST_TIME'] > 0 ? 't' : 'f');";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    let expected = format!("127.0.0.1|{}|HTTP/1.1|http|elephc|t", port);
+    assert!(resp.ends_with(&expected), "expected {:?} at end of {:?}", expected, resp);
+}

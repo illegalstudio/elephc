@@ -34,6 +34,12 @@ extern "elephc_web" {
     function elephc_web_header_value(int $i): string;
     function elephc_web_body_ptr(): ptr;
     function elephc_web_body_len(): int;
+    function elephc_web_remote_addr(): string;
+    function elephc_web_remote_port(): int;
+    function elephc_web_server_addr(): string;
+    function elephc_web_server_port(): int;
+    function elephc_web_protocol(): string;
+    function elephc_web_request_time(): int;
 }
 $_SERVER = [];
 $_SERVER['REQUEST_METHOD'] = elephc_web_method();
@@ -48,6 +54,16 @@ for ($__elephc_i = 0; $__elephc_i < $__elephc_hc; $__elephc_i++) {
     if ($__elephc_up === 'CONTENT-TYPE') { $_SERVER['CONTENT_TYPE'] = $__elephc_hv; }
     if ($__elephc_up === 'CONTENT-LENGTH') { $_SERVER['CONTENT_LENGTH'] = $__elephc_hv; }
 }
+$_SERVER['REMOTE_ADDR']       = elephc_web_remote_addr();
+$_SERVER['REMOTE_PORT']       = elephc_web_remote_port();
+$_SERVER['SERVER_ADDR']       = elephc_web_server_addr();
+$_SERVER['SERVER_PORT']       = elephc_web_server_port();
+$_SERVER['SERVER_NAME']       = elephc_web_server_addr();
+$_SERVER['SERVER_PROTOCOL']   = elephc_web_protocol();
+$_SERVER['REQUEST_TIME']      = elephc_web_request_time();
+$_SERVER['REQUEST_SCHEME']    = 'http';
+$_SERVER['GATEWAY_INTERFACE'] = 'CGI/1.1';
+$_SERVER['SERVER_SOFTWARE']   = 'elephc';
 $_GET = [];
 $__elephc_qs = elephc_web_query_string();
 if ($__elephc_qs !== '') {
