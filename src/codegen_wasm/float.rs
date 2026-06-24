@@ -636,6 +636,178 @@ const RT_BIGNUM_SHR1: &str = r#"  (func $__rt_bignum_shr1 (param $ptr i32) (para
   )                                                                              ;; end func
 "#;
 
+/// Zeroes `n` little-endian base-2^32 limbs at `ptr` (writes 0 to each). Used to clear
+/// the fixed bignum buffers at the start of `__rt_digits_to_f64` so a repeated call in
+/// the same program does not see stale limbs left by a prior parse (fresh linear memory
+/// is zero-initialized, but only the first call can rely on that).
+const RT_BIGNUM_ZERO: &str = r#"  (func $__rt_bignum_zero (param $ptr i32) (param $n i32) (local $i i32) (local $addr i32) ;; zero n limbs (write 0 to every limb)
+    (local.set $i (i32.const 0))                                                 ;; limb index = 0
+    (block $end                                                                  ;; zero loop exit target
+      (loop $top                                                                 ;; iterate limbs low-to-high
+        (br_if $end (i32.ge_u (local.get $i) (local.get $n)))                    ;; stop once i >= n
+        (local.set $addr (i32.add (local.get $ptr) (i32.shl (local.get $i) (i32.const 2)))) ;; &limb[i] = ptr + i*4
+        (i64.store32 (local.get $addr) (i64.const 0))                            ;; limb[i] = 0
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))                    ;; i = i + 1
+        (br $top)                                                                ;; continue the loop
+      )                                                                          ;; end loop $top
+    )                                                                            ;; end block $end
+  )                                                                              ;; end func
+"#;
+
+/// Correctly-rounded decimal string -> IEEE-754 double bits (the strtod core).
+///
+/// `(sign, ndig, K, digptr) -> i64` where the value is `M * 10^K` and `M` is the
+/// `ndig` ASCII digit bytes at `digptr` (leading zeros preserved). Builds the exact
+/// integer ratio `num/den` (absorbing `10^K` as `5^K * 2^K` into `num` for `K >= 0`
+/// or into `den` for `K < 0`), normalizes it into the `[2^52, 2^53)` mantissa window by
+/// powers of two, extracts the 53-bit significand via binary long division against
+/// `den << 52`, rounds half-to-even, and assembles the bits. Trailing digits beyond
+/// `KEEP = 400` are dropped (with `K` adjusted) since they fall below the double
+/// subnormal ulp; magnitudes `>= 1e309` short-circuit to `+/-inf` and `< 1e-308` (the
+/// deferred subnormal range) to `+/-0`. Bignums use 96-limb fixed buffers at
+/// `0x4000`/`0x4400`/`0x4800`/`0x4C00` (zero-initialized).
+const RT_DIGITS_TO_F64: &str = r#"  (func $__rt_digits_to_f64 (param $sign i32) (param $ndig i32) (param $K i32) (param $digptr i32) (result i64) (local $i i32) (local $d i32) (local $a i32) (local $b i32) (local $dd i32) (local $cmp i32) (local $Q i64) (local $exp i32) (local $biased i32) (local $drop i32) (local $kc i32) ;; correctly-rounded decimal M*10^K -> f64 bits (sign,ndig,K,digptr)
+    (call $__rt_bignum_zero (i32.const 16384) (i32.const 96))                    ;; clear NUM (96 limbs) so a repeated call sees no stale mantissa
+    (call $__rt_bignum_zero (i32.const 17408) (i32.const 96))                    ;; clear DEN (96 limbs) so a repeated call sees no stale denominator
+    (if (i32.gt_s (local.get $ndig) (i32.const 400))                             ;; keep at most KEEP significant digits
+      (then                                                                      ;; then: input longer than KEEP
+        (local.set $drop (i32.sub (local.get $ndig) (i32.const 400)))            ;; drop = ndig - KEEP
+        (local.set $K (i32.add (local.get $K) (local.get $drop)))                ;; K += drop (value preserved to ~2^-1074)
+        (local.set $ndig (i32.const 400))                                        ;; ndig = KEEP
+      )                                                                          ;; end then
+    )                                                                            ;; end if
+    (if (i32.eqz (local.get $ndig))                                              ;; no digits?
+      (then                                                                      ;; then: zero magnitude
+        (return (i64.shl (i64.extend_i32_u (local.get $sign)) (i64.const 63)))   ;; return +/-0 (sign << 63)
+      )                                                                          ;; end then
+    )                                                                            ;; end if
+    (if (i32.ge_s (i32.add (i32.sub (local.get $ndig) (i32.const 1)) (local.get $K)) (i32.const 309)) ;; order of magnitude >= 1e309?
+      (then                                                                      ;; then: overflow
+        (return (i64.or (i64.shl (i64.extend_i32_u (local.get $sign)) (i64.const 63)) (i64.const 0x7FF0000000000000))) ;; return +/-inf
+      )                                                                          ;; end then
+    )                                                                            ;; end if
+    (if (i32.le_s (i32.add (local.get $ndig) (local.get $K)) (i32.const -308))   ;; order of magnitude < 1e-308?
+      (then                                                                      ;; then: underflow (subnormal -> 0)
+        (return (i64.shl (i64.extend_i32_u (local.get $sign)) (i64.const 63)))   ;; return +/-0 (subnormals deferred)
+      )                                                                          ;; end then
+    )                                                                            ;; end if
+    (local.set $i (i32.const 0))                                                 ;; digit index = 0
+    (block $mb                                                                   ;; mantissa-build loop exit
+      (loop $mt                                                                  ;; iterate digits low-to-high
+        (br_if $mb (i32.ge_s (local.get $i) (local.get $ndig)))                  ;; stop once i >= ndig
+        (local.set $d (i32.sub (i32.load8_u (i32.add (local.get $digptr) (local.get $i))) (i32.const 48))) ;; d = digit byte minus ASCII '0'
+        (drop (call $__rt_bignum_mul_u32 (i32.const 16384) (i32.const 96) (i64.const 10))) ;; M = M * 10
+        (drop (call $__rt_bignum_add_u32 (i32.const 16384) (i32.const 96) (i64.extend_i32_u (local.get $d)))) ;; M = M + d
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))                    ;; i = i + 1
+        (br $mt)                                                                 ;; continue the mantissa-build loop
+      )                                                                          ;; end loop $mt
+    )                                                                            ;; end block $mb
+    (if (call $__rt_bignum_is_zero (i32.const 16384) (i32.const 96))             ;; mantissa M == 0 ?
+      (then (return (i64.shl (i64.extend_i32_u (local.get $sign)) (i64.const 63)))) ;; return +/-0
+    )                                                                            ;; end if
+    (if (i32.ge_s (local.get $K) (i32.const 0))                                  ;; K >= 0 ?
+      (then                                                                      ;; then: K >= 0 -> num = M*5^K*2^K, den = 1
+        (i32.store (i32.const 17408) (i32.const 1))                              ;; den = 1 (limb0 = 1, rest zero-init)
+        (call $__rt_bignum_mul_small_n_times (i32.const 16384) (i32.const 96) (i64.const 5) (local.get $K)) ;; num *= 5^K
+        (call $__rt_bignum_mul_small_n_times (i32.const 16384) (i32.const 96) (i64.const 2) (local.get $K)) ;; num *= 2^K (= *10^K total)
+      )                                                                          ;; end then
+      (else                                                                      ;; else: K < 0 -> den = 10^|K|, num = M
+        (i32.store (i32.const 17408) (i32.const 1))                              ;; den = 1 (start)
+        (local.set $kc (i32.sub (i32.const 0) (local.get $K)))                   ;; kc = |K| = -K
+        (call $__rt_bignum_mul_small_n_times (i32.const 17408) (i32.const 96) (i64.const 5) (local.get $kc)) ;; den *= 5^|K|
+        (call $__rt_bignum_mul_small_n_times (i32.const 17408) (i32.const 96) (i64.const 2) (local.get $kc)) ;; den *= 2^|K| (= 10^|K|)
+      )                                                                          ;; end else
+    )                                                                            ;; end if
+    (local.set $a (i32.const 0))                                                 ;; num double-shifts a = 0
+    (local.set $b (i32.const 0))                                                 ;; den double-shifts b = 0
+    (local.set $dd (i32.sub (call $__rt_bignum_bitlen (i32.const 16384) (i32.const 96)) (call $__rt_bignum_bitlen (i32.const 17408) (i32.const 96)))) ;; dd = bitlen(num) - bitlen(den) (~ floor log2 value)
+    (if (i32.gt_s (local.get $dd) (i32.const 52))                                ;; dd > 52 ? (value too large)
+      (then                                                                      ;; then: shrink quotient by scaling den up
+        (local.set $b (i32.sub (local.get $dd) (i32.const 52)))                  ;; b = dd - 52
+        (call $__rt_bignum_mul_small_n_times (i32.const 17408) (i32.const 96) (i64.const 2) (local.get $b)) ;; den *= 2^b
+      )                                                                          ;; end then
+    )                                                                            ;; end if
+    (if (i32.lt_s (local.get $dd) (i32.const 52))                                ;; dd < 52 ? (value too small)
+      (then                                                                      ;; then: grow quotient by scaling num up
+        (local.set $a (i32.sub (i32.const 52) (local.get $dd)))                  ;; a = 52 - dd
+        (call $__rt_bignum_mul_small_n_times (i32.const 16384) (i32.const 96) (i64.const 2) (local.get $a)) ;; num *= 2^a
+      )                                                                          ;; end then
+    )                                                                            ;; end if
+    (call $__rt_bignum_copy (i32.const 19456) (i32.const 17408) (i32.const 96))  ;; den_shl = copy(den)
+    (call $__rt_bignum_mul_small_n_times (i32.const 19456) (i32.const 96) (i64.const 2) (i32.const 52)) ;; den_shl <<= 52
+    (if (i32.lt_s (call $__rt_bignum_cmp (i32.const 16384) (i32.const 96) (i32.const 19456) (i32.const 96)) (i32.const 0)) ;; num < den_shl ? (Q would be < 2^52)
+      (then                                                                      ;; then: scale num up once more
+        (call $__rt_bignum_mul_small_n_times (i32.const 16384) (i32.const 96) (i64.const 2) (i32.const 1)) ;; num *= 2
+        (local.set $a (i32.add (local.get $a) (i32.const 1)))                    ;; a += 1 (exp stays correct)
+      )                                                                          ;; end then
+    )                                                                            ;; end if
+    (call $__rt_bignum_copy (i32.const 18432) (i32.const 16384) (i32.const 96))  ;; work = copy(num) (running remainder)
+    (local.set $Q (i64.const 0))                                                 ;; quotient Q = 0
+    (local.set $i (i32.const 52))                                                ;; bit index = 52 (top of 53-bit mantissa)
+    (block $ld                                                                   ;; long-division loop exit
+      (loop $lt                                                                  ;; iterate bit index 52 down to 0
+        (br_if $ld (i32.lt_s (local.get $i) (i32.const 0)))                      ;; stop once i < 0
+        (if (i32.ge_s (call $__rt_bignum_cmp (i32.const 18432) (i32.const 96) (i32.const 19456) (i32.const 96)) (i32.const 0)) ;; work >= den_shl ?
+          (then                                                                  ;; then: this bit of the quotient is 1
+            (local.set $Q (i64.or (local.get $Q) (i64.shl (i64.const 1) (i64.extend_i32_u (local.get $i))))) ;; Q |= (1 << i)
+            (drop (call $__rt_bignum_sub (i32.const 18432) (i32.const 19456) (i32.const 96))) ;; work -= den_shl
+          )                                                                      ;; end then
+        )                                                                        ;; end if
+        (call $__rt_bignum_shr1 (i32.const 19456) (i32.const 96))                ;; den_shl >>= 1 (next lower bit)
+        (local.set $i (i32.sub (local.get $i) (i32.const 1)))                    ;; i = i - 1
+        (br $lt)                                                                 ;; continue the long-division loop
+      )                                                                          ;; end loop $lt
+    )                                                                            ;; end block $ld
+    (call $__rt_bignum_mul_small_n_times (i32.const 18432) (i32.const 96) (i64.const 2) (i32.const 1)) ;; work = 2 * rem
+    (local.set $cmp (call $__rt_bignum_cmp (i32.const 18432) (i32.const 96) (i32.const 17408) (i32.const 96))) ;; cmp = compare(2*rem, den)
+    (if (i32.gt_s (local.get $cmp) (i32.const 0))                                ;; 2*rem > den ? (round up)
+      (then (local.set $Q (i64.add (local.get $Q) (i64.const 1))))               ;; Q += 1 (round up)
+    )                                                                            ;; end if
+    (if (i32.and (i32.eq (local.get $cmp) (i32.const 0)) (i64.ne (i64.and (local.get $Q) (i64.const 1)) (i64.const 0))) ;; exact half and Q odd ? (round to even)
+      (then (local.set $Q (i64.add (local.get $Q) (i64.const 1))))               ;; Q += 1 (round half to even)
+    )                                                                            ;; end if
+    (if (i64.eq (local.get $Q) (i64.const 0x20000000000000))                     ;; rounding carried Q to 2^53 ?
+      (then                                                                      ;; then: normalize carry
+        (local.set $Q (i64.const 0x10000000000000))                              ;; Q = 2^52
+        (local.set $a (i32.sub (local.get $a) (i32.const 1)))                    ;; a -= 1 (exp += 1)
+      )                                                                          ;; end then
+    )                                                                            ;; end if
+    (local.set $exp (i32.add (i32.const 52) (i32.sub (local.get $b) (local.get $a)))) ;; unbiased exp = 52 + (b - a)
+    (local.set $biased (i32.add (local.get $exp) (i32.const 1023)))              ;; biased exp = exp + 1023
+    (if (i32.ge_s (local.get $biased) (i32.const 2047))                          ;; biased >= 2047 ? (overflow to inf)
+      (then (return (i64.or (i64.shl (i64.extend_i32_u (local.get $sign)) (i64.const 63)) (i64.const 0x7FF0000000000000)))) ;; return +/-inf
+    )                                                                            ;; end if
+    (if (i32.le_s (local.get $biased) (i32.const 0))                             ;; biased <= 0 ? (subnormal -> 0)
+      (then (return (i64.shl (i64.extend_i32_u (local.get $sign)) (i64.const 63)))) ;; return +/-0 (subnormals deferred)
+    )                                                                            ;; end if
+    (i64.or (i64.or (i64.shl (i64.extend_i32_u (local.get $sign)) (i64.const 63)) (i64.shl (i64.extend_i32_u (local.get $biased)) (i64.const 52))) (i64.sub (local.get $Q) (i64.const 0x10000000000000))) ;; bits = (sign<<63) | (biased<<52) | (Q - 2^52)
+  )                                                                              ;; end func
+"#;
+
+/// Parses a decimal string and stores its IEEE-754 double bits at `$out`.
+///
+/// `(ptr, len, out)` calls `__rt_parse_decimal` (digits written to the fixed `DIGBUF`
+/// at `0x5000`) and dispatches on the class. PHP's string->float grammar only accepts
+/// finite numeric syntax: the `inf`/`nan` tokens and empty/invalid strings (classes 1,
+/// 2, 3) all yield `+0.0` (PHP returns `+0.0` even for `"-inf"`), so only the finite
+/// branch (`__rt_digits_to_f64`) runs -- and it handles overflow to `+/-inf` internally.
+/// The result is stored as an i64 at `*out` (the raw bit pattern; callers reinterpret it
+/// as f64). This is the wasm32-wasi `strtod` equivalent used by `(float)`/`(int)`-of-
+/// float-string casts.
+const RT_STR_TO_F64: &str = r#"  (func $__rt_str_to_f64 (param $ptr i32) (param $len i32) (param $out i32) (local $sign i32) (local $ndig i32) (local $K i32) (local $class i32) (local $bits i64) ;; parse a decimal string and store its f64 bits at out
+    (call $__rt_parse_decimal (local.get $ptr) (local.get $len) (i32.const 20480)) ;; parse_decimal -> sign,ndig,K,class
+    (local.set $class)                                                           ;; pop class
+    (local.set $K)                                                               ;; pop K
+    (local.set $ndig)                                                            ;; pop ndig
+    (local.set $sign)                                                            ;; pop sign
+    (if (i32.eq (local.get $class) (i32.const 0))                                ;; class 0 (finite decimal)?
+      (then (local.set $bits (call $__rt_digits_to_f64 (local.get $sign) (local.get $ndig) (local.get $K) (i32.const 20480)))) ;; bits = correctly-rounded finite M*10^K
+      (else (local.set $bits (i64.const 0)))                                     ;; class 1/2/3 (invalid/inf/nan token) -> +0.0 (PHP non-numeric -> 0.0)
+    )                                                                            ;; end if (finite vs non-numeric)
+    (i64.store (local.get $out) (local.get $bits))                               ;; *(out) = bits
+  )                                                                              ;; end func
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
 /// Currently emits the full float<->string pipeline: the `__rt_f64_decompose` decoder,
@@ -666,6 +838,9 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_BIGNUM_COPY);
     wm.add_raw_func(RT_BIGNUM_BITLEN);
     wm.add_raw_func(RT_BIGNUM_SHR1);
+    wm.add_raw_func(RT_BIGNUM_ZERO);
+    wm.add_raw_func(RT_DIGITS_TO_F64);
+    wm.add_raw_func(RT_STR_TO_F64);
 }
 
 #[cfg(test)]
@@ -2176,6 +2351,316 @@ mod tests {
         }
     }
 
+
+    /// Formats an f64 raw bit pattern (a u64) the way `wasmer --invoke` prints the
+    /// returned i64 -- as a signed decimal (a set sign bit yields a negative number).
+    fn bits_str(bits: u64) -> String {
+        format!("{}", bits as i64)
+    }
+
+    /// Stores ASCII `digs` at 512 and calls `__rt_digits_to_f64(sign, ndig, K, 512)`,
+    /// returning the i64 bits. `ndig` must equal `digs.len()`.
+    fn digits_driver(sign: u32, ndig: u32, k: i32, digs: &str) -> String {
+        let stores = store_ascii(512, digs);
+        format!(
+            r#"(func $t (export "t") (result i64)
+{stores}  (call $__rt_digits_to_f64 (i32.const {sign}) (i32.const {ndig}) (i32.const {k}) (i32.const 512)))"#,
+        )
+    }
+
+    /// Stores string `s` at 256, calls `__rt_str_to_f64(256, len, 600)`, and loads the
+    /// i64 bits the routine stored at 600 (the full parse + dispatch + rounding path).
+    fn strtod_driver(s: &str) -> String {
+        let stores = store_ascii(256, s);
+        format!(
+            r#"(func $t (export "t") (result i64)
+{stores}  (call $__rt_str_to_f64 (i32.const 256) (i32.const {len}) (i32.const 600))
+  (i64.load (i32.const 600)))"#,
+            len = s.len(),
+        )
+    }
+
+    /// Calls `__rt_str_to_f64` twice in one module (first at 256, then 320), returning
+    /// the second result. Guards the buffer zeroing: a prior large-magnitude parse must
+    /// not leave stale bignum limbs for the following call.
+    fn strtod_repeated_driver(first: &str, second: &str) -> String {
+        let s1 = store_ascii(256, first);
+        let s2 = store_ascii(320, second);
+        format!(
+            r#"(func $t (export "t") (result i64)
+{s1}  (call $__rt_str_to_f64 (i32.const 256) (i32.const {len1}) (i32.const 600))
+{s2}  (call $__rt_str_to_f64 (i32.const 320) (i32.const {len2}) (i32.const 600))
+  (i64.load (i32.const 600)))"#,
+            len1 = first.len(),
+            len2 = second.len(),
+        )
+    }
+
+    // -- __rt_digits_to_f64: orchestrator parity vs `php -r` (PHP 8.5 true IEEE bits) --
+
+    /// 1e3 = 1000 -> 0x408f400000000000 (sign 0, 1 digit, K 3).
+    #[test]
+    fn digits_one_e3() {
+        if let Some(o) = run_float_driver(&digits_driver(0, 1, 3, "1"), "t") {
+            assert_eq!(o, bits_str(0x408f400000000000));
+        }
+    }
+
+    /// 3.14 -> 0x40091eb851eb851f (digits "314", K -2).
+    #[test]
+    fn digits_three_point_fourteen() {
+        if let Some(o) = run_float_driver(&digits_driver(0, 3, -2, "314"), "t") {
+            assert_eq!(o, bits_str(0x40091eb851eb851f));
+        }
+    }
+
+    /// 0.1 -> 0x3fb999999999999a (digits "01", K -1).
+    #[test]
+    fn digits_one_tenth() {
+        if let Some(o) = run_float_driver(&digits_driver(0, 2, -1, "01"), "t") {
+            assert_eq!(o, bits_str(0x3fb999999999999a));
+        }
+    }
+
+    /// 1e-7 -> 0x3e7ad7f29abcaf48 (digits "1", K -7).
+    #[test]
+    fn digits_one_e_minus_seven() {
+        if let Some(o) = run_float_driver(&digits_driver(0, 1, -7, "1"), "t") {
+            assert_eq!(o, bits_str(0x3e7ad7f29abcaf48));
+        }
+    }
+
+    /// 2.5 -> 0x4004000000000000 (digits "25", K -1).
+    #[test]
+    fn digits_two_point_five() {
+        if let Some(o) = run_float_driver(&digits_driver(0, 2, -1, "25"), "t") {
+            assert_eq!(o, bits_str(0x4004000000000000));
+        }
+    }
+
+    /// -2.5 -> 0xc004000000000000 (sign 1, digits "25", K -1).
+    #[test]
+    fn digits_neg_two_point_five() {
+        if let Some(o) = run_float_driver(&digits_driver(1, 2, -1, "25"), "t") {
+            assert_eq!(o, bits_str(0xc004000000000000));
+        }
+    }
+
+    /// 1e100 -> 0x54b249ad2594c37d (digits "1", K 100).
+    #[test]
+    fn digits_one_e_100() {
+        if let Some(o) = run_float_driver(&digits_driver(0, 1, 100, "1"), "t") {
+            assert_eq!(o, bits_str(0x54b249ad2594c37d));
+        }
+    }
+
+    /// 1e-100 -> 0x2b2bff2ee48e0530 (digits "1", K -100).
+    #[test]
+    fn digits_one_e_minus_100() {
+        if let Some(o) = run_float_driver(&digits_driver(0, 1, -100, "1"), "t") {
+            assert_eq!(o, bits_str(0x2b2bff2ee48e0530));
+        }
+    }
+
+    /// DBL_MAX = 1.7976931348623157e308 -> 0x7fefffffffffffff (17 digits, K 292).
+    #[test]
+    fn digits_max_finite() {
+        if let Some(o) = run_float_driver(&digits_driver(0, 17, 292, "17976931348623157"), "t") {
+            assert_eq!(o, bits_str(0x7fefffffffffffff));
+        }
+    }
+
+    /// M == 0 with a sign -> -0.0 = 0x8000000000000000 (digits "0", K 0, sign 1).
+    #[test]
+    fn digits_negative_zero() {
+        if let Some(o) = run_float_driver(&digits_driver(1, 1, 0, "0"), "t") {
+            assert_eq!(o, bits_str(0x8000000000000000));
+        }
+    }
+
+    /// Smallest positive normal = 2.2250738585072014e-308 -> 0x0010000000000000
+    /// (digits "22250738585072014", K -324; just above the underflow short-circuit).
+    #[test]
+    fn digits_smallest_normal() {
+        if let Some(o) = run_float_driver(&digits_driver(0, 17, -324, "22250738585072014"), "t") {
+            assert_eq!(o, bits_str(0x0010000000000000));
+        }
+    }
+
+    // -- __rt_str_to_f64: full parse + dispatch + rounding parity vs `php -r` --
+
+    /// "1e3" -> 0x408f400000000000.
+    #[test]
+    fn strtod_one_e3() {
+        if let Some(o) = run_float_driver(&strtod_driver("1e3"), "t") {
+            assert_eq!(o, bits_str(0x408f400000000000));
+        }
+    }
+
+    /// "3.14" -> 0x40091eb851eb851f.
+    #[test]
+    fn strtod_three_point_fourteen() {
+        if let Some(o) = run_float_driver(&strtod_driver("3.14"), "t") {
+            assert_eq!(o, bits_str(0x40091eb851eb851f));
+        }
+    }
+
+    /// "0.1" -> 0x3fb999999999999a.
+    #[test]
+    fn strtod_one_tenth() {
+        if let Some(o) = run_float_driver(&strtod_driver("0.1"), "t") {
+            assert_eq!(o, bits_str(0x3fb999999999999a));
+        }
+    }
+
+    /// "1E-7" (uppercase E) -> 0x3e7ad7f29abcaf48.
+    #[test]
+    fn strtod_one_e_minus_seven() {
+        if let Some(o) = run_float_driver(&strtod_driver("1E-7"), "t") {
+            assert_eq!(o, bits_str(0x3e7ad7f29abcaf48));
+        }
+    }
+
+    /// "2.5" -> 0x4004000000000000.
+    #[test]
+    fn strtod_two_point_five() {
+        if let Some(o) = run_float_driver(&strtod_driver("2.5"), "t") {
+            assert_eq!(o, bits_str(0x4004000000000000));
+        }
+    }
+
+    /// "-2.5" -> 0xc004000000000000.
+    #[test]
+    fn strtod_neg_two_point_five() {
+        if let Some(o) = run_float_driver(&strtod_driver("-2.5"), "t") {
+            assert_eq!(o, bits_str(0xc004000000000000));
+        }
+    }
+
+    /// "1e100" -> 0x54b249ad2594c37d.
+    #[test]
+    fn strtod_one_e_100() {
+        if let Some(o) = run_float_driver(&strtod_driver("1e100"), "t") {
+            assert_eq!(o, bits_str(0x54b249ad2594c37d));
+        }
+    }
+
+    /// "1e-100" -> 0x2b2bff2ee48e0530.
+    #[test]
+    fn strtod_one_e_minus_100() {
+        if let Some(o) = run_float_driver(&strtod_driver("1e-100"), "t") {
+            assert_eq!(o, bits_str(0x2b2bff2ee48e0530));
+        }
+    }
+
+    /// "1e309" overflows -> +inf = 0x7ff0000000000000 (matches PHP `(float)"1e309"`).
+    #[test]
+    fn strtod_overflow_inf() {
+        if let Some(o) = run_float_driver(&strtod_driver("1e309"), "t") {
+            assert_eq!(o, bits_str(0x7ff0000000000000));
+        }
+    }
+
+    /// "-1e309" overflows -> -inf = 0xfff0000000000000.
+    #[test]
+    fn strtod_overflow_neg_inf() {
+        if let Some(o) = run_float_driver(&strtod_driver("-1e309"), "t") {
+            assert_eq!(o, bits_str(0xfff0000000000000));
+        }
+    }
+
+    /// "1.7976931348623157e308" -> DBL_MAX = 0x7fefffffffffffff.
+    #[test]
+    fn strtod_max_finite() {
+        if let Some(o) = run_float_driver(&strtod_driver("1.7976931348623157e308"), "t") {
+            assert_eq!(o, bits_str(0x7fefffffffffffff));
+        }
+    }
+
+    /// "1e308" -> 0x7fe1ccf385ebc8a0 (just below the overflow threshold).
+    #[test]
+    fn strtod_one_e_308() {
+        if let Some(o) = run_float_driver(&strtod_driver("1e308"), "t") {
+            assert_eq!(o, bits_str(0x7fe1ccf385ebc8a0));
+        }
+    }
+
+    /// "0.0" -> +0.0 = 0x0 (M == 0).
+    #[test]
+    fn strtod_zero() {
+        if let Some(o) = run_float_driver(&strtod_driver("0.0"), "t") {
+            assert_eq!(o, bits_str(0x0));
+        }
+    }
+
+    /// "-0.0" -> -0.0 = 0x8000000000000000.
+    #[test]
+    fn strtod_neg_zero() {
+        if let Some(o) = run_float_driver(&strtod_driver("-0.0"), "t") {
+            assert_eq!(o, bits_str(0x8000000000000000));
+        }
+    }
+
+    /// "1e-307" -> 0x0031fa182c40c60d (smallest tested non-underflowing negative exponent).
+    #[test]
+    fn strtod_one_e_minus_307() {
+        if let Some(o) = run_float_driver(&strtod_driver("1e-307"), "t") {
+            assert_eq!(o, bits_str(0x0031fa182c40c60d));
+        }
+    }
+
+    /// "2.2250738585072014e-308" -> smallest normal 0x0010000000000000.
+    #[test]
+    fn strtod_smallest_normal() {
+        if let Some(o) = run_float_driver(&strtod_driver("2.2250738585072014e-308"), "t") {
+            assert_eq!(o, bits_str(0x0010000000000000));
+        }
+    }
+
+    // -- non-numeric tokens: PHP string->float yields +0.0 for inf/nan/invalid --
+
+    /// "inf" -> +0.0 (PHP grammar excludes the `inf` token from numeric strings).
+    #[test]
+    fn strtod_inf_token_is_zero() {
+        if let Some(o) = run_float_driver(&strtod_driver("inf"), "t") {
+            assert_eq!(o, bits_str(0x0));
+        }
+    }
+
+    /// "-inf" -> +0.0 (PHP returns +0.0 even for the negated non-numeric token).
+    #[test]
+    fn strtod_neg_inf_token_is_zero() {
+        if let Some(o) = run_float_driver(&strtod_driver("-inf"), "t") {
+            assert_eq!(o, bits_str(0x0));
+        }
+    }
+
+    /// "nan" -> +0.0 (PHP grammar excludes the `nan` token from numeric strings).
+    #[test]
+    fn strtod_nan_token_is_zero() {
+        if let Some(o) = run_float_driver(&strtod_driver("nan"), "t") {
+            assert_eq!(o, bits_str(0x0));
+        }
+    }
+
+    /// "abc" -> +0.0 (no leading numeric prefix).
+    #[test]
+    fn strtod_invalid_is_zero() {
+        if let Some(o) = run_float_driver(&strtod_driver("abc"), "t") {
+            assert_eq!(o, bits_str(0x0));
+        }
+    }
+
+    /// A large-magnitude parse followed by "1" must still yield 1.0 = 0x3ff0000000000000:
+    /// the buffer zeroing prevents the first call's bignum limbs from corrupting the
+    /// second call's mantissa build.
+    #[test]
+    fn strtod_repeated_call_clears_buffers() {
+        let d = strtod_repeated_driver("1e100", "1");
+        if let Some(o) = run_float_driver(&d, "t") {
+            assert_eq!(o, bits_str(0x3ff0000000000000));
+        }
+    }
 
     /// Assembles RT_PARSE_DECIMAL alone and dumps numbered WAT on failure (diagnostic).
     #[test]
