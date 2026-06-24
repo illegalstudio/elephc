@@ -63,6 +63,9 @@ const NATIVE_ATTRIBUTE_ARG_NULL: u8 = 0;
 const NATIVE_ATTRIBUTE_ARG_BOOL: u8 = 1;
 const NATIVE_ATTRIBUTE_ARG_INT: u8 = 2;
 const NATIVE_ATTRIBUTE_ARG_STRING: u8 = 3;
+const NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
+const NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
+const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = 3;
 
 /// Local slot metadata needed for conservative eval scope synchronization.
 #[derive(Clone)]
@@ -135,6 +138,10 @@ struct EvalNativeMemberAttributeRegistration {
 enum EvalNativeCallableDefault {
     Scalar { kind: i64, payload: i64 },
     String(String),
+    Object {
+        class_name: String,
+        args: Vec<EvalNativeCallableDefault>,
+    },
 }
 
 /// Lowers `eval($code)` to the eval bridge ABI and leaves the eval return cell in result registers.
@@ -1133,6 +1140,11 @@ fn eval_native_php_type_member_specs(members: &[PhpType]) -> Option<String> {
 
 /// Converts a PHP signature default into the compact eval bridge default ABI.
 fn eval_native_callable_default(expr: &Expr) -> Option<EvalNativeCallableDefault> {
+    eval_native_literal_default(expr).or_else(|| eval_native_object_default(expr))
+}
+
+/// Converts scalar/string/empty-array defaults into the compact eval bridge default ABI.
+fn eval_native_literal_default(expr: &Expr) -> Option<EvalNativeCallableDefault> {
     match &expr.kind {
         ExprKind::Null => Some(EvalNativeCallableDefault::Scalar {
             kind: NATIVE_DEFAULT_NULL,
@@ -1162,6 +1174,24 @@ fn eval_native_callable_default(expr: &Expr) -> Option<EvalNativeCallableDefault
     }
 }
 
+/// Converts supported object-valued defaults into compact eval bridge metadata.
+fn eval_native_object_default(expr: &Expr) -> Option<EvalNativeCallableDefault> {
+    let ExprKind::NewObject { class_name, args } = &expr.kind else {
+        return None;
+    };
+    if args.len() > MAX_NATIVE_OBJECT_DEFAULT_ARGS {
+        return None;
+    }
+    let mut default_args = Vec::with_capacity(args.len());
+    for arg in args {
+        default_args.push(eval_native_literal_default(arg)?);
+    }
+    Some(EvalNativeCallableDefault::Object {
+        class_name: class_name.as_canonical(),
+        args: default_args,
+    })
+}
+
 /// Converts supported property defaults into the compact eval bridge default ABI.
 fn eval_native_property_default(
     default: Option<&Expr>,
@@ -1169,7 +1199,7 @@ fn eval_native_property_default(
     is_abstract: bool,
 ) -> Option<EvalNativeCallableDefault> {
     if let Some(default) = default {
-        return eval_native_callable_default(default);
+        return eval_native_literal_default(default);
     }
     (!is_declared && !is_abstract).then_some(EvalNativeCallableDefault::Scalar {
         kind: NATIVE_DEFAULT_NULL,
@@ -1194,6 +1224,43 @@ fn eval_native_callable_negated_default(expr: &Expr) -> Option<EvalNativeCallabl
         }),
         _ => None,
     }
+}
+
+/// Encodes an object-valued native callable default for libelephc-magician.
+fn encode_eval_native_object_default(default: &EvalNativeCallableDefault) -> Vec<u8> {
+    let EvalNativeCallableDefault::Object { class_name, args } = default else {
+        return Vec::new();
+    };
+    let mut bytes = Vec::new();
+    encode_eval_native_default_string(&mut bytes, class_name);
+    bytes.push(args.len() as u8);
+    for arg in args {
+        encode_eval_native_object_default_arg(&mut bytes, arg);
+    }
+    bytes
+}
+
+/// Encodes one object-default constructor argument for libelephc-magician.
+fn encode_eval_native_object_default_arg(bytes: &mut Vec<u8>, default: &EvalNativeCallableDefault) {
+    match default {
+        EvalNativeCallableDefault::Scalar { kind, payload } => {
+            bytes.push(NATIVE_OBJECT_DEFAULT_ARG_SCALAR);
+            bytes.extend_from_slice(&(*kind as u64).to_le_bytes());
+            bytes.extend_from_slice(&(*payload as u64).to_le_bytes());
+        }
+        EvalNativeCallableDefault::String(value) => {
+            bytes.push(NATIVE_OBJECT_DEFAULT_ARG_STRING);
+            encode_eval_native_default_string(bytes, value);
+        }
+        EvalNativeCallableDefault::Object { .. } => {}
+    }
+}
+
+/// Encodes one UTF-8 string with a little-endian u32 byte-length prefix.
+fn encode_eval_native_default_string(bytes: &mut Vec<u8>, value: &str) {
+    let len = u32::try_from(value.len()).unwrap_or(u32::MAX);
+    bytes.extend_from_slice(&len.to_le_bytes());
+    bytes.extend_from_slice(value.as_bytes());
 }
 
 /// Returns true when an instance method is public in the class metadata.
@@ -1681,6 +1748,29 @@ fn register_eval_native_method_param_default(
                     .extern_symbol("__elephc_eval_register_native_method_param_default_string")
             }
         }
+        EvalNativeCallableDefault::Object { .. } => {
+            let spec = encode_eval_native_object_default(default);
+            let (default_label, default_len) = ctx.data.add_string(&spec);
+            abi::emit_symbol_address(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 4),
+                &default_label,
+            );
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 5),
+                default_len as i64,
+            );
+            if is_static {
+                ctx.emitter.target.extern_symbol(
+                    "__elephc_eval_register_native_static_method_param_default_object",
+                )
+            } else {
+                ctx.emitter
+                    .target
+                    .extern_symbol("__elephc_eval_register_native_method_param_default_object")
+            }
+        }
     };
     abi::emit_call_label(ctx.emitter, &symbol);
 }
@@ -1933,6 +2023,7 @@ fn register_eval_native_property_default(
                 .target
                 .extern_symbol("__elephc_eval_register_native_property_default_string")
         }
+        EvalNativeCallableDefault::Object { .. } => return,
     };
     abi::emit_call_label(ctx.emitter, &symbol);
 }
@@ -2203,6 +2294,23 @@ fn register_eval_native_constructor_param_default(
             ctx.emitter
                 .target
                 .extern_symbol("__elephc_eval_register_native_constructor_param_default_string")
+        }
+        EvalNativeCallableDefault::Object { .. } => {
+            let spec = encode_eval_native_object_default(default);
+            let (default_label, default_len) = ctx.data.add_string(&spec);
+            abi::emit_symbol_address(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 4),
+                &default_label,
+            );
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 5),
+                default_len as i64,
+            );
+            ctx.emitter
+                .target
+                .extern_symbol("__elephc_eval_register_native_constructor_param_default_object")
         }
     };
     abi::emit_call_label(ctx.emitter, &symbol);

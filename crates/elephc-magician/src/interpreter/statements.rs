@@ -4538,7 +4538,28 @@ fn materialize_native_callable_default(
         NativeCallableDefault::Float(value) => values.float(*value),
         NativeCallableDefault::String(value) => values.string(value),
         NativeCallableDefault::EmptyArray => values.array_new(0),
+        NativeCallableDefault::Object { class_name, args } => {
+            materialize_native_callable_object_default(class_name, args, values)
+        }
     }
+}
+
+/// Allocates and constructs one object-valued native AOT parameter default.
+fn materialize_native_callable_object_default(
+    class_name: &str,
+    args: &[NativeCallableDefault],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let object = values.new_object(class_name)?;
+    let mut constructor_args = Vec::with_capacity(args.len());
+    for arg in args {
+        constructor_args.push(materialize_native_callable_default(arg, values)?);
+    }
+    if let Err(err) = values.construct_object(object, constructor_args) {
+        let _ = values.release(object);
+        return Err(err);
+    }
+    Ok(object)
 }
 
 /// Executes a PHP `static $name = expr;` declaration in the current eval scope.

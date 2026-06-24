@@ -123,6 +123,10 @@ pub enum NativeCallableDefault {
     Float(f64),
     String(String),
     EmptyArray,
+    Object {
+        class_name: String,
+        args: Vec<NativeCallableDefault>,
+    },
 }
 
 /// Native AOT method or constructor signature metadata visible to eval fragments.

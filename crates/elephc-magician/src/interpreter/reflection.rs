@@ -2666,7 +2666,19 @@ fn eval_reflection_native_callable_default_expr(default: &NativeCallableDefault)
         NativeCallableDefault::Float(value) => EvalExpr::Const(EvalConst::Float(*value)),
         NativeCallableDefault::String(value) => EvalExpr::Const(EvalConst::String(value.clone())),
         NativeCallableDefault::EmptyArray => EvalExpr::Array(Vec::new()),
+        NativeCallableDefault::Object { class_name, args } => EvalExpr::NewObject {
+            class_name: class_name.clone(),
+            args: args
+                .iter()
+                .map(eval_reflection_native_callable_default_arg)
+                .collect(),
+        },
     }
+}
+
+/// Converts one native object-default constructor argument into a positional eval call arg.
+fn eval_reflection_native_callable_default_arg(default: &NativeCallableDefault) -> EvalCallArg {
+    EvalCallArg::positional(eval_reflection_native_callable_default_expr(default))
 }
 
 /// Returns generated AOT ReflectionProperty metadata when the runtime table has a matching row.

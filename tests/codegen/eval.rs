@@ -8371,6 +8371,37 @@ return $obj->countItems();');
     assert_eq!(out, "0");
 }
 
+/// Verifies eval materializes generated/AOT object defaults during method dispatch.
+#[test]
+fn test_eval_aot_method_call_uses_object_default() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotObjectDefaultMethodDep {
+    public string $label;
+    public function __construct(string $label = "dep") {
+        $this->label = $label;
+    }
+}
+
+class EvalAotObjectDefaultMethodTarget {
+    public function describe(EvalAotObjectDefaultMethodDep $dep = new EvalAotObjectDefaultMethodDep("method")): string {
+        return $dep->label;
+    }
+
+    public static function describeStatic(EvalAotObjectDefaultMethodDep $dep = new EvalAotObjectDefaultMethodDep("static")): string {
+        return $dep->label;
+    }
+}
+
+echo eval('$obj = new EvalAotObjectDefaultMethodTarget();
+$method = new ReflectionMethod("EvalAotObjectDefaultMethodTarget", "describe");
+$default = $method->getParameters()[0]->getDefaultValue();
+return $obj->describe() . ":" . EvalAotObjectDefaultMethodTarget::describeStatic() . ":" . $default->label;');
+"#,
+    );
+    assert_eq!(out, "method:static:method");
+}
+
 /// Verifies eval ReflectionMethod exposes generated/AOT by-ref and variadic parameter flags.
 #[test]
 fn test_eval_reflection_method_exposes_aot_parameter_flags() {
@@ -10842,6 +10873,32 @@ return $box->count;');
 "#,
     );
     assert_eq!(out, "0");
+}
+
+/// Verifies eval materializes generated/AOT object defaults during constructor dispatch.
+#[test]
+fn test_eval_dynamic_new_uses_constructor_object_default() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewObjectDefaultDep {
+    public string $label;
+    public function __construct(string $label = "dep") {
+        $this->label = $label;
+    }
+}
+
+class EvalDynamicNewObjectDefaultCtor {
+    public string $label = "";
+    public function __construct(EvalDynamicNewObjectDefaultDep $dep = new EvalDynamicNewObjectDefaultDep("ctor")) {
+        $this->label = $dep->label;
+    }
+}
+
+echo eval('$box = new EvalDynamicNewObjectDefaultCtor();
+return $box->label;');
+"#,
+    );
+    assert_eq!(out, "ctor");
 }
 
 /// Verifies eval object construction passes more than two arguments to an AOT constructor.

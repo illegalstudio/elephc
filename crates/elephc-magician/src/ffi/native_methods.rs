@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Invalid names, handles, or indexes fail closed as `false`.
-//! - The metadata records parameter names and scalar defaults; generated user
+//! - The metadata records parameter names and supported defaults; generated user
 //!   helpers still perform the actual method, static method, and constructor calls.
 
 use super::util::abi_name_to_string;
@@ -30,6 +30,9 @@ const NATIVE_ATTRIBUTE_ARG_NULL: u8 = 0;
 const NATIVE_ATTRIBUTE_ARG_BOOL: u8 = 1;
 const NATIVE_ATTRIBUTE_ARG_INT: u8 = 2;
 const NATIVE_ATTRIBUTE_ARG_STRING: u8 = 3;
+const NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
+const NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
+const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = 3;
 
 #[derive(Clone, Copy)]
 enum NativeCallableTypePosition {
@@ -453,6 +456,62 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_defau
     .unwrap_or(0)
 }
 
+/// Registers one generated native PHP method object parameter default in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Method key and encoded default
+/// pointers must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_method_param_default_object(
+    ctx: *mut ElephcEvalContext,
+    method_key_ptr: *const u8,
+    method_key_len: u64,
+    param_index: u64,
+    spec_ptr: *const u8,
+    spec_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_method_param_default_object_inner(
+            ctx,
+            method_key_ptr,
+            method_key_len,
+            false,
+            param_index,
+            spec_ptr,
+            spec_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP static-method object parameter default in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Method key and encoded default
+/// pointers must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_static_method_param_default_object(
+    ctx: *mut ElephcEvalContext,
+    method_key_ptr: *const u8,
+    method_key_len: u64,
+    param_index: u64,
+    spec_ptr: *const u8,
+    spec_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_method_param_default_object_inner(
+            ctx,
+            method_key_ptr,
+            method_key_len,
+            true,
+            param_index,
+            spec_ptr,
+            spec_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
 /// Registers a generated native PHP constructor signature in an eval context.
 ///
 /// # Safety
@@ -624,6 +683,33 @@ pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_default
             param_index,
             default_ptr,
             default_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP constructor object parameter default in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Class name and encoded default
+/// pointers must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_constructor_param_default_object(
+    ctx: *mut ElephcEvalContext,
+    class_name_ptr: *const u8,
+    class_name_len: u64,
+    param_index: u64,
+    spec_ptr: *const u8,
+    spec_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_constructor_param_default_object_inner(
+            ctx,
+            class_name_ptr,
+            class_name_len,
+            param_index,
+            spec_ptr,
+            spec_len,
         )
     })
     .unwrap_or(0)
@@ -1073,6 +1159,33 @@ unsafe fn register_native_method_param_default_string_inner(
     )
 }
 
+/// Runs native method object-default registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_method_param_default_object`; invalid
+/// handles, names, indexes, or object specs fail closed as `false`.
+unsafe fn register_native_method_param_default_object_inner(
+    ctx: *mut ElephcEvalContext,
+    method_key_ptr: *const u8,
+    method_key_len: u64,
+    is_static: bool,
+    param_index: u64,
+    spec_ptr: *const u8,
+    spec_len: u64,
+) -> i32 {
+    let Some(default) = native_callable_object_default(spec_ptr, spec_len) else {
+        return 0;
+    };
+    register_native_method_param_default_inner(
+        ctx,
+        method_key_ptr,
+        method_key_len,
+        is_static,
+        param_index,
+        default,
+    )
+}
+
 /// Records a native method parameter default in the selected instance/static table.
 ///
 /// # Safety
@@ -1317,6 +1430,31 @@ unsafe fn register_native_constructor_param_default_string_inner(
         class_name_len,
         param_index,
         NativeCallableDefault::String(default),
+    )
+}
+
+/// Runs native constructor object-default registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_constructor_param_default_object`;
+/// invalid handles, names, indexes, or object specs fail closed as `false`.
+unsafe fn register_native_constructor_param_default_object_inner(
+    ctx: *mut ElephcEvalContext,
+    class_name_ptr: *const u8,
+    class_name_len: u64,
+    param_index: u64,
+    spec_ptr: *const u8,
+    spec_len: u64,
+) -> i32 {
+    let Some(default) = native_callable_object_default(spec_ptr, spec_len) else {
+        return 0;
+    };
+    register_native_constructor_param_default_inner(
+        ctx,
+        class_name_ptr,
+        class_name_len,
+        param_index,
+        default,
     )
 }
 
@@ -1628,6 +1766,53 @@ fn native_callable_scalar_default(
         NATIVE_DEFAULT_EMPTY_ARRAY => Some(NativeCallableDefault::EmptyArray),
         _ => None,
     }
+}
+
+/// Decodes an object-valued native callable default from a generated binary spec.
+///
+/// # Safety
+/// `spec_ptr` must be readable for `spec_len` bytes when non-null.
+unsafe fn native_callable_object_default(
+    spec_ptr: *const u8,
+    spec_len: u64,
+) -> Option<NativeCallableDefault> {
+    let len = usize::try_from(spec_len).ok()?;
+    let bytes = (!spec_ptr.is_null()).then(|| std::slice::from_raw_parts(spec_ptr, len))?;
+    let mut offset = 0;
+    let class_name = native_attribute_take_string(bytes, &mut offset)?;
+    let arg_count = usize::from(native_attribute_take_u8(bytes, &mut offset)?);
+    if arg_count > MAX_NATIVE_OBJECT_DEFAULT_ARGS {
+        return None;
+    }
+    let mut args = Vec::with_capacity(arg_count);
+    for _ in 0..arg_count {
+        args.push(native_callable_object_default_arg(bytes, &mut offset)?);
+    }
+    (offset == bytes.len()).then_some(NativeCallableDefault::Object { class_name, args })
+}
+
+/// Decodes one object-default constructor argument from a generated binary spec.
+fn native_callable_object_default_arg(
+    bytes: &[u8],
+    offset: &mut usize,
+) -> Option<NativeCallableDefault> {
+    match native_attribute_take_u8(bytes, offset)? {
+        NATIVE_OBJECT_DEFAULT_ARG_SCALAR => {
+            let kind = native_attribute_take_u64(bytes, offset)?;
+            let payload = native_attribute_take_u64(bytes, offset)?;
+            native_callable_scalar_default(kind, payload)
+        }
+        NATIVE_OBJECT_DEFAULT_ARG_STRING => {
+            native_attribute_take_string(bytes, offset).map(NativeCallableDefault::String)
+        }
+        _ => None,
+    }
+}
+
+/// Reads one little-endian u64 from a native binary metadata record.
+fn native_attribute_take_u64(bytes: &[u8], offset: &mut usize) -> Option<u64> {
+    let chunk = native_attribute_take_bytes(bytes, offset, std::mem::size_of::<u64>())?;
+    Some(u64::from_le_bytes(chunk.try_into().ok()?))
 }
 
 /// Decodes one generated type-spec string into eval Reflection type metadata.
