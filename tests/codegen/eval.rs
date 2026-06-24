@@ -4895,6 +4895,33 @@ echo eval('$box = new EvalDynamicNewNamedCtor(right: "F", left: "E"); return $bo
     assert_eq!(out, "EF");
 }
 
+/// Verifies eval object construction passes object-typed arguments to AOT constructors.
+#[test]
+fn test_eval_dynamic_new_passes_object_arg_to_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewObjectArgSource {
+    public string $name;
+    public function __construct(string $name) {
+        $this->name = $name;
+    }
+}
+
+class EvalDynamicNewObjectArgTarget {
+    public string $label = "";
+    public function __construct(EvalDynamicNewObjectArgSource $source) {
+        $this->label = $source->name;
+    }
+}
+
+echo eval('$source = new EvalDynamicNewObjectArgSource("Ada");
+$box = new EvalDynamicNewObjectArgTarget($source);
+return $box->label;');
+"#,
+    );
+    assert_eq!(out, "Ada");
+}
+
 /// Verifies eval-declared methods resolve `new self/static/parent` through the bridge.
 #[test]
 fn test_eval_declared_methods_construct_relative_class_names() {

@@ -9,7 +9,7 @@
 //! - The cacheable runtime object can allocate by name, but only user assembly
 //!   knows constructor symbols and parameter ABI shapes.
 //! - Classes without constructors are treated as successful no-ops, matching PHP.
-//! - Constructors are bridged for fixed non-by-ref scalar/Mixed arguments.
+//! - Constructors are bridged for fixed non-by-ref scalar/Mixed/object arguments.
 
 use std::collections::BTreeMap;
 
@@ -175,7 +175,12 @@ fn constructor_signature_supported(sig: &FunctionSig) -> bool {
 fn constructor_param_supported(ty: &PhpType) -> bool {
     matches!(
         ty.codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Mixed
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Mixed
+            | PhpType::Object(_)
     )
 }
 
@@ -631,6 +636,12 @@ fn emit_aarch64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
         PhpType::Mixed => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for a Mixed constructor parameter
         }
+        PhpType::Object(_) => {
+            emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for object unboxing
+            emitter.instruction("bl __rt_mixed_unbox");                         // expose the eval object payload for the constructor ABI
+            emitter.instruction("mov x0, x1");                                  // move the unboxed object payload into the result register
+            abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+        }
         _ => {}
     }
 }
@@ -656,6 +667,12 @@ fn emit_x86_64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
         }
         PhpType::Mixed => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for a Mixed constructor parameter
+        }
+        PhpType::Object(_) => {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for object unboxing
+            emitter.instruction("call __rt_mixed_unbox");                       // expose the eval object payload for the constructor ABI
+            emitter.instruction("mov rax, rdi");                                // move the unboxed object payload into the result register
+            abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
         }
         _ => {}
     }

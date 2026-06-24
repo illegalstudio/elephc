@@ -991,7 +991,12 @@ fn eval_native_method_param_supported(ty: &PhpType) -> bool {
 fn eval_native_constructor_param_supported(ty: &PhpType) -> bool {
     matches!(
         ty.codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Mixed
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Mixed
+            | PhpType::Object(_)
     )
 }
 
