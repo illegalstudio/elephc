@@ -1953,8 +1953,37 @@ fn eval_reflection_aot_class_flags(
     if eval_reflection_builtin_class_is_iterable(runtime_class_name) {
         flags |= EVAL_REFLECTION_CLASS_FLAG_ITERABLE;
     }
+    if is_class {
+        if eval_reflection_aot_lifecycle_method_allows_public_reflection(
+            runtime_class_name,
+            "__construct",
+            values,
+        )? {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE;
+        }
+        if eval_reflection_aot_lifecycle_method_allows_public_reflection(
+            runtime_class_name,
+            "__clone",
+            values,
+        )? {
+            flags |= EVAL_REFLECTION_CLASS_FLAG_CLONEABLE;
+        }
+    }
     let modifiers = if is_enum { 32 } else { 0 };
     Ok(Some((flags, modifiers)))
+}
+
+/// Returns whether an absent or public AOT lifecycle method allows public reflection.
+fn eval_reflection_aot_lifecycle_method_allows_public_reflection(
+    class_name: &str,
+    method_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some(flags) = values.reflection_method_flags(class_name, method_name)? else {
+        return Ok(true);
+    };
+    Ok(flags & EVAL_REFLECTION_MEMBER_FLAG_PUBLIC != 0
+        && flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT == 0)
 }
 
 /// Builds an eval-backed `ReflectionFunction` object for eval or registered native functions.

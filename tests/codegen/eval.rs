@@ -8111,6 +8111,36 @@ echo (new ReflectionClass("EvalInstEnum"))->isInstantiable() ? "E" : "e";');
     assert_eq!(out.stdout, "aBCprite");
 }
 
+/// Verifies eval ReflectionClass lifecycle predicates use generated/AOT lifecycle visibility.
+#[test]
+fn test_eval_reflection_class_aot_lifecycle_visibility_predicates() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotInstNoCtor {}
+class EvalAotInstPublicCtor { public function __construct() {} }
+class EvalAotInstPrivateCtor { private function __construct() {} }
+class EvalAotInstProtectedCtor { protected function __construct() {} }
+class EvalAotCloneNoHook {}
+class EvalAotClonePublicHook { public function __clone() {} }
+class EvalAotClonePrivateHook { private function __clone() {} }
+class EvalAotCloneProtectedHook { protected function __clone() {} }
+
+echo eval('
+echo (new ReflectionClass("EvalAotInstNoCtor"))->isInstantiable() ? "N" : "n";
+echo (new ReflectionClass("EvalAotInstPublicCtor"))->isInstantiable() ? "P" : "p";
+echo (new ReflectionClass("EvalAotInstPrivateCtor"))->isInstantiable() ? "R" : "r";
+echo (new ReflectionClass("EvalAotInstProtectedCtor"))->isInstantiable() ? "T" : "t";
+echo ":";
+echo (new ReflectionClass("EvalAotCloneNoHook"))->isCloneable() ? "N" : "n";
+echo (new ReflectionClass("EvalAotClonePublicHook"))->isCloneable() ? "P" : "p";
+echo (new ReflectionClass("EvalAotClonePrivateHook"))->isCloneable() ? "R" : "r";
+echo (new ReflectionClass("EvalAotCloneProtectedHook"))->isCloneable() ? "T" : "t";
+');
+"#,
+    );
+    assert_eq!(out, "NPrt:NPrt");
+}
+
 /// Verifies eval ReflectionClass reports named eval class-like symbols as non-anonymous through
 /// the generated reflection-owner bridge.
 #[test]

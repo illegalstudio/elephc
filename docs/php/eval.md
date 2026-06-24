@@ -228,10 +228,11 @@ PHP-compatible enum finality and class-like kind checks for eval interfaces,
 traits, and enums. `ReflectionClass::isReadOnly()` reports eval `readonly class`
 metadata. `ReflectionClass::isAnonymous()` reports true for eval anonymous
 classes and false for eval-declared named class-like symbols.
-`ReflectionClass::isInstantiable()` reports whether eval class-like metadata
-describes a concrete class with no constructor or a public constructor.
-`ReflectionClass::isCloneable()` reports whether eval class metadata describes
-a concrete class with no `__clone()` or a public `__clone()`.
+`ReflectionClass::isInstantiable()` reports whether eval or generated/AOT
+class-like metadata describes a concrete class with no constructor or a public
+constructor. `ReflectionClass::isCloneable()` reports whether eval or
+generated/AOT class metadata describes a concrete class with no `__clone()` or
+a public `__clone()`.
 `ReflectionClass::isIterable()` and `isIterateable()` report whether eval or
 generated class metadata describes a concrete `Iterator` or `IteratorAggregate`
 class.
