@@ -4624,6 +4624,31 @@ echo (new EvalMethodObjectArgBox())->run();
     assert_eq!(out, "Obj:Obj!");
 }
 
+/// Verifies eval fragments can pass array-typed arguments to public AOT methods.
+#[test]
+fn test_eval_fragment_can_call_aot_method_with_array_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMethodArrayArgBox {
+    public function countItems(array $items): int {
+        return count($items);
+    }
+
+    public static function countStatic(array $items): int {
+        return count($items);
+    }
+
+    public function run() {
+        return eval('return $this->countItems([1, 2, 3]) . ":" . EvalMethodArrayArgBox::countStatic([4, 5]);');
+    }
+}
+
+echo (new EvalMethodArrayArgBox())->run();
+"#,
+    );
+    assert_eq!(out, "3:2");
+}
+
 /// Verifies eval fragments inherit lexical `self::` from an AOT instance method.
 #[test]
 fn test_eval_fragment_in_aot_method_resolves_self_scope() {
@@ -4920,6 +4945,25 @@ return $box->label;');
 "#,
     );
     assert_eq!(out, "Ada");
+}
+
+/// Verifies eval object construction passes array-typed arguments to AOT constructors.
+#[test]
+fn test_eval_dynamic_new_passes_array_arg_to_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewArrayArgTarget {
+    public int $count = 0;
+    public function __construct(array $items) {
+        $this->count = count($items);
+    }
+}
+
+echo eval('$box = new EvalDynamicNewArrayArgTarget([1, 2, 3, 4]);
+return $box->count;');
+"#,
+    );
+    assert_eq!(out, "4");
 }
 
 /// Verifies eval-declared methods resolve `new self/static/parent` through the bridge.
