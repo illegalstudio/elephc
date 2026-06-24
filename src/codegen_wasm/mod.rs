@@ -489,6 +489,266 @@ mod tests {
         }
     }
 
+    /// Verifies `HashSet` of a Mixed cell holding a float into an INT-typed hash casts
+    /// via `__rt_mixed_cast_int` (S6f): `(int)9.5` truncates toward zero to 9 and
+    /// `(int)7.7` to 7, so `$h[1]+h[2]` echoes "16". A missing cast would mis-store the
+    /// f64 bits as an int and echo a huge value, not "16".
+    #[test]
+    fn hash_set_mixed_int_cast_lowers() {
+        let assoc = PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Int),
+        };
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    assoc.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            for (k, v) in [(1_i64, 9.5_f64), (2, 7.7)] {
+                let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+                let key = b.emit_const_i64(k);
+                let fv = b.emit_const_f64(v);
+                let m = b
+                    .emit(
+                        Op::MixedBox,
+                        vec![fv],
+                        None,
+                        IrType::Heap(IrHeapKind::Mixed),
+                        PhpType::Mixed,
+                        Ownership::Owned,
+                    )
+                    .unwrap();
+                let _ = b.emit(
+                    Op::HashSet,
+                    vec![h, key, m],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let h1 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let k1 = b.emit_const_i64(1);
+            let g1 = b
+                .emit(Op::HashGet, vec![h1, k1], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            let h2 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let k2 = b.emit_const_i64(2);
+            let g2 = b
+                .emit(Op::HashGet, vec![h2, k2], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            let sum = b
+                .emit(Op::IAdd, vec![g1, g2], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![sum],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "16");
+        }
+    }
+
+    /// Verifies `HashSet` of a Mixed cell holding an int into a FLOAT-typed hash casts
+    /// via `__rt_mixed_cast_float` (S6f): `(float)7` -> 7.0, and `7.0 / 2.0` echoes
+    /// "3.5" — a non-integer only a correct f64 widening can produce. Forwarding the
+    /// raw int bits as f64 would render a subnormal ("0"/"3e-322"), not "3.5".
+    #[test]
+    fn hash_set_mixed_float_cast_lowers() {
+        let assoc = PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Float),
+        };
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    assoc.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key = b.emit_const_i64(1);
+            let iv = b.emit_const_i64(7);
+            let m = b
+                .emit(
+                    Op::MixedBox,
+                    vec![iv],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::HashSet,
+                vec![h, key, m],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let h1 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let k1 = b.emit_const_i64(1);
+            let g = b
+                .emit(
+                    Op::HashGet,
+                    vec![h1, k1],
+                    None,
+                    IrType::F64,
+                    PhpType::Float,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let two = b.emit_const_f64(2.0);
+            let half = b
+                .emit(Op::FDiv, vec![g, two], None, IrType::F64, PhpType::Float, Ownership::NonHeap)
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![half],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "3.5");
+        }
+    }
+
+    /// Verifies `HashSet` of a Mixed cell holding an int into a STRING-typed hash casts
+    /// via `__rt_mixed_cast_string_ref` (S6f): `(string)42` -> "42". The borrowed cast
+    /// result is persisted once by `__rt_hash_set`, so the cast's no-persist variant
+    /// avoids the double-persist leak that the always-persisting `__rt_mixed_cast_string`
+    /// would cause. Equivalent to `$h[1]=(string)(mixed)42; echo $h[1];` -> "42".
+    #[test]
+    fn hash_set_mixed_string_cast_lowers() {
+        let assoc = PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Str),
+        };
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(
+                    Op::HashNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::Heap(IrHeapKind::Hash),
+                    assoc.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let key = b.emit_const_i64(1);
+            let iv = b.emit_const_i64(42);
+            let m = b
+                .emit(
+                    Op::MixedBox,
+                    vec![iv],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::HashSet,
+                vec![h, key, m],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let h1 = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let k1 = b.emit_const_i64(1);
+            let g = b
+                .emit(
+                    Op::HashGet,
+                    vec![h1, k1],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::MaybeOwned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![g],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "42");
+        }
+    }
+
     /// Generates and validates a command module, runs it under `wasmer`, and
     /// returns its process exit code (not asserting success). Returns `None` when
     /// `wasmer` is absent.

@@ -37,6 +37,7 @@ pub(super) fn emit_mixed_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_MIXED_CAST_INT);
     wm.add_raw_func(RT_MIXED_CAST_FLOAT);
     wm.add_raw_func(RT_MIXED_CAST_STRING);
+    wm.add_raw_func(RT_MIXED_CAST_STRING_REF);
 }
 
 /// `__rt_mixed_from_value`: boxes a `(tag, lo, hi)` triple into a fresh 24-byte
@@ -284,6 +285,50 @@ const RT_MIXED_CAST_STRING: &str = r#"(func $__rt_mixed_cast_string (param $ptr 
           (local.set $pptr)                                             ;; pop persisted pointer (result 0)
           (return (local.get $pptr) (i32.wrap_i64 (local.get $plen))))))) ;; return the owned "1"
   (i32.const 0) (i32.const 0))                                          ;; array/hash/object/resource/null/other -> empty string
+"#;
+
+/// `__rt_mixed_cast_string_ref`: like `__rt_mixed_cast_string` but returns a
+/// BORROWED `(ptr, len)` -- the int/float text lands in the float scratch and the
+/// string tag forwards the source cell's own pointer -- with NO `__rt_str_persist`.
+/// This is the variant for callers that copy the bytes themselves (notably
+/// `__rt_hash_set`, which persists inbound strings into its own storage): passing the
+/// always-persisting `__rt_mixed_cast_string` result there would leak the cast's owned
+/// copy, since `__rt_hash_set` re-persists. Unboxes via `__rt_mixed_unbox`, then per
+/// tag: an int renders via `__rt_itoa` into scratch+0; a string forwards the cell's
+/// `(ptr, len)`; a float renders via `__rt_ftoa` into scratch+4096; a bool true renders
+/// "1" via `__rt_itoa`, false yields `(0, 0)`; arrays/hashes/objects/resources/null/
+/// other yield `(0, 0)`. Borrows the source cell (never frees it). The borrowed scratch
+/// pointer is only valid until the next float-scratch user, so callers must copy promptly.
+const RT_MIXED_CAST_STRING_REF: &str = r#"(func $__rt_mixed_cast_string_ref (param $ptr i32) (result i32) (result i32) (local $tag i64) (local $lo i64) (local $hi i64) (local $iptr i32) (local $ilen i32) ;; cast a boxed Mixed cell to a BORROWED PHP string (ptr,len) in float-scratch (no persist; caller copies)
+  (call $__rt_mixed_unbox (local.get $ptr))                             ;; unbox -> stack: tag, lo, hi
+  (local.set $hi)                                                       ;; pop value high word
+  (local.set $lo)                                                       ;; pop value low word
+  (local.set $tag)                                                      ;; pop runtime tag
+  (if (i64.eqz (local.get $tag))                                        ;; tag 0 = int
+    (then
+      (call $__rt_itoa (local.get $lo) (global.get $__float_scratch))   ;; decimal text into scratch+0, returns (ptr,len)
+      (local.set $ilen)                                                 ;; pop itoa length (result 1, on top)
+      (local.set $iptr)                                                 ;; pop itoa pointer (result 0)
+      (return (local.get $iptr) (local.get $ilen))))                    ;; return borrowed scratch text
+  (if (i64.eq (local.get $tag) (i64.const 1))                           ;; tag 1 = string
+    (then
+      (return (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi))))) ;; return borrowed source cell string (ptr,len)
+  (if (i64.eq (local.get $tag) (i64.const 2))                           ;; tag 2 = float
+    (then
+      (call $__rt_ftoa (local.get $lo) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 768) (i32.add (global.get $__float_scratch) (i32.const 4096))) ;; format into scratch+4096, returns (ptr,len)
+      (local.set $ilen)                                                 ;; pop ftoa length (result 1, on top)
+      (local.set $iptr)                                                 ;; pop ftoa pointer (result 0)
+      (return (local.get $iptr) (local.get $ilen))))                    ;; return borrowed scratch text
+  (if (i64.eq (local.get $tag) (i64.const 3))                           ;; tag 3 = bool
+    (then
+      (if (i64.eqz (local.get $lo))                                     ;; false payload?
+        (then (return (i32.const 0) (i32.const 0)))                     ;; false -> empty (ptr=0, len=0)
+        (else
+          (call $__rt_itoa (i64.const 1) (global.get $__float_scratch)) ;; true -> "1" in scratch+0, returns (ptr,len)
+          (local.set $ilen)                                             ;; pop itoa length (result 1, on top)
+          (local.set $iptr)                                             ;; pop itoa pointer (result 0)
+          (return (local.get $iptr) (local.get $ilen))))))              ;; return borrowed "1"
+  (i32.const 0) (i32.const 0))                                          ;; array/hash/object/resource/null/other -> empty
 "#;
 
 #[cfg(test)]

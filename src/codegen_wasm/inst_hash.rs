@@ -553,14 +553,16 @@ fn materialize_hash_value(ctx: &mut FnCtx, value: crate::ir::ValueId) -> Result<
 /// For a heterogeneous (`Mixed`/`Iterable`) hash the value is stored concretely with
 /// its own per-entry tag — no cast (delegates to [`materialize_hash_value`] +
 /// [`hash_value_tag`]). For a concretely-typed hash a `Mixed`/`Union`/`TaggedScalar`
-/// source must be cast to the storage element type. Only the PHP `(bool)` cast is
-/// supported on wasm32-wasi today: it goes through `__rt_mixed_cast_bool`, which needs
-/// no float formatting and is fully PHP-correct. The int/float/string casts depend on
-/// the deferred `strtod` / `%.14G` ftoa float↔string conversion (a float-form numeric
-/// string casts to int via `strtod`, etc.), so they return a clean `Unsupported`
-/// rather than mis-tagging a Mixed-cell pointer as an inline scalar. The cast reads the
-/// borrowed Mixed cell non-destructively; the source temp's release is handled by the
-/// ownership pass, exactly as on the native backend.
+/// source must be cast to the storage element type. The int/float/bool casts go through
+/// `__rt_mixed_cast_int`/`__rt_mixed_cast_float`/`__rt_mixed_cast_bool` and return a
+/// scalar (int, raw f64 bits, or bool), so the concrete hash entry simply stores those
+/// bits. The string cast uses `__rt_mixed_cast_string_ref`, the BORROWED variant: it
+/// returns a `(ptr, len)` into the float scratch (or the source cell's own string) with
+/// no `__rt_str_persist`, because `__rt_hash_set` persists inbound strings into its own
+/// storage — passing the always-persisting `__rt_mixed_cast_string` result there would
+/// double-persist and leak the cast's owned copy. The cast reads the borrowed Mixed cell
+/// non-destructively; the source temp's release is handled by the ownership pass, exactly
+/// as on the native backend.
 fn materialize_hash_value_tagged(
     ctx: &mut FnCtx,
     value: crate::ir::ValueId,
@@ -586,6 +588,73 @@ fn materialize_hash_value_tagged(
         && matches!(value_ir, Some(IrType::Heap(IrHeapKind::Mixed)));
 
     match storage_value {
+        PhpType::Int if is_mixed_cell => {
+            let val_lo = ctx.fresh_temp(ValType::I64);
+            let val_hi = ctx.fresh_temp(ValType::I64);
+            ctx.emit_load_value(value)?; // i32 Mixed cell pointer
+            ctx.fb.ins(
+                "call $__rt_mixed_cast_int",
+                "PHP (int) cast of the boxed mixed value",
+            );
+            ctx.fb
+                .ins(&format!("local.set {}", val_lo), "cast int -> value low word");
+            ctx.fb.ins("i64.const 0", "int hash value high word unused");
+            ctx.fb
+                .ins(&format!("local.set {}", val_hi), "store value high word");
+            Ok((
+                val_lo,
+                val_hi,
+                crate::codegen::runtime_value_tag(&PhpType::Int) as i64,
+            ))
+        }
+        PhpType::Float if is_mixed_cell => {
+            let val_lo = ctx.fresh_temp(ValType::I64);
+            let val_hi = ctx.fresh_temp(ValType::I64);
+            ctx.emit_load_value(value)?; // i32 Mixed cell pointer
+            ctx.fb.ins(
+                "call $__rt_mixed_cast_float",
+                "PHP (float) cast of the boxed mixed value -> raw f64 bits",
+            );
+            ctx.fb
+                .ins(&format!("local.set {}", val_lo), "cast float bits -> value low word");
+            ctx.fb.ins("i64.const 0", "float hash value high word unused");
+            ctx.fb
+                .ins(&format!("local.set {}", val_hi), "store value high word");
+            Ok((
+                val_lo,
+                val_hi,
+                crate::codegen::runtime_value_tag(&PhpType::Float) as i64,
+            ))
+        }
+        PhpType::Str if is_mixed_cell => {
+            // Borrowed (ptr, len) so __rt_hash_set persists the single owned copy.
+            let val_lo = ctx.fresh_temp(ValType::I64);
+            let val_hi = ctx.fresh_temp(ValType::I64);
+            let sp = ctx.fresh_temp(ValType::I32);
+            let sl = ctx.fresh_temp(ValType::I32);
+            ctx.emit_load_value(value)?; // i32 Mixed cell pointer
+            ctx.fb.ins(
+                "call $__rt_mixed_cast_string_ref",
+                "PHP (string) cast of the boxed mixed value (borrowed, no persist)",
+            );
+            ctx.fb
+                .ins(&format!("local.set {}", sl), "pop cast string length (result 1, on top)");
+            ctx.fb
+                .ins(&format!("local.set {}", sp), "pop cast string pointer (result 0)");
+            ctx.fb.ins(&format!("local.get {}", sp), "cast string pointer");
+            ctx.fb.ins("i64.extend_i32_u", "cast string ptr -> i64 value low word");
+            ctx.fb
+                .ins(&format!("local.set {}", val_lo), "store value low word");
+            ctx.fb.ins(&format!("local.get {}", sl), "cast string length");
+            ctx.fb.ins("i64.extend_i32_u", "cast string len -> i64 value high word");
+            ctx.fb
+                .ins(&format!("local.set {}", val_hi), "store value high word");
+            Ok((
+                val_lo,
+                val_hi,
+                crate::codegen::runtime_value_tag(&PhpType::Str) as i64,
+            ))
+        }
         PhpType::Bool if is_mixed_cell => {
             let val_lo = ctx.fresh_temp(ValType::I64);
             let val_hi = ctx.fresh_temp(ValType::I64);
@@ -606,9 +675,9 @@ fn materialize_hash_value_tagged(
             ))
         }
         _ => Err(WasmError::Unsupported(format!(
-            "hash store cast of a mixed value into {:?} storage (needs \
-             __rt_mixed_cast_int/float/string; deferred on the strtod/ftoa \
-             float<->string conversion)",
+            "hash store cast of a mixed value into {:?} storage: the cast needs a real \
+             Mixed cell pointer (union/tagged-scalar non-cell sources are not yet \
+             supported)",
             storage_value
         ))),
     }
