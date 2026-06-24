@@ -468,6 +468,86 @@ const RT_FTOA: &str = r#"(func $__rt_ftoa (param $bits i64) (param $big i32) (pa
   (return (local.get $out) (call $__rt_ftoa_fixed (local.get $digptr) (local.get $nsig) (local.get $x) (local.get $sign) (local.get $out))))  ;; fixed notation
 "#;
 
+/// `__rt_parse_decimal` tokenizes a decimal numeric string into the pieces the
+/// string->float orchestrator needs. Reads bytes `[$ptr, $ptr+$len)`, skips leading
+/// whitespace, an optional sign, then either an `inf`/`nan` quick path or
+/// `[integer][.fraction][eExponent]`.
+///
+/// Returns four i32s: `sign` (1 if a leading '-' was consumed), `ndig` (count of ASCII
+/// digit bytes written to `$out`, no sign and no point), `K` (decimal exponent such
+/// that value = int($out digits) × 10^K), and `class` (0 finite, 1 empty/no-digits ->
+/// 0.0, 2 infinity, 3 NaN). The `inf`/`nan` paths consume their three letters and
+/// short-circuit via `br $done` with `ndig`/`K` zeroed.
+const RT_PARSE_DECIMAL: &str = r#"  (func $__rt_parse_decimal (param $ptr i32) (param $len i32) (param $out i32) (result i32 i32 i32 i32) (local $i i32) (local $sign i32) (local $ndig i32) (local $K i32) (local $class i32) (local $frac i32) (local $c i32) (local $es i32) (local $ev i32) (local $tmp i32)  ;; decimal-string parser: ptr,len,out -> sign,ndig,K,class (4 results)
+    (block $wse  ;; A: skip leading whitespace
+      (loop $wsl (br_if $wse (i32.ge_s (local.get $i) (local.get $len))) (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))  ;; A: whitespace loop
+        (if (i32.or (i32.and (i32.ge_s (local.get $c) (i32.const 9)) (i32.le_s (local.get $c) (i32.const 13))) (i32.eq (local.get $c) (i32.const 32)))  ;; A: whitespace byte? (9..13 or 32)
+          (then (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $wsl)))))  ;; A: consume whitespace, continue
+    (if (i32.lt_s (local.get $i) (local.get $len))  ;; bounds check: cursor < len before reading
+      (then (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))  ;; load current byte ptr[i] into c
+        (if (i32.eq (local.get $c) (i32.const 45))  ;; ...
+          (then (local.set $sign (i32.const 1)) (local.set $i (i32.add (local.get $i) (i32.const 1))))  ;; consume one byte (cursor++)
+          (else  ;; ...
+            (if (i32.eq (local.get $c) (i32.const 43))  ;; B: '+' -> consume
+              (then (local.set $i (i32.add (local.get $i) (i32.const 1)))))))))  ;; consume one byte (cursor++)
+    (block $done  ;; C..G: parse body (inf/nan exits early via br $done)
+      (if (i32.lt_s (local.get $i) (local.get $len))  ;; bounds check: cursor < len before reading
+        (then (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))  ;; load current byte ptr[i] into c
+          (if (i32.and (i32.and (i32.le_s (i32.add (local.get $i) (i32.const 3)) (local.get $len)) (i32.or (i32.eq (local.get $c) (i32.const 105)) (i32.eq (local.get $c) (i32.const 73)))) (i32.and (i32.or (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $i) (i32.const 1)))) (i32.const 110)) (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $i) (i32.const 1)))) (i32.const 78))) (i32.or (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $i) (i32.const 2)))) (i32.const 102)) (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $i) (i32.const 2)))) (i32.const 70)))))  ;; C: "inf"/"INF"? (i/I, n/N, f/F, 3 bytes)
+            (then (local.set $class (i32.const 2)) (local.set $i (i32.add (local.get $i) (i32.const 3))) (br $done)))  ;; C: infinity -> class=2
+          (if (i32.and (i32.and (i32.le_s (i32.add (local.get $i) (i32.const 3)) (local.get $len)) (i32.or (i32.eq (local.get $c) (i32.const 110)) (i32.eq (local.get $c) (i32.const 78)))) (i32.and (i32.or (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $i) (i32.const 1)))) (i32.const 97)) (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $i) (i32.const 1)))) (i32.const 65))) (i32.or (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $i) (i32.const 2)))) (i32.const 110)) (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.add (local.get $i) (i32.const 2)))) (i32.const 78)))))  ;; C: "nan"/"NAN"? (n/N, a/A, n/N, 3 bytes)
+            (then (local.set $class (i32.const 3)) (local.set $i (i32.add (local.get $i) (i32.const 3))) (br $done)))))  ;; C: NaN -> class=3
+      (block $ide  ;; D: integer digits
+        (loop $idl (br_if $ide (i32.ge_s (local.get $i) (local.get $len))) (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i)))) (br_if $ide (i32.lt_s (local.get $c) (i32.const 48))) (br_if $ide (i32.gt_s (local.get $c) (i32.const 57))) (i32.store8 (i32.add (local.get $out) (local.get $ndig)) (local.get $c)) (local.set $ndig (i32.add (local.get $ndig) (i32.const 1))) (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $idl)))  ;; D: integer-digit loop
+      (if (i32.lt_s (local.get $i) (local.get $len))  ;; bounds check: cursor < len before reading
+        (then (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))  ;; load current byte ptr[i] into c
+          (if (i32.eq (local.get $c) (i32.const 46))  ;; E: '.' -> consume, parse fraction digits
+            (then (local.set $i (i32.add (local.get $i) (i32.const 1)))  ;; consume one byte (cursor++)
+              (block $fde  ;; E: fraction digits
+                (loop $fdl (br_if $fde (i32.ge_s (local.get $i) (local.get $len))) (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i)))) (br_if $fde (i32.lt_s (local.get $c) (i32.const 48))) (br_if $fde (i32.gt_s (local.get $c) (i32.const 57))) (i32.store8 (i32.add (local.get $out) (local.get $ndig)) (local.get $c)) (local.set $ndig (i32.add (local.get $ndig) (i32.const 1))) (local.set $frac (i32.add (local.get $frac) (i32.const 1))) (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $fdl)))))))  ;; E: fraction-digit loop
+      (if (i32.lt_s (local.get $i) (local.get $len))  ;; bounds check: cursor < len before reading
+        (then (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))  ;; load current byte ptr[i] into c
+          (if (i32.or (i32.eq (local.get $c) (i32.const 101)) (i32.eq (local.get $c) (i32.const 69)))  ;; F: 'e' or 'E' -> parse exponent
+            (then (local.set $i (i32.add (local.get $i) (i32.const 1))) (local.set $es (i32.const 1))  ;; F: default exponent sign +1
+              (if (i32.lt_s (local.get $i) (local.get $len))  ;; bounds check: cursor < len before reading
+                (then (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))  ;; load current byte ptr[i] into c
+                  (if (i32.eq (local.get $c) (i32.const 45))  ;; ...
+                    (then (local.set $es (i32.const -1)) (local.set $i (i32.add (local.get $i) (i32.const 1)))))  ;; F: '-' -> exponent sign -1
+                  (if (i32.eq (local.get $c) (i32.const 43))  ;; B: '+' -> consume
+                    (then (local.set $i (i32.add (local.get $i) (i32.const 1)))))))  ;; consume one byte (cursor++)
+              (block $ede  ;; F: exponent digits
+                (loop $edl (br_if $ede (i32.ge_s (local.get $i) (local.get $len))) (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i)))) (br_if $ede (i32.lt_s (local.get $c) (i32.const 48))) (br_if $ede (i32.gt_s (local.get $c) (i32.const 57))) (local.set $ev (i32.add (i32.mul (local.get $ev) (i32.const 10)) (i32.sub (local.get $c) (i32.const 48)))) (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $edl))) (local.set $K (i32.add (local.get $K) (i32.mul (local.get $es) (local.get $ev))))))))  ;; F: exponent-digit loop
+      (if (i32.eqz (local.get $ndig))  ;; G: no digits parsed?
+        (then (local.set $class (i32.const 1)))) (local.set $K (i32.sub (local.get $K) (local.get $frac)))) (return (local.get $sign) (local.get $ndig) (local.get $K) (local.get $class)))  ;; G: K = es*ev - frac (decimal exponent)
+"#;
+
+/// Compares two little-endian base-2^32 big integers; returns i32 -1 / 0 / 1 for
+/// a < b / a == b / a > b. Trims leading zero limbs (effective length) first, then
+/// compares lengths; equal-length numbers are scanned most-significant limb first.
+const RT_BIGNUM_CMP: &str = r#"  (func $__rt_bignum_cmp (param $a i32) (param $na i32) (param $b i32) (param $nb i32) (result i32) (local $ha i32) (local $hb i32) (local $i i32) (local $va i64) (local $vb i64) (local.set $ha (local.get $na)) (local.set $hb (local.get $nb))  ;; compare two big ints a,b (limb counts na,nb) -> i32 -1/0/1
+    (block $ae  ;; trim leading zero limbs off a
+      (loop $al (br_if $ae (i32.eqz (local.get $ha))) (br_if $ae (i64.ne (i64.load32_u (i32.add (local.get $a) (i32.shl (i32.sub (local.get $ha) (i32.const 1)) (i32.const 2)))) (i64.const 0))) (local.set $ha (i32.sub (local.get $ha) (i32.const 1))) (br $al)))  ;; a trim loop
+    (block $be  ;; trim leading zero limbs off b
+      (loop $bl (br_if $be (i32.eqz (local.get $hb))) (br_if $be (i64.ne (i64.load32_u (i32.add (local.get $b) (i32.shl (i32.sub (local.get $hb) (i32.const 1)) (i32.const 2)))) (i64.const 0))) (local.set $hb (i32.sub (local.get $hb) (i32.const 1))) (br $bl)))  ;; b trim loop
+    (if (i32.gt_s (local.get $ha) (local.get $hb))  ;; a longer than b?
+      (then (return (i32.const 1))))  ;; a > b -> return 1
+    (if (i32.lt_s (local.get $ha) (local.get $hb))  ;; a shorter than b?
+      (then (return (i32.const -1)))) (local.set $i (local.get $ha))  ;; i = ha (trimmed effective length, for equal-length scan)
+    (block $ce  ;; equal length: scan limbs top-down
+      (loop $cl (br_if $ce (i32.eqz (local.get $i))) (local.set $i (i32.sub (local.get $i) (i32.const 1))) (local.set $va (i64.load32_u (i32.add (local.get $a) (i32.shl (local.get $i) (i32.const 2))))) (local.set $vb (i64.load32_u (i32.add (local.get $b) (i32.shl (local.get $i) (i32.const 2))))) (br_if $cl (i64.eq (local.get $va) (local.get $vb)))  ;; equal-length scan loop
+        (if (i64.gt_u (local.get $va) (local.get $vb))  ;; a limb > b limb?
+          (then (return (i32.const 1)))  ;; a > b -> return 1
+          (else (return (i32.const -1)))) (br $cl))) (return (i32.const 0)))  ;; a limb < b limb -> return -1
+"#;
+
+/// In-place big-integer subtraction a -= b over $n limbs (little-endian base-2^32).
+/// Caller guarantees a >= b (check with `__rt_bignum_cmp`). Returns the final borrow
+/// (i64, 0 when no underflow); limbs use two complement mod 2^32 on underflow.
+const RT_BIGNUM_SUB: &str = r#"  (func $__rt_bignum_sub (param $a i32) (param $b i32) (param $n i32) (result i64) (local $i i32) (local $borrow i64) (local $va i64) (local $vb i64) (local $acc i64) (local $addr i32) (local.set $i (i32.const 0)) (local.set $borrow (i64.const 0))  ;; in-place a -= b over n limbs (caller guarantees a>=b); returns final borrow
+    (block $end  ;; subtraction loop
+      (loop $top (br_if $end (i32.ge_u (local.get $i) (local.get $n))) (local.set $addr (i32.add (local.get $a) (i32.shl (local.get $i) (i32.const 2)))) (local.set $va (i64.load32_u (local.get $addr))) (local.set $vb (i64.load32_u (i32.add (local.get $b) (i32.shl (local.get $i) (i32.const 2))))) (local.set $acc (i64.sub (i64.sub (local.get $va) (local.get $vb)) (local.get $borrow))) (i64.store32 (local.get $addr) (local.get $acc)) (local.set $borrow (select (i64.const 1) (i64.const 0) (i64.lt_s (local.get $acc) (i64.const 0)))) (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $top))) (local.get $borrow))  ;; limb subtract loop
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
 /// Currently emits the full float<->string pipeline: the `__rt_f64_decompose` decoder,
@@ -491,6 +571,9 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_FTOA_SCIENTIFIC);
     wm.add_raw_func(RT_FTOA_FIXED);
     wm.add_raw_func(RT_FTOA);
+    wm.add_raw_func(RT_PARSE_DECIMAL);
+    wm.add_raw_func(RT_BIGNUM_CMP);
+    wm.add_raw_func(RT_BIGNUM_SUB);
 }
 
 #[cfg(test)]
@@ -1465,4 +1548,349 @@ mod tests {
             assert_eq!(o, str_hash("NAN").to_string());
         }
     }
+
+    /// Builds a driver that stores two little-endian base-2^32 big integers (`a` at 256,
+    /// `b` at 4096) and calls `__rt_bignum_cmp(256, a.len, 4096, b.len)`, returning the
+    /// signed i32 result (-1/0/1) extended to i64 so wasmer prints `-1`/`0`/`1`.
+    fn bignum_cmp_driver(a: &[u32], b: &[u32]) -> String {
+        let mut stores = String::new();
+        for (i, &v) in a.iter().enumerate() {
+            stores.push_str(&format!(
+                "  (i64.store32 (i32.const {}) (i64.const {}))\n",
+                256 + i * 4,
+                v
+            ));
+        }
+        for (i, &v) in b.iter().enumerate() {
+            stores.push_str(&format!(
+                "  (i64.store32 (i32.const {}) (i64.const {}))\n",
+                4096 + i * 4,
+                v
+            ));
+        }
+        format!(
+            r#"(func $t (export "t") (result i64)
+{stores}  (i64.extend_i32_s (call $__rt_bignum_cmp (i32.const 256) (i32.const {na}) (i32.const 4096) (i32.const {nb}))))"#,
+            na = a.len(),
+            nb = b.len()
+        )
+    }
+
+    /// `[5]` vs `[5]` -> equal -> 0.
+    #[test]
+    fn bignum_cmp_equal_single_limb() {
+        if let Some(o) = run_float_driver(&bignum_cmp_driver(&[5], &[5]), "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// `[6]` vs `[5]` -> greater -> 1.
+    #[test]
+    fn bignum_cmp_greater_single_limb() {
+        if let Some(o) = run_float_driver(&bignum_cmp_driver(&[6], &[5]), "t") {
+            assert_eq!(o, "1");
+        }
+    }
+
+    /// `[5]` vs `[6]` -> less -> -1.
+    #[test]
+    fn bignum_cmp_less_single_limb() {
+        if let Some(o) = run_float_driver(&bignum_cmp_driver(&[5], &[6]), "t") {
+            assert_eq!(o, "-1");
+        }
+    }
+
+    /// `[1,1]` (0x1_00000001) vs `[0xFFFFFFFF]` -> longer is bigger -> 1.
+    #[test]
+    fn bignum_cmp_longer_is_greater() {
+        if let Some(o) = run_float_driver(&bignum_cmp_driver(&[1, 1], &[0xFFFFFFFF]), "t") {
+            assert_eq!(o, "1");
+        }
+    }
+
+    /// Leading zero limbs are trimmed: `[5,0,0]` and `[5]` are both `[5]` -> 0.
+    #[test]
+    fn bignum_cmp_trims_leading_zeros() {
+        if let Some(o) = run_float_driver(&bignum_cmp_driver(&[5, 0, 0], &[5]), "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// Both zero -> 0.
+    #[test]
+    fn bignum_cmp_both_zero() {
+        if let Some(o) = run_float_driver(&bignum_cmp_driver(&[0], &[0]), "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// `[0xFFFFFFFF,0]` trims to `[0xFFFFFFFF]` (1 limb) vs `[0,1]` (2 limbs) -> shorter -> -1.
+    #[test]
+    fn bignum_cmp_trimmed_shorter_is_less() {
+        if let Some(o) = run_float_driver(&bignum_cmp_driver(&[0xFFFFFFFF, 0], &[0, 1]), "t") {
+            assert_eq!(o, "-1");
+        }
+    }
+
+    /// Equal length, top limb decides: `[0,1]` vs `[1,1]` -> 0<1 at top -> -1.
+    #[test]
+    fn bignum_cmp_top_limb_decides() {
+        if let Some(o) = run_float_driver(&bignum_cmp_driver(&[0, 1], &[1, 1]), "t") {
+            assert_eq!(o, "-1");
+        }
+    }
+
+    /// Equal length, low limb decides: `[1,5]` vs `[1,4]` -> top equal, low 5>4 -> 1.
+    #[test]
+    fn bignum_cmp_low_limb_decides() {
+        if let Some(o) = run_float_driver(&bignum_cmp_driver(&[1, 5], &[1, 4]), "t") {
+            assert_eq!(o, "1");
+        }
+    }
+
+    /// Builds a driver that stores two big integers, calls `__rt_bignum_sub(a, b, n)`
+    /// in place, and returns `borrow * 10^9 + limb[watch]` (borrow is the final i64
+    /// borrow, limb[watch] is the watched result limb).
+    fn bignum_sub_driver(a: &[u32], b: &[u32], watch: usize) -> String {
+        let n = a.len().max(b.len());
+        let mut stores = String::new();
+        for (i, &v) in a.iter().enumerate() {
+            stores.push_str(&format!(
+                "  (i64.store32 (i32.const {}) (i64.const {}))\n",
+                256 + i * 4,
+                v
+            ));
+        }
+        for (i, &v) in b.iter().enumerate() {
+            stores.push_str(&format!(
+                "  (i64.store32 (i32.const {}) (i64.const {}))\n",
+                4096 + i * 4,
+                v
+            ));
+        }
+        format!(
+            r#"(func $t (export "t") (result i64)
+  (local $borrow i64)
+{stores}  (local.set $borrow (call $__rt_bignum_sub (i32.const 256) (i32.const 4096) (i32.const {n})))
+  (i64.add (i64.mul (local.get $borrow) (i64.const 1000000000)) (i64.load32_u (i32.const {watch_addr}))))"#,
+            n = n,
+            watch_addr = 256 + watch * 4
+        )
+    }
+
+    /// [10] - [3] = [7], no borrow -> 7.
+    #[test]
+    fn bignum_sub_simple_no_borrow() {
+        if let Some(o) = run_float_driver(&bignum_sub_driver(&[10], &[3], 0), "t") {
+            assert_eq!(o, "7");
+        }
+    }
+
+    /// [3] - [10] underflows: limb0 = (3-10) mod 2^32 = 0xFFFFFFF9 = 4294967289, borrow 1.
+    #[test]
+    fn bignum_sub_underflow_single_limb() {
+        if let Some(o) = run_float_driver(&bignum_sub_driver(&[3], &[10], 0), "t") {
+            assert_eq!(o, "5294967289");
+        }
+    }
+
+    /// [2^32] - [1] = [0xFFFFFFFF, 0]: low limb borrows, high limb clears -> 4294967295.
+    #[test]
+    fn bignum_sub_multi_limb_borrow() {
+        if let Some(o) = run_float_driver(&bignum_sub_driver(&[0, 1], &[1, 0], 0), "t") {
+            assert_eq!(o, "4294967295");
+        }
+    }
+
+    /// [5,5] - [6,5]: low underflows (0xFFFFFFFF), borrow propagates, high = 5-5-1 = -1
+    /// -> 0xFFFFFFFF with final borrow 1 -> 1*10^9 + 4294967295 = 5294967295.
+    #[test]
+    fn bignum_sub_borrow_propagation() {
+        if let Some(o) = run_float_driver(&bignum_sub_driver(&[5, 5], &[6, 5], 0), "t") {
+            assert_eq!(o, "5294967295");
+        }
+    }
+
+    /// Builds a driver that writes the ASCII bytes of `s` at 256, calls
+    /// `__rt_parse_decimal` on it with the digit out-buffer at 512, and returns a witness
+    /// `sign*10^15 + ndig*10^12 + (K+32768)*1000 + class`. K is biased by 32768 so it stays
+    /// non-negative for any realistic decimal exponent; the parsed digits at 512 are
+    /// validated separately by the digit-hash tests below.
+    fn parse_driver(s: &str) -> String {
+        let stores = store_ascii(256, s);
+        format!(
+            r#"(func $t (export "t") (result i64)
+  (local $sign i32) (local $ndig i32) (local $K i32) (local $class i32)
+{stores}  (call $__rt_parse_decimal (i32.const 256) (i32.const {len}) (i32.const 512))
+  (local.set $class)
+  (local.set $K)
+  (local.set $ndig)
+  (local.set $sign)
+  (i64.add
+    (i64.add
+      (i64.mul (i64.extend_i32_u (local.get $sign)) (i64.const 1000000000000000))
+      (i64.mul (i64.extend_i32_u (local.get $ndig)) (i64.const 1000000000000)))
+    (i64.add
+      (i64.mul (i64.extend_i32_u (i32.add (local.get $K) (i32.const 32768))) (i64.const 1000))
+      (i64.extend_i32_u (local.get $class)))))"#,
+            len = s.len(),
+        )
+    }
+
+    /// Reconstructs the witness the driver returns for a given parse result.
+    fn parse_witness(sign: u32, ndig: u32, k: i32, class: u32) -> u64 {
+        (sign as u64) * 1_000_000_000_000_000
+            + (ndig as u64) * 1_000_000_000_000
+            + ((k + 32768) as u64) * 1000
+            + class as u64
+    }
+
+    /// "1e3" -> sign 0, ndig 1, K 3, class 0 (value = 1 * 10^3 = 1000).
+    #[test]
+    fn parse_one_e3() {
+        if let Some(o) = run_float_driver(&parse_driver("1e3"), "t") {
+            assert_eq!(o, parse_witness(0, 1, 3, 0).to_string());
+        }
+    }
+
+    /// "3.14" -> ndig 3, K -2, class 0 (value = 314 * 10^-2 = 3.14).
+    #[test]
+    fn parse_three_point_fourteen() {
+        if let Some(o) = run_float_driver(&parse_driver("3.14"), "t") {
+            assert_eq!(o, parse_witness(0, 3, -2, 0).to_string());
+        }
+    }
+
+    /// ".5" -> ndig 1, K -1, class 0 (value = 5 * 10^-1 = 0.5).
+    #[test]
+    fn parse_dot_five() {
+        if let Some(o) = run_float_driver(&parse_driver(".5"), "t") {
+            assert_eq!(o, parse_witness(0, 1, -1, 0).to_string());
+        }
+    }
+
+    /// "0.5e2" -> ndig 2 ("05"), K = 2 - 1 = 1, class 0 (value = 5 * 10^1 = 50).
+    #[test]
+    fn parse_half_times_e2() {
+        if let Some(o) = run_float_driver(&parse_driver("0.5e2"), "t") {
+            assert_eq!(o, parse_witness(0, 2, 1, 0).to_string());
+        }
+    }
+
+    /// "-1.5" -> sign 1, ndig 2, K -1, class 0.
+    #[test]
+    fn parse_negative_one_point_five() {
+        if let Some(o) = run_float_driver(&parse_driver("-1.5"), "t") {
+            assert_eq!(o, parse_witness(1, 2, -1, 0).to_string());
+        }
+    }
+
+    /// "  +100 " -> sign 0, ndig 3, K 0, class 0 (whitespace + plus handled).
+    #[test]
+    fn parse_ws_plus_hundred() {
+        if let Some(o) = run_float_driver(&parse_driver("  +100 "), "t") {
+            assert_eq!(o, parse_witness(0, 3, 0, 0).to_string());
+        }
+    }
+
+    /// "INF" -> class 2, ndig 0, K 0.
+    #[test]
+    fn parse_inf() {
+        if let Some(o) = run_float_driver(&parse_driver("INF"), "t") {
+            assert_eq!(o, parse_witness(0, 0, 0, 2).to_string());
+        }
+    }
+
+    /// "-inf" -> sign 1, class 2.
+    #[test]
+    fn parse_neg_inf() {
+        if let Some(o) = run_float_driver(&parse_driver("-inf"), "t") {
+            assert_eq!(o, parse_witness(1, 0, 0, 2).to_string());
+        }
+    }
+
+    /// "NAN" -> class 3 (never signed).
+    #[test]
+    fn parse_nan() {
+        if let Some(o) = run_float_driver(&parse_driver("NAN"), "t") {
+            assert_eq!(o, parse_witness(0, 0, 0, 3).to_string());
+        }
+    }
+
+    /// "abc" -> no digits, class 1 (empty/invalid -> 0.0).
+    #[test]
+    fn parse_no_digits() {
+        if let Some(o) = run_float_driver(&parse_driver("abc"), "t") {
+            assert_eq!(o, parse_witness(0, 0, 0, 1).to_string());
+        }
+    }
+
+    /// "0" -> ndig 1, K 0, class 0.
+    #[test]
+    fn parse_zero() {
+        if let Some(o) = run_float_driver(&parse_driver("0"), "t") {
+            assert_eq!(o, parse_witness(0, 1, 0, 0).to_string());
+        }
+    }
+
+    /// "1E-7" -> ndig 1, K -7, class 0 (uppercase E, negative exponent).
+    #[test]
+    fn parse_one_e_minus_seven() {
+        if let Some(o) = run_float_driver(&parse_driver("1E-7"), "t") {
+            assert_eq!(o, parse_witness(0, 1, -7, 0).to_string());
+        }
+    }
+
+    /// Validates the parsed digit bytes at 512 via a rolling hash, ensuring the
+    /// concatenated digits (no sign, no point) are written correctly for "12345.6789".
+    fn parse_digits_driver(s: &str) -> String {
+        let stores = store_ascii(256, s);
+        format!(
+            r#"(func $t (export "t") (result i64)
+  (local $sign i32) (local $ndig i32) (local $K i32) (local $class i32)
+  (local $i i32) (local $h i64)
+{stores}  (call $__rt_parse_decimal (i32.const 256) (i32.const {len}) (i32.const 512))
+  (local.set $class)
+  (local.set $K)
+  (local.set $ndig)
+  (local.set $sign)
+  (local.set $h (i64.const 0))
+  (local.set $i (i32.const 0))
+  (block $e
+    (loop $l
+      (br_if $e (i32.ge_s (local.get $i) (local.get $ndig)))
+      (local.set $h (i64.rem_u (i64.add (i64.mul (local.get $h) (i64.const 257)) (i64.load8_u (i32.add (i32.const 512) (local.get $i)))) (i64.const 1000000000000000)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+  (local.get $h))"#,
+            len = s.len(),
+        )
+    }
+
+    /// "12345.6789" -> digit bytes "123456789" written at 512 (hash matches str_hash).
+    #[test]
+    fn parse_digits_stripped() {
+        if let Some(o) = run_float_driver(&parse_digits_driver("12345.6789"), "t") {
+            assert_eq!(o, str_hash("123456789").to_string());
+        }
+    }
+
+
+    /// Assembles RT_PARSE_DECIMAL alone and dumps numbered WAT on failure (diagnostic).
+    #[test]
+    fn probe_assemble_parse() {
+        let mut wm = WatModule::new();
+        wm.set_memory(1, Some("memory"));
+        wm.add_raw_func(super::RT_PARSE_DECIMAL);
+        let wat = wm.render();
+        match ::wat::parse_str(&wat) {
+            Ok(bytes) => { let _ = ::wasmparser::validate(&bytes); }
+            Err(e) => {
+                let numbered: String = wat.lines().enumerate()
+                    .map(|(i,l)| format!("{:4}: {}", i+1, l)).collect::<Vec<_>>().join("\n");
+                panic!("PARSE-ASSEMBLE failed: {e}\n==== WAT ====\n{numbered}");
+            }
+        }
+    }
+
 }
