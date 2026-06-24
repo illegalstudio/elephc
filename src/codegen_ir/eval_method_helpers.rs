@@ -259,6 +259,8 @@ fn method_param_supported(ty: &PhpType) -> bool {
             | PhpType::Float
             | PhpType::Str
             | PhpType::Mixed
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
             | PhpType::Object(_)
     )
 }
@@ -1138,6 +1140,12 @@ fn emit_aarch64_cast_eval_arg(
         PhpType::Object(class_name) => {
             emit_aarch64_cast_eval_object_arg(module, emitter, data, &class_name, fail_label);
         }
+        PhpType::Array(_) => {
+            emit_aarch64_cast_eval_array_arg(emitter, 4, fail_label);
+        }
+        PhpType::AssocArray { .. } => {
+            emit_aarch64_cast_eval_array_arg(emitter, 5, fail_label);
+        }
         _ => {}
     }
 }
@@ -1163,6 +1171,16 @@ fn emit_aarch64_cast_eval_object_arg(
     emitter.instruction("cmp x0, #6");                                          // object type hints require an object payload, not a class string
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject malformed non-object payloads
     emitter.instruction("mov x0, x1");                                          // place the unboxed object pointer in the result register
+}
+
+/// Validates and unboxes one ARM64 array-typed eval argument for native method dispatch.
+fn emit_aarch64_cast_eval_array_arg(emitter: &mut Emitter, expected_tag: i64, fail_label: &str) {
+    emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for array unboxing
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the array payload for the native method call
+    abi::emit_load_int_immediate(emitter, "x9", expected_tag);
+    emitter.instruction("cmp x0, x9");                                          // compare the eval payload tag with the expected array ABI
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject array payloads with an incompatible ABI shape
+    emitter.instruction("mov x0, x1");                                          // place the unboxed array pointer in the result register
 }
 
 /// Casts one boxed eval argument into x86_64 result registers for temporary staging.
@@ -1196,6 +1214,12 @@ fn emit_x86_64_cast_eval_arg(
         PhpType::Object(class_name) => {
             emit_x86_64_cast_eval_object_arg(module, emitter, data, &class_name, fail_label);
         }
+        PhpType::Array(_) => {
+            emit_x86_64_cast_eval_array_arg(emitter, 4, fail_label);
+        }
+        PhpType::AssocArray { .. } => {
+            emit_x86_64_cast_eval_array_arg(emitter, 5, fail_label);
+        }
         _ => {}
     }
 }
@@ -1222,6 +1246,16 @@ fn emit_x86_64_cast_eval_object_arg(
     emitter.instruction("cmp rax, 6");                                          // object type hints require an object payload, not a class string
     emitter.instruction(&format!("jne {}", fail_label));                        // reject malformed non-object payloads
     emitter.instruction("mov rax, rdi");                                        // place the unboxed object pointer in the result register
+}
+
+/// Validates and unboxes one x86_64 array-typed eval argument for native method dispatch.
+fn emit_x86_64_cast_eval_array_arg(emitter: &mut Emitter, expected_tag: i64, fail_label: &str) {
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for array unboxing
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the array payload for the native method call
+    abi::emit_load_int_immediate(emitter, "r10", expected_tag);
+    emitter.instruction("cmp rax, r10");                                        // compare the eval payload tag with the expected array ABI
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject array payloads with an incompatible ABI shape
+    emitter.instruction("mov rax, rdi");                                        // place the unboxed array pointer in the result register
 }
 
 /// Boxes the current native method result as the Mixed cell expected by eval.

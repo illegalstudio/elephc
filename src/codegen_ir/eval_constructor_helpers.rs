@@ -9,7 +9,7 @@
 //! - The cacheable runtime object can allocate by name, but only user assembly
 //!   knows constructor symbols and parameter ABI shapes.
 //! - Classes without constructors are treated as successful no-ops, matching PHP.
-//! - Constructors are bridged for fixed non-by-ref scalar/Mixed/object arguments.
+//! - Constructors are bridged for fixed non-by-ref scalar/Mixed/array/object arguments.
 
 use std::collections::BTreeMap;
 
@@ -180,6 +180,8 @@ fn constructor_param_supported(ty: &PhpType) -> bool {
             | PhpType::Float
             | PhpType::Str
             | PhpType::Mixed
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
             | PhpType::Object(_)
     )
 }
@@ -337,7 +339,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     emitter.instruction("cmp x9, #0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("b.eq {}", success_label));                    // keep the empty Throwable defaults when no message was supplied
     emit_aarch64_load_eval_arg(module, emitter, 0);
-    emit_aarch64_cast_eval_arg(emitter, &PhpType::Str);
+    emit_aarch64_cast_eval_arg(emitter, &PhpType::Str, fail_label);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for message initialization
     emitter.instruction("str x1, [x9, #8]");                                    // store the message pointer in the compact Throwable payload
     emitter.instruction("str x2, [x9, #16]");                                   // store the message length in the compact Throwable payload
@@ -345,7 +347,7 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     emitter.instruction("cmp x9, #1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("b.le {}", success_label));                    // keep code zero when only the message was supplied
     emit_aarch64_load_eval_arg(module, emitter, 1);
-    emit_aarch64_cast_eval_arg(emitter, &PhpType::Int);
+    emit_aarch64_cast_eval_arg(emitter, &PhpType::Int, fail_label);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for code initialization
     emitter.instruction("str x0, [x9, #24]");                                   // store the integer exception code
     emitter.instruction(&format!("b {}", success_label));                       // builtin Throwable construction completed
@@ -364,7 +366,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     emitter.instruction("cmp r11, 0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("je {}", success_label));                      // keep the empty Throwable defaults when no message was supplied
     emit_x86_64_load_eval_arg(module, emitter, 0);
-    emit_x86_64_cast_eval_arg(emitter, &PhpType::Str);
+    emit_x86_64_cast_eval_arg(emitter, &PhpType::Str, fail_label);
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for message initialization
     emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // store the message pointer in the compact Throwable payload
     emitter.instruction("mov QWORD PTR [r11 + 16], rdx");                       // store the message length in the compact Throwable payload
@@ -372,7 +374,7 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     emitter.instruction("cmp r11, 1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("jle {}", success_label));                     // keep code zero when only the message was supplied
     emit_x86_64_load_eval_arg(module, emitter, 1);
-    emit_x86_64_cast_eval_arg(emitter, &PhpType::Int);
+    emit_x86_64_cast_eval_arg(emitter, &PhpType::Int, fail_label);
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for code initialization
     emitter.instruction("mov QWORD PTR [r11 + 24], rax");                       // store the integer exception code
     emitter.instruction(&format!("jmp {}", success_label));                     // builtin Throwable construction completed
@@ -479,7 +481,7 @@ fn emit_aarch64_constructor_body(
         return;
     }
     emit_aarch64_validate_constructor_arg_count(module, emitter, slot, fail_label);
-    let overflow_bytes = emit_aarch64_prepare_constructor_args(module, emitter, slot);
+    let overflow_bytes = emit_aarch64_prepare_constructor_args(module, emitter, slot, fail_label);
     let caller_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
     abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
     abi::emit_call_label(emitter, &method_symbol(&slot.impl_class, "__construct"));
@@ -501,7 +503,7 @@ fn emit_x86_64_constructor_body(
         return;
     }
     emit_x86_64_validate_constructor_arg_count(module, emitter, slot, fail_label);
-    let overflow_bytes = emit_x86_64_prepare_constructor_args(module, emitter, slot);
+    let overflow_bytes = emit_x86_64_prepare_constructor_args(module, emitter, slot, fail_label);
     let caller_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
     abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
     abi::emit_call_label(emitter, &method_symbol(&slot.impl_class, "__construct"));
@@ -545,13 +547,14 @@ fn emit_aarch64_prepare_constructor_args(
     module: &Module,
     emitter: &mut Emitter,
     slot: &EvalConstructorSlot,
+    fail_label: &str,
 ) -> usize {
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("ldr x0, [sp, #16]");                                   // load the unboxed receiver as the first constructor argument
     abi::emit_push_result_value(emitter, &receiver_ty);
     for (index, param_ty) in slot.params.iter().enumerate() {
         emit_aarch64_load_eval_arg(module, emitter, index);
-        emit_aarch64_cast_eval_arg(emitter, param_ty);
+        emit_aarch64_cast_eval_arg(emitter, param_ty, fail_label);
         abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
     }
     materialize_constructor_args(module, emitter, &receiver_ty, &slot.params)
@@ -562,13 +565,14 @@ fn emit_x86_64_prepare_constructor_args(
     module: &Module,
     emitter: &mut Emitter,
     slot: &EvalConstructorSlot,
+    fail_label: &str,
 ) -> usize {
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the unboxed receiver as the first constructor argument
     abi::emit_push_result_value(emitter, &receiver_ty);
     for (index, param_ty) in slot.params.iter().enumerate() {
         emit_x86_64_load_eval_arg(module, emitter, index);
-        emit_x86_64_cast_eval_arg(emitter, param_ty);
+        emit_x86_64_cast_eval_arg(emitter, param_ty, fail_label);
         abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
     }
     materialize_constructor_args(module, emitter, &receiver_ty, &slot.params)
@@ -615,7 +619,7 @@ fn emit_x86_64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usiz
 }
 
 /// Casts one boxed eval argument into ARM64 result registers for temporary staging.
-fn emit_aarch64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
+fn emit_aarch64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType, fail_label: &str) {
     match param_ty.codegen_repr() {
         PhpType::Int => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for integer coercion
@@ -639,15 +643,39 @@ fn emit_aarch64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
         PhpType::Object(_) => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for object unboxing
             emitter.instruction("bl __rt_mixed_unbox");                         // expose the eval object payload for the constructor ABI
+            emitter.instruction("cmp x0, #6");                                  // runtime tag 6 means the eval argument is an object
+            emitter.instruction(&format!("b.ne {}", fail_label));               // reject malformed non-object constructor arguments
             emitter.instruction("mov x0, x1");                                  // move the unboxed object payload into the result register
             abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+        }
+        PhpType::Array(_) => {
+            emit_aarch64_cast_eval_array_arg(emitter, param_ty, 4, fail_label);
+        }
+        PhpType::AssocArray { .. } => {
+            emit_aarch64_cast_eval_array_arg(emitter, param_ty, 5, fail_label);
         }
         _ => {}
     }
 }
 
+/// Validates and unboxes one ARM64 array-typed eval argument for native constructors.
+fn emit_aarch64_cast_eval_array_arg(
+    emitter: &mut Emitter,
+    param_ty: &PhpType,
+    expected_tag: i64,
+    fail_label: &str,
+) {
+    emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for array unboxing
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the eval array payload for the constructor ABI
+    abi::emit_load_int_immediate(emitter, "x9", expected_tag);
+    emitter.instruction("cmp x0, x9");                                          // compare the eval payload tag with the expected array ABI
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject array payloads with an incompatible ABI shape
+    emitter.instruction("mov x0, x1");                                          // move the unboxed array payload into the result register
+    abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+}
+
 /// Casts one boxed eval argument into x86_64 result registers for temporary staging.
-fn emit_x86_64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
+fn emit_x86_64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType, fail_label: &str) {
     match param_ty.codegen_repr() {
         PhpType::Int => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for integer coercion
@@ -671,11 +699,35 @@ fn emit_x86_64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType) {
         PhpType::Object(_) => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for object unboxing
             emitter.instruction("call __rt_mixed_unbox");                       // expose the eval object payload for the constructor ABI
+            emitter.instruction("cmp rax, 6");                                  // runtime tag 6 means the eval argument is an object
+            emitter.instruction(&format!("jne {}", fail_label));                // reject malformed non-object constructor arguments
             emitter.instruction("mov rax, rdi");                                // move the unboxed object payload into the result register
             abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
         }
+        PhpType::Array(_) => {
+            emit_x86_64_cast_eval_array_arg(emitter, param_ty, 4, fail_label);
+        }
+        PhpType::AssocArray { .. } => {
+            emit_x86_64_cast_eval_array_arg(emitter, param_ty, 5, fail_label);
+        }
         _ => {}
     }
+}
+
+/// Validates and unboxes one x86_64 array-typed eval argument for native constructors.
+fn emit_x86_64_cast_eval_array_arg(
+    emitter: &mut Emitter,
+    param_ty: &PhpType,
+    expected_tag: i64,
+    fail_label: &str,
+) {
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for array unboxing
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the eval array payload for the constructor ABI
+    abi::emit_load_int_immediate(emitter, "r10", expected_tag);
+    emitter.instruction("cmp rax, r10");                                        // compare the eval payload tag with the expected array ABI
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject array payloads with an incompatible ABI shape
+    emitter.instruction("mov rax, rdi");                                        // move the unboxed array payload into the result register
+    abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
 }
 
 /// Groups constructor slots by class id while preserving sorted class order.

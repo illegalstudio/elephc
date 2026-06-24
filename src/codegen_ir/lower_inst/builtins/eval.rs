@@ -983,6 +983,8 @@ fn eval_native_method_param_supported(ty: &PhpType) -> bool {
             | PhpType::Float
             | PhpType::Str
             | PhpType::Mixed
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
             | PhpType::Object(_)
     )
 }
@@ -996,6 +998,8 @@ fn eval_native_constructor_param_supported(ty: &PhpType) -> bool {
             | PhpType::Float
             | PhpType::Str
             | PhpType::Mixed
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
             | PhpType::Object(_)
     )
 }
