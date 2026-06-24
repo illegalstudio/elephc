@@ -4497,17 +4497,40 @@ fn bind_native_signature_args(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     let mut bound_args = vec![None; signature.param_count()];
+    let variadic_index = native_callable_variadic_index(signature);
     let mut next_positional = 0;
+    let mut next_variadic_index = 0_i64;
+
+    if let Some(index) = variadic_index {
+        let array = values.array_new(args.len())?;
+        bound_args[index] = Some(array);
+    }
 
     for arg in args {
         if let Some(name) = arg.name {
-            bind_dynamic_named_arg(signature.param_names(), &mut bound_args, &name, arg.value)?;
+            bind_native_named_signature_arg(
+                signature,
+                variadic_index,
+                &mut bound_args,
+                &name,
+                arg.value,
+            )?;
         } else {
-            bind_dynamic_positional_arg(&mut bound_args, &mut next_positional, arg.value)?;
+            bind_native_positional_signature_arg(
+                &mut bound_args,
+                variadic_index,
+                &mut next_positional,
+                &mut next_variadic_index,
+                arg.value,
+                values,
+            )?;
         }
     }
 
     for (position, value) in bound_args.iter_mut().enumerate() {
+        if Some(position) == variadic_index {
+            continue;
+        }
         if value.is_some() {
             continue;
         }
@@ -4524,6 +4547,76 @@ fn bind_native_signature_args(
         .into_iter()
         .collect::<Option<Vec<_>>>()
         .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Returns the native callable variadic slot, if metadata registered one.
+fn native_callable_variadic_index(signature: &NativeCallableSignature) -> Option<usize> {
+    (0..signature.param_count()).find(|index| signature.param_variadic(*index))
+}
+
+/// Binds one positional native AOT argument to a fixed slot or variadic array.
+fn bind_native_positional_signature_arg(
+    bound_args: &mut [Option<RuntimeCellHandle>],
+    variadic_index: Option<usize>,
+    next_positional: &mut usize,
+    next_variadic_index: &mut i64,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if variadic_index.is_some_and(|index| *next_positional >= index) {
+        let key = values.int(*next_variadic_index)?;
+        *next_variadic_index = next_variadic_index
+            .checked_add(1)
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        return bind_native_variadic_arg(bound_args, variadic_index, key, value, values);
+    }
+    bind_dynamic_positional_arg(bound_args, next_positional, value)
+}
+
+/// Binds one named native AOT argument to a fixed non-variadic slot.
+fn bind_native_named_signature_arg(
+    signature: &NativeCallableSignature,
+    variadic_index: Option<usize>,
+    bound_args: &mut [Option<RuntimeCellHandle>],
+    name: &str,
+    value: RuntimeCellHandle,
+) -> Result<(), EvalStatus> {
+    if let Some(param_index) = native_regular_param_index(signature, variadic_index, name) {
+        if bound_args[param_index].is_some() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        bound_args[param_index] = Some(value);
+        return Ok(());
+    }
+    Err(EvalStatus::RuntimeFatal)
+}
+
+/// Returns the matching non-variadic native parameter index for one named arg.
+fn native_regular_param_index(
+    signature: &NativeCallableSignature,
+    variadic_index: Option<usize>,
+    name: &str,
+) -> Option<usize> {
+    signature
+        .param_names()
+        .iter()
+        .enumerate()
+        .position(|(index, param)| Some(index) != variadic_index && param == name)
+}
+
+/// Appends one value into the native AOT variadic argument array.
+fn bind_native_variadic_arg(
+    bound_args: &mut [Option<RuntimeCellHandle>],
+    variadic_index: Option<usize>,
+    key: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let index = variadic_index.ok_or(EvalStatus::RuntimeFatal)?;
+    let bound = bound_args[index].ok_or(EvalStatus::RuntimeFatal)?;
+    let array = values.array_set(bound, key, value)?;
+    bound_args[index] = Some(array);
+    Ok(())
 }
 
 /// Allocates a fresh runtime cell for one invocation-safe native AOT default.

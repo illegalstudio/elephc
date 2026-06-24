@@ -9,7 +9,8 @@
 //! - The cacheable runtime object can allocate by name, but only user assembly
 //!   knows constructor symbols and parameter ABI shapes.
 //! - Classes without constructors are treated as successful no-ops, matching PHP.
-//! - Constructors are bridged for fixed non-by-ref scalar/Mixed/array/object arguments.
+//! - Constructors are bridged for non-by-ref scalar/Mixed/array/object arguments,
+//!   including a generated variadic array slot when the signature has one.
 
 use std::collections::BTreeMap;
 
@@ -163,7 +164,6 @@ fn constructor_is_public(class_info: &ClassInfo, method_key: &str) -> bool {
 /// Returns true for constructor signatures supported by this eval bridge slice.
 fn constructor_signature_supported(sig: &FunctionSig) -> bool {
     sig.params.len() <= MAX_EVAL_CONSTRUCTOR_ARGS
-        && sig.variadic.is_none()
         && sig.ref_params.iter().all(|is_ref| !*is_ref)
         && sig
             .params

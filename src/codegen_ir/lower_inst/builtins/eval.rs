@@ -961,7 +961,6 @@ fn function_can_register_with_eval(function: &Function) -> bool {
 /// Returns true when eval can dispatch a native method through the generated bridge.
 fn method_signature_can_bridge_with_eval(signature: &FunctionSig) -> bool {
     signature.params.len() <= MAX_EVAL_NATIVE_METHOD_PARAMS
-        && signature.variadic.is_none()
         && signature.ref_params.iter().all(|is_ref| !*is_ref)
         && signature
             .params
@@ -973,7 +972,6 @@ fn method_signature_can_bridge_with_eval(signature: &FunctionSig) -> bool {
 /// Returns true when eval can dispatch a native constructor through the generated bridge.
 fn constructor_signature_can_bridge_with_eval(signature: &FunctionSig) -> bool {
     signature.params.len() <= MAX_EVAL_NATIVE_METHOD_PARAMS
-        && signature.variadic.is_none()
         && signature.ref_params.iter().all(|is_ref| !*is_ref)
         && signature
             .params

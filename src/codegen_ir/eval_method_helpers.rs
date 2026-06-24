@@ -245,7 +245,6 @@ fn static_method_is_public(class_info: &ClassInfo, method: &str) -> bool {
 /// Returns true for method signatures supported by the eval bridge.
 fn method_signature_supported(sig: &crate::types::FunctionSig) -> bool {
     sig.params.len() <= MAX_EVAL_METHOD_ARGS
-        && sig.variadic.is_none()
         && sig.ref_params.iter().all(|is_ref| !*is_ref)
         && sig.params.iter().all(|(_, ty)| method_param_supported(ty))
 }

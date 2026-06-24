@@ -8444,19 +8444,45 @@ echo $static->getNumberOfRequiredParameters();
     assert_eq!(out.stdout, "2/1:valueRvr;partsbVO;:itemsbV0");
 }
 
-/// Verifies metadata-only generated/AOT signatures remain non-dispatchable through eval.
+/// Verifies eval can dispatch generated/AOT variadic methods and constructors.
 #[test]
-fn test_eval_aot_variadic_method_metadata_only_call_fails() {
-    let err = compile_and_run_expect_failure(
+fn test_eval_aot_variadic_method_and_constructor_bridge() {
+    let out = compile_and_run(
         r#"<?php
-class EvalAotMetadataOnlyCallTarget {
-    public function collect(string ...$items): string {
-        return implode(":", $items);
+class EvalAotVariadicBridgeTarget {
+    public string $label = "";
+
+    public function __construct($head, ...$items) {
+        $this->label = $head . ":" . count($items) . ":" . $items[0] . ":" . $items[1];
+    }
+
+    public function collect($head, ...$items): string {
+        return $head . ":" . count($items) . ":" . $items[0] . ":" . $items[1];
+    }
+
+    public static function collectStatic(...$items): string {
+        return count($items) . ":" . $items[0] . ":" . $items[1];
     }
 }
-eval('$target = new EvalAotMetadataOnlyCallTarget();
-echo (new ReflectionMethod("EvalAotMetadataOnlyCallTarget", "collect"))->getParameters()[0]->isVariadic() ? "V" : "v";
-$target->collect("A");');
+echo eval('$target = new EvalAotVariadicBridgeTarget("C", "D", "E");
+return $target->collect("H", "A", "B") . "|" . EvalAotVariadicBridgeTarget::collectStatic("S", "T") . "|" . $target->label;');
+"#,
+    );
+    assert_eq!(out, "H:2:A:B|2:S:T|C:2:D:E");
+}
+
+/// Verifies generated/AOT variadic bridge rejects named arguments captured by the tail.
+#[test]
+fn test_eval_aot_variadic_method_rejects_named_tail() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalAotVariadicNamedTailTarget {
+    public function collect(...$items): int {
+        return count($items);
+    }
+}
+eval('$target = new EvalAotVariadicNamedTailTarget();
+$target->collect(named: "A");');
 "#,
     );
     assert!(
