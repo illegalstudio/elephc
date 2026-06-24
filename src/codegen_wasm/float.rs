@@ -338,6 +338,76 @@ const RT_FTOA_SCIENTIFIC: &str = r#"(func $__rt_ftoa_scientific (param $digptr i
   (local.get $w))                                                ;; total bytes written
 "#;
 
+/// Formats already-rounded significant digits in PHP fixed-point notation.
+///
+/// `$x` is the leading digit's decimal exponent (here -4 <= x <= 13). If x >= 0 the integer
+/// part is x+1 digits (significant digits then zero padding), with the remaining significant
+/// digits after a '.'; if x < 0 it writes "0.", `-x-1` leading zeros, then all significant
+/// digits. `$sign` selects a leading '-'. Trailing zeros were already stripped by the caller.
+/// Writes into `$out` and returns the byte length.
+const RT_FTOA_FIXED: &str = r#"(func $__rt_ftoa_fixed (param $digptr i32) (param $nsig i32) (param $x i32) (param $sign i32) (param $out i32) (result i32)
+  (local $w i32) (local $i i32) (local $intlen i32) (local $k i32)
+  (local.set $w (i32.const 0))                                    ;; bytes written = 0
+  (if (local.get $sign)                                           ;; negative -> leading '-'
+    (then
+      (i32.store8 (local.get $out) (i32.const 45))                ;; '-'
+      (local.set $w (i32.const 1))))                              ;; advance
+  (if (i32.ge_s (local.get $x) (i32.const 0))                     ;; X >= 0: integer part has X+1 digits
+    (then
+      (local.set $intlen (i32.add (local.get $x) (i32.const 1)))  ;; integer digit count
+      (local.set $i (i32.const 0))                                ;; source index
+      (block $ie                                                  ;; integer-copy exit
+        (loop $il                                                 ;; copy up to min(intlen,nsig) significant digits
+          (br_if $ie (i32.ge_s (local.get $i) (local.get $intlen)))  ;; filled the integer slots
+          (br_if $ie (i32.ge_s (local.get $i) (local.get $nsig)))    ;; ran out of significant digits
+          (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.load8_u (i32.add (local.get $digptr) (local.get $i))))  ;; copy digit
+          (local.set $w (i32.add (local.get $w) (i32.const 1)))   ;; advance out
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))   ;; advance source
+          (br $il)))                                              ;; continue
+      (block $pe                                                  ;; zero-pad exit
+        (loop $pl                                                 ;; pad integer part with zeros if nsig < intlen
+          (br_if $pe (i32.ge_s (local.get $i) (local.get $intlen)))  ;; integer part complete
+          (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 48))  ;; '0'
+          (local.set $w (i32.add (local.get $w) (i32.const 1)))   ;; advance
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))   ;; advance count
+          (br $pl)))                                              ;; continue
+      (if (i32.gt_s (local.get $nsig) (local.get $intlen))        ;; remaining digits -> fractional part
+        (then
+          (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 46))  ;; '.'
+          (local.set $w (i32.add (local.get $w) (i32.const 1)))   ;; advance
+          (local.set $i (local.get $intlen))                      ;; fraction starts at index intlen
+          (block $fe                                              ;; fraction-copy exit
+            (loop $fl                                             ;; copy digit[intlen..nsig]
+              (br_if $fe (i32.ge_s (local.get $i) (local.get $nsig)))  ;; done
+              (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.load8_u (i32.add (local.get $digptr) (local.get $i))))  ;; copy digit
+              (local.set $w (i32.add (local.get $w) (i32.const 1)))  ;; advance out
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))  ;; advance source
+              (br $fl)))))                                        ;; continue; closes the fraction loop, block and if
+      (return (local.get $w))))                                   ;; X >= 0 case done
+  (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 48))  ;; X < 0: leading '0'
+  (local.set $w (i32.add (local.get $w) (i32.const 1)))           ;; advance
+  (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 46))  ;; '.'
+  (local.set $w (i32.add (local.get $w) (i32.const 1)))           ;; advance
+  (local.set $k (i32.sub (i32.sub (i32.const 0) (local.get $x)) (i32.const 1)))  ;; leading-zero count = -x-1
+  (local.set $i (i32.const 0))                                    ;; zero counter
+  (block $ze                                                      ;; leading-zero exit
+    (loop $zl                                                     ;; write -x-1 leading zeros
+      (br_if $ze (i32.ge_s (local.get $i) (local.get $k)))        ;; done padding
+      (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 48))  ;; '0'
+      (local.set $w (i32.add (local.get $w) (i32.const 1)))       ;; advance
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))       ;; advance count
+      (br $zl)))                                                  ;; continue
+  (local.set $i (i32.const 0))                                    ;; source index
+  (block $se                                                      ;; significant-digit exit
+    (loop $sl                                                     ;; append all nsig significant digits
+      (br_if $se (i32.ge_s (local.get $i) (local.get $nsig)))     ;; done
+      (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.load8_u (i32.add (local.get $digptr) (local.get $i))))  ;; copy digit
+      (local.set $w (i32.add (local.get $w) (i32.const 1)))       ;; advance out
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))       ;; advance source
+      (br $sl)))                                                  ;; continue
+  (local.get $w))                                                ;; total bytes written
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
 /// Currently emits `__rt_f64_decompose` (the float decoder) plus the big-integer
@@ -359,6 +429,7 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ROUND_DIGITS);
     wm.add_raw_func(RT_U32_TO_DEC);
     wm.add_raw_func(RT_FTOA_SCIENTIFIC);
+    wm.add_raw_func(RT_FTOA_FIXED);
 }
 
 #[cfg(test)]
@@ -1089,6 +1160,89 @@ mod tests {
     fn sci_negative_sign() {
         if let Some(o) = run_float_driver(&sci_driver("15", 2, 20, 1), "t") {
             assert_eq!(o, str_hash("-1.5E+20").to_string());
+        }
+    }
+
+    /// Like `sci_driver` but formats in fixed-point notation via `__rt_ftoa_fixed`.
+    fn fixed_driver(digits: &str, nsig: u32, x: i32, sign: u32) -> String {
+        format!(
+            r#"(func $t (export "t") (result i64)
+  (local $len i32) (local $i i32) (local $h i64)
+{stores}  (local.set $len (call $__rt_ftoa_fixed (i32.const 256) (i32.const {nsig}) (i32.const {x}) (i32.const {sign}) (i32.const 512)))
+  (local.set $h (i64.const 0))
+  (local.set $i (i32.const 0))
+  (block $e
+    (loop $l
+      (br_if $e (i32.ge_s (local.get $i) (local.get $len)))
+      (local.set $h (i64.rem_u (i64.add (i64.mul (local.get $h) (i64.const 257)) (i64.load8_u (i32.add (i32.const 512) (local.get $i)))) (i64.const 1000000000000000)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+  (local.get $h))"#,
+            stores = store_ascii(256, digits),
+        )
+    }
+
+    /// 100: one significant digit, exponent 2 -> "100" (significant digit then zero padding).
+    #[test]
+    fn fixed_integer_padded() {
+        if let Some(o) = run_float_driver(&fixed_driver("1", 1, 2, 0), "t") {
+            assert_eq!(o, str_hash("100").to_string());
+        }
+    }
+
+    /// 12345.6789: nine significant digits, exponent 4 -> integer part "12345", fraction "6789".
+    #[test]
+    fn fixed_integer_and_fraction() {
+        if let Some(o) = run_float_driver(&fixed_driver("123456789", 9, 4, 0), "t") {
+            assert_eq!(o, str_hash("12345.6789").to_string());
+        }
+    }
+
+    /// 2: single digit, exponent 0 -> "2" (no fraction, no padding).
+    #[test]
+    fn fixed_single_integer() {
+        if let Some(o) = run_float_driver(&fixed_driver("2", 1, 0, 0), "t") {
+            assert_eq!(o, str_hash("2").to_string());
+        }
+    }
+
+    /// 0.1: exponent -1 -> "0.1" (no leading fractional zeros).
+    #[test]
+    fn fixed_leading_zero_point() {
+        if let Some(o) = run_float_driver(&fixed_driver("1", 1, -1, 0), "t") {
+            assert_eq!(o, str_hash("0.1").to_string());
+        }
+    }
+
+    /// 0.0001: exponent -4 -> "0.0001" (three leading fractional zeros).
+    #[test]
+    fn fixed_many_leading_zeros() {
+        if let Some(o) = run_float_driver(&fixed_driver("1", 1, -4, 0), "t") {
+            assert_eq!(o, str_hash("0.0001").to_string());
+        }
+    }
+
+    /// -0.5: negative fraction -> "-0.5".
+    #[test]
+    fn fixed_negative_fraction() {
+        if let Some(o) = run_float_driver(&fixed_driver("5", 1, -1, 1), "t") {
+            assert_eq!(o, str_hash("-0.5").to_string());
+        }
+    }
+
+    /// 1000000: exponent 6 with one significant digit -> "1000000" (six zero pads).
+    #[test]
+    fn fixed_large_integer() {
+        if let Some(o) = run_float_driver(&fixed_driver("1", 1, 6, 0), "t") {
+            assert_eq!(o, str_hash("1000000").to_string());
+        }
+    }
+
+    /// 12.5: three significant digits, exponent 1 -> integer "12", fraction "5".
+    #[test]
+    fn fixed_short_fraction() {
+        if let Some(o) = run_float_driver(&fixed_driver("125", 3, 1, 0), "t") {
+            assert_eq!(o, str_hash("12.5").to_string());
         }
     }
 }
