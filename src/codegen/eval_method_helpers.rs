@@ -275,6 +275,7 @@ fn method_return_supported(ty: &PhpType) -> bool {
             | PhpType::Str
             | PhpType::Mixed
             | PhpType::Union(_)
+            | PhpType::Iterable
             | PhpType::Object(_)
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
