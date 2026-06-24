@@ -30,8 +30,9 @@ use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 use super::super::context::FunctionContext;
 use super::{
     callables, cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes,
-    emit_loaded_indexed_array_to_mixed, emit_ref_arg_writebacks, expect_data, expect_operand,
-    iterators, load_value_to_first_int_arg, materialize_direct_call_args_with_refs,
+    coerce_loaded_value_to_tagged_scalar, emit_loaded_indexed_array_to_mixed,
+    emit_ref_arg_writebacks, expect_data, expect_operand, iterators, load_value_to_first_int_arg,
+    materialize_direct_call_args_with_refs,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
     store_call_result, store_if_result,
 };
@@ -4613,14 +4614,15 @@ fn resolve_packed_field_slot(
 
 /// Verifies that this slice knows how to represent the property type in an object slot.
 fn ensure_property_type_supported(php_type: &PhpType, inst: &Instruction) -> Result<()> {
-    match php_type {
+    match php_type.codegen_repr() {
         PhpType::Bool
         | PhpType::Int
         | PhpType::Float
         | PhpType::Str
+        | PhpType::TaggedScalar
         | PhpType::Void
         | PhpType::Never => Ok(()),
-        ty if is_pointer_sized_property_type(ty) => Ok(()),
+        ref ty if is_pointer_sized_property_type(ty) => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!(
             "{} for property PHP type {:?}",
             inst.op.name(),
@@ -4652,6 +4654,9 @@ fn ensure_property_value_supported(
         return Ok(());
     }
     if can_convert_indexed_array_to_mixed_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
+    if can_store_value_as_tagged_scalar_property(value_ty, &slot.php_type) {
         return Ok(());
     }
     if can_coerce_tagged_scalar_to_int_property(value_ty, &slot.php_type) {
@@ -4806,6 +4811,24 @@ fn can_coerce_mixed_to_scalar_property(value_ty: &PhpType, slot_ty: &PhpType) ->
         )
 }
 
+/// Returns true when a value can materialize nullable-int tagged-scalar property storage.
+fn can_store_value_as_tagged_scalar_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    if slot_ty.codegen_repr() != PhpType::TaggedScalar {
+        return false;
+    }
+    matches!(
+        value_ty.codegen_repr(),
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Callable
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::TaggedScalar
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    )
+}
+
 /// Returns true when a nullable inline scalar can be narrowed into int property storage.
 fn can_coerce_tagged_scalar_to_int_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
     value_ty.codegen_repr() == PhpType::TaggedScalar && slot_ty.codegen_repr() == PhpType::Int
@@ -4883,7 +4906,7 @@ fn emit_property_load(
     if slot.is_reference {
         return emit_reference_property_load(ctx, slot, base_reg);
     }
-    match &slot.php_type {
+    match slot.php_type.codegen_repr() {
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             if base_reg == ptr_reg {
@@ -4902,7 +4925,13 @@ fn emit_property_load(
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset);
         }
-        ty if is_pointer_sized_property_type(ty) => {
+        PhpType::TaggedScalar => {
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset);
+            abi::emit_load_from_address(ctx.emitter, tag_reg, base_reg, slot.offset + 8);
+        }
+        ty if is_pointer_sized_property_type(&ty) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset);
         }
@@ -4934,6 +4963,12 @@ fn emit_reference_property_load(
             let float_reg = abi::float_result_reg(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, float_reg, pointer_reg, 0);
         }
+        PhpType::TaggedScalar => {
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_load_from_address(ctx.emitter, int_reg, pointer_reg, 0);
+            abi::emit_load_from_address(ctx.emitter, tag_reg, pointer_reg, 8);
+        }
         ty if is_pointer_sized_property_type(&ty)
             || matches!(
                 ty,
@@ -4959,7 +4994,7 @@ fn emit_packed_field_load(
     slot: &PropertySlot,
     base_reg: &str,
 ) -> Result<()> {
-    match &slot.php_type {
+    match slot.php_type.codegen_repr() {
         PhpType::Float => {
             let float_reg = abi::float_result_reg(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, float_reg, base_reg, slot.offset);
@@ -5022,7 +5057,7 @@ fn emit_property_store(
         abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
         return Ok(());
     }
-    match &slot.php_type {
+    match slot.php_type.codegen_repr() {
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
@@ -5054,7 +5089,16 @@ fn emit_property_store(
             abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
             abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
         }
-        ty if is_pointer_sized_property_type(ty) => {
+        PhpType::TaggedScalar => {
+            let int_reg = abi::int_result_reg(ctx.emitter);
+            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_push_reg(ctx.emitter, base_reg);
+            load_property_store_value_to_result(ctx, value, &slot.php_type)?;
+            abi::emit_pop_reg(ctx.emitter, base_reg);
+            abi::emit_store_to_address(ctx.emitter, int_reg, base_reg, slot.offset);
+            abi::emit_store_to_address(ctx.emitter, tag_reg, base_reg, slot.offset + 8);
+        }
+        ty if is_pointer_sized_property_type(&ty) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_push_reg(ctx.emitter, base_reg);
             load_property_store_value_to_result(ctx, value, &slot.php_type)?;
@@ -5243,6 +5287,20 @@ fn store_current_result_to_reference_cell(
                 0,
             );
         }
+        PhpType::TaggedScalar => {
+            abi::emit_store_to_address(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                pointer_reg,
+                0,
+            );
+            abi::emit_store_to_address(
+                ctx.emitter,
+                crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter),
+                pointer_reg,
+                8,
+            );
+        }
         ty if is_pointer_sized_property_type(&ty)
             || matches!(
                 ty,
@@ -5358,6 +5416,18 @@ fn load_property_store_value_to_result(
         };
         emit_loaded_indexed_array_to_mixed(ctx, &source_elem.codegen_repr());
         abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+        return Ok(());
+    }
+    if can_store_value_as_tagged_scalar_property(&value_ty, slot_ty) {
+        match value_ty.codegen_repr() {
+            PhpType::Void | PhpType::Never => {
+                crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
+            }
+            _ => {
+                ctx.load_value_to_result(value)?;
+                coerce_loaded_value_to_tagged_scalar(ctx, &value_ty)?;
+            }
+        }
         return Ok(());
     }
     if can_coerce_tagged_scalar_to_int_property(&value_ty, slot_ty) {

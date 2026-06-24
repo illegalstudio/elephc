@@ -4430,6 +4430,32 @@ echo $box->x;
     assert_eq!(out, "2");
 }
 
+/// Verifies eval fragments can read and write public nullable-int AOT properties through `$this`.
+#[test]
+fn test_eval_fragment_can_mutate_this_nullable_int_property() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNullableIntPropBox {
+    public ?int $count = null;
+
+    public function run(): void {
+        echo eval('$out = ($this->count === null) ? "N" : "n";
+            $this->count = 7;
+            $out = $out . ":" . (($this->count === 7) ? "I7" : "bad");
+            $this->count = "42";
+            $out = $out . ":" . (($this->count === 42) ? "I42" : "bad");
+            $this->count = null;
+            return $out . ":" . (($this->count === null) ? "N" : "bad");');
+    }
+}
+
+$box = new EvalNullableIntPropBox();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "N:I7:I42:N");
+}
+
 /// Verifies eval keeps PHP property names case-sensitive while parsing keywords case-insensitively.
 #[test]
 fn test_eval_fragment_preserves_this_property_case() {
