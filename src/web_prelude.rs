@@ -40,6 +40,9 @@ extern "elephc_web" {
     function elephc_web_server_port(): int;
     function elephc_web_protocol(): string;
     function elephc_web_request_time(): int;
+    function elephc_web_env_count(): int;
+    function elephc_web_env_name(int $i): string;
+    function elephc_web_env_value(int $i): string;
 }
 $_SERVER = [];
 $_SERVER['REQUEST_METHOD'] = elephc_web_method();
@@ -122,6 +125,11 @@ foreach ($_GET as $__elephc_rqk => $__elephc_rqv) {
 }
 foreach ($_POST as $__elephc_rqk => $__elephc_rqv) {
     $_REQUEST[$__elephc_rqk] = $__elephc_rqv;
+}
+$_ENV = [];
+$__elephc_envc = elephc_web_env_count();
+for ($__elephc_envi = 0; $__elephc_envi < $__elephc_envc; $__elephc_envi++) {
+    $_ENV[elephc_web_env_name($__elephc_envi)] = elephc_web_env_value($__elephc_envi);
 }
 function __elephc_emit_cookie($name, $value, $expires, $path, $domain, $secure, $httponly) {
     $c = $name . '=' . $value;

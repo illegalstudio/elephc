@@ -385,6 +385,54 @@ pub unsafe extern "C" fn elephc_web_request_time() -> i64 {
     *core::ptr::addr_of!(REQ_TIME)
 }
 
+/// Process environment snapshot, built once per worker (the env is fixed at fork)
+/// and reused across requests. Backs `$_ENV`.
+static mut ENV_CACHE: Option<Vec<(CString, CString)>> = None;
+
+/// Returns the cached process-environment (name, value) pairs, building it on
+/// first use. Single-threaded per worker, so the lazy init cannot race.
+unsafe fn env_cache() -> &'static [(CString, CString)] {
+    let slot = core::ptr::addr_of_mut!(ENV_CACHE);
+    if (*slot).is_none() {
+        let vars: Vec<(CString, CString)> = std::env::vars()
+            .map(|(k, v)| {
+                (
+                    CString::new(k.replace('\0', "")).unwrap_or_default(),
+                    CString::new(v.replace('\0', "")).unwrap_or_default(),
+                )
+            })
+            .collect();
+        core::ptr::write(slot, Some(vars));
+    }
+    (*slot).as_deref().unwrap_or(&[])
+}
+
+/// Returns the number of process environment variables; backs `$_ENV`.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_env_count() -> i64 {
+    env_cache().len() as i64
+}
+
+/// Returns the name of environment variable at index `i`, or empty when out of range.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_env_name(i: i64) -> *const c_char {
+    static EMPTY: [c_char; 1] = [0];
+    match usize::try_from(i).ok().and_then(|i| env_cache().get(i)) {
+        Some((n, _)) => n.as_ptr(),
+        None => EMPTY.as_ptr(),
+    }
+}
+
+/// Returns the value of environment variable at index `i`, or empty when out of range.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_env_value(i: i64) -> *const c_char {
+    static EMPTY: [c_char; 1] = [0];
+    match usize::try_from(i).ok().and_then(|i| env_cache().get(i)) {
+        Some((_, v)) => v.as_ptr(),
+        None => EMPTY.as_ptr(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

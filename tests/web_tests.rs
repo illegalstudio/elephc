@@ -674,3 +674,23 @@ fn web_setcookie_emits_header() {
     assert!(lower.contains("set-cookie: x=y"), "second cookie: {:?}", resp);
     assert!(resp.ends_with("ok"), "body: {:?}", resp);
 }
+
+/// Verifies $_ENV (A7) is populated from the process environment.
+#[test]
+fn web_env_superglobal_populated() {
+    let dir = make_test_dir("web_env");
+    let src = "<?php echo ($_ENV['ELEPHC_WEB_TEST_ENV'] ?? '?');";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1"])
+        .env("ELEPHC_WEB_TEST_ENV", "present")
+        .spawn()
+        .expect("spawn");
+    wait_until_ready(&addr);
+    let resp = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("present"), "$_ENV not populated: {:?}", resp);
+}
