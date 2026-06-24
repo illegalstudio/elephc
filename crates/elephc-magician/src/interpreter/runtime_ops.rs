@@ -79,6 +79,21 @@ pub trait RuntimeValueOps {
         value: RuntimeCellHandle,
     ) -> Result<(), EvalStatus>;
 
+    /// Reads a public generated/AOT static property through the generated bridge.
+    fn static_property_get(
+        &mut self,
+        class_name: &str,
+        property: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus>;
+
+    /// Writes a public generated/AOT static property through the generated bridge.
+    fn static_property_set(
+        &mut self,
+        class_name: &str,
+        property: &str,
+        value: RuntimeCellHandle,
+    ) -> Result<bool, EvalStatus>;
+
     /// Creates a shallow clone of a runtime object held in a boxed Mixed cell.
     fn object_clone_shallow(
         &mut self,

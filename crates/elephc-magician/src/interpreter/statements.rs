@@ -2565,18 +2565,23 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
     class_name: &str,
     property_name: &str,
     context: &mut ElephcEvalContext,
-    _values: &mut impl RuntimeValueOps,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let class_name = resolve_eval_static_class_name(class_name, context)?;
-    let (declaring_class, property) = context
-        .class_property(&class_name, property_name)
-        .ok_or(EvalStatus::RuntimeFatal)?;
-    if !property.is_static() {
+    let class_name = resolve_eval_static_member_class_name(class_name, context)?;
+    if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
+        if !property.is_static() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+        return context
+            .static_property(&declaring_class, property.name())
+            .ok_or(EvalStatus::RuntimeFatal);
+    }
+    if eval_static_member_context_owns_class(&class_name, context) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    validate_eval_member_access(&declaring_class, property.visibility(), context)?;
-    context
-        .static_property(&declaring_class, property.name())
+    values
+        .static_property_get(&class_name, property_name)?
         .ok_or(EvalStatus::RuntimeFatal)
 }
 
@@ -2724,19 +2729,26 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let class_name = resolve_eval_static_class_name(class_name, context)?;
-    let (declaring_class, property) = context
-        .class_property(&class_name, property_name)
-        .ok_or(EvalStatus::RuntimeFatal)?;
-    if !property.is_static() {
+    let class_name = resolve_eval_static_member_class_name(class_name, context)?;
+    if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
+        if !property.is_static() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        validate_eval_property_write_access(&declaring_class, &property, context)?;
+        validate_eval_readonly_property_write(&declaring_class, &property, context)?;
+        if let Some(replaced) = context.set_static_property(&declaring_class, property.name(), value) {
+            values.release(replaced)?;
+        }
+        return Ok(());
+    }
+    if eval_static_member_context_owns_class(&class_name, context) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    validate_eval_property_write_access(&declaring_class, &property, context)?;
-    validate_eval_readonly_property_write(&declaring_class, &property, context)?;
-    if let Some(replaced) = context.set_static_property(&declaring_class, property.name(), value) {
-        values.release(replaced)?;
+    if values.static_property_set(&class_name, property_name, value)? {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
     }
-    Ok(())
 }
 
 /// Dispatches a static method call to an eval-declared static method.
@@ -2747,7 +2759,7 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let class_name = resolve_eval_static_method_class_name(class_name, context)?;
+    let class_name = resolve_eval_static_member_class_name(class_name, context)?;
     if let Some(result) = eval_builtin_property_hook_type_static_method_result(
         &class_name,
         method_name,
@@ -3096,8 +3108,8 @@ pub(in crate::interpreter) fn resolve_eval_static_class_name(
     }
 }
 
-/// Resolves static method receivers while allowing non-eval class names to reach AOT lookup.
-fn resolve_eval_static_method_class_name(
+/// Resolves static member receivers while allowing non-eval class names to reach AOT lookup.
+fn resolve_eval_static_member_class_name(
     class_name: &str,
     context: &ElephcEvalContext,
 ) -> Result<String, EvalStatus> {
@@ -3107,6 +3119,17 @@ fn resolve_eval_static_method_class_name(
             .resolve_class_name(class_name)
             .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string())),
     }
+}
+
+/// Returns true when an eval-declared class-like symbol should not fall through to AOT lookup.
+fn eval_static_member_context_owns_class(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    context.has_class(class_name)
+        || context.has_interface(class_name)
+        || context.has_trait(class_name)
+        || context.has_enum(class_name)
 }
 
 /// Resolves `self`, `parent`, `static`, and named class-like receivers for constant access.

@@ -4456,6 +4456,27 @@ $box->run();
     assert_eq!(out, "N:I7:I42:N");
 }
 
+/// Verifies eval fragments can read and write public nullable-int AOT static properties.
+#[test]
+fn test_eval_fragment_can_mutate_aot_nullable_int_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNullableIntStaticPropBox {
+    public static ?int $count = null;
+}
+
+echo eval('$out = (EvalNullableIntStaticPropBox::$count === null) ? "N" : "n";
+    EvalNullableIntStaticPropBox::$count = 9;
+    $out = $out . ":" . ((EvalNullableIntStaticPropBox::$count === 9) ? "I9" : "bad");
+    EvalNullableIntStaticPropBox::$count = "33";
+    $out = $out . ":" . ((EvalNullableIntStaticPropBox::$count === 33) ? "I33" : "bad");
+    EvalNullableIntStaticPropBox::$count = null;
+    return $out . ":" . ((EvalNullableIntStaticPropBox::$count === null) ? "N" : "bad");');
+"#,
+    );
+    assert_eq!(out, "N:I9:I33:N");
+}
+
 /// Verifies eval keeps PHP property names case-sensitive while parsing keywords case-insensitively.
 #[test]
 fn test_eval_fragment_preserves_this_property_case() {

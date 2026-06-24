@@ -1,0 +1,784 @@
+//! Purpose:
+//! Emits user-assembly helpers that let libelephc-magician access public native
+//! static properties through symbol-backed storage.
+//!
+//! Called from:
+//! - `crate::codegen_ir::finalize_user_asm()` when an EIR module uses eval.
+//!
+//! Key details:
+//! - The cacheable runtime object cannot know user static-property symbols, so
+//!   these C-ABI bridge symbols are emitted into the user assembly.
+//! - Null helper returns mean "no bridge match"; boxed PHP null is returned as
+//!   a real Mixed cell pointer.
+
+use std::collections::BTreeMap;
+
+use crate::codegen::{abi, emit_box_current_value_as_mixed};
+use crate::codegen::data_section::DataSection;
+use crate::codegen::emit::Emitter;
+use crate::codegen::platform::Arch;
+use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
+use crate::ir::{Function, LocalKind, Module};
+use crate::names::static_property_symbol;
+use crate::parser::ast::Visibility;
+use crate::types::{ClassInfo, PhpType};
+
+/// Static property slot metadata needed by eval bridge dispatch.
+#[derive(Clone)]
+struct EvalStaticPropertySlot {
+    class_name: String,
+    property: String,
+    symbol: String,
+    ty: PhpType,
+    is_declared: bool,
+}
+
+/// Emits eval static-property helpers when any lowered function owns an eval context.
+pub(super) fn emit_eval_static_property_helpers(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    if !module_uses_eval(module) {
+        return;
+    }
+    let slots = collect_eval_static_property_slots(module);
+    emit_static_property_get_helper(module, emitter, data, &slots);
+    emit_static_property_set_helper(module, emitter, data, &slots);
+}
+
+/// Returns true when the EIR module contains a function that can call eval.
+fn module_uses_eval(module: &Module) -> bool {
+    all_module_functions(module).any(function_uses_eval)
+}
+
+/// Iterates every EIR function body emitted or inspected by the backend.
+fn all_module_functions(module: &Module) -> impl Iterator<Item = &Function> {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+}
+
+/// Returns true when a function has hidden eval state locals.
+fn function_uses_eval(function: &Function) -> bool {
+    function.locals.iter().any(|local| {
+        matches!(
+            local.kind,
+            LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
+        )
+    })
+}
+
+/// Collects public static properties with storage layouts the bridge can access.
+fn collect_eval_static_property_slots(module: &Module) -> Vec<EvalStaticPropertySlot> {
+    let mut slots = Vec::new();
+    let mut classes = module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    for (class_name, class_info) in classes {
+        collect_class_static_property_slots(module, class_name, class_info, &mut slots);
+    }
+    slots
+}
+
+/// Adds bridge-supported public static properties visible from one class.
+fn collect_class_static_property_slots(
+    module: &Module,
+    class_name: &str,
+    class_info: &ClassInfo,
+    slots: &mut Vec<EvalStaticPropertySlot>,
+) {
+    let mut properties = class_info.static_properties.iter().collect::<Vec<_>>();
+    properties.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (property, ty) in properties {
+        if !static_property_is_public(class_info, property) || !static_property_type_supported(ty) {
+            continue;
+        }
+        let declaring_class = class_info
+            .static_property_declaring_classes
+            .get(property)
+            .map(String::as_str)
+            .unwrap_or(class_name);
+        let Some(declaring_info) = module.class_infos.get(declaring_class) else {
+            continue;
+        };
+        slots.push(EvalStaticPropertySlot {
+            class_name: class_name.to_string(),
+            property: property.clone(),
+            symbol: static_property_symbol(declaring_class, property),
+            ty: ty.codegen_repr(),
+            is_declared: declaring_info.declared_static_properties.contains(property),
+        });
+    }
+}
+
+/// Returns true when a static property is publicly visible to eval.
+fn static_property_is_public(class_info: &ClassInfo, property: &str) -> bool {
+    class_info
+        .static_property_visibilities
+        .get(property)
+        .is_none_or(|visibility| matches!(visibility, Visibility::Public))
+}
+
+/// Returns true for static-property storage shapes the bridge can box and update.
+fn static_property_type_supported(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::TaggedScalar
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    )
+}
+
+/// Emits `__elephc_eval_value_static_property_get(class, name) -> Mixed*`.
+fn emit_static_property_get_helper(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slots: &[EvalStaticPropertySlot],
+) {
+    emitter.blank();
+    emitter.comment("--- eval bridge: user static property get ---");
+    label_c_global(module, emitter, "__elephc_eval_value_static_property_get");
+    match module.target.arch {
+        Arch::AArch64 => emit_static_property_get_aarch64(module, emitter, data, slots),
+        Arch::X86_64 => emit_static_property_get_x86_64(module, emitter, data, slots),
+    }
+}
+
+/// Emits `__elephc_eval_value_static_property_set(class, name, Mixed*) -> bool`.
+fn emit_static_property_set_helper(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slots: &[EvalStaticPropertySlot],
+) {
+    emitter.blank();
+    emitter.comment("--- eval bridge: user static property set ---");
+    label_c_global(module, emitter, "__elephc_eval_value_static_property_set");
+    match module.target.arch {
+        Arch::AArch64 => emit_static_property_set_aarch64(module, emitter, data, slots),
+        Arch::X86_64 => emit_static_property_set_x86_64(module, emitter, data, slots),
+    }
+}
+
+/// Emits the ARM64 static-property get helper body.
+fn emit_static_property_get_aarch64(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slots: &[EvalStaticPropertySlot],
+) {
+    let done_label = "__elephc_eval_value_static_property_get_done";
+    emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for class/property slices and fp/lr
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
+    emitter.instruction("str x1, [sp, #8]");                                    // save the requested class-name length
+    emitter.instruction("str x2, [sp, #16]");                                   // save the requested property-name pointer
+    emitter.instruction("str x3, [sp, #24]");                                   // save the requested property-name length
+    emit_aarch64_static_property_dispatch(module, emitter, data, slots, "get");
+    emitter.instruction("mov x0, xzr");                                         // report bridge miss with a null pointer
+    emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after a miss
+    emit_aarch64_get_slot_bodies(module, emitter, slots, done_label);
+    emitter.label(done_label);
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the boxed static property value to Rust
+}
+
+/// Emits the x86_64 static-property get helper body.
+fn emit_static_property_get_x86_64(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slots: &[EvalStaticPropertySlot],
+) {
+    let done_label = "__elephc_eval_value_static_property_get_done_x";
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for class and property slices
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested property-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the requested property-name length
+    emit_x86_64_static_property_dispatch(module, emitter, data, slots, "get");
+    emitter.instruction("xor eax, eax");                                        // report bridge miss with a null pointer
+    emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after a miss
+    emit_x86_64_get_slot_bodies(module, emitter, slots, done_label);
+    emitter.label(done_label);
+    emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed static property value to Rust
+}
+
+/// Emits the ARM64 static-property set helper body.
+fn emit_static_property_set_aarch64(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slots: &[EvalStaticPropertySlot],
+) {
+    let fail_label = "__elephc_eval_value_static_property_set_fail";
+    let done_label = "__elephc_eval_value_static_property_set_done";
+    emitter.instruction("sub sp, sp, #80");                                     // reserve helper frame for class/property, value, and fp/lr
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #64");                                    // establish a stable helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
+    emitter.instruction("str x1, [sp, #8]");                                    // save the requested class-name length
+    emitter.instruction("str x2, [sp, #16]");                                   // save the requested property-name pointer
+    emitter.instruction("str x3, [sp, #24]");                                   // save the requested property-name length
+    emitter.instruction("str x4, [sp, #32]");                                   // save the boxed value being assigned
+    emit_aarch64_static_property_dispatch(module, emitter, data, slots, "set");
+    emitter.instruction(&format!("b {}", fail_label));                          // no supported public static property matched the request
+    emit_aarch64_set_slot_bodies(module, emitter, slots, done_label);
+    emitter.label(fail_label);
+    emitter.instruction("mov x0, #0");                                          // report a failed eval static-property write to Rust
+    emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after failure
+    emitter.label(done_label);
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #80");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the write-status flag to Rust
+}
+
+/// Emits the x86_64 static-property set helper body.
+fn emit_static_property_set_x86_64(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slots: &[EvalStaticPropertySlot],
+) {
+    let fail_label = "__elephc_eval_value_static_property_set_fail_x";
+    let done_label = "__elephc_eval_value_static_property_set_done_x";
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for class, property, and value
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested property-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the requested property-name length
+    emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the boxed value being assigned
+    emit_x86_64_static_property_dispatch(module, emitter, data, slots, "set");
+    emitter.instruction(&format!("jmp {}", fail_label));                        // no supported public static property matched the request
+    emit_x86_64_set_slot_bodies(module, emitter, slots, done_label);
+    emitter.label(fail_label);
+    emitter.instruction("xor eax, eax");                                        // report a failed eval static-property write to Rust
+    emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after failure
+    emitter.label(done_label);
+    emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the write-status flag to Rust
+}
+
+/// Emits ARM64 class-name and property-name dispatch for static property helpers.
+fn emit_aarch64_static_property_dispatch(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slots: &[EvalStaticPropertySlot],
+    mode: &str,
+) {
+    for (class_name, class_slots) in grouped_slots(slots) {
+        let next_label = format!(
+            "__elephc_eval_static_property_{}_next_{}",
+            mode,
+            label_fragment(class_name)
+        );
+        emit_aarch64_static_class_name_compare(emitter, data, class_name, &next_label);
+        for slot in class_slots {
+            emit_aarch64_static_property_name_compare(module, emitter, data, slot, mode);
+        }
+        emitter.label(&next_label);
+    }
+}
+
+/// Emits x86_64 class-name and property-name dispatch for static property helpers.
+fn emit_x86_64_static_property_dispatch(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slots: &[EvalStaticPropertySlot],
+    mode: &str,
+) {
+    for (class_name, class_slots) in grouped_slots(slots) {
+        let next_label = format!(
+            "__elephc_eval_static_property_{}_next_{}_x",
+            mode,
+            label_fragment(class_name)
+        );
+        emit_x86_64_static_class_name_compare(emitter, data, class_name, &next_label);
+        for slot in class_slots {
+            emit_x86_64_static_property_name_compare(module, emitter, data, slot, mode);
+        }
+        emitter.label(&next_label);
+    }
+}
+
+/// Emits one ARM64 case-insensitive class-name comparison for a static property group.
+fn emit_aarch64_static_class_name_compare(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    class_name: &str,
+    next_label: &str,
+) {
+    let (label, len) = data.add_string(class_name.as_bytes());
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload requested class-name pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload requested class-name length
+    abi::emit_symbol_address(emitter, "x3", &label);
+    abi::emit_load_int_immediate(emitter, "x4", len as i64);
+    emitter.instruction("bl __rt_strcasecmp");                                  // compare class names with PHP case-insensitive rules
+    emitter.instruction(&format!("cbnz x0, {}", next_label));                   // try the next class when names differ
+}
+
+/// Emits one x86_64 case-insensitive class-name comparison for a static property group.
+fn emit_x86_64_static_class_name_compare(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    class_name: &str,
+    next_label: &str,
+) {
+    let (label, len) = data.add_string(class_name.as_bytes());
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload requested class-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload requested class-name length
+    abi::emit_symbol_address(emitter, "rdx", &label);
+    abi::emit_load_int_immediate(emitter, "rcx", len as i64);
+    emitter.instruction("call __rt_strcasecmp");                                // compare class names with PHP case-insensitive rules
+    emitter.instruction("test rax, rax");                                       // check whether the class names matched
+    emitter.instruction(&format!("jne {}", next_label));                        // try the next class when names differ
+}
+
+/// Emits one ARM64 property-name comparison and branch to the matching body.
+fn emit_aarch64_static_property_name_compare(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalStaticPropertySlot,
+    mode: &str,
+) {
+    let (label, len) = data.add_string(slot.property.as_bytes());
+    emitter.instruction("ldr x1, [sp, #16]");                                   // reload requested property-name pointer
+    emitter.instruction("ldr x2, [sp, #24]");                                   // reload requested property-name length
+    abi::emit_symbol_address(emitter, "x3", &label);
+    abi::emit_load_int_immediate(emitter, "x4", len as i64);
+    emitter.instruction("bl __rt_str_eq");                                      // compare property names with PHP case-sensitive rules
+    let target_label = slot_body_label(module, slot, mode);
+    emitter.instruction(&format!("cbnz x0, {}", target_label));                 // dispatch to the static property body when names match
+}
+
+/// Emits one x86_64 property-name comparison and branch to the matching body.
+fn emit_x86_64_static_property_name_compare(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalStaticPropertySlot,
+    mode: &str,
+) {
+    let (label, len) = data.add_string(slot.property.as_bytes());
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload requested property-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload requested property-name length
+    abi::emit_symbol_address(emitter, "rdx", &label);
+    abi::emit_load_int_immediate(emitter, "rcx", len as i64);
+    emitter.instruction("call __rt_str_eq");                                    // compare property names with PHP case-sensitive rules
+    emitter.instruction("test rax, rax");                                       // check whether the property names matched
+    let target_label = slot_body_label(module, slot, mode);
+    emitter.instruction(&format!("jne {}", target_label));                      // dispatch to the static property body when names match
+}
+
+/// Emits ARM64 get bodies for every bridge-supported static property slot.
+fn emit_aarch64_get_slot_bodies(
+    module: &Module,
+    emitter: &mut Emitter,
+    slots: &[EvalStaticPropertySlot],
+    done_label: &str,
+) {
+    for slot in slots {
+        emitter.label(&slot_body_label(module, slot, "get"));
+        emit_aarch64_uninitialized_guard(emitter, slot, done_label);
+        emit_aarch64_box_static_property_slot(emitter, slot);
+        emitter.instruction(&format!("b {}", done_label));                      // return after boxing the static property value
+    }
+}
+
+/// Emits x86_64 get bodies for every bridge-supported static property slot.
+fn emit_x86_64_get_slot_bodies(
+    module: &Module,
+    emitter: &mut Emitter,
+    slots: &[EvalStaticPropertySlot],
+    done_label: &str,
+) {
+    for slot in slots {
+        emitter.label(&slot_body_label(module, slot, "get"));
+        emit_x86_64_uninitialized_guard(emitter, slot, done_label);
+        emit_x86_64_box_static_property_slot(emitter, slot);
+        emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the static property value
+    }
+}
+
+/// Emits ARM64 set bodies for every bridge-supported static property slot.
+fn emit_aarch64_set_slot_bodies(
+    module: &Module,
+    emitter: &mut Emitter,
+    slots: &[EvalStaticPropertySlot],
+    done_label: &str,
+) {
+    for slot in slots {
+        emitter.label(&slot_body_label(module, slot, "set"));
+        emit_aarch64_store_static_property_slot(emitter, slot);
+        emitter.instruction("mov x0, #1");                                      // report a successful eval static-property write to Rust
+        emitter.instruction(&format!("b {}", done_label));                      // return after storing the static property value
+    }
+}
+
+/// Emits x86_64 set bodies for every bridge-supported static property slot.
+fn emit_x86_64_set_slot_bodies(
+    module: &Module,
+    emitter: &mut Emitter,
+    slots: &[EvalStaticPropertySlot],
+    done_label: &str,
+) {
+    for slot in slots {
+        emitter.label(&slot_body_label(module, slot, "set"));
+        emit_x86_64_store_static_property_slot(emitter, slot);
+        emitter.instruction("mov rax, 1");                                      // report a successful eval static-property write to Rust
+        emitter.instruction(&format!("jmp {}", done_label));                    // return after storing the static property value
+    }
+}
+
+/// Emits an ARM64 uninitialized typed-static-property guard before boxing.
+fn emit_aarch64_uninitialized_guard(
+    emitter: &mut Emitter,
+    slot: &EvalStaticPropertySlot,
+    done_label: &str,
+) {
+    if !slot.is_declared {
+        return;
+    }
+    let initialized_label = format!(
+        "{}_initialized",
+        label_fragment(&slot_body_label_raw(slot, "get"))
+    );
+    abi::emit_load_symbol_to_reg(emitter, "x10", &slot.symbol, 8);
+    abi::emit_load_int_immediate(emitter, "x11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp x10, x11");                                        // check whether the typed static property is initialized
+    emitter.instruction(&format!("b.ne {}", initialized_label));                // continue boxing once the static slot is initialized
+    emitter.instruction("mov x0, xzr");                                         // report uninitialized static property as a bridge failure
+    emitter.instruction(&format!("b {}", done_label));                          // return the failure to Rust without boxing storage
+    emitter.label(&initialized_label);
+}
+
+/// Emits an x86_64 uninitialized typed-static-property guard before boxing.
+fn emit_x86_64_uninitialized_guard(
+    emitter: &mut Emitter,
+    slot: &EvalStaticPropertySlot,
+    done_label: &str,
+) {
+    if !slot.is_declared {
+        return;
+    }
+    let initialized_label = format!(
+        "{}_initialized_x",
+        label_fragment(&slot_body_label_raw(slot, "get"))
+    );
+    abi::emit_load_symbol_to_reg(emitter, "r10", &slot.symbol, 8);
+    abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp r10, r11");                                        // check whether the typed static property is initialized
+    emitter.instruction(&format!("jne {}", initialized_label));                 // continue boxing once the static slot is initialized
+    emitter.instruction("xor eax, eax");                                        // report uninitialized static property as a bridge failure
+    emitter.instruction(&format!("jmp {}", done_label));                        // return the failure to Rust without boxing storage
+    emitter.label(&initialized_label);
+}
+
+/// Boxes an ARM64 static property symbol payload into a Mixed cell.
+fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
+    match slot.ty.codegen_repr() {
+        PhpType::Int | PhpType::Bool => {
+            abi::emit_load_symbol_to_reg(emitter, "x0", &slot.symbol, 0);
+            emit_box_current_value_as_mixed(emitter, &slot.ty);
+        }
+        PhpType::Float => {
+            abi::emit_load_symbol_to_reg(emitter, "d0", &slot.symbol, 0);
+            emit_box_current_value_as_mixed(emitter, &PhpType::Float);
+        }
+        PhpType::Str => {
+            abi::emit_load_symbol_to_reg(emitter, "x1", &slot.symbol, 0);
+            abi::emit_load_symbol_to_reg(emitter, "x2", &slot.symbol, 8);
+            emit_box_current_value_as_mixed(emitter, &PhpType::Str);
+        }
+        PhpType::TaggedScalar => {
+            abi::emit_load_symbol_to_reg(emitter, "x0", &slot.symbol, 0);
+            abi::emit_load_symbol_to_reg(emitter, "x1", &slot.symbol, 8);
+            emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            let null_label = format!(
+                "{}_mixed_null",
+                label_fragment(&slot_body_label_raw(slot, "get"))
+            );
+            let done_label = format!(
+                "{}_mixed_done",
+                label_fragment(&slot_body_label_raw(slot, "get"))
+            );
+            abi::emit_load_symbol_to_reg(emitter, "x0", &slot.symbol, 0);
+            emitter.instruction(&format!("cbz x0, {}", null_label));            // null static storage reads as PHP null
+            emitter.instruction("bl __rt_incref");                              // retain the stored Mixed cell for the eval caller
+            emitter.instruction(&format!("b {}", done_label));                  // skip null materialization after a retained hit
+            emitter.label(&null_label);
+            let null_symbol = emitter.target.extern_symbol("__elephc_eval_value_null");
+            abi::emit_call_label(emitter, &null_symbol);
+            emitter.label(&done_label);
+        }
+        _ => {
+            let null_symbol = emitter.target.extern_symbol("__elephc_eval_value_null");
+            abi::emit_call_label(emitter, &null_symbol);
+        }
+    }
+}
+
+/// Boxes an x86_64 static property symbol payload into a Mixed cell.
+fn emit_x86_64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
+    match slot.ty.codegen_repr() {
+        PhpType::Int | PhpType::Bool => {
+            abi::emit_load_symbol_to_reg(emitter, "rax", &slot.symbol, 0);
+            emit_box_current_value_as_mixed(emitter, &slot.ty);
+        }
+        PhpType::Float => {
+            abi::emit_load_symbol_to_reg(emitter, "xmm0", &slot.symbol, 0);
+            emit_box_current_value_as_mixed(emitter, &PhpType::Float);
+        }
+        PhpType::Str => {
+            abi::emit_load_symbol_to_reg(emitter, "rax", &slot.symbol, 0);
+            abi::emit_load_symbol_to_reg(emitter, "rdx", &slot.symbol, 8);
+            emit_box_current_value_as_mixed(emitter, &PhpType::Str);
+        }
+        PhpType::TaggedScalar => {
+            abi::emit_load_symbol_to_reg(emitter, "rax", &slot.symbol, 0);
+            abi::emit_load_symbol_to_reg(emitter, "rdx", &slot.symbol, 8);
+            emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            let null_label = format!(
+                "{}_mixed_null_x",
+                label_fragment(&slot_body_label_raw(slot, "get"))
+            );
+            let done_label = format!(
+                "{}_mixed_done_x",
+                label_fragment(&slot_body_label_raw(slot, "get"))
+            );
+            abi::emit_load_symbol_to_reg(emitter, "rax", &slot.symbol, 0);
+            emitter.instruction("test rax, rax");                               // check whether static storage holds a Mixed cell
+            emitter.instruction(&format!("jz {}", null_label));                 // null static storage reads as PHP null
+            emitter.instruction("call __rt_incref");                            // retain the stored Mixed cell for the eval caller
+            emitter.instruction(&format!("jmp {}", done_label));                // skip null materialization after a retained hit
+            emitter.label(&null_label);
+            let null_symbol = emitter.target.extern_symbol("__elephc_eval_value_null");
+            abi::emit_call_label(emitter, &null_symbol);
+            emitter.label(&done_label);
+        }
+        _ => {
+            let null_symbol = emitter.target.extern_symbol("__elephc_eval_value_null");
+            abi::emit_call_label(emitter, &null_symbol);
+        }
+    }
+}
+
+/// Stores a boxed Mixed eval value into an ARM64 static property symbol.
+fn emit_aarch64_store_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
+    match slot.ty.codegen_repr() {
+        PhpType::Int => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0"),
+        PhpType::Bool => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_bool", "x0"),
+        PhpType::Float => {
+            emitter.instruction("ldr x0, [sp, #32]");                           // reload the boxed eval value for float coercion
+            emitter.instruction("bl __rt_mixed_cast_float");                    // coerce the eval value to a PHP float
+            abi::emit_store_reg_to_symbol(emitter, "d0", &slot.symbol, 0);
+            clear_uninitialized_marker_after_static_store(emitter, slot);
+        }
+        PhpType::Str => {
+            emitter.instruction("ldr x0, [sp, #32]");                           // reload the boxed eval value for string coercion
+            emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval value to a PHP string pair
+            abi::emit_store_reg_to_symbol(emitter, "x1", &slot.symbol, 0);
+            abi::emit_store_reg_to_symbol(emitter, "x2", &slot.symbol, 8);
+        }
+        PhpType::TaggedScalar => emit_aarch64_store_tagged_scalar_static_property(emitter, slot),
+        PhpType::Mixed | PhpType::Union(_) => {
+            emitter.instruction("ldr x0, [sp, #32]");                           // reload the boxed eval value being assigned
+            emitter.instruction("bl __rt_incref");                              // retain the Mixed cell for static-property ownership
+            abi::emit_store_reg_to_symbol(emitter, "x0", &slot.symbol, 0);
+            clear_uninitialized_marker_after_static_store(emitter, slot);
+        }
+        _ => {}
+    }
+}
+
+/// Stores a boxed Mixed eval value into an x86_64 static property symbol.
+fn emit_x86_64_store_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
+    match slot.ty.codegen_repr() {
+        PhpType::Int => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax"),
+        PhpType::Bool => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_bool", "rax"),
+        PhpType::Float => {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval value for float coercion
+            emitter.instruction("call __rt_mixed_cast_float");                  // coerce the eval value to a PHP float
+            abi::emit_store_reg_to_symbol(emitter, "xmm0", &slot.symbol, 0);
+            clear_uninitialized_marker_after_static_store(emitter, slot);
+        }
+        PhpType::Str => {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval value for string coercion
+            emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval value to a PHP string pair
+            abi::emit_store_reg_to_symbol(emitter, "rax", &slot.symbol, 0);
+            abi::emit_store_reg_to_symbol(emitter, "rdx", &slot.symbol, 8);
+        }
+        PhpType::TaggedScalar => emit_x86_64_store_tagged_scalar_static_property(emitter, slot),
+        PhpType::Mixed | PhpType::Union(_) => {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval value being assigned
+            emitter.instruction("call __rt_incref");                            // retain the Mixed cell for static-property ownership
+            abi::emit_store_reg_to_symbol(emitter, "rax", &slot.symbol, 0);
+            clear_uninitialized_marker_after_static_store(emitter, slot);
+        }
+        _ => {}
+    }
+}
+
+/// Emits an ARM64 scalar static-property store after Mixed coercion.
+fn emit_aarch64_store_cast_scalar(
+    emitter: &mut Emitter,
+    slot: &EvalStaticPropertySlot,
+    helper: &str,
+    result_reg: &str,
+) {
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the boxed eval value for scalar coercion
+    emitter.instruction(&format!("bl {}", helper));                             // coerce the eval value to the declared static-property type
+    abi::emit_store_reg_to_symbol(emitter, result_reg, &slot.symbol, 0);
+    clear_uninitialized_marker_after_static_store(emitter, slot);
+}
+
+/// Emits an x86_64 scalar static-property store after Mixed coercion.
+fn emit_x86_64_store_cast_scalar(
+    emitter: &mut Emitter,
+    slot: &EvalStaticPropertySlot,
+    helper: &str,
+    result_reg: &str,
+) {
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval value for scalar coercion
+    emitter.instruction(&format!("call {}", helper));                           // coerce the eval value to the declared static-property type
+    abi::emit_store_reg_to_symbol(emitter, result_reg, &slot.symbol, 0);
+    clear_uninitialized_marker_after_static_store(emitter, slot);
+}
+
+/// Stores a boxed eval value into an ARM64 nullable-int static property symbol.
+fn emit_aarch64_store_tagged_scalar_static_property(
+    emitter: &mut Emitter,
+    slot: &EvalStaticPropertySlot,
+) {
+    let null_label = format!(
+        "{}_tagged_scalar_null",
+        label_fragment(&slot_body_label_raw(slot, "set"))
+    );
+    let done_label = format!(
+        "{}_tagged_scalar_done",
+        label_fragment(&slot_body_label_raw(slot, "set"))
+    );
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the boxed eval value for nullable-int inspection
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the assigned value tag and payload words
+    emitter.instruction("cmp x0, #8");                                          // runtime tag 8 means the assigned value is null
+    emitter.instruction(&format!("b.eq {}", null_label));                       // materialize a tagged null for null static-property writes
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the boxed eval value for integer coercion
+    emitter.instruction("bl __rt_mixed_cast_int");                              // coerce non-null eval values to a PHP int payload
+    crate::codegen::sentinels::emit_tagged_scalar_from_int_result(emitter);
+    emitter.instruction(&format!("b {}", done_label));                          // skip tagged-null materialization after integer coercion
+    emitter.label(&null_label);
+    crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+    emitter.label(&done_label);
+    abi::emit_store_reg_to_symbol(emitter, "x0", &slot.symbol, 0);
+    abi::emit_store_reg_to_symbol(emitter, "x1", &slot.symbol, 8);
+}
+
+/// Stores a boxed eval value into an x86_64 nullable-int static property symbol.
+fn emit_x86_64_store_tagged_scalar_static_property(
+    emitter: &mut Emitter,
+    slot: &EvalStaticPropertySlot,
+) {
+    let null_label = format!(
+        "{}_tagged_scalar_null_x",
+        label_fragment(&slot_body_label_raw(slot, "set"))
+    );
+    let done_label = format!(
+        "{}_tagged_scalar_done_x",
+        label_fragment(&slot_body_label_raw(slot, "set"))
+    );
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval value for nullable-int inspection
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the assigned value tag and payload words
+    emitter.instruction("cmp rax, 8");                                          // runtime tag 8 means the assigned value is null
+    emitter.instruction(&format!("je {}", null_label));                         // materialize a tagged null for null static-property writes
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval value for integer coercion
+    emitter.instruction("call __rt_mixed_cast_int");                            // coerce non-null eval values to a PHP int payload
+    crate::codegen::sentinels::emit_tagged_scalar_from_int_result(emitter);
+    emitter.instruction(&format!("jmp {}", done_label));                        // skip tagged-null materialization after integer coercion
+    emitter.label(&null_label);
+    crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+    emitter.label(&done_label);
+    abi::emit_store_reg_to_symbol(emitter, "rax", &slot.symbol, 0);
+    abi::emit_store_reg_to_symbol(emitter, "rdx", &slot.symbol, 8);
+}
+
+/// Clears the typed-property high word after a successful non-pair static store.
+fn clear_uninitialized_marker_after_static_store(
+    emitter: &mut Emitter,
+    slot: &EvalStaticPropertySlot,
+) {
+    if !matches!(slot.ty.codegen_repr(), PhpType::Str | PhpType::TaggedScalar) {
+        abi::emit_store_zero_to_symbol(emitter, &slot.symbol, 8);
+    }
+}
+
+/// Groups static property slots by PHP-visible class name in deterministic order.
+fn grouped_slots(slots: &[EvalStaticPropertySlot]) -> BTreeMap<&str, Vec<&EvalStaticPropertySlot>> {
+    let mut grouped = BTreeMap::new();
+    for slot in slots {
+        grouped
+            .entry(slot.class_name.as_str())
+            .or_insert_with(Vec::new)
+            .push(slot);
+    }
+    grouped
+}
+
+/// Returns a platform-safe body label for a get/set static property slot.
+fn slot_body_label(module: &Module, slot: &EvalStaticPropertySlot, mode: &str) -> String {
+    let suffix = match module.target.arch {
+        Arch::AArch64 => "",
+        Arch::X86_64 => "_x",
+    };
+    format!("{}{}", slot_body_label_raw(slot, mode), suffix)
+}
+
+/// Returns the architecture-independent body label stem for a static property slot.
+fn slot_body_label_raw(slot: &EvalStaticPropertySlot, mode: &str) -> String {
+    format!(
+        "__elephc_eval_static_property_{}_{}_{}",
+        mode,
+        label_fragment(&slot.class_name),
+        label_fragment(&slot.property)
+    )
+}
+
+/// Converts arbitrary PHP metadata names into assembly-label-safe fragments.
+fn label_fragment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect()
+}
+
+/// Emits a C-visible global label with target-specific symbol mangling.
+fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
+    let symbol = module.target.extern_symbol(name);
+    emitter.label_global(&symbol);
+}

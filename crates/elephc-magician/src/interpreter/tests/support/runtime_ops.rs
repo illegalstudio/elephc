@@ -83,6 +83,23 @@ impl RuntimeValueOps for FakeOps {
     ) -> Result<(), EvalStatus> {
         self.runtime_property_set(object, property, value)
     }
+    /// Reports no fake AOT static property match.
+    fn static_property_get(
+        &mut self,
+        _class_name: &str,
+        _property: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(None)
+    }
+    /// Reports a failed fake AOT static property write.
+    fn static_property_set(
+        &mut self,
+        _class_name: &str,
+        _property: &str,
+        _value: RuntimeCellHandle,
+    ) -> Result<bool, EvalStatus> {
+        Ok(false)
+    }
     /// Creates one shallow fake object clone.
     fn object_clone_shallow(
         &mut self,

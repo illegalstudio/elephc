@@ -125,6 +125,46 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         }
     }
 
+    /// Reads a public AOT static property through the generated user helper.
+    fn static_property_get(
+        &mut self,
+        class_name: &str,
+        property: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let ptr = unsafe {
+            __elephc_eval_value_static_property_get(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+                property.as_ptr(),
+                property.len() as u64,
+            )
+        };
+        if ptr.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(RuntimeCellHandle::from_raw(ptr)))
+        }
+    }
+
+    /// Writes a public AOT static property through the generated user helper.
+    fn static_property_set(
+        &mut self,
+        class_name: &str,
+        property: &str,
+        value: RuntimeCellHandle,
+    ) -> Result<bool, EvalStatus> {
+        let ok = unsafe {
+            __elephc_eval_value_static_property_set(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+                property.as_ptr(),
+                property.len() as u64,
+                value.as_ptr(),
+            )
+        };
+        Ok(ok != 0)
+    }
+
     /// Creates a shallow clone of a boxed Mixed stdClass/eval object through the generated wrapper.
     fn object_clone_shallow(
         &mut self,

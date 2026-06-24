@@ -51,6 +51,19 @@ unsafe extern "C" {
         name_len: u64,
         value: *mut RuntimeCell,
     ) -> u64;
+    pub(super) fn __elephc_eval_value_static_property_get(
+        class_ptr: *const u8,
+        class_len: u64,
+        name_ptr: *const u8,
+        name_len: u64,
+    ) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_value_static_property_set(
+        class_ptr: *const u8,
+        class_len: u64,
+        name_ptr: *const u8,
+        name_len: u64,
+        value: *mut RuntimeCell,
+    ) -> u64;
     /// Returns a boxed shallow clone for stdClass/eval object storage.
     pub(super) fn __elephc_eval_value_object_clone_shallow(
         object: *mut RuntimeCell,
