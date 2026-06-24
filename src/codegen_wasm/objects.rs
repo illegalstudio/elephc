@@ -31,13 +31,14 @@
 //!   persists the incoming value, and stores lo + hi. Mixed slots split into MOVE (incoming is
 //!   already a Mixed cell) and BOX (`emit_box_value_into_mixed`).
 
-use super::context::{FnCtx, Result};
+use super::context::{wasm_fn_symbol, FnCtx, Result};
 use super::inst::{data_immediate, operand, store_result};
 use super::values::WasmRepr;
 use super::wat::{DataSegment, Global, ValType, WatModule};
 use super::WasmError;
 use crate::codegen_ir::{literal_default_value, LiteralDefaultValue};
 use crate::ir::{Instruction, IrHeapKind, IrType, ValueId};
+use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
 use std::collections::HashMap;
 
@@ -317,13 +318,20 @@ fn object_ptr_ref(ctx: &FnCtx, object: ValueId) -> Result<String> {
     }
 }
 
-/// Lowers `Op::ObjectNew` (no constructor) to an inline heap allocation.
+/// Lowers `Op::ObjectNew` to an inline heap allocation followed by a constructor call.
 ///
 /// Allocates `8 + n*16` payload bytes via `__rt_heap_alloc`, stamps heap-kind 4 at `[obj-8]`,
 /// writes the compile-time `class_id` at `[obj+0]`, zeroes every property slot, then emits
-/// scalar (int/float/bool/null) property defaults. Rejects `#[AllowDynamicProperties]` classes
-/// and constructor calls with `Unsupported`. Non-scalar property defaults (string/container/
-/// mixed) are a follow-up sub-phase and surface as `Unsupported` from `emit_scalar_default`.
+/// scalar (int/float/bool/null) property defaults. If the class declares `__construct`
+/// (`ci.methods[php_symbol_key("__construct")]`), the ctor is resolved (inherited ctors via
+/// `ci.method_impl_classes`, defaulting to the class itself) and called AFTER the defaults with
+/// `[$this, ...user_args]` — the fresh object pointer is the first arg, matching the native
+/// `emit_constructor_call` and the hidden leading `this` param convention. `Op::ObjectNew`
+/// operands are the ctor USER args only (the receiver is not in operands; the backend prepends
+/// it), mirroring the native `lower_new_object`. Rejects `#[AllowDynamicProperties]` classes,
+/// args without a `__construct`, ctor arg-count mismatch, and variadic / by-ref ctor params
+/// with `Unsupported`. Non-scalar property defaults (string/container/mixed) are a follow-up
+/// sub-phase and surface as `Unsupported` from `emit_scalar_default`.
 pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let class_data = data_immediate(inst)?;
     let class_name = ctx
@@ -345,12 +353,16 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
             class_name
         )));
     }
-    if !inst.operands.is_empty() {
-        return Err(WasmError::Unsupported(format!(
-            "object constructor not yet supported on wasm32-wasi for class {}",
-            class_name
-        )));
-    }
+    // Resolve the constructor (case-insensitive key) and the declaring class for an
+    // inherited ctor (defaults to self). The call is emitted after the defaults loop;
+    // the gate logic moves there so a 0-arg ctor is still called with just `$this`.
+    let ctor_key = php_symbol_key("__construct");
+    let ctor_sig = ci.methods.get(&ctor_key).cloned();
+    let impl_class = ci
+        .method_impl_classes
+        .get(&ctor_key)
+        .cloned()
+        .unwrap_or_else(|| class_name.clone());
 
     let n = ci.properties.len();
     let payload_size: i32 = 8 + (n as i32) * 16;
@@ -405,6 +417,50 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
         )
         .map_err(|e| WasmError::Unsupported(e.to_string()))?;
         emit_scalar_default(ctx, &obj, off, &lit, &prop_name)?;
+    }
+
+    // -- call __construct (if declared) with [$this, ...user_args]; defaults run first --
+    match &ctor_sig {
+        None => {
+            // No constructor: operands MUST be empty (matches native's args-without-ctor reject).
+            if !inst.operands.is_empty() {
+                return Err(WasmError::Unsupported(format!(
+                    "constructor arguments for class {} with no __construct on wasm32-wasi",
+                    class_name
+                )));
+            }
+        }
+        Some(sig) => {
+            if inst.operands.len() != sig.params.len() {
+                return Err(WasmError::Unsupported(format!(
+                    "constructor argument count mismatch for class {} on wasm32-wasi (got {}, expected {})",
+                    class_name, inst.operands.len(), sig.params.len()
+                )));
+            }
+            if sig.variadic.is_some() {
+                return Err(WasmError::Unsupported(format!(
+                    "variadic constructor not yet supported on wasm32-wasi for class {}",
+                    class_name
+                )));
+            }
+            if sig.ref_params.iter().any(|r| *r) {
+                return Err(WasmError::Unsupported(format!(
+                    "by-ref constructor parameters not yet supported on wasm32-wasi for class {}",
+                    class_name
+                )));
+            }
+            // The ctor symbol is the same `wasm_fn_symbol("<Class>::__construct")` that
+            // `function::lower_function` assigns to the class-method function, so a WAT
+            // `call $<symbol>` resolves it. Push the fresh object ptr (`$this`) first
+            // (deepest = first param), then each user arg via `emit_load_value` in source
+            // order — the stack bottom->top `[obj, arg0, ...]` matches params `[this, ...]`.
+            let ctor_symbol = wasm_fn_symbol(&format!("{}::{}", impl_class, "__construct"));
+            ctx.fb.ins(&format!("local.get {}", obj), "push $this (fresh object) as first ctor arg");
+            for &arg in inst.operands.iter() {
+                ctx.emit_load_value(arg)?;
+            }
+            ctx.fb.ins(&format!("call ${}", ctor_symbol), "call ClassName::__construct($this, ...args)");
+        }
     }
 
     // -- store the object pointer into the result value's local --

@@ -139,6 +139,19 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
         wm.add_func(fb);
     }
 
+    // Lower every class method (instance + static), so `__construct` and other
+    // methods become callable WAT functions. Reuses the same lowering as user
+    // functions: a non-static method's hidden leading `this` param is just param 0
+    // (`IrType::Heap(Object)` -> `WasmRepr::Ptr` / i32), and the body uses the
+    // already-supported `PropGet`/`PropSet`/`LoadLocal("this")`/`EchoValue` ops. WAT
+    // `call $<name>` resolves a module-local function regardless of definition
+    // order, so a `module.functions` entry calling `__construct` (via `ObjectNew`)
+    // sees the method defined here even though methods are lowered after it.
+    for func in &module.class_methods {
+        let fb = function::lower_function(module, func, &str_literals)?;
+        wm.add_func(fb);
+    }
+
     Ok(wm.render())
 }
 
@@ -168,7 +181,7 @@ mod tests {
     };
     use crate::parser::ast::{Expr, ExprKind};
     use crate::span::Span;
-    use crate::types::{ClassInfo, PhpType};
+    use crate::types::{ClassInfo, FunctionSig, PhpType};
     use std::collections::{HashMap, HashSet};
 
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -3382,6 +3395,25 @@ mod tests {
         .expect("ObjectNew lowers")
     }
 
+    /// Emits `new ClassName(args...)`: `Op::ObjectNew` carrying the ctor USER args as
+    /// operands (the receiver `$this` is NOT included — the backend prepends it).
+    fn emit_object_new_with_args(
+        b: &mut Builder,
+        class_name: &str,
+        class_data: DataId,
+        args: Vec<ValueId>,
+    ) -> ValueId {
+        b.emit(
+            Op::ObjectNew,
+            args,
+            Some(Immediate::Data(class_data)),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class_name.to_string()),
+            Ownership::Owned,
+        )
+        .expect("ObjectNew with ctor args lowers")
+    }
+
     /// Emits `$obj->$prop = $value` (PropSet is void).
     fn emit_prop_set(b: &mut Builder, obj: ValueId, prop_data: DataId, value: ValueId) {
         let _ = b.emit(
@@ -3841,5 +3873,243 @@ mod tests {
         if let Some(out) = run_main(&module) {
             assert_eq!(out, "hi");
         }
+    }
+
+    // ----- P6c: __construct + $this param convention -----
+
+    /// Builds a `__construct` `FunctionSig` over the given user params (no defaults,
+    /// no by-ref, no variadic). `$this` is NOT included: it is a backend convention
+    /// (hidden leading param), not a declared param, so `sig.params` lists only the
+    /// user params — matching the native `__construct` signature.
+    fn ctor_sig(user_params: &[(&str, PhpType)]) -> FunctionSig {
+        FunctionSig {
+            params: user_params
+                .iter()
+                .map(|(n, t)| (n.to_string(), t.clone()))
+                .collect(),
+            defaults: (0..user_params.len()).map(|_| None).collect(),
+            return_type: PhpType::Void,
+            declared_return: true,
+            ref_params: (0..user_params.len()).map(|_| false).collect(),
+            declared_params: (0..user_params.len()).map(|_| true).collect(),
+            variadic: None,
+            deprecation: None,
+        }
+    }
+
+    /// `new P(42)` where `P::__construct(int $v){ $this->x = $v; }` -> echo `$o->x` = "42".
+    /// Verifies the full P6c path: `Op::ObjectNew` carries the ctor user arg, the backend
+    /// resolves `__construct`, prepends the fresh object as `$this`, calls `P::__construct`
+    /// with `[this, 42]`, and the ctor body's `PropSet` writes the arg into property `x`.
+    #[test]
+    fn object_ctor_one_arg_sets_prop_then_echo() {
+        let class = "P";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let prop_data = module.data.intern_string("x");
+        // Class P: one int property x (no default) + a declared __construct(int $v).
+        let mut ci = test_class_info(1, vec![("x".to_string(), PhpType::Int)], vec![None], false);
+        let ctor_key = crate::names::php_symbol_key("__construct");
+        ci.methods.insert(ctor_key.clone(), ctor_sig(&[("v", PhpType::Int)]));
+        ci.method_impl_classes.insert(ctor_key, class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+
+        // P::__construct(this, int $v): $this->x = $v. Params are [this, v]; slots map
+        // 0->this (param 0), 1->v (param 1) in lower_function's param<->local mapping.
+        let mut ctor = Function::new(format!("{}::__construct", class), IrType::Void, PhpType::Void);
+        ctor.flags.is_method = true;
+        ctor.params.push(FunctionParam {
+            name: "this".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Object),
+            php_type: PhpType::Object(class.to_string()),
+            by_ref: false,
+            variadic: false,
+        });
+        ctor.params.push(FunctionParam {
+            name: "v".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        let this_slot = ctor.add_local(
+            Some("this".to_string()),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class.to_string()),
+            LocalKind::PhpLocal,
+        );
+        let v_slot = ctor.add_local(
+            Some("v".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut ctor);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            // Materialize $this and $v as ValueIds before the PropSet.
+            let this = b.emit_load_local(
+                this_slot,
+                IrType::Heap(IrHeapKind::Object),
+                PhpType::Object(class.to_string()),
+            );
+            let v = b.emit_load_local(v_slot, IrType::I64, PhpType::Int);
+            emit_prop_set(&mut b, this, prop_data, v);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.class_methods.push(ctor);
+
+        // main: $o = new P(42); echo $o->x;
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arg = b.emit_const_i64(42);
+            let obj = emit_object_new_with_args(&mut b, class, class_data, vec![arg]);
+            let x = emit_prop_get(&mut b, obj, prop_data, IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![x],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "42");
+        }
+    }
+
+    /// `new P()` where `P::__construct(){ $this->x = 7; }` (property default 0) -> echo = "7".
+    /// Verifies a 0-arg ctor is STILL called (operands empty but ctor present): `$this` is
+    /// passed alone, so the ctor body overwrites the default-0 property with 7. Proves the
+    /// "ctor present -> call regardless of operand count" gate path.
+    #[test]
+    fn object_ctor_zero_arg_sets_default_prop_then_echo() {
+        let class = "P";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let prop_data = module.data.intern_string("x");
+        // Property x with a scalar default 0 (written before the ctor), then ctor sets 7.
+        let default_zero = Expr { kind: ExprKind::IntLiteral(0), span: Span::dummy() };
+        let mut ci = test_class_info(
+            1,
+            vec![("x".to_string(), PhpType::Int)],
+            vec![Some(default_zero)],
+            false,
+        );
+        let ctor_key = crate::names::php_symbol_key("__construct");
+        ci.methods.insert(ctor_key.clone(), ctor_sig(&[]));
+        ci.method_impl_classes.insert(ctor_key, class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+
+        // P::__construct(this): $this->x = 7. One param (this), one slot.
+        let mut ctor = Function::new(format!("{}::__construct", class), IrType::Void, PhpType::Void);
+        ctor.flags.is_method = true;
+        ctor.params.push(FunctionParam {
+            name: "this".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Object),
+            php_type: PhpType::Object(class.to_string()),
+            by_ref: false,
+            variadic: false,
+        });
+        let this_slot = ctor.add_local(
+            Some("this".to_string()),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class.to_string()),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut ctor);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let this = b.emit_load_local(
+                this_slot,
+                IrType::Heap(IrHeapKind::Object),
+                PhpType::Object(class.to_string()),
+            );
+            let seven = b.emit_const_i64(7);
+            emit_prop_set(&mut b, this, prop_data, seven);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.class_methods.push(ctor);
+
+        // main: $o = new P(); echo $o->x; (ObjectNew with no operands -> 0-arg ctor call)
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let x = emit_prop_get(&mut b, obj, prop_data, IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![x],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "7");
+        }
+    }
+
+    /// `new P(1)` on a class with NO `__construct` must fail lowering (gate: no ctor +
+    /// operands -> Unsupported). Confirms the backend rejects args-without-ctor instead of
+    /// silently dropping them, mirroring the native `lower_new_object` gate.
+    #[test]
+    fn object_no_ctor_args_rejected() {
+        let class = "P";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let prop_data = module.data.intern_string("x");
+        module.class_infos.insert(
+            class.to_string(),
+            test_class_info(1, vec![("x".to_string(), PhpType::Int)], vec![None], false),
+        );
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arg = b.emit_const_i64(1);
+            // ObjectNew with 1 arg but no __construct -> generate() must return Err.
+            let _ = emit_object_new_with_args(&mut b, class, class_data, vec![arg]);
+            // An echo so the block is reachable and well-formed even though we expect a
+            // lowering error before this point.
+            let x = emit_prop_get(&mut b, arg, prop_data, IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![x],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        let err = generate(&module, Emit::Executable).expect_err("lowering should reject ctor args without __construct");
+        assert!(
+            err.to_string().contains("no __construct"),
+            "unexpected error message: {err}"
+        );
     }
 }
