@@ -79,14 +79,14 @@ pub trait RuntimeValueOps {
         value: RuntimeCellHandle,
     ) -> Result<(), EvalStatus>;
 
-    /// Reads a public generated/AOT static property through the generated bridge.
+    /// Reads a generated/AOT static property through the generated bridge.
     fn static_property_get(
         &mut self,
         class_name: &str,
         property: &str,
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus>;
 
-    /// Writes a public generated/AOT static property through the generated bridge.
+    /// Writes a generated/AOT static property through the generated bridge.
     fn static_property_set(
         &mut self,
         class_name: &str,

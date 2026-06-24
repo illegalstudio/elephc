@@ -4571,6 +4571,51 @@ echo eval('$out = (EvalNullableIntStaticPropBox::$count === null) ? "N" : "n";
     assert_eq!(out, "N:I9:I33:N");
 }
 
+/// Verifies eval fragments inherit native class scope for private AOT static properties.
+#[test]
+fn test_eval_fragment_can_mutate_private_aot_static_property_from_declaring_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalPrivateStaticPropBox {
+    private static int $x = 1;
+
+    public function run(): void {
+        echo eval('self::$x = self::$x + 4; return self::$x;');
+    }
+}
+
+$box = new EvalPrivateStaticPropBox();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval fragments reject private AOT static properties outside the declaring scope.
+#[test]
+fn test_eval_fragment_rejects_private_aot_static_property_outside_declaring_scope() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalPrivateStaticPropBase {
+    private static int $x = 1;
+}
+
+class EvalPrivateStaticPropChild extends EvalPrivateStaticPropBase {
+    public function run(): void {
+        echo eval('return EvalPrivateStaticPropBase::$x;');
+    }
+}
+
+$box = new EvalPrivateStaticPropChild();
+$box->run();
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "unexpected stderr: {err}"
+    );
+}
+
 /// Verifies eval fragments can replace public array AOT static properties.
 #[test]
 fn test_eval_fragment_can_mutate_aot_array_static_property() {

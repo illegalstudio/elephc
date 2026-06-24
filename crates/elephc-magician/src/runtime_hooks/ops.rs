@@ -131,18 +131,21 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         }
     }
 
-    /// Reads a public AOT static property through the generated user helper.
+    /// Reads an AOT static property through the generated user helper.
     fn static_property_get(
         &mut self,
         class_name: &str,
         property: &str,
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let ptr = unsafe {
             __elephc_eval_value_static_property_get(
                 class_name.as_ptr(),
                 class_name.len() as u64,
                 property.as_ptr(),
                 property.len() as u64,
+                scope_ptr,
+                scope_len,
             )
         };
         if ptr.is_null() {
@@ -152,13 +155,14 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         }
     }
 
-    /// Writes a public AOT static property through the generated user helper.
+    /// Writes an AOT static property through the generated user helper.
     fn static_property_set(
         &mut self,
         class_name: &str,
         property: &str,
         value: RuntimeCellHandle,
     ) -> Result<bool, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let ok = unsafe {
             __elephc_eval_value_static_property_set(
                 class_name.as_ptr(),
@@ -166,6 +170,8 @@ impl RuntimeValueOps for ElephcRuntimeOps {
                 property.as_ptr(),
                 property.len() as u64,
                 value.as_ptr(),
+                scope_ptr,
+                scope_len,
             )
         };
         Ok(ok != 0)

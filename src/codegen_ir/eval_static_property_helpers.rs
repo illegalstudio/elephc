@@ -1,6 +1,6 @@
 //! Purpose:
-//! Emits user-assembly helpers that let libelephc-magician access public native
-//! static properties through symbol-backed storage.
+//! Emits user-assembly helpers that let libelephc-magician access native static
+//! properties through symbol-backed storage.
 //!
 //! Called from:
 //! - `crate::codegen_ir::finalize_user_asm()` when an EIR module uses eval.
@@ -8,6 +8,8 @@
 //! Key details:
 //! - The cacheable runtime object cannot know user static-property symbols, so
 //!   these C-ABI bridge symbols are emitted into the user assembly.
+//! - Supported slots include public static properties and private static
+//!   properties when the active eval class scope matches the declaring class.
 //! - Null helper returns mean "no bridge match"; boxed PHP null is returned as
 //!   a real Mixed cell pointer.
 
@@ -27,7 +29,9 @@ use crate::types::{ClassInfo, PhpType};
 #[derive(Clone)]
 struct EvalStaticPropertySlot {
     class_name: String,
+    declaring_class: String,
     property: String,
+    visibility: Visibility,
     symbol: String,
     ty: PhpType,
     is_declared: bool,
@@ -75,7 +79,7 @@ fn function_uses_eval(function: &Function) -> bool {
     })
 }
 
-/// Collects public static properties with storage layouts the bridge can access.
+/// Collects static properties with storage layouts and visibility rules the bridge can access.
 fn collect_eval_static_property_slots(module: &Module) -> Vec<EvalStaticPropertySlot> {
     let mut slots = Vec::new();
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
@@ -86,7 +90,7 @@ fn collect_eval_static_property_slots(module: &Module) -> Vec<EvalStaticProperty
     slots
 }
 
-/// Adds bridge-supported public static properties visible from one class.
+/// Adds bridge-supported static properties visible from one class.
 fn collect_class_static_property_slots(
     module: &Module,
     class_name: &str,
@@ -96,7 +100,10 @@ fn collect_class_static_property_slots(
     let mut properties = class_info.static_properties.iter().collect::<Vec<_>>();
     properties.sort_by(|(left, _), (right, _)| left.cmp(right));
     for (property, ty) in properties {
-        if !static_property_is_public(class_info, property) || !static_property_type_supported(ty) {
+        let visibility = static_property_visibility(class_info, property);
+        if !static_property_visibility_supported(visibility)
+            || !static_property_type_supported(ty)
+        {
             continue;
         }
         let declaring_class = class_info
@@ -109,7 +116,9 @@ fn collect_class_static_property_slots(
         };
         slots.push(EvalStaticPropertySlot {
             class_name: class_name.to_string(),
+            declaring_class: declaring_class.to_string(),
             property: property.clone(),
+            visibility: visibility.clone(),
             symbol: static_property_symbol(declaring_class, property),
             ty: ty.codegen_repr(),
             is_declared: declaring_info.declared_static_properties.contains(property),
@@ -117,12 +126,17 @@ fn collect_class_static_property_slots(
     }
 }
 
-/// Returns true when a static property is publicly visible to eval.
-fn static_property_is_public(class_info: &ClassInfo, property: &str) -> bool {
+/// Returns the declared static-property visibility, defaulting to public metadata.
+fn static_property_visibility<'a>(class_info: &'a ClassInfo, property: &str) -> &'a Visibility {
     class_info
         .static_property_visibilities
         .get(property)
-        .is_none_or(|visibility| matches!(visibility, Visibility::Public))
+        .unwrap_or(&Visibility::Public)
+}
+
+/// Returns true when the eval static-property bridge can enforce this visibility.
+fn static_property_visibility_supported(visibility: &Visibility) -> bool {
+    matches!(visibility, Visibility::Public | Visibility::Private)
 }
 
 /// Returns true for static-property storage shapes the bridge can box and update.
@@ -142,7 +156,7 @@ fn static_property_type_supported(ty: &PhpType) -> bool {
     )
 }
 
-/// Emits `__elephc_eval_value_static_property_get(class, name) -> Mixed*`.
+/// Emits `__elephc_eval_value_static_property_get(class, name, scope, scope_len) -> Mixed*`.
 fn emit_static_property_get_helper(
     module: &Module,
     emitter: &mut Emitter,
@@ -158,7 +172,7 @@ fn emit_static_property_get_helper(
     }
 }
 
-/// Emits `__elephc_eval_value_static_property_set(class, name, Mixed*) -> bool`.
+/// Emits `__elephc_eval_value_static_property_set(class, name, Mixed*, scope, scope_len) -> bool`.
 fn emit_static_property_set_helper(
     module: &Module,
     emitter: &mut Emitter,
@@ -182,13 +196,15 @@ fn emit_static_property_get_aarch64(
     slots: &[EvalStaticPropertySlot],
 ) {
     let done_label = "__elephc_eval_value_static_property_get_done";
-    emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for class/property slices and fp/lr
+    emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for class/property/scope slices and fp/lr
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the requested class-name length
     emitter.instruction("str x2, [sp, #16]");                                   // save the requested property-name pointer
     emitter.instruction("str x3, [sp, #24]");                                   // save the requested property-name length
+    emitter.instruction("str x4, [sp, #32]");                                   // save the active eval class-scope pointer
+    emitter.instruction("str x5, [sp, #40]");                                   // save the active eval class-scope length
     emit_aarch64_static_property_dispatch(module, emitter, data, slots, "get");
     emitter.instruction("mov x0, xzr");                                         // report bridge miss with a null pointer
     emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after a miss
@@ -209,11 +225,13 @@ fn emit_static_property_get_x86_64(
     let done_label = "__elephc_eval_value_static_property_get_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for class and property slices
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for class, property, and scope slices
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested property-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the requested property-name length
+    emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the active eval class-scope pointer
+    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the active eval class-scope length
     emit_x86_64_static_property_dispatch(module, emitter, data, slots, "get");
     emitter.instruction("xor eax, eax");                                        // report bridge miss with a null pointer
     emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after a miss
@@ -233,7 +251,7 @@ fn emit_static_property_set_aarch64(
 ) {
     let fail_label = "__elephc_eval_value_static_property_set_fail";
     let done_label = "__elephc_eval_value_static_property_set_done";
-    emitter.instruction("sub sp, sp, #80");                                     // reserve helper frame for class/property, value, and fp/lr
+    emitter.instruction("sub sp, sp, #80");                                     // reserve helper frame for class/property, value, scope, and fp/lr
     emitter.instruction("stp x29, x30, [sp, #64]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #64");                                    // establish a stable helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
@@ -241,8 +259,10 @@ fn emit_static_property_set_aarch64(
     emitter.instruction("str x2, [sp, #16]");                                   // save the requested property-name pointer
     emitter.instruction("str x3, [sp, #24]");                                   // save the requested property-name length
     emitter.instruction("str x4, [sp, #32]");                                   // save the boxed value being assigned
+    emitter.instruction("str x5, [sp, #40]");                                   // save the active eval class-scope pointer
+    emitter.instruction("str x6, [sp, #48]");                                   // save the active eval class-scope length
     emit_aarch64_static_property_dispatch(module, emitter, data, slots, "set");
-    emitter.instruction(&format!("b {}", fail_label));                          // no supported public static property matched the request
+    emitter.instruction(&format!("b {}", fail_label));                          // no supported static property matched the request
     emit_aarch64_set_slot_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("mov x0, #0");                                          // report a failed eval static-property write to Rust
@@ -264,14 +284,17 @@ fn emit_static_property_set_x86_64(
     let done_label = "__elephc_eval_value_static_property_set_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for class, property, and value
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned slots for class, property, value, and scope
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested property-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the requested property-name length
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the boxed value being assigned
+    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the active eval class-scope pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp + 16]");                       // load the active eval class-scope length stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the active eval class-scope length
     emit_x86_64_static_property_dispatch(module, emitter, data, slots, "set");
-    emitter.instruction(&format!("jmp {}", fail_label));                        // no supported public static property matched the request
+    emitter.instruction(&format!("jmp {}", fail_label));                        // no supported static property matched the request
     emit_x86_64_set_slot_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // report a failed eval static-property write to Rust
@@ -374,7 +397,14 @@ fn emit_aarch64_static_property_name_compare(
     abi::emit_load_int_immediate(emitter, "x4", len as i64);
     emitter.instruction("bl __rt_str_eq");                                      // compare property names with PHP case-sensitive rules
     let target_label = slot_body_label(module, slot, mode);
-    emitter.instruction(&format!("cbnz x0, {}", target_label));                 // dispatch to the static property body when names match
+    if matches!(slot.visibility, Visibility::Public) {
+        emitter.instruction(&format!("cbnz x0, {}", target_label));             // dispatch to the static property body when names match
+        return;
+    }
+    let miss_label = slot_access_miss_label(module, slot, mode);
+    emitter.instruction(&format!("cbz x0, {}", miss_label));                    // continue static-property dispatch when names differ
+    emit_aarch64_private_static_property_scope_check(emitter, data, slot, mode, &target_label);
+    emitter.label(&miss_label);
 }
 
 /// Emits one x86_64 property-name comparison and branch to the matching body.
@@ -393,7 +423,74 @@ fn emit_x86_64_static_property_name_compare(
     emitter.instruction("call __rt_str_eq");                                    // compare property names with PHP case-sensitive rules
     emitter.instruction("test rax, rax");                                       // check whether the property names matched
     let target_label = slot_body_label(module, slot, mode);
-    emitter.instruction(&format!("jne {}", target_label));                      // dispatch to the static property body when names match
+    if matches!(slot.visibility, Visibility::Public) {
+        emitter.instruction(&format!("jne {}", target_label));                  // dispatch to the static property body when names match
+        return;
+    }
+    let miss_label = slot_access_miss_label(module, slot, mode);
+    emitter.instruction(&format!("je {}", miss_label));                         // continue static-property dispatch when names differ
+    emit_x86_64_private_static_property_scope_check(emitter, data, slot, mode, &target_label);
+    emitter.label(&miss_label);
+}
+
+/// Emits an ARM64 exact-class check for a private static-property bridge hit.
+fn emit_aarch64_private_static_property_scope_check(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalStaticPropertySlot,
+    mode: &str,
+    target_label: &str,
+) {
+    let (scope_ptr_offset, scope_len_offset) = aarch64_scope_offsets(mode);
+    let (label, len) = data.add_string(slot.declaring_class.as_bytes());
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));       // reload the active eval class-scope pointer
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));       // reload the active eval class-scope length
+    emitter.instruction("cbz x1, 1f");                                          // skip private dispatch outside a class scope
+    abi::emit_symbol_address(emitter, "x3", &label);
+    abi::emit_load_int_immediate(emitter, "x4", len as i64);
+    emitter.instruction("bl __rt_strcasecmp");                                  // compare current eval class scope with the declaring class
+    emitter.instruction(&format!("cbz x0, {}", target_label));                  // dispatch when private visibility is satisfied
+    emitter.label("1");
+}
+
+/// Emits an x86_64 exact-class check for a private static-property bridge hit.
+fn emit_x86_64_private_static_property_scope_check(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalStaticPropertySlot,
+    mode: &str,
+    target_label: &str,
+) {
+    let (scope_ptr_offset, scope_len_offset) = x86_64_scope_offsets(mode);
+    let (label, len) = data.add_string(slot.declaring_class.as_bytes());
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)); // reload the active eval class-scope pointer
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)); // reload the active eval class-scope length
+    emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
+    emitter.instruction("jz 1f");                                               // skip private dispatch outside a class scope
+    abi::emit_symbol_address(emitter, "rdx", &label);
+    abi::emit_load_int_immediate(emitter, "rcx", len as i64);
+    emitter.instruction("call __rt_strcasecmp");                                // compare current eval class scope with the declaring class
+    emitter.instruction("test rax, rax");                                       // check whether the scope matched the declaring class
+    emitter.instruction(&format!("je {}", target_label));                       // dispatch when private visibility is satisfied
+    emitter.label("1");
+}
+
+/// Returns ARM64 stack offsets for the class-scope pointer and length.
+fn aarch64_scope_offsets(mode: &str) -> (usize, usize) {
+    match mode {
+        "get" => (32, 40),
+        "set" => (40, 48),
+        _ => unreachable!("eval static property helpers only use get/set modes"),
+    }
+}
+
+/// Returns x86_64 frame offsets for the class-scope pointer and length.
+fn x86_64_scope_offsets(mode: &str) -> (usize, usize) {
+    match mode {
+        "get" => (40, 48),
+        "set" => (48, 56),
+        _ => unreachable!("eval static property helpers only use get/set modes"),
+    }
 }
 
 /// Emits ARM64 get bodies for every bridge-supported static property slot.
@@ -889,6 +986,15 @@ fn slot_body_label(module: &Module, slot: &EvalStaticPropertySlot, mode: &str) -
         Arch::X86_64 => "_x",
     };
     format!("{}{}", slot_body_label_raw(slot, mode), suffix)
+}
+
+/// Returns a platform-safe label for continuing after a private static-property name miss.
+fn slot_access_miss_label(
+    module: &Module,
+    slot: &EvalStaticPropertySlot,
+    mode: &str,
+) -> String {
+    format!("{}_access_miss", slot_body_label(module, slot, mode))
 }
 
 /// Returns the architecture-independent body label stem for a static property slot.
