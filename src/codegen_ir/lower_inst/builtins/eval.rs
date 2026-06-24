@@ -987,6 +987,7 @@ fn eval_native_method_param_supported(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
+            | PhpType::TaggedScalar
             | PhpType::Mixed
             | PhpType::Iterable
             | PhpType::Array(_)
@@ -1003,6 +1004,7 @@ fn eval_native_constructor_param_supported(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
+            | PhpType::TaggedScalar
             | PhpType::Mixed
             | PhpType::Iterable
             | PhpType::Array(_)
