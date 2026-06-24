@@ -126,6 +126,10 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // Object refcount runtime: `__rt_decref_object`, called from `__rt_decref_any`
     // kind-4. P6b performs the full gc_desc-driven property walk + `__rt_heap_free`.
     objects::emit_object_runtime(&mut wm);
+    // P6e destructor dispatch: `__rt_call_object_destructor`, called from the free path
+    // above to run `__destruct` before the property walk. One if-ladder arm per class
+    // whose hierarchy declares `__destruct` (resolved via `method_impl_classes`).
+    objects::emit_destructor_dispatch(&mut wm, &module.class_infos)?;
     arrays::emit_array_runtime(&mut wm);
     mixed::emit_mixed_runtime(&mut wm);
     hashes::emit_hash_runtime(&mut wm);
@@ -3452,6 +3456,25 @@ mod tests {
         .expect("PropGet lowers")
     }
 
+    /// Emits `echo $s` for an interned string literal: persists the literal to an owned
+    /// heap copy (`Op::Acquire` -> `__rt_str_persist`) then `Op::EchoValue`s it. The
+    /// owned copy is transient (not released here); for short dtor-marker strings the
+    /// one-block leak is acceptable in a test harness.
+    fn echo_str(b: &mut Builder, str_data: DataId) {
+        let lit = b.emit_const_str(str_data);
+        let owned = b
+            .emit(Op::Acquire, vec![lit], None, IrType::Str, PhpType::Str, Ownership::Owned)
+            .unwrap();
+        let _ = b.emit(
+            Op::EchoValue,
+            vec![owned],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+    }
+
     /// `new P{int x; int y}; x=3; y=4; return x+y` -> "7". Verifies alloc + scalar
     /// PropSet/PropGet round-trip for two int properties at offsets 8 and 24.
     #[test]
@@ -4537,5 +4560,400 @@ mod tests {
             err.to_string().contains("mixed"),
             "unexpected error message: {err}"
         );
+    }
+
+    // ----- P6e: destructors __destruct + _class_destruct_ptrs -----
+
+    /// Registers a class with a `__destruct` (impl = `class` itself) and pushes the
+    /// matching `__destruct` instance method into `module.class_methods`. Mirrors what
+    /// the checker populates (`methods` + `method_impl_classes`) for a self-declared
+    /// destructor. Returns the lowered `__destruct` function name for reference.
+    fn register_dtor_class(module: &mut Module, class: &str, class_id: u64, dtor_str: &str) {
+        let dtor_data = module.data.intern_string(dtor_str);
+        let destruct_key = crate::names::php_symbol_key("__destruct");
+        let mut ci = test_class_info(class_id, vec![], vec![], false);
+        ci.methods
+            .insert(destruct_key.clone(), method_sig(&[], PhpType::Void));
+        ci.method_impl_classes
+            .insert(destruct_key, class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+        module.class_methods.push(instance_method_fn(
+            class,
+            "__destruct",
+            IrType::Void,
+            PhpType::Void,
+            move |b, _this| {
+                echo_str(b, dtor_data);
+                None
+            },
+        ));
+    }
+
+    /// `new P6eA()` released at scope end runs `__destruct`, which echoes `"dtor"`.
+    /// Verifies the P6e free path: `Op::Release` -> `__rt_decref_any` kind-4 ->
+    /// `__rt_decref_object` -> mark-0 -> `__rt_call_object_destructor` -> the `P6eA` arm
+    /// calls `fn_P6eA____destruct` -> echoes the marker.
+    #[test]
+    fn destructor_runs_on_last_release() {
+        let mut module = Module::new(Target::wasm());
+        let class = "P6eA";
+        let before_data = module.data.intern_string("before");
+        register_dtor_class(&mut module, class, 1, "dtor");
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            echo_str(&mut b, before_data);
+            let class_data = module.data.intern_class_name(class);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let _ = b.emit(
+                Op::Release,
+                vec![obj],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "beforedtor");
+        }
+    }
+
+    /// `__destruct` reads `$this->x` (set to 42 by the ctor) and echoes it -> "42".
+    /// Verifies ordering: the destructor runs BEFORE the gc_desc property walk, so the
+    /// property is still intact and readable in the body.
+    #[test]
+    fn destructor_reads_prop_before_walk() {
+        let class = "P6eB";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let prop_data = module.data.intern_string("x");
+        // One int property x (no default) + a declared __construct(int $v) + __destruct.
+        let mut ci = test_class_info(1, vec![("x".to_string(), PhpType::Int)], vec![None], false);
+        let ctor_key = crate::names::php_symbol_key("__construct");
+        ci.methods.insert(ctor_key.clone(), ctor_sig(&[("v", PhpType::Int)]));
+        ci.method_impl_classes.insert(ctor_key, class.to_string());
+        let destruct_key = crate::names::php_symbol_key("__destruct");
+        ci.methods.insert(destruct_key.clone(), method_sig(&[], PhpType::Void));
+        ci.method_impl_classes.insert(destruct_key, class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+
+        // P6eB::__construct(this, int $v): $this->x = $v.
+        let mut ctor = Function::new(format!("{}::__construct", class), IrType::Void, PhpType::Void);
+        ctor.flags.is_method = true;
+        ctor.params.push(FunctionParam {
+            name: "this".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Object),
+            php_type: PhpType::Object(class.to_string()),
+            by_ref: false,
+            variadic: false,
+        });
+        ctor.params.push(FunctionParam {
+            name: "v".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        let this_slot = ctor.add_local(
+            Some("this".to_string()),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class.to_string()),
+            LocalKind::PhpLocal,
+        );
+        let v_slot = ctor.add_local(Some("v".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut ctor);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let this = b.emit_load_local(
+                this_slot,
+                IrType::Heap(IrHeapKind::Object),
+                PhpType::Object(class.to_string()),
+            );
+            let v = b.emit_load_local(v_slot, IrType::I64, PhpType::Int);
+            emit_prop_set(&mut b, this, prop_data, v);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.class_methods.push(ctor);
+
+        // P6eB::__destruct(this): echo $this->x (PropGet int -> echo i64).
+        module.class_methods.push(instance_method_fn(
+            class,
+            "__destruct",
+            IrType::Void,
+            PhpType::Void,
+            |b, this| {
+                let x = emit_prop_get(b, this, prop_data, IrType::I64, PhpType::Int);
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![x],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+                None
+            },
+        ));
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arg = b.emit_const_i64(42);
+            let obj = emit_object_new_with_args(&mut b, class, class_data, vec![arg]);
+            let _ = b.emit(
+                Op::Release,
+                vec![obj],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "42");
+        }
+    }
+
+    /// `P6eDer extends P6eBase` (no own `__destruct`); releasing a `P6eDer` instance runs
+    /// the inherited `P6eBase::__destruct`. Verifies arm resolution via `method_impl_classes`:
+    /// the `P6eDer` arm points at `fn_P6eBase____destruct` (the ancestor's symbol).
+    #[test]
+    fn destructor_inherited_runs_ancestor() {
+        let base = "P6eBase";
+        let der = "P6eDer";
+        let mut module = Module::new(Target::wasm());
+        let base_dtor_data = module.data.intern_string("base_dtor");
+        let destruct_key = crate::names::php_symbol_key("__destruct");
+
+        // Base (id 1): declares __destruct (impl = self).
+        let mut base_ci = test_class_info(1, vec![], vec![], false);
+        base_ci.methods.insert(destruct_key.clone(), method_sig(&[], PhpType::Void));
+        base_ci.method_impl_classes.insert(destruct_key.clone(), base.to_string());
+        module.class_infos.insert(base.to_string(), base_ci);
+
+        // Der (id 2): inherits __destruct (impl = Base, no own method entry).
+        let mut der_ci = test_class_info(2, vec![], vec![], false);
+        der_ci.parent = Some(base.to_string());
+        der_ci.method_impl_classes.insert(destruct_key, base.to_string());
+        module.class_infos.insert(der.to_string(), der_ci);
+
+        module.class_methods.push(instance_method_fn(
+            base,
+            "__destruct",
+            IrType::Void,
+            PhpType::Void,
+            move |b, _this| {
+                echo_str(b, base_dtor_data);
+                None
+            },
+        ));
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let der_data = module.data.intern_class_name(der);
+            let obj = emit_object_new(&mut b, der, der_data);
+            let _ = b.emit(
+                Op::Release,
+                vec![obj],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "base_dtor");
+        }
+    }
+
+    /// `P6eC::__destruct` does `$this->self = $this` (a property of type `Object(P6eC)`,
+    /// gc_desc tag 6 so the walk decrefs it). The PropSet increfs `$this`; without the
+    /// bit-31 reentrancy guard the subsequent walk decref would take rc 1->0, re-enter the
+    /// free path, and re-run the destructor (infinite recursion -> stack trap). With bit-31
+    /// the refcount stays in `0x8000_0000+`, the walk decref lands on the keep path, and
+    /// the destructor runs exactly once. Load-bearing for the bit-31 guard.
+    #[test]
+    fn destructor_self_ref_in_body_no_recurse() {
+        let class = "P6eC";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let self_prop_data = module.data.intern_string("self");
+        let dtor_data = module.data.intern_string("dtor");
+        let destruct_key = crate::names::php_symbol_key("__destruct");
+        // One property `self` of type Object(P6eC) (gc_desc tag 6, walked + decref'd).
+        let mut ci = test_class_info(
+            1,
+            vec![("self".to_string(), PhpType::Object(class.to_string()))],
+            vec![None],
+            false,
+        );
+        ci.methods.insert(destruct_key.clone(), method_sig(&[], PhpType::Void));
+        ci.method_impl_classes.insert(destruct_key, class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+
+        module.class_methods.push(instance_method_fn(
+            class,
+            "__destruct",
+            IrType::Void,
+            PhpType::Void,
+            move |b, this| {
+                // $this->self = $this: PropSet retains the incoming $this (incref).
+                emit_prop_set(b, this, self_prop_data, this);
+                echo_str(b, dtor_data);
+                None
+            },
+        ));
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let _ = b.emit(
+                Op::Release,
+                vec![obj],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "dtor");
+        }
+    }
+
+    /// `P6eQ` has no `__destruct`; releasing an instance falls through the dispatch
+    /// ladder (no arm), leaves the refcount untouched, walks the (scalar) properties,
+    /// and frees cleanly. Verifies the no-destructor fall-through + that rc is not
+    /// poisoned and no spurious output is produced.
+    #[test]
+    fn no_destructor_released_cleanly() {
+        let class = "P6eQ";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let ok_data = module.data.intern_string("ok");
+        // One int property (gc_desc tag 0, skipped by the walk); no __destruct.
+        let ci = test_class_info(1, vec![("n".to_string(), PhpType::Int)], vec![None], false);
+        module.class_infos.insert(class.to_string(), ci);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            echo_str(&mut b, ok_data);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let _ = b.emit(
+                Op::Release,
+                vec![obj],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "ok");
+        }
+    }
+
+    /// `$o->__destruct()` (explicit MethodCall, P6d path) echoes `"x"`, then the scope-end
+    /// release runs `__destruct` again (echoes `"x"`) -> "xx". Verifies `__destruct` is an
+    /// ordinary dispatchable method (vtable slot, not special-cased) AND that an explicit
+    /// call does not suppress the GC destructor on release (PHP semantics).
+    #[test]
+    fn explicit_destruct_then_gc_both_run() {
+        let class = "P6eR";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let destruct_data = module.data.intern_string("__destruct");
+        let x_data = module.data.intern_string("x");
+        let destruct_key = crate::names::php_symbol_key("__destruct");
+        let mut ci = test_class_info(1, vec![], vec![], false);
+        ci.methods.insert(destruct_key.clone(), method_sig(&[], PhpType::Void));
+        ci.method_impl_classes.insert(destruct_key.clone(), class.to_string());
+        // __destruct is a non-private instance method: it gets a vtable slot so the
+        // explicit MethodCall dispatches through the P6d stub.
+        ci.vtable_slots.insert(destruct_key, 0);
+        module.class_infos.insert(class.to_string(), ci);
+
+        module.class_methods.push(instance_method_fn(
+            class,
+            "__destruct",
+            IrType::Void,
+            PhpType::Void,
+            move |b, _this| {
+                echo_str(b, x_data);
+                None
+            },
+        ));
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            // Explicit $o->__destruct() via the vtable dispatch stub. Built inline
+            // (not via `emit_method_call`) because `__destruct` returns void and
+            // `Builder::emit` legitimately returns `None` for a void result.
+            let _ = b.emit(
+                Op::MethodCall,
+                vec![obj],
+                Some(Immediate::Data(destruct_data)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            // Scope-end release: GC runs __destruct again.
+            let _ = b.emit(
+                Op::Release,
+                vec![obj],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "xx");
+        }
     }
 }

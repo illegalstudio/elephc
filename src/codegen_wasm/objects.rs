@@ -10,18 +10,21 @@
 //!
 //! Key details:
 //! - P6b scope: declared properties of scalar, string, container (array/hash/object), and
-//!   mixed/union/iterable type; no-ctor objects only. Dynamic properties, constructors,
-//!   method dispatch, and destructors are later sub-phases and return `WasmError::Unsupported`.
+//!   mixed/union/iterable type. Constructors (P6c), method dispatch (P6d), and destructors
+//!   (P6e) are now supported; dynamic properties remain a later sub-phase and return
+//!   `WasmError::Unsupported`.
 //! - Objects are heap blocks whose 16-byte header (`__rt_heap_alloc`) is stamped with
 //!   heap-kind 4 at `[ptr-8]`; the payload holds `class_id` at `+0` and one 16-byte
 //!   `(value_lo i64, value_hi i64)` slot per declared property (parent-first). The hi word is
 //!   the runtime value tag for refcounted slots (4/5/6/7) or the string length for Str, and 0
 //!   for scalars.
 //! - `__rt_decref_object` performs the full release: a refcount==0 re-entrancy guard, mark-zero,
-//!   then a gc_desc-driven property walk that releases each refcounted slot value (desc tag in
-//!   {1,4,5,6,7}) before freeing the block via `__rt_heap_free` (unsafe; refcount is already 0).
-//!   The property count is derived from the object's own size header (`n = (size-8) >> 4`), not
-//!   from a terminator, so a scalar-then-refcounted property ordering is handled correctly.
+//!   a call to `__rt_call_object_destructor` (runs `__destruct` with the properties still
+//!   intact, before the walk), then a gc_desc-driven property walk that releases each refcounted
+//!   slot value (desc tag in {1,4,5,6,7}) before freeing the block via `__rt_heap_free` (unsafe;
+//!   refcount is already 0). The property count is derived from the object's own size header
+//!   (`n = (size-8) >> 4`), not from a terminator, so a scalar-then-refcounted property ordering
+//!   is handled correctly.
 //!   The gc_desc table is emitted by `emit_gc_desc_table` (one tag byte per property, indexed by
 //!   `class_id`); `emit_gc_desc_stub` declares empty-table globals for unit-test harnesses that
 //!   register no classes (the `cid < count` check is then false for every cid and the walk is
@@ -208,14 +211,16 @@ fn gc_desc_tag(ty: &PhpType) -> u8 {
 /// `__rt_decref_object`: the full object release with a gc_desc-driven property walk.
 ///
 /// Mirrors `__rt_object_free_deep` from the native backend (minus the Fiber/Generator/SPL special
-/// cases and the destructor hook, which are later sub-phases). Guards null / below-first-payload
-/// / at-or-after-cursor like `__rt_decref_any`, then a refcount==0 re-entrancy guard. On reaching
-/// zero it marks the refcount 0 (so any nested release during the walk is a no-op), derives the
-/// property count `n = (size[ptr-16] - 8) >> 4` from the object's own size header, and — when
-/// `class_id < $__gc_desc_count` — walks `i in 0..n` releasing each slot whose desc tag is in
-/// {1,4,5,6,7} (str/array/hash/object/mixed) via the null-safe, kind-dispatched `__rt_decref_any`.
-/// Resource slots (tag 9) and scalars (tag 0/2/3) are deliberately skipped. Finally the block is
-/// freed with `__rt_heap_free` (unsafe, no refcount guard) since the refcount is already 0.
+/// cases). Guards null / below-first-payload / at-or-after-cursor like `__rt_decref_any`, then a
+/// refcount==0 re-entrancy guard. On reaching zero it marks the refcount 0 (so any nested release
+/// during the walk is a no-op), calls `__rt_call_object_destructor` to run `__destruct` (built by
+/// `emit_destructor_dispatch`, one if-ladder arm per class whose hierarchy declares it) while the
+/// properties are still intact, derives the property count `n = (size[ptr-16] - 8) >> 4` from the
+/// object's own size header, and — when `class_id < $__gc_desc_count` — walks `i in 0..n` releasing
+/// each slot whose desc tag is in {1,4,5,6,7} (str/array/hash/object/mixed) via the null-safe,
+/// kind-dispatched `__rt_decref_any`. Resource slots (tag 9) and scalars (tag 0/2/3) are deliberately
+/// skipped. Finally the block is freed with `__rt_heap_free` (unsafe, no refcount guard) since the
+/// refcount is already 0.
 const RT_DECREF_OBJECT: &str = r#"(func $__rt_decref_object (param $ptr i32)
   (local $rc i32) (local $n i32) (local $cid i32) (local $desc i32) (local $i i32) (local $tag i32) (local $slot i32)
   (if (i32.eqz (local.get $ptr)) (then (return)))                    ;; guard: null pointer
@@ -230,6 +235,7 @@ const RT_DECREF_OBJECT: &str = r#"(func $__rt_decref_object (param $ptr i32)
     (i32.store (i32.sub (local.get $ptr) (i32.const 12)) (local.get $rc))  ;; store decremented refcount
     (return)))                                                       ;; keep live and return
   (i32.store (i32.sub (local.get $ptr) (i32.const 12)) (i32.const 0))  ;; mark refcount 0 (re-entrancy guard)
+  (call $__rt_call_object_destructor (local.get $ptr))          ;; run __destruct (if any) before the property walk
   (local.set $cid (i32.wrap_i64 (i64.load (local.get $ptr))))    ;; class_id = [ptr+0] (i64 -> i32)
   (local.set $n (i32.shr_u (i32.sub (i32.load (i32.sub (local.get $ptr) (i32.const 16))) (i32.const 8)) (i32.const 4)))  ;; n = (size-8) >> 4
   (if (i32.lt_u (local.get $cid) (global.get $__gc_desc_count)) (then  ;; class_id within the descriptor table?
@@ -254,6 +260,118 @@ const RT_DECREF_OBJECT: &str = r#"(func $__rt_decref_object (param $ptr i32)
   (return)                                                    ;; top-level return
 )                                                              ;; close func
 "#;
+
+/// Emits `__rt_call_object_destructor`, the per-class `__destruct` dispatch for the
+/// wasm32-wasi backend.
+///
+/// WASM has no `call_reg`, so the closed AOT class set is branched at compile time: the
+/// routine is an if-ladder over the runtime `class_id` (read from `[obj+0]`), with one arm
+/// per class whose hierarchy declares `__destruct`. The impl class for each arm is
+/// resolved via `method_impl_classes.get("__destruct")` — exactly the lookup native
+/// `_class_destruct_ptrs` emission uses — so an inherited destructor points at the
+/// ancestor's lowered symbol and an override points at the overriding class (most-derived,
+/// matching PHP). A class with no `__destruct` in its hierarchy has the key absent and
+/// emits no arm, falling through with the refcount untouched (matching native's `fn==0`
+/// early return). Arms are sorted by `class_id` for deterministic emission; since each id
+/// is unique, order does not affect dispatch (at most one arm matches).
+///
+/// Reentrancy guard: bit 31 of the refcount (`0x8000_0000`) is the in-destructor flag. It
+/// is set INSIDE each matched arm (not in the preamble), so a class with no `__destruct`
+/// falls through without mutating its refcount — the 0-arm test stub is therefore a true
+/// no-op. The flag is required for a destructor body that creates a new strong reference to
+/// `$this` (e.g. `$this->self = $this`, or `$tmp = $this; unset($tmp)`): without it the new
+/// ref raises the refcount from 0 to 1, the post-destructor property walk decrefs it back
+/// to 0, re-enters the free path, and re-runs the destructor (infinite recursion / stack
+/// trap). With the flag the refcount stays in `0x8000_0000+` so the decref lands on the
+/// keep path and returns. The existing mark-zero + top `rc==0` guard in
+/// `__rt_decref_object` already handle a pre-existing self-cycle; bit 31 handles the
+/// new-ref-during-destructor case. `$rc` is captured once before the ladder and reused
+/// inside each arm (single-threaded; no intervening store), and `0x8000_0000` is emitted
+/// as the signed `i32.const -2147483648`.
+///
+/// Trade-off: the ladder is O(N) in code size and per-free dispatch time. For a typical
+/// PHP module the class count is small; for very large closed sets a `br_table` (dense ids)
+/// or a `funcref` table + `call_indirect` would shrink the routine, at the cost of a data
+/// segment and an indirection. Kept as a ladder here for parity with the P6d method
+/// dispatch stubs.
+///
+/// `generate()` calls this right after `emit_object_runtime`; unit-test harnesses that
+/// emit `emit_object_runtime` must emit `emit_destructor_dispatch_stub` (or this with an
+/// empty map) so the `(call $__rt_call_object_destructor ...)` in `RT_DECREF_OBJECT`
+/// resolves. Both the arm symbol and the lowered `__destruct` definition are produced by
+/// the same `wasm_fn_symbol` helper, so they match by construction.
+pub(super) fn emit_destructor_dispatch(
+    wm: &mut WatModule,
+    class_infos: &HashMap<String, ClassInfo>,
+) -> Result<()> {
+    let destruct_key = php_symbol_key("__destruct");
+    let mut arms: Vec<(u64, String)> = Vec::new();
+    for ci in class_infos.values() {
+        let Some(impl_class) = ci.method_impl_classes.get(&destruct_key) else {
+            continue;
+        };
+        // The checker guarantees the resolved impl class declares __destruct (self at
+        // classes/methods.rs:267-271, ancestor at classes/state.rs:359-360). Validate it
+        // anyway so a stale `method_impl_classes` entry surfaces a clean error instead of
+        // an undefined-symbol WAT validation failure.
+        let declares = class_infos
+            .get(impl_class)
+            .map(|c| c.methods.contains_key(&destruct_key))
+            .unwrap_or(false);
+        if !declares {
+            return Err(WasmError::Unsupported(format!(
+                "class {impl_class} resolved as __destruct impl does not declare it"
+            )));
+        }
+        arms.push((
+            ci.class_id,
+            wasm_fn_symbol(&format!("{}::__destruct", impl_class)),
+        ));
+    }
+    arms.sort_by_key(|(class_id, _)| *class_id);
+
+    let mut wat = String::new();
+    wat.push_str("(func $__rt_call_object_destructor (param $obj i32)\n");
+    wat.push_str("  (local $rc i32) (local $cid i64)\n");
+    wat.push_str("  ;; null receiver -> nothing to destruct\n");
+    wat.push_str("  (if (i32.eqz (local.get $obj)) (then (return)))\n");
+    wat.push_str("  ;; reentrancy guard: bit 31 set means already destructing this object\n");
+    wat.push_str("  (local.set $rc (i32.load (i32.sub (local.get $obj) (i32.const 12))))\n");
+    wat.push_str("  (if (i32.lt_s (local.get $rc) (i32.const 0)) (then (return)))\n");
+    wat.push_str("  ;; read the runtime class id from the object payload at +0\n");
+    wat.push_str("  (local.set $cid (i64.load (local.get $obj)))\n");
+    for (class_id, fn_symbol) in &arms {
+        wat.push_str(&format!(
+            "  ;; dispatch arm for class id {} -> {}::destructor\n",
+            *class_id, fn_symbol
+        ));
+        wat.push_str(&format!(
+            "  (if (i64.eq (local.get $cid) (i64.const {})) (then\n",
+            *class_id as i64
+        ));
+        wat.push_str("    ;; set the in-destructor flag (bit 31) before running the body\n");
+        wat.push_str("    (i32.store (i32.sub (local.get $obj) (i32.const 12)) (i32.or (local.get $rc) (i32.const -2147483648)))\n");
+        wat.push_str(&format!("    (call ${} (local.get $obj))\n", fn_symbol));
+        wat.push_str("    (return)))\n");
+    }
+    wat.push_str("  ;; no destructor for this class -> return without touching the refcount\n");
+    wat.push_str(")\n");
+    wm.add_raw_func(&wat);
+    Ok(())
+}
+
+/// Declares an empty `__rt_call_object_destructor` (no arms) for unit-test harnesses that
+/// register no classes with a destructor.
+///
+/// With zero arms the routine reads the refcount, returns on the bit-31 reentrancy guard,
+/// reads the class id, and falls through without mutating the refcount — a true no-op that
+/// lets `RT_DECREF_OBJECT`'s `(call $__rt_call_object_destructor ...)` resolve. Mirrors
+/// `emit_gc_desc_stub`: every harness emitting `emit_object_runtime` must emit this (or the
+/// real `emit_destructor_dispatch`) alongside `emit_gc_desc_stub`.
+#[cfg(test)]
+pub(super) fn emit_destructor_dispatch_stub(wm: &mut WatModule) {
+    let _ = emit_destructor_dispatch(wm, &HashMap::new());
+}
 
 /// Returns the PHP type attached to an SSA value, read from the function's value table.
 ///

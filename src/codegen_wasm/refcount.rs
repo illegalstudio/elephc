@@ -127,7 +127,7 @@ mod tests {
     use super::super::arrays::emit_array_runtime;
     use super::super::heap::emit_heap_runtime;
     use super::super::mixed::emit_mixed_runtime;
-    use super::super::objects::{emit_gc_desc_stub, emit_object_runtime};
+    use super::super::objects::{emit_destructor_dispatch_stub, emit_gc_desc_stub, emit_object_runtime};
     use super::super::wat::{DataSegment, Global, ValType, WatModule};
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -168,6 +168,9 @@ mod tests {
         // `__rt_decref_object` references the `$__gc_desc_*` globals; the stub declares
         // empty-table globals so the walk is skipped for harness blocks (no classes).
         emit_gc_desc_stub(&mut wm);
+        // `__rt_decref_object` also calls `__rt_call_object_destructor`; the 0-arm stub
+        // resolves the call as a no-op for harness blocks that hold no destructors.
+        emit_destructor_dispatch_stub(&mut wm);
         wm.add_raw_func(driver);
         let wat = wm.render();
         let bytes = ::wat::parse_str(&wat)
@@ -318,6 +321,9 @@ mod tests {
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
+        // `__rt_decref_object` calls `__rt_call_object_destructor`; this harness registers no
+        // class with a destructor, so the 0-arm stub resolves the call as a no-op.
+        emit_destructor_dispatch_stub(&mut wm);
         // Real gc_desc for class 0: one property of tag 1 (string). The desc byte and the
         // 4-aligned pointer table sit in the free [0, 64) region below CONCAT_BASE so they
         // never collide with the concat scratch (never written here) or the heap (>= 1024).

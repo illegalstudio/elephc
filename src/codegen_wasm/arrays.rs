@@ -449,7 +449,7 @@ mod tests {
     use super::emit_array_runtime;
     use super::super::heap::emit_heap_runtime;
     use super::super::mixed::emit_mixed_runtime;
-    use super::super::objects::{emit_gc_desc_stub, emit_object_runtime};
+    use super::super::objects::{emit_destructor_dispatch_stub, emit_gc_desc_stub, emit_object_runtime};
     use super::super::refcount::emit_refcount_runtime;
     use super::super::wat::WatModule;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -484,6 +484,7 @@ mod tests {
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
         emit_gc_desc_stub(&mut wm);
+        emit_destructor_dispatch_stub(&mut wm);
         wm.add_raw_func(driver);
         let wat = wm.render();
         let bytes = ::wat::parse_str(&wat)
