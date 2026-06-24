@@ -8214,6 +8214,69 @@ echo ":" . $listed->getNumberOfParameters() . "/" . $listed->getParameters()[2]-
     );
 }
 
+/// Verifies eval ReflectionMethod exposes generated/AOT by-ref and variadic parameter flags.
+#[test]
+fn test_eval_reflection_method_exposes_aot_parameter_flags() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectParamFlagsTarget {
+    public function mutate(int &$value, string ...$parts): string {
+        $value += count($parts);
+        return implode("", $parts);
+    }
+
+    public static function collect(string ...$items): string {
+        return implode(":", $items);
+    }
+}
+echo eval('$method = new ReflectionMethod("EvalAotReflectParamFlagsTarget", "mutate");
+$params = $method->getParameters();
+echo $method->getNumberOfParameters() . "/" . $method->getNumberOfRequiredParameters() . ":";
+foreach ($params as $param) {
+    echo $param->getName();
+    echo $param->isPassedByReference() ? "R" : "b";
+    echo $param->isVariadic() ? "V" : "v";
+    echo $param->isOptional() ? "O" : "r";
+    echo ";";
+}
+$static = new ReflectionMethod("EvalAotReflectParamFlagsTarget", "collect");
+$item = $static->getParameters()[0];
+echo ":" . $item->getName();
+echo $item->isPassedByReference() ? "R" : "b";
+echo $item->isVariadic() ? "V" : "v";
+echo $static->getNumberOfRequiredParameters();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "2/1:valueRvr;partsbVO;:itemsbV0");
+}
+
+/// Verifies metadata-only generated/AOT signatures remain non-dispatchable through eval.
+#[test]
+fn test_eval_aot_variadic_method_metadata_only_call_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalAotMetadataOnlyCallTarget {
+    public function collect(string ...$items): string {
+        return implode(":", $items);
+    }
+}
+eval('$target = new EvalAotMetadataOnlyCallTarget();
+echo (new ReflectionMethod("EvalAotMetadataOnlyCallTarget", "collect"))->getParameters()[0]->isVariadic() ? "V" : "v";
+$target->collect("A");');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval ReflectionMethod exposes generated/AOT declared type metadata.
 #[test]
 fn test_eval_reflection_method_exposes_aot_type_metadata() {

@@ -97,12 +97,14 @@ struct EvalNativeMethodRegistration {
     method_name: String,
     is_static: bool,
     signature: FunctionSig,
+    bridge_supported: bool,
 }
 
 /// A module-local constructor signature that can be registered with the eval context.
 struct EvalNativeConstructorRegistration {
     class_name: String,
     signature: FunctionSig,
+    bridge_supported: bool,
 }
 
 /// A module-local property type that can be registered with the eval context.
@@ -525,7 +527,7 @@ fn eval_native_function_registrations(
         .collect()
 }
 
-/// Collects public AOT methods whose parameter names can be exposed to eval binding.
+/// Collects AOT method signatures whose metadata can be exposed to eval.
 fn eval_native_method_registrations(
     ctx: &FunctionContext<'_>,
 ) -> Vec<EvalNativeMethodRegistration> {
@@ -539,7 +541,7 @@ fn eval_native_method_registrations(
     registrations
 }
 
-/// Collects public AOT constructors whose parameter names can be exposed to eval binding.
+/// Collects AOT constructors whose metadata can be exposed to eval.
 fn eval_native_constructor_registrations(
     ctx: &FunctionContext<'_>,
 ) -> Vec<EvalNativeConstructorRegistration> {
@@ -551,14 +553,12 @@ fn eval_native_constructor_registrations(
         let Some(signature) = class_info.methods.get(&method_key) else {
             continue;
         };
-        if !class_method_is_public(class_info, &method_key)
-            || !method_signature_can_register_with_eval(signature)
-        {
-            continue;
-        }
+        let bridge_supported = class_method_is_public(class_info, &method_key)
+            && constructor_signature_can_bridge_with_eval(signature);
         registrations.push(EvalNativeConstructorRegistration {
             class_name: class_name.clone(),
             signature: signature.clone(),
+            bridge_supported,
         });
     }
     registrations
@@ -895,7 +895,7 @@ fn eval_native_property_attribute_declaring_class<'a>(
         .unwrap_or(reflected_class)
 }
 
-/// Adds eligible public instance methods for one class to eval signature registration.
+/// Adds instance method metadata for one class to eval signature registration.
 fn collect_eval_native_instance_methods(
     class_name: &str,
     class_info: &ClassInfo,
@@ -904,22 +904,22 @@ fn collect_eval_native_instance_methods(
     let mut methods = class_info.methods.iter().collect::<Vec<_>>();
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method_name, signature) in methods {
-        if method_name == "__construct"
-            || !class_method_is_public(class_info, method_name)
-            || !method_signature_can_register_with_eval(signature)
-        {
+        if method_name == "__construct" {
             continue;
         }
+        let bridge_supported = class_method_is_public(class_info, method_name)
+            && method_signature_can_bridge_with_eval(signature);
         registrations.push(EvalNativeMethodRegistration {
             class_name: class_name.to_string(),
             method_name: method_name.clone(),
             is_static: false,
             signature: signature.clone(),
+            bridge_supported,
         });
     }
 }
 
-/// Adds eligible public static methods for one class to eval signature registration.
+/// Adds static method metadata for one class to eval signature registration.
 fn collect_eval_native_static_methods(
     class_name: &str,
     class_info: &ClassInfo,
@@ -928,16 +928,14 @@ fn collect_eval_native_static_methods(
     let mut methods = class_info.static_methods.iter().collect::<Vec<_>>();
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method_name, signature) in methods {
-        if !class_static_method_is_public(class_info, method_name)
-            || !method_signature_can_register_with_eval(signature)
-        {
-            continue;
-        }
+        let bridge_supported = class_static_method_is_public(class_info, method_name)
+            && method_signature_can_bridge_with_eval(signature);
         registrations.push(EvalNativeMethodRegistration {
             class_name: class_name.to_string(),
             method_name: method_name.clone(),
             is_static: true,
             signature: signature.clone(),
+            bridge_supported,
         });
     }
 }
@@ -952,11 +950,76 @@ fn function_can_register_with_eval(function: &Function) -> bool {
             .all(|param| !param.by_ref && !param.variadic)
 }
 
-/// Returns true when eval can bind native method arguments by fixed parameter names.
-fn method_signature_can_register_with_eval(signature: &FunctionSig) -> bool {
+/// Returns true when eval can dispatch a native method through the generated bridge.
+fn method_signature_can_bridge_with_eval(signature: &FunctionSig) -> bool {
     signature.params.len() <= MAX_EVAL_NATIVE_METHOD_PARAMS
         && signature.variadic.is_none()
         && signature.ref_params.iter().all(|is_ref| !*is_ref)
+        && signature
+            .params
+            .iter()
+            .all(|(_, ty)| eval_native_method_param_supported(ty))
+        && eval_native_method_return_supported(&signature.return_type)
+}
+
+/// Returns true when eval can dispatch a native constructor through the generated bridge.
+fn constructor_signature_can_bridge_with_eval(signature: &FunctionSig) -> bool {
+    signature.params.len() <= MAX_EVAL_NATIVE_METHOD_PARAMS
+        && signature.variadic.is_none()
+        && signature.ref_params.iter().all(|is_ref| !*is_ref)
+        && signature
+            .params
+            .iter()
+            .all(|(_, ty)| eval_native_constructor_param_supported(ty))
+}
+
+/// Returns true when one native method argument type fits the eval method bridge.
+fn eval_native_method_param_supported(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Mixed
+            | PhpType::Object(_)
+    )
+}
+
+/// Returns true when one native constructor argument type fits the eval bridge.
+fn eval_native_constructor_param_supported(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Mixed
+    )
+}
+
+/// Returns true when one native method return type can be boxed back for eval.
+fn eval_native_method_return_supported(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Void
+            | PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Object(_)
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+    )
+}
+
+/// Returns true when the indexed parameter is the signature's variadic slot.
+fn signature_param_is_variadic(signature: &FunctionSig, index: usize, param_name: &str) -> bool {
+    signature.variadic.as_deref().is_some_and(|variadic| {
+        variadic == param_name
+            || signature
+                .params
+                .get(index)
+                .is_some_and(|(name, _)| name == variadic)
+    })
 }
 
 /// Returns generated type specs for declared native callable parameters.
@@ -1233,6 +1296,14 @@ fn register_eval_native_method(
             .extern_symbol("__elephc_eval_register_native_method")
     };
     abi::emit_call_label(ctx.emitter, &symbol);
+    register_eval_native_method_bridge_support(
+        ctx,
+        context_offset,
+        &method_key_label,
+        method_key_len,
+        registration.is_static,
+        registration.bridge_supported,
+    );
     let param_type_specs = eval_native_callable_param_type_specs(&registration.signature);
     for (index, (param_name, _)) in registration.signature.params.iter().enumerate() {
         register_eval_native_method_param(
@@ -1243,6 +1314,21 @@ fn register_eval_native_method(
             registration.is_static,
             index,
             param_name,
+        );
+        register_eval_native_method_param_flags(
+            ctx,
+            context_offset,
+            &method_key_label,
+            method_key_len,
+            registration.is_static,
+            index,
+            registration
+                .signature
+                .ref_params
+                .get(index)
+                .copied()
+                .unwrap_or(false),
+            signature_param_is_variadic(&registration.signature, index, param_name),
         );
         if let Some(type_spec) = param_type_specs.get(index).and_then(Option::as_deref) {
             register_eval_native_method_param_type(
@@ -1280,6 +1366,43 @@ fn register_eval_native_method(
             &type_spec,
         );
     }
+}
+
+/// Emits one native method bridge-support registration call.
+fn register_eval_native_method_bridge_support(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    method_key_label: &str,
+    method_key_len: usize,
+    is_static: bool,
+    bridge_supported: bool,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        method_key_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        method_key_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        if bridge_supported { 1 } else { 0 },
+    );
+    let symbol = if is_static {
+        ctx.emitter
+            .target
+            .extern_symbol("__elephc_eval_register_native_static_method_bridge_support")
+    } else {
+        ctx.emitter
+            .target
+            .extern_symbol("__elephc_eval_register_native_method_bridge_support")
+    };
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native method parameter-name registration call.
@@ -1327,6 +1450,55 @@ fn register_eval_native_method_param(
         ctx.emitter
             .target
             .extern_symbol("__elephc_eval_register_native_method_param")
+    };
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native method parameter-flags registration call.
+fn register_eval_native_method_param_flags(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    method_key_label: &str,
+    method_key_len: usize,
+    is_static: bool,
+    param_index: usize,
+    is_by_ref: bool,
+    is_variadic: bool,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        method_key_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        method_key_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        param_index as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        if is_by_ref { 1 } else { 0 },
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        if is_variadic { 1 } else { 0 },
+    );
+    let symbol = if is_static {
+        ctx.emitter
+            .target
+            .extern_symbol("__elephc_eval_register_native_static_method_param_flags")
+    } else {
+        ctx.emitter
+            .target
+            .extern_symbol("__elephc_eval_register_native_method_param_flags")
     };
     abi::emit_call_label(ctx.emitter, &symbol);
 }
@@ -1526,6 +1698,13 @@ fn register_eval_native_constructor(
         .target
         .extern_symbol("__elephc_eval_register_native_constructor");
     abi::emit_call_label(ctx.emitter, &symbol);
+    register_eval_native_constructor_bridge_support(
+        ctx,
+        context_offset,
+        &class_name_label,
+        class_name_len,
+        registration.bridge_supported,
+    );
     let param_type_specs = eval_native_callable_param_type_specs(&registration.signature);
     for (index, (param_name, _)) in registration.signature.params.iter().enumerate() {
         register_eval_native_constructor_param(
@@ -1535,6 +1714,20 @@ fn register_eval_native_constructor(
             class_name_len,
             index,
             param_name,
+        );
+        register_eval_native_constructor_param_flags(
+            ctx,
+            context_offset,
+            &class_name_label,
+            class_name_len,
+            index,
+            registration
+                .signature
+                .ref_params
+                .get(index)
+                .copied()
+                .unwrap_or(false),
+            signature_param_is_variadic(&registration.signature, index, param_name),
         );
         if let Some(type_spec) = param_type_specs.get(index).and_then(Option::as_deref) {
             register_eval_native_constructor_param_type(
@@ -1560,6 +1753,37 @@ fn register_eval_native_constructor(
             &default,
         );
     }
+}
+
+/// Emits one native constructor bridge-support registration call.
+fn register_eval_native_constructor_bridge_support(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    class_name_label: &str,
+    class_name_len: usize,
+    bridge_supported: bool,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        class_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        class_name_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        if bridge_supported { 1 } else { 0 },
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_constructor_bridge_support");
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Emits one native class-parent metadata registration call into the eval context.
@@ -1818,6 +2042,49 @@ fn register_eval_native_constructor_param(
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_constructor_param");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native constructor parameter-flags registration call.
+fn register_eval_native_constructor_param_flags(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    class_name_label: &str,
+    class_name_len: usize,
+    param_index: usize,
+    is_by_ref: bool,
+    is_variadic: bool,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        class_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        class_name_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        param_index as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        if is_by_ref { 1 } else { 0 },
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        if is_variadic { 1 } else { 0 },
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_constructor_param_flags");
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 

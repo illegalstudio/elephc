@@ -2592,8 +2592,12 @@ fn eval_reflection_native_callable_parameters(
         .collect::<Vec<_>>();
     let parameter_attributes = vec![Vec::new(); parameter_count];
     let defaults = eval_reflection_native_callable_parameter_defaults(signature);
-    let by_ref_flags = vec![false; parameter_count];
-    let variadic_flags = vec![false; parameter_count];
+    let by_ref_flags = (0..parameter_count)
+        .map(|index| signature.param_by_ref(index))
+        .collect::<Vec<_>>();
+    let variadic_flags = (0..parameter_count)
+        .map(|index| signature.param_variadic(index))
+        .collect::<Vec<_>>();
     let declaring_function = EvalReflectionDeclaringFunctionMetadata {
         name: method_name.to_ascii_lowercase(),
         declaring_class_name: Some(declaring_class_name.trim_start_matches('\\').to_string()),

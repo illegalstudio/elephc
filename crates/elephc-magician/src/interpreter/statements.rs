@@ -4480,6 +4480,9 @@ pub(in crate::interpreter) fn bind_native_callable_args(
     let Some(signature) = signature else {
         return positional_evaluated_arg_values(args);
     };
+    if !signature.bridge_supported() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     if signature.param_names().len() == signature.param_count() {
         bind_native_signature_args(&signature, args, values)
     } else {

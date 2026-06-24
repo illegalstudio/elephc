@@ -131,7 +131,10 @@ pub struct NativeCallableSignature {
     param_names: Vec<String>,
     param_types: Vec<Option<EvalParameterType>>,
     param_defaults: Vec<Option<NativeCallableDefault>>,
+    param_by_ref: Vec<bool>,
+    variadic_index: Option<usize>,
     return_type: Option<EvalParameterType>,
+    bridge_supported: bool,
 }
 
 impl NativeCallableSignature {
@@ -142,7 +145,10 @@ impl NativeCallableSignature {
             param_names: Vec::new(),
             param_types: Vec::new(),
             param_defaults: Vec::new(),
+            param_by_ref: Vec::new(),
+            variadic_index: None,
             return_type: None,
+            bridge_supported: true,
         }
     }
 
@@ -187,9 +193,35 @@ impl NativeCallableSignature {
         true
     }
 
+    /// Records whether one positional callable parameter is by-reference.
+    pub fn set_param_by_ref(&mut self, index: usize, by_ref: bool) -> bool {
+        if index >= self.param_count {
+            return false;
+        }
+        if self.param_by_ref.len() < self.param_count {
+            self.param_by_ref.resize(self.param_count, false);
+        }
+        self.param_by_ref[index] = by_ref;
+        true
+    }
+
+    /// Records which positional callable parameter is variadic.
+    pub fn set_variadic_index(&mut self, index: usize) -> bool {
+        if index >= self.param_count {
+            return false;
+        }
+        self.variadic_index = Some(index);
+        true
+    }
+
     /// Records the PHP declared return type metadata for this callable.
     pub fn set_return_type(&mut self, return_type: EvalParameterType) {
         self.return_type = Some(return_type);
+    }
+
+    /// Records whether eval may dispatch this callable through the generated bridge.
+    pub fn set_bridge_supported(&mut self, supported: bool) {
+        self.bridge_supported = supported;
     }
 
     /// Returns the PHP-visible parameter names registered for this callable.
@@ -217,8 +249,28 @@ impl NativeCallableSignature {
         self.param_defaults.get(index).and_then(Option::as_ref)
     }
 
+    /// Returns whether one registered parameter is by-reference.
+    pub fn param_by_ref(&self, index: usize) -> bool {
+        self.param_by_ref.get(index).copied().unwrap_or(false)
+    }
+
+    /// Returns whether one registered parameter is the variadic parameter.
+    pub fn param_variadic(&self, index: usize) -> bool {
+        self.variadic_index == Some(index)
+    }
+
+    /// Returns whether eval may dispatch this callable through the generated bridge.
+    pub const fn bridge_supported(&self) -> bool {
+        self.bridge_supported
+    }
+
     /// Returns the minimum number of arguments required by registered defaults.
     pub fn required_param_count(&self) -> usize {
+        if let Some(index) = self.variadic_index {
+            return (0..index)
+                .rfind(|position| self.param_default(*position).is_none())
+                .map_or(0, |position| position + 1);
+        }
         (0..self.param_count)
             .rfind(|index| self.param_default(*index).is_none())
             .map_or(0, |index| index + 1)
@@ -1780,6 +1832,46 @@ impl ElephcEvalContext {
             .is_some_and(|signature| signature.set_param_default(index, default))
     }
 
+    /// Records whether one native AOT instance-method parameter is by-reference.
+    pub fn define_native_method_param_by_ref(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        index: usize,
+        by_ref: bool,
+    ) -> bool {
+        self.native_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| signature.set_param_by_ref(index, by_ref))
+    }
+
+    /// Records which native AOT instance-method parameter is variadic.
+    pub fn define_native_method_variadic_param(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        index: usize,
+    ) -> bool {
+        self.native_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| signature.set_variadic_index(index))
+    }
+
+    /// Records whether eval may dispatch one native AOT instance method.
+    pub fn define_native_method_bridge_supported(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        supported: bool,
+    ) -> bool {
+        self.native_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| {
+                signature.set_bridge_supported(supported);
+                true
+            })
+    }
+
     /// Records one return type for registered native AOT instance-method metadata.
     pub fn define_native_method_return_type(
         &mut self,
@@ -1834,6 +1926,46 @@ impl ElephcEvalContext {
             .is_some_and(|signature| signature.set_param_default(index, default))
     }
 
+    /// Records whether one native AOT static-method parameter is by-reference.
+    pub fn define_native_static_method_param_by_ref(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        index: usize,
+        by_ref: bool,
+    ) -> bool {
+        self.native_static_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| signature.set_param_by_ref(index, by_ref))
+    }
+
+    /// Records which native AOT static-method parameter is variadic.
+    pub fn define_native_static_method_variadic_param(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        index: usize,
+    ) -> bool {
+        self.native_static_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| signature.set_variadic_index(index))
+    }
+
+    /// Records whether eval may dispatch one native AOT static method.
+    pub fn define_native_static_method_bridge_supported(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        supported: bool,
+    ) -> bool {
+        self.native_static_methods
+            .get_mut(&native_method_key(class_name, method_name))
+            .is_some_and(|signature| {
+                signature.set_bridge_supported(supported);
+                true
+            })
+    }
+
     /// Records one return type for registered native AOT static-method metadata.
     pub fn define_native_static_method_return_type(
         &mut self,
@@ -1883,6 +2015,43 @@ impl ElephcEvalContext {
         self.native_constructors
             .get_mut(&normalize_class_name(class_name))
             .is_some_and(|signature| signature.set_param_default(index, default))
+    }
+
+    /// Records whether one native AOT constructor parameter is by-reference.
+    pub fn define_native_constructor_param_by_ref(
+        &mut self,
+        class_name: &str,
+        index: usize,
+        by_ref: bool,
+    ) -> bool {
+        self.native_constructors
+            .get_mut(&normalize_class_name(class_name))
+            .is_some_and(|signature| signature.set_param_by_ref(index, by_ref))
+    }
+
+    /// Records which native AOT constructor parameter is variadic.
+    pub fn define_native_constructor_variadic_param(
+        &mut self,
+        class_name: &str,
+        index: usize,
+    ) -> bool {
+        self.native_constructors
+            .get_mut(&normalize_class_name(class_name))
+            .is_some_and(|signature| signature.set_variadic_index(index))
+    }
+
+    /// Records whether eval may dispatch one native AOT constructor.
+    pub fn define_native_constructor_bridge_supported(
+        &mut self,
+        class_name: &str,
+        supported: bool,
+    ) -> bool {
+        self.native_constructors
+            .get_mut(&normalize_class_name(class_name))
+            .is_some_and(|signature| {
+                signature.set_bridge_supported(supported);
+                true
+            })
     }
 
     /// Returns native AOT instance-method signature metadata by PHP class and method name.

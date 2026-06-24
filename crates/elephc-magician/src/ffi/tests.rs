@@ -348,6 +348,16 @@ fn register_native_methods_record_signature_metadata() {
             method_type.len() as u64,
         )
     };
+    let method_param_flags_registered = unsafe {
+        __elephc_eval_register_native_method_param_flags(
+            &mut ctx,
+            method.as_ptr(),
+            method.len() as u64,
+            1,
+            1,
+            0,
+        )
+    };
     let static_registered = unsafe {
         __elephc_eval_register_native_static_method(
             &mut ctx,
@@ -374,6 +384,16 @@ fn register_native_methods_record_signature_metadata() {
             0,
             static_type.as_ptr(),
             static_type.len() as u64,
+        )
+    };
+    let static_param_flags_registered = unsafe {
+        __elephc_eval_register_native_static_method_param_flags(
+            &mut ctx,
+            static_method.as_ptr(),
+            static_method.len() as u64,
+            1,
+            0,
+            1,
         )
     };
     let static_return_type_registered = unsafe {
@@ -406,6 +426,24 @@ fn register_native_methods_record_signature_metadata() {
             0,
             constructor_type.as_ptr(),
             constructor_type.len() as u64,
+        )
+    };
+    let constructor_param_flags_registered = unsafe {
+        __elephc_eval_register_native_constructor_param_flags(
+            &mut ctx,
+            class.as_ptr(),
+            class.len() as u64,
+            0,
+            1,
+            1,
+        )
+    };
+    let constructor_bridge_support_registered = unsafe {
+        __elephc_eval_register_native_constructor_bridge_support(
+            &mut ctx,
+            class.as_ptr(),
+            class.len() as u64,
+            0,
         )
     };
     let method_default_registered = unsafe {
@@ -442,13 +480,17 @@ fn register_native_methods_record_signature_metadata() {
     assert_eq!(method_registered, 1);
     assert_eq!(method_param_registered, 1);
     assert_eq!(method_param_type_registered, 1);
+    assert_eq!(method_param_flags_registered, 1);
     assert_eq!(static_registered, 1);
     assert_eq!(static_param_registered, 1);
     assert_eq!(static_param_type_registered, 1);
+    assert_eq!(static_param_flags_registered, 1);
     assert_eq!(static_return_type_registered, 1);
     assert_eq!(constructor_registered, 1);
     assert_eq!(constructor_param_registered, 1);
     assert_eq!(constructor_param_type_registered, 1);
+    assert_eq!(constructor_param_flags_registered, 1);
+    assert_eq!(constructor_bridge_support_registered, 1);
     assert_eq!(method_default_registered, 1);
     assert_eq!(static_default_registered, 1);
     assert_eq!(constructor_default_registered, 1);
@@ -472,6 +514,8 @@ fn register_native_methods_record_signature_metadata() {
             EvalParameterTypeVariant::String
         ]
     );
+    assert!(method_signature.param_by_ref(1));
+    assert!(!method_signature.param_variadic(1));
     assert_eq!(
         ctx.native_static_method_signature("KnownClass", "SUM")
             .expect("static method metadata")
@@ -486,6 +530,8 @@ fn register_native_methods_record_signature_metadata() {
         .expect("static method parameter type");
     assert!(static_type.allows_null());
     assert_eq!(static_type.variants(), &[EvalParameterTypeVariant::String]);
+    assert!(!static_signature.param_by_ref(1));
+    assert!(static_signature.param_variadic(1));
     assert_eq!(
         static_signature
             .return_type()
@@ -509,6 +555,9 @@ fn register_native_methods_record_signature_metadata() {
             .variants(),
         &[EvalParameterTypeVariant::Class("KnownDep".to_string())]
     );
+    assert!(constructor_signature.param_by_ref(0));
+    assert!(constructor_signature.param_variadic(0));
+    assert!(!constructor_signature.bridge_supported());
     assert_eq!(
         ctx.native_method_signature("knownclass", "JOIN")
             .expect("method metadata")

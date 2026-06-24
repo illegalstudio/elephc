@@ -341,9 +341,9 @@ reflected method is `__construct` or `__destruct`.
 `ReflectionMethod::getParameters()`, `getNumberOfParameters()`, and
 `getNumberOfRequiredParameters()` report retained eval-declared function and
 method metadata, plus registered generated/AOT method parameter names, declared
-parameter and return types, required/optional counts, and scalar or null default
-values when native method/static-method signatures are registered. Eval code can
-also reflect supported callable-builtin signatures, including
+parameter and return types, required/optional counts, by-reference and variadic
+flags, and scalar or null default values when native method/static-method or
+constructor signatures are registered. Eval code can also reflect supported callable-builtin signatures, including
 internal origin, parameter names, parameter types, and return type metadata.
 Eval-declared
 functions and methods expose declared-type presence for parameters and return types, simple
@@ -649,9 +649,10 @@ eval-supported constant-expression subset, object-valued generated defaults
 beyond the supported parameter `new C(<supported scalar/null args>)` slice, and broader generated/AOT method bridge signatures beyond the current public
 non-by-reference fixed scalar/Mixed/object slice plus visibility-checked
 `__clone()` hooks. Generated/AOT method type
-metadata and generated/AOT method/property attributes are exposed for registered
-metadata slices, while broader non-public or unsupported bridge shapes remain
-outside that slice.
+metadata, by-reference and variadic parameter flags, and generated/AOT
+method/property attributes are exposed for registered metadata slices, while
+unsupported bridge shapes remain metadata-only rather than invocable through
+eval.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`
