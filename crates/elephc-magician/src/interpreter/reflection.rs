@@ -5399,7 +5399,7 @@ fn eval_reflection_function_invoke_dispatch(
     eval_callable_with_call_array_args(&function_key, function_args, context, values)
 }
 
-/// Dispatches one reflected method invocation through eval or public AOT bridges.
+/// Dispatches one reflected method invocation through eval or AOT bridges.
 fn eval_reflection_method_invoke_dispatch(
     declaring_class: &str,
     method_name: &str,
@@ -5478,7 +5478,7 @@ fn eval_reflection_method_instance_called_class(
     Ok(object_class_name)
 }
 
-/// Invokes one reflected generated/AOT method when it fits the public bridge slice.
+/// Invokes one reflected generated/AOT method when it fits the bridge slice.
 fn eval_reflection_aot_method_invoke_dispatch(
     declaring_class: &str,
     method_name: &str,
@@ -5490,7 +5490,7 @@ fn eval_reflection_aot_method_invoke_dispatch(
     let member =
         eval_reflection_aot_method_metadata_if_exists(declaring_class, method_name, values)?
             .ok_or(EvalStatus::RuntimeFatal)?;
-    if member.visibility != EvalVisibility::Public || member.is_abstract {
+    if member.is_abstract {
         return Err(EvalStatus::RuntimeFatal);
     }
     if member.is_static {
@@ -5499,7 +5499,9 @@ fn eval_reflection_aot_method_invoke_dispatch(
             method_args,
             values,
         )?;
-        return values.static_method_call(declaring_class, method_name, args);
+        return eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+            values.static_method_call(declaring_class, method_name, args)
+        });
     }
     if values.is_null(object)? || values.type_tag(object)? != EVAL_TAG_OBJECT {
         return Err(EvalStatus::RuntimeFatal);
@@ -5519,7 +5521,23 @@ fn eval_reflection_aot_method_invoke_dispatch(
         method_args,
         values,
     )?;
-    values.method_call(object, method_name, args)
+    eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+        values.method_call(object, method_name, args)
+    })
+}
+
+/// Runs a reflected AOT invocation with the declaring class as visibility scope.
+fn eval_reflection_with_declaring_class_scope<T>(
+    declaring_class: &str,
+    context: &mut ElephcEvalContext,
+    action: impl FnOnce() -> Result<T, EvalStatus>,
+) -> Result<T, EvalStatus> {
+    context.push_class_scope(declaring_class.to_string());
+    context.push_called_class_scope(declaring_class.to_string());
+    let result = action();
+    context.pop_called_class_scope();
+    context.pop_class_scope();
+    result
 }
 
 /// Reads one eval instance property through ReflectionProperty semantics.
