@@ -4469,6 +4469,77 @@ eval('return $box->x;');
     );
 }
 
+/// Verifies eval fragments can access inherited protected AOT properties from child scopes.
+#[test]
+fn test_eval_fragment_can_mutate_protected_aot_property_from_child_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalProtectedPropBase {
+    protected int $x = 1;
+}
+
+class EvalProtectedPropChild extends EvalProtectedPropBase {
+    public function run(): void {
+        echo eval('$this->x = $this->x + 4; return $this->x;');
+    }
+}
+
+$box = new EvalProtectedPropChild();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval fragments allow parent scopes to access child-declared protected AOT properties.
+#[test]
+fn test_eval_fragment_can_mutate_child_protected_aot_property_from_parent_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalParentScopeProtectedPropBase {
+    public function run(): void {
+        echo eval('$this->x = $this->x + 4; return $this->x;');
+    }
+}
+
+class EvalParentScopeProtectedPropChild extends EvalParentScopeProtectedPropBase {
+    protected int $x = 1;
+}
+
+$box = new EvalParentScopeProtectedPropChild();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval fragments reject protected AOT properties between sibling class scopes.
+#[test]
+fn test_eval_fragment_rejects_protected_aot_property_from_sibling_scope() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalProtectedPropSiblingBase {}
+
+class EvalProtectedPropLeft extends EvalProtectedPropSiblingBase {
+    protected int $x = 1;
+}
+
+class EvalProtectedPropRight extends EvalProtectedPropSiblingBase {
+    public function run(): void {
+        echo eval('return (new EvalProtectedPropLeft())->x;');
+    }
+}
+
+$right = new EvalProtectedPropRight();
+$right->run();
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "unexpected stderr: {err}"
+    );
+}
+
 /// Verifies eval fragments can read and write public nullable-int AOT properties through `$this`.
 #[test]
 fn test_eval_fragment_can_mutate_this_nullable_int_property() {
@@ -4608,6 +4679,80 @@ class EvalPrivateStaticPropChild extends EvalPrivateStaticPropBase {
 
 $box = new EvalPrivateStaticPropChild();
 $box->run();
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "unexpected stderr: {err}"
+    );
+}
+
+/// Verifies eval fragments can access inherited protected AOT static properties from child scopes.
+#[test]
+fn test_eval_fragment_can_mutate_protected_aot_static_property_from_child_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalProtectedStaticPropBase {
+    protected static int $x = 1;
+}
+
+class EvalProtectedStaticPropChild extends EvalProtectedStaticPropBase {
+    public function run(): void {
+        echo eval('EvalProtectedStaticPropBase::$x = EvalProtectedStaticPropBase::$x + 4;
+            return EvalProtectedStaticPropBase::$x;');
+    }
+}
+
+$box = new EvalProtectedStaticPropChild();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval fragments allow parent scopes to access child-declared protected AOT static properties.
+#[test]
+fn test_eval_fragment_can_mutate_child_protected_aot_static_property_from_parent_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalParentScopeProtectedStaticPropBase {
+    public function run(): void {
+        echo eval('EvalParentScopeProtectedStaticPropChild::$x =
+            EvalParentScopeProtectedStaticPropChild::$x + 4;
+            return EvalParentScopeProtectedStaticPropChild::$x;');
+    }
+}
+
+class EvalParentScopeProtectedStaticPropChild extends EvalParentScopeProtectedStaticPropBase {
+    protected static int $x = 1;
+}
+
+$box = new EvalParentScopeProtectedStaticPropBase();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval fragments reject protected AOT static properties between sibling class scopes.
+#[test]
+fn test_eval_fragment_rejects_protected_aot_static_property_from_sibling_scope() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalProtectedStaticPropSiblingBase {}
+
+class EvalProtectedStaticPropLeft extends EvalProtectedStaticPropSiblingBase {
+    protected static int $x = 1;
+}
+
+class EvalProtectedStaticPropRight extends EvalProtectedStaticPropSiblingBase {
+    public function run(): void {
+        echo eval('return EvalProtectedStaticPropLeft::$x;');
+    }
+}
+
+$right = new EvalProtectedStaticPropRight();
+$right->run();
 "#,
     );
     assert!(
