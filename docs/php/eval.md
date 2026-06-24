@@ -297,8 +297,8 @@ counts, and registered scalar, null, empty-array, or supported object-valued def
 constructor, instance-method, and static-method signatures. AOT property
 reflection exposes registered declared property types and supported scalar,
 string, or null default values for generated property metadata. AOT method and
-property reflection expose generated member attributes when their arguments fit
-the materializable literal subset.
+property/class-constant reflection expose generated member attributes when
+their arguments fit the materializable literal subset.
 `ReflectionMethod::getDeclaringClass()` and
 `ReflectionProperty::getDeclaringClass()` return a materialized
 `ReflectionClass` for the symbol that declares the reflected
@@ -672,7 +672,7 @@ object-valued generated defaults beyond the positional
 non-by-reference scalar/nullable-int/Mixed/array/iterable/object parameter slice plus scalar/nullable-int/Mixed/array/iterable/object returns and
 `__clone()` hooks. Generated/AOT method type
 metadata, by-reference and variadic parameter flags, and generated/AOT
-method/property attributes are exposed for registered metadata slices, while
+method/property/class-constant attributes are exposed for registered metadata slices, while
 unsupported bridge shapes remain metadata-only rather than invocable through
 eval.
 

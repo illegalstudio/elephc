@@ -8971,8 +8971,7 @@ echo $listed->getDefaultValue();
     );
 }
 
-/// Verifies eval exposes generated/AOT method and property attributes through
-/// `ReflectionMethod::getAttributes()` and `ReflectionProperty::getAttributes()`.
+/// Verifies eval exposes generated/AOT member attributes through Reflection.
 #[test]
 fn test_eval_reflection_member_exposes_aot_attributes() {
     let out = compile_and_run_capture(
@@ -8991,6 +8990,12 @@ class EvalAotReflectAttrTarget extends EvalAotReflectAttrBase {
     public function run() {}
     #[EvalAotMemberAttr("property", -3)]
     public int $id = 2;
+    #[EvalAotMemberAttr("constant", 11)]
+    public const LIMIT = 5;
+}
+enum EvalAotReflectAttrEnum {
+    #[EvalAotMemberAttr("case")]
+    case Ready;
 }
 echo eval('$methodAttrs = (new ReflectionMethod("EvalAotReflectAttrTarget", "run"))->getAttributes();
 echo "M" . count($methodAttrs) . ":";
@@ -9009,7 +9014,16 @@ echo "BP" . count($basePropertyAttrs) . ":" . $basePropertyAttrs[0]->getArgument
 $listedMethod = (new ReflectionClass("EvalAotReflectAttrTarget"))->getMethod("run");
 echo count($listedMethod->getAttributes()) . ":";
 $listedProperty = (new ReflectionClass("EvalAotReflectAttrTarget"))->getProperty("id");
-echo count($listedProperty->getAttributes());
+echo count($listedProperty->getAttributes()) . ":";
+$constantAttrs = (new ReflectionClassConstant("EvalAotReflectAttrTarget", "LIMIT"))->getAttributes();
+echo "C" . count($constantAttrs) . ":";
+echo $constantAttrs[0]->getName() . ":";
+$constantArgs = $constantAttrs[0]->getArguments();
+echo $constantArgs[0] . ":" . $constantArgs[1] . ":";
+$listedConstant = (new ReflectionClass("EvalAotReflectAttrTarget"))->getReflectionConstant("LIMIT");
+echo count($listedConstant->getAttributes()) . ":";
+$caseAttrs = (new ReflectionClassConstant("EvalAotReflectAttrEnum", "Ready"))->getAttributes();
+echo "E" . count($caseAttrs) . ":" . $caseAttrs[0]->getArguments()[0];
 ');
 "#,
     );
@@ -9020,7 +9034,7 @@ echo count($listedProperty->getAttributes());
     );
     assert_eq!(
         out.stdout,
-        "M1:EvalAotMemberAttr:method:P1:EvalAotMemberAttr:property:-3:BM1:base:7:T:N:BP1:baseProp:1:1"
+        "M1:EvalAotMemberAttr:method:P1:EvalAotMemberAttr:property:-3:BM1:base:7:T:N:BP1:baseProp:1:1:C1:EvalAotMemberAttr:constant:11:1:E1:case"
     );
 }
 

@@ -363,6 +363,7 @@ pub struct ElephcEvalContext {
     native_constructors: HashMap<String, NativeCallableSignature>,
     native_class_parents: HashMap<String, String>,
     native_method_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
+    native_constant_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
     native_property_types: HashMap<(String, String), EvalParameterType>,
     native_property_defaults: HashMap<(String, String), NativeCallableDefault>,
     native_property_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
@@ -418,6 +419,7 @@ impl ElephcEvalContext {
             native_constructors: HashMap::new(),
             native_class_parents: HashMap::new(),
             native_method_attributes: HashMap::new(),
+            native_constant_attributes: HashMap::new(),
             native_property_types: HashMap::new(),
             native_property_defaults: HashMap::new(),
             native_property_attributes: HashMap::new(),
@@ -474,6 +476,7 @@ impl ElephcEvalContext {
             native_constructors: HashMap::new(),
             native_class_parents: HashMap::new(),
             native_method_attributes: HashMap::new(),
+            native_constant_attributes: HashMap::new(),
             native_property_types: HashMap::new(),
             native_property_defaults: HashMap::new(),
             native_property_attributes: HashMap::new(),
@@ -2140,6 +2143,36 @@ impl ElephcEvalContext {
             .unwrap_or_default()
     }
 
+    /// Appends generated AOT class-constant attribute metadata for eval reflection.
+    pub fn define_native_constant_attribute(
+        &mut self,
+        class_name: &str,
+        constant_name: &str,
+        attribute: EvalAttribute,
+    ) -> bool {
+        let key = native_constant_key(class_name, constant_name);
+        if key.0.is_empty() || key.1.is_empty() {
+            return false;
+        }
+        self.native_constant_attributes
+            .entry(key)
+            .or_default()
+            .push(attribute);
+        true
+    }
+
+    /// Returns generated AOT class-constant attribute metadata by PHP class and constant name.
+    pub fn native_constant_attributes(
+        &self,
+        class_name: &str,
+        constant_name: &str,
+    ) -> Vec<EvalAttribute> {
+        self.native_constant_attributes
+            .get(&native_constant_key(class_name, constant_name))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Defines generated AOT property type metadata for eval reflection.
     pub fn define_native_property_type(
         &mut self,
@@ -2510,6 +2543,14 @@ fn native_property_key(class_name: &str, property_name: &str) -> (String, String
     (
         normalize_class_name(class_name),
         property_name.trim_start_matches('$').to_string(),
+    )
+}
+
+/// Builds the case-sensitive native class-constant metadata key used for eval reflection.
+fn native_constant_key(class_name: &str, constant_name: &str) -> (String, String) {
+    (
+        normalize_class_name(class_name),
+        constant_name.to_string(),
     )
 }
 
