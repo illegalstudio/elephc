@@ -1586,6 +1586,15 @@ fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
         emit_object_tostring_call(ctx, value, normalized)?;
         return store_if_result(ctx, inst);
     }
+    if inst.result_php_type.codegen_repr() == PhpType::Iterable
+        && matches!(
+            source_ty,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Iterable
+        )
+    {
+        ctx.load_value_to_result(value)?;
+        return store_if_result(ctx, inst);
+    }
     if inst.result_php_type.codegen_repr() == PhpType::TaggedScalar {
         match source_ty {
             PhpType::Int | PhpType::Bool | PhpType::Callable => {

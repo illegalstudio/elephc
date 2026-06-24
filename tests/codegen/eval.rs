@@ -4649,6 +4649,33 @@ echo (new EvalMethodArrayArgBox())->run();
     assert_eq!(out, "3:2");
 }
 
+/// Verifies eval fragments can read iterable return values from AOT methods.
+#[test]
+fn test_eval_fragment_dispatches_aot_method_with_iterable_return() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotIterableReturnBox {
+    public function items(): iterable {
+        return [1, 2, 3];
+    }
+
+    public static function labels(): iterable {
+        return ["left" => "L", "right" => "R"];
+    }
+
+    public function run() {
+        return eval('$items = $this->items();
+$labels = EvalAotIterableReturnBox::labels();
+return is_iterable($items) . ":" . count($items) . ":" . $items[1] . ":" . is_iterable($labels) . ":" . $labels["right"];');
+    }
+}
+
+echo (new EvalAotIterableReturnBox())->run();
+"#,
+    );
+    assert_eq!(out, "1:3:2:1:R");
+}
+
 /// Verifies eval fragments inherit lexical `self::` from an AOT instance method.
 #[test]
 fn test_eval_fragment_in_aot_method_resolves_self_scope() {
