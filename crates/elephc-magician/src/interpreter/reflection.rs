@@ -637,7 +637,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_static_properties_result
     else {
         return Ok(None);
     };
-    let property_names = eval_reflection_static_property_names(&reflected_name, context);
+    let property_names = eval_reflection_static_property_names(&reflected_name, context, values)?;
     let mut result = values.assoc_new(property_names.len())?;
     for name in property_names {
         let Some(value) =
@@ -711,7 +711,8 @@ pub(in crate::interpreter) fn eval_reflection_class_set_static_property_value_re
         evaluated_args,
     )?;
     let property_name = eval_reflection_string_arg(args[0], values)?;
-    let Some(member) = eval_reflection_property_metadata(&reflected_name, &property_name, context)
+    let Some(member) =
+        eval_reflection_static_property_metadata(&reflected_name, &property_name, context, values)?
     else {
         return eval_reflection_static_property_missing_for_set(
             &reflected_name,
@@ -728,12 +729,23 @@ pub(in crate::interpreter) fn eval_reflection_class_set_static_property_value_re
             values,
         );
     }
-    let declaring_class = member
-        .declaring_class_name
-        .as_deref()
-        .ok_or(EvalStatus::RuntimeFatal)?;
-    if let Some(replaced) = context.set_static_property(declaring_class, &property_name, args[1]) {
-        values.release(replaced)?;
+    if eval_reflection_class_like_exists(&reflected_name, context) {
+        let declaring_class = member
+            .declaring_class_name
+            .as_deref()
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        if let Some(replaced) =
+            context.set_static_property(declaring_class, &property_name, args[1])
+        {
+            values.release(replaced)?;
+        }
+    } else if !values.static_property_set(&reflected_name, &property_name, args[1])? {
+        return eval_reflection_static_property_missing_for_set(
+            &reflected_name,
+            &property_name,
+            context,
+            values,
+        );
     }
     values.null().map(Some)
 }
@@ -5094,46 +5106,77 @@ fn eval_reflection_eval_property_names(
     context.class_property_names(reflected_name)
 }
 
-/// Returns eval property names that can contribute to `ReflectionClass::getStaticProperties()`.
+/// Returns property names that can contribute to `ReflectionClass::getStaticProperties()`.
 fn eval_reflection_static_property_names(
     reflected_name: &str,
     context: &ElephcEvalContext,
-) -> Vec<String> {
-    eval_reflection_eval_property_names(reflected_name, context)
-        .into_iter()
-        .filter(|name| {
-            eval_reflection_property_metadata(reflected_name, name, context)
-                .is_some_and(|property| property.is_static)
-        })
-        .collect()
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    if eval_reflection_class_like_exists(reflected_name, context) {
+        return Ok(eval_reflection_eval_property_names(reflected_name, context)
+            .into_iter()
+            .filter(|name| {
+                eval_reflection_property_metadata(reflected_name, name, context)
+                    .is_some_and(|property| property.is_static)
+            })
+            .collect());
+    }
+    let names =
+        eval_reflection_aot_member_names(EVAL_REFLECTION_OWNER_PROPERTY, reflected_name, values)?;
+    let mut result = Vec::new();
+    for name in names {
+        if eval_reflection_aot_property_metadata_if_exists(reflected_name, &name, context, values)?
+            .is_some_and(|property| property.is_static)
+        {
+            result.push(name);
+        }
+    }
+    Ok(result)
 }
 
-/// Returns the current eval static property value or the trait metadata default.
+/// Returns eval or generated/AOT property metadata for static-property reflection.
+fn eval_reflection_static_property_metadata(
+    reflected_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalReflectionMemberMetadata>, EvalStatus> {
+    if let Some(member) = eval_reflection_property_metadata(reflected_name, property_name, context) {
+        return Ok(Some(member));
+    }
+    eval_reflection_aot_property_metadata_if_exists(reflected_name, property_name, context, values)
+}
+
+/// Returns the current eval or generated/AOT static property value.
 fn eval_reflection_static_property_value(
     reflected_name: &str,
     property_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let Some(member) = eval_reflection_property_metadata(reflected_name, property_name, context)
+    let Some(member) =
+        eval_reflection_static_property_metadata(reflected_name, property_name, context, values)?
     else {
         return Ok(None);
     };
     if !member.is_static {
         return Ok(None);
     }
-    let declaring_class = member
-        .declaring_class_name
-        .as_deref()
-        .ok_or(EvalStatus::RuntimeFatal)?;
-    if let Some(value) = context.static_property(declaring_class, property_name) {
-        return Ok(Some(value));
+    if eval_reflection_class_like_exists(reflected_name, context) {
+        let declaring_class = member
+            .declaring_class_name
+            .as_deref()
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        if let Some(value) = context.static_property(declaring_class, property_name) {
+            return Ok(Some(value));
+        }
+        return member
+            .default_value
+            .as_ref()
+            .map(|default| eval_method_parameter_default(default, context, values))
+            .transpose();
     }
-    member
-        .default_value
-        .as_ref()
-        .map(|default| eval_method_parameter_default(default, context, values))
-        .transpose()
+    values.static_property_get(reflected_name, property_name)
 }
 
 /// Binds `getStaticPropertyValue()` arguments while preserving whether a default was supplied.
