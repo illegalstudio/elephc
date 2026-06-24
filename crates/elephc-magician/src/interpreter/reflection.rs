@@ -2659,13 +2659,14 @@ fn eval_reflection_native_callable_parameter_defaults(
 
 /// Converts one registered native default into an eval constant expression.
 fn eval_reflection_native_callable_default_expr(default: &NativeCallableDefault) -> EvalExpr {
-    EvalExpr::Const(match default {
-        NativeCallableDefault::Null => EvalConst::Null,
-        NativeCallableDefault::Bool(value) => EvalConst::Bool(*value),
-        NativeCallableDefault::Int(value) => EvalConst::Int(*value),
-        NativeCallableDefault::Float(value) => EvalConst::Float(*value),
-        NativeCallableDefault::String(value) => EvalConst::String(value.clone()),
-    })
+    match default {
+        NativeCallableDefault::Null => EvalExpr::Const(EvalConst::Null),
+        NativeCallableDefault::Bool(value) => EvalExpr::Const(EvalConst::Bool(*value)),
+        NativeCallableDefault::Int(value) => EvalExpr::Const(EvalConst::Int(*value)),
+        NativeCallableDefault::Float(value) => EvalExpr::Const(EvalConst::Float(*value)),
+        NativeCallableDefault::String(value) => EvalExpr::Const(EvalConst::String(value.clone())),
+        NativeCallableDefault::EmptyArray => EvalExpr::Array(Vec::new()),
+    }
 }
 
 /// Returns generated AOT ReflectionProperty metadata when the runtime table has a matching row.

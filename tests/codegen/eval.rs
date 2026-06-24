@@ -8214,6 +8214,50 @@ echo ":" . $listed->getNumberOfParameters() . "/" . $listed->getParameters()[2]-
     );
 }
 
+/// Verifies eval ReflectionMethod exposes generated/AOT empty-array defaults.
+#[test]
+fn test_eval_reflection_method_exposes_aot_empty_array_default() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectArrayDefaultTarget {
+    public function countItems($items = []): int {
+        return 0;
+    }
+}
+echo eval('$method = new ReflectionMethod("EvalAotReflectArrayDefaultTarget", "countItems");
+$param = $method->getParameters()[0];
+echo $param->isOptional() ? "O" : "r";
+echo $param->isDefaultValueAvailable() ? "=" : "-";
+$default = $param->getDefaultValue();
+echo is_array($default) ? count($default) : "bad";
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "O=0");
+}
+
+/// Verifies eval rejects generated/AOT empty-array defaults during method dispatch.
+#[test]
+fn test_eval_aot_method_call_rejects_empty_array_default() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotArrayDefaultMethodTarget {
+    public function countItems($items = []): int {
+        return 1;
+    }
+}
+echo eval('$obj = new EvalAotArrayDefaultMethodTarget();
+return $obj->countItems();');
+"#,
+    );
+    assert!(!out.success, "program unexpectedly succeeded: {:?}", out.stdout);
+}
+
 /// Verifies eval ReflectionMethod exposes generated/AOT by-ref and variadic parameter flags.
 #[test]
 fn test_eval_reflection_method_exposes_aot_parameter_flags() {
@@ -10667,6 +10711,24 @@ return $second->label;');
 "#,
     );
     assert_eq!(out, "AB:XY");
+}
+
+/// Verifies eval rejects generated/AOT empty-array defaults during constructor dispatch.
+#[test]
+fn test_eval_dynamic_new_rejects_constructor_empty_array_default() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalDynamicNewArrayDefaultCtor {
+    public int $count = -1;
+    public function __construct($items = []) {
+        $this->count = 1;
+    }
+}
+echo eval('$box = new EvalDynamicNewArrayDefaultCtor();
+return $box->count;');
+"#,
+    );
+    assert!(!out.success, "program unexpectedly succeeded: {:?}", out.stdout);
 }
 
 /// Verifies eval object construction passes more than two arguments to an AOT constructor.

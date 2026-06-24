@@ -466,6 +466,16 @@ fn register_native_methods_record_signature_metadata() {
             42,
         )
     };
+    let static_empty_array_default_registered = unsafe {
+        __elephc_eval_register_native_static_method_param_default_scalar(
+            &mut ctx,
+            static_method.as_ptr(),
+            static_method.len() as u64,
+            1,
+            NATIVE_DEFAULT_EMPTY_ARRAY,
+            0,
+        )
+    };
     let constructor_default_registered = unsafe {
         __elephc_eval_register_native_constructor_param_default_scalar(
             &mut ctx,
@@ -493,6 +503,7 @@ fn register_native_methods_record_signature_metadata() {
     assert_eq!(constructor_bridge_support_registered, 1);
     assert_eq!(method_default_registered, 1);
     assert_eq!(static_default_registered, 1);
+    assert_eq!(static_empty_array_default_registered, 1);
     assert_eq!(constructor_default_registered, 1);
     assert_eq!(
         ctx.native_method_signature("knownclass", "JOIN")
@@ -569,6 +580,12 @@ fn register_native_methods_record_signature_metadata() {
             .expect("static method metadata")
             .param_default(0),
         Some(&NativeCallableDefault::Int(42))
+    );
+    assert_eq!(
+        ctx.native_static_method_signature("KnownClass", "SUM")
+            .expect("static method metadata")
+            .param_default(1),
+        Some(&NativeCallableDefault::EmptyArray)
     );
     assert_eq!(
         ctx.native_constructor_signature("knownclass")

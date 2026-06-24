@@ -114,7 +114,7 @@ impl NativeFunction {
     }
 }
 
-/// Scalar default value for a native AOT callable parameter visible to eval fragments.
+/// Default value for a native AOT callable parameter visible to eval fragments.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NativeCallableDefault {
     Null,
@@ -122,6 +122,7 @@ pub enum NativeCallableDefault {
     Int(i64),
     Float(f64),
     String(String),
+    EmptyArray,
 }
 
 /// Native AOT method or constructor signature metadata visible to eval fragments.

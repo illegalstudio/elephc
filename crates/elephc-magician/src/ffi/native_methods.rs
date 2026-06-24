@@ -21,6 +21,7 @@ const NATIVE_DEFAULT_NULL: u64 = 0;
 const NATIVE_DEFAULT_BOOL: u64 = 1;
 const NATIVE_DEFAULT_INT: u64 = 2;
 const NATIVE_DEFAULT_FLOAT: u64 = 3;
+pub(crate) const NATIVE_DEFAULT_EMPTY_ARRAY: u64 = 4;
 const NATIVE_MEMBER_ATTRIBUTE_METHOD: u8 = 0;
 const NATIVE_MEMBER_ATTRIBUTE_PROPERTY: u8 = 1;
 const NATIVE_ATTRIBUTE_ARGS_UNSUPPORTED: u8 = 0;
@@ -1612,7 +1613,7 @@ fn native_attribute_take_bytes<'a>(
     Some(chunk)
 }
 
-/// Decodes scalar default kind/payload ABI fields into native callable metadata.
+/// Decodes tagged default kind/payload ABI fields into native callable metadata.
 fn native_callable_scalar_default(
     default_kind: u64,
     default_payload: u64,
@@ -1624,6 +1625,7 @@ fn native_callable_scalar_default(
         NATIVE_DEFAULT_FLOAT => Some(NativeCallableDefault::Float(f64::from_bits(
             default_payload,
         ))),
+        NATIVE_DEFAULT_EMPTY_ARRAY => Some(NativeCallableDefault::EmptyArray),
         _ => None,
     }
 }
