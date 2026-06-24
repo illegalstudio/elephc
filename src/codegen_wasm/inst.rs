@@ -105,6 +105,8 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ObjectNew => super::objects::lower_object_new(ctx, &inst),
         Op::PropGet => super::objects::lower_prop_get(ctx, &inst),
         Op::PropSet => super::objects::lower_prop_set(ctx, &inst),
+        Op::MethodCall => super::methods::lower_method_call(ctx, &inst),
+        Op::StaticMethodCall => super::methods::lower_static_method_call(ctx, &inst),
         other => Err(WasmError::Unsupported(format!("op {:?}", other))),
     }
 }

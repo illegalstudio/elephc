@@ -115,6 +115,32 @@ impl<'a> FnCtx<'a> {
             .ok_or_else(|| WasmError::Unsupported(format!("slot {:?} has no repr", s)))
     }
 
+    /// Returns the `PhpType` carried by an EIR value (read from the function's
+    /// value table).
+    ///
+    /// Used by method-call lowering to inspect the receiver's declared type and
+    /// resolve the target class's vtable information.
+    pub(super) fn value_php_type(&self, v: ValueId) -> Result<PhpType> {
+        self.function
+            .value(v)
+            .map(|val| val.php_type.clone())
+            .ok_or_else(|| WasmError::Unsupported(format!("value {:?} has no php_type", v)))
+    }
+
+    /// Emits `local.get` for each local backing a local slot, in canonical order.
+    ///
+    /// Used by static-method lowering's lexical fallback to forward the current
+    /// `this` (slot 0) as the receiver of an instance method call (e.g.
+    /// `parent::__construct()` chaining).
+    pub(super) fn emit_load_slot(&mut self, s: LocalSlotId) -> Result<()> {
+        let refs = self.slot_repr(s)?.local_refs();
+        for local_ref in refs {
+            self.fb
+                .ins(&format!("local.get {}", local_ref), "load slot component");
+        }
+        Ok(())
+    }
+
     /// Returns the block index for a `BlockId`.
     ///
     /// Block indices are exactly their raw IDs; this is a convention of the

@@ -27,6 +27,7 @@ mod hashes;
 mod heap;
 mod inst;
 mod inst_hash;
+mod methods;
 mod mixed;
 mod objects;
 mod refcount;
@@ -151,6 +152,12 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
         let fb = function::lower_function(module, func, &str_literals)?;
         wm.add_func(fb);
     }
+
+    // Emit per-(introducer, method) dispatch stubs for virtual instance methods,
+    // so every `call $<stub>` emitted by `MethodCall` lowering resolves to a
+    // defined function. Must run after class methods are lowered (stub signatures
+    // are read from the class-method `Function`s) but before `wm.render()`.
+    methods::emit_method_dispatch_stubs(&mut wm, module)?;
 
     Ok(wm.render())
 }
@@ -3877,24 +3884,32 @@ mod tests {
 
     // ----- P6c: __construct + $this param convention -----
 
-    /// Builds a `__construct` `FunctionSig` over the given user params (no defaults,
-    /// no by-ref, no variadic). `$this` is NOT included: it is a backend convention
-    /// (hidden leading param), not a declared param, so `sig.params` lists only the
-    /// user params — matching the native `__construct` signature.
-    fn ctor_sig(user_params: &[(&str, PhpType)]) -> FunctionSig {
+    /// Builds a `FunctionSig` over the given user params (no defaults, no by-ref,
+    /// no variadic) with the given return type. `$this` / `__elephc_called_class_id`
+    /// are backend conventions (hidden leading param), not declared params, so
+    /// `sig.params` lists only the user params — matching the native signatures.
+    fn method_sig(user_params: &[(&str, PhpType)], return_type: PhpType) -> FunctionSig {
         FunctionSig {
             params: user_params
                 .iter()
                 .map(|(n, t)| (n.to_string(), t.clone()))
                 .collect(),
             defaults: (0..user_params.len()).map(|_| None).collect(),
-            return_type: PhpType::Void,
+            return_type,
             declared_return: true,
             ref_params: (0..user_params.len()).map(|_| false).collect(),
             declared_params: (0..user_params.len()).map(|_| true).collect(),
             variadic: None,
             deprecation: None,
         }
+    }
+
+    /// Builds a `__construct` `FunctionSig` over the given user params (no defaults,
+    /// no by-ref, no variadic). `$this` is NOT included: it is a backend convention
+    /// (hidden leading param), not a declared param, so `sig.params` lists only the
+    /// user params — matching the native `__construct` signature.
+    fn ctor_sig(user_params: &[(&str, PhpType)]) -> FunctionSig {
+        method_sig(user_params, PhpType::Void)
     }
 
     /// `new P(42)` where `P::__construct(int $v){ $this->x = $v; }` -> echo `$o->x` = "42".
@@ -4109,6 +4124,417 @@ mod tests {
         let err = generate(&module, Emit::Executable).expect_err("lowering should reject ctor args without __construct");
         assert!(
             err.to_string().contains("no __construct"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    // ----- P6d: vtable dispatch + MethodCall/StaticMethodCall -----
+
+    /// Builds an instance method `Function` named `{class}::{method}` with the given
+    /// result type and `$this` as hidden param 0 (slot 0). The body closure receives
+    /// the builder and the `$this` value id, and returns the method result (or `None`
+    /// for a void method). Mirrors the P6c `__construct` builder pattern.
+    fn instance_method_fn(
+        class: &str,
+        method: &str,
+        ret_ir: IrType,
+        ret_php: PhpType,
+        body: impl FnOnce(&mut Builder, ValueId) -> Option<ValueId>,
+    ) -> Function {
+        let mut f = Function::new(format!("{}::{}", class, method), ret_ir, ret_php);
+        f.flags.is_method = true;
+        f.params.push(FunctionParam {
+            name: "this".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Object),
+            php_type: PhpType::Object(class.to_string()),
+            by_ref: false,
+            variadic: false,
+        });
+        let this_slot = f.add_local(
+            Some("this".to_string()),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class.to_string()),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let this = b.emit_load_local(
+                this_slot,
+                IrType::Heap(IrHeapKind::Object),
+                PhpType::Object(class.to_string()),
+            );
+            let ret = body(&mut b, this);
+            b.terminate(Terminator::Return { value: ret });
+        }
+        f
+    }
+
+    /// Builds a static method `Function` named `{class}::{method}` with the given result
+    /// type and `__elephc_called_class_id` (i64) as hidden param 0 (slot 0). The body
+    /// closure receives the builder and the loaded `called_class_id` value id.
+    fn static_method_fn(
+        class: &str,
+        method: &str,
+        ret_ir: IrType,
+        ret_php: PhpType,
+        body: impl FnOnce(&mut Builder, ValueId) -> Option<ValueId>,
+    ) -> Function {
+        let mut f = Function::new(format!("{}::{}", class, method), ret_ir, ret_php);
+        f.flags.is_method = true;
+        f.flags.is_static = true;
+        f.params.push(FunctionParam {
+            name: "__elephc_called_class_id".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        let cid_slot = f.add_local(
+            Some("__elephc_called_class_id".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let cid = b.emit_load_local(cid_slot, IrType::I64, PhpType::Int);
+            let ret = body(&mut b, cid);
+            b.terminate(Terminator::Return { value: ret });
+        }
+        f
+    }
+
+    /// Emits `$obj->method(args...)` (Op::MethodCall): operands are `[receiver, args...]`,
+    /// the immediate is the interned method-name string. Returns the result value id.
+    fn emit_method_call(
+        b: &mut Builder,
+        receiver: ValueId,
+        method_data: DataId,
+        args: Vec<ValueId>,
+        result_ir: IrType,
+        result_php: PhpType,
+    ) -> ValueId {
+        let mut operands = vec![receiver];
+        operands.extend(args);
+        b.emit(
+            Op::MethodCall,
+            operands,
+            Some(Immediate::Data(method_data)),
+            result_ir,
+            result_php,
+            Ownership::Owned,
+        )
+        .expect("MethodCall lowers")
+    }
+
+    /// Emits `Receiver::method(args...)` (Op::StaticMethodCall): operands are the user
+    /// args only, the immediate is the interned `"Receiver::method"` string. Returns
+    /// the result value id.
+    fn emit_static_method_call(
+        b: &mut Builder,
+        target_data: DataId,
+        args: Vec<ValueId>,
+        result_ir: IrType,
+        result_php: PhpType,
+    ) -> ValueId {
+        b.emit(
+            Op::StaticMethodCall,
+            args,
+            Some(Immediate::Data(target_data)),
+            result_ir,
+            result_php,
+            Ownership::Owned,
+        )
+        .expect("StaticMethodCall lowers")
+    }
+
+    /// `new PdD1()->get()` where `get` is final -> direct call returns 7.
+    /// Verifies the direct (non-dispatched) MethodCall path: a final method occupies a
+    /// vtable slot but takes the direct call, and no dispatch stub is emitted for it.
+    #[test]
+    fn method_direct_call_returns_value() {
+        let class = "PdD1";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let get_data = module.data.intern_string("get");
+        let get_key = crate::names::php_symbol_key("get");
+        let mut ci = test_class_info(1, vec![], vec![], false);
+        ci.methods.insert(get_key.clone(), method_sig(&[], PhpType::Int));
+        ci.method_impl_classes.insert(get_key.clone(), class.to_string());
+        // `get` is final: it carries a vtable slot but takes the direct path (no dispatch).
+        ci.vtable_slots.insert(get_key.clone(), 0);
+        ci.final_methods.insert(get_key);
+        module.class_infos.insert(class.to_string(), ci);
+
+        module.class_methods.push(instance_method_fn(
+            class,
+            "get",
+            IrType::I64,
+            PhpType::Int,
+            |b, _this| Some(b.emit_const_i64(7)),
+        ));
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let r = emit_method_call(&mut b, obj, get_data, vec![], IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![r],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "7");
+        }
+    }
+
+    /// `PdD2::sm()` named static call returns 99. Verifies the true-static path: a
+    /// constant `called_class_id` (i64 hidden param 0) is pushed before the user args.
+    #[test]
+    fn static_method_named_direct_call() {
+        let class = "PdD2";
+        let mut module = Module::new(Target::wasm());
+        let target_data = module.data.intern_string("PdD2::sm");
+        let sm_key = crate::names::php_symbol_key("sm");
+        let mut ci = test_class_info(1, vec![], vec![], false);
+        ci.static_methods
+            .insert(sm_key.clone(), method_sig(&[], PhpType::Int));
+        ci.static_method_impl_classes
+            .insert(sm_key, class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+
+        module.class_methods.push(static_method_fn(
+            class,
+            "sm",
+            IrType::I64,
+            PhpType::Int,
+            |b, _cid| Some(b.emit_const_i64(99)),
+        ));
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let r = emit_static_method_call(&mut b, target_data, vec![], IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![r],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "99");
+        }
+    }
+
+    /// `PdD3Base::get()` -> 100, `PdD3Der` overrides `get()` -> 999. Both receivers
+    /// route to ONE introducer-scoped dispatch stub keyed by `class_id`; a Base object
+    /// prints 100 and a Der object prints 999, proving the override dispatches correctly.
+    #[test]
+    fn method_vtable_dispatch_calls_override() {
+        let base = "PdD3Base";
+        let der = "PdD3Der";
+        let mut module = Module::new(Target::wasm());
+        let base_data = module.data.intern_class_name(base);
+        let der_data = module.data.intern_class_name(der);
+        let get_data = module.data.intern_string("get");
+        let get_key = crate::names::php_symbol_key("get");
+
+        // Base (id 1): introduces the virtual `get` slot (index 0); not final.
+        let mut base_ci = test_class_info(1, vec![], vec![], false);
+        base_ci.methods.insert(get_key.clone(), method_sig(&[], PhpType::Int));
+        base_ci
+            .method_impl_classes
+            .insert(get_key.clone(), base.to_string());
+        base_ci.vtable_slots.insert(get_key.clone(), 0);
+        module.class_infos.insert(base.to_string(), base_ci);
+
+        // Der (id 2): inherits the slot (same index 0), overrides `get`.
+        let mut der_ci = test_class_info(2, vec![], vec![], false);
+        der_ci.parent = Some(base.to_string());
+        der_ci.methods.insert(get_key.clone(), method_sig(&[], PhpType::Int));
+        der_ci
+            .method_impl_classes
+            .insert(get_key.clone(), der.to_string());
+        der_ci.vtable_slots.insert(get_key.clone(), 0);
+        module.class_infos.insert(der.to_string(), der_ci);
+
+        module.class_methods.push(instance_method_fn(
+            base,
+            "get",
+            IrType::I64,
+            PhpType::Int,
+            |b, _this| Some(b.emit_const_i64(100)),
+        ));
+        module.class_methods.push(instance_method_fn(
+            der,
+            "get",
+            IrType::I64,
+            PhpType::Int,
+            |b, _this| Some(b.emit_const_i64(999)),
+        ));
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let bo = emit_object_new(&mut b, base, base_data);
+            let br = emit_method_call(&mut b, bo, get_data, vec![], IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![br],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let d = emit_object_new(&mut b, der, der_data);
+            let dr = emit_method_call(&mut b, d, get_data, vec![], IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![dr],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "100999");
+        }
+    }
+
+    /// `PdD4::caller()` returns `self::ig()` (55). Verifies the lexical instance
+    /// fallback: `self::ig` resolves to the instance method `ig` and forwards the
+    /// current `$this` (slot 0) as the receiver instead of pushing a `called_class_id`.
+    #[test]
+    fn static_self_lexical_instance_call() {
+        let class = "PdD4";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let ig_data = module.data.intern_string("self::ig");
+        let caller_data = module.data.intern_string("caller");
+        let ig_key = crate::names::php_symbol_key("ig");
+        let caller_key = crate::names::php_symbol_key("caller");
+        let mut ci = test_class_info(1, vec![], vec![], false);
+        ci.methods.insert(ig_key.clone(), method_sig(&[], PhpType::Int));
+        ci.method_impl_classes.insert(ig_key.clone(), class.to_string());
+        ci.methods.insert(caller_key.clone(), method_sig(&[], PhpType::Int));
+        ci.method_impl_classes
+            .insert(caller_key.clone(), class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+
+        module.class_methods.push(instance_method_fn(
+            class,
+            "ig",
+            IrType::I64,
+            PhpType::Int,
+            |b, _this| Some(b.emit_const_i64(55)),
+        ));
+        module.class_methods.push(instance_method_fn(
+            class,
+            "caller",
+            IrType::I64,
+            PhpType::Int,
+            |b, _this| Some(emit_static_method_call(b, ig_data, vec![], IrType::I64, PhpType::Int)),
+        ));
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let r = emit_method_call(&mut b, obj, caller_data, vec![], IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![r],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "55");
+        }
+    }
+
+    /// A method call on a `Mixed`-typed receiver is rejected with a clear diagnostic
+    /// (mixed/union dispatch is P6f scope). Mixed dispatch and static late-binding are
+    /// out of P6d scope and surface as `Unsupported` rather than miscompiling.
+    #[test]
+    fn method_on_mixed_receiver_rejected() {
+        let mut module = Module::new(Target::wasm());
+        let m_data = module.data.intern_string("m");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let n = b.emit_const_i64(7);
+            let mixed = b
+                .emit(
+                    Op::MixedBox,
+                    vec![n],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .expect("MixedBox lowers");
+            // Method call on a Mixed receiver must be rejected before any class lookup.
+            let _ = b.emit(
+                Op::MethodCall,
+                vec![mixed],
+                Some(Immediate::Data(m_data)),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        let err = generate(&module, Emit::Executable)
+            .expect_err("method call on a mixed receiver should be rejected");
+        assert!(
+            err.to_string().contains("mixed"),
             "unexpected error message: {err}"
         );
     }
