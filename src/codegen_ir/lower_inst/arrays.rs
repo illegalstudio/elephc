@@ -218,6 +218,7 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
+    ctx.writeback_global_array_source(array)?;
     Ok(())
 }
 
@@ -237,6 +238,7 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
+    ctx.writeback_global_array_source(array)?;
     Ok(())
 }
 

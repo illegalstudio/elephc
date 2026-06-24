@@ -101,6 +101,7 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, hash)?;
     }
+    ctx.writeback_global_array_source(hash)?;
     Ok(())
 }
 
@@ -121,6 +122,7 @@ pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instructio
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, hash)?;
     }
+    ctx.writeback_global_array_source(hash)?;
     Ok(())
 }
 

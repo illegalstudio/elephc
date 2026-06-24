@@ -576,3 +576,25 @@ fn web_keep_alive_reuses_connection() {
     assert!(resp1.contains("200") && resp1.contains("hi"), "resp1: {:?}", resp1);
     assert!(resp2.contains("200") && resp2.contains("hi"), "keep-alive reuse failed: {:?}", resp2);
 }
+
+/// Regression: a request with many query parameters must not corrupt $_GET. The
+/// superglobal assoc array grows past its initial capacity; before the fix the
+/// grown table pointer was not written back to global storage, corrupting the
+/// array (count went wrong / the worker crashed). 30 params must all survive.
+#[test]
+fn web_get_many_params_not_corrupted() {
+    let dir = make_test_dir("web_get_many");
+    let src = "<?php echo count($_GET) . '|' . ($_GET['p29'] ?? '?');";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let mut query = String::from("/?");
+    for i in 0..30 {
+        query.push_str(&format!("p{}={}&", i, i));
+    }
+    let resp = http_request(&addr, "GET", &query, &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("30|29"), "many-param $_GET corrupted: {:?}", resp);
+}

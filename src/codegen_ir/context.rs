@@ -352,6 +352,40 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
+    /// After an in-place hash/array mutation whose runtime helper returns the
+    /// possibly-reallocated container pointer in `value`'s register (already
+    /// persisted via `store_result_value`), writes that pointer back to global
+    /// storage when `value` was loaded from a global — i.e. a superglobal such as
+    /// `$_SERVER`/`$_GET`/`$_POST`. Mirrors the local-slot write-back that array
+    /// and hash set/append lowerings already perform; without it a global array
+    /// that grows past its initial capacity leaves the global symbol pointing at
+    /// freed storage (corruption / crash). No-op unless `value` came from
+    /// `Op::LoadGlobal`.
+    pub(super) fn writeback_global_array_source(&mut self, value: ValueId) -> Result<()> {
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(());
+        };
+        let Some(inst_ref) = self.function.instruction(inst) else {
+            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+        };
+        if inst_ref.op != Op::LoadGlobal {
+            return Ok(());
+        }
+        let Some(crate::ir::Immediate::GlobalName(data)) = inst_ref.immediate else {
+            return Ok(());
+        };
+        let name = self.global_name_data(data)?.to_string();
+        let symbol = crate::names::ir_global_symbol(&name);
+        let ty = self.value_php_type(value)?;
+        self.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
+        self.load_value_to_result(value)?;
+        abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);
+        Ok(())
+    }
+
     /// Stores an SSA value through a local ref-cell pointer slot.
     fn store_value_to_ref_cell_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
         let source_ty = self.load_value_to_result(value)?;
