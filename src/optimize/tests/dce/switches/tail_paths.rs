@@ -31,6 +31,7 @@ fn test_eliminate_dead_code_drops_trailing_empty_switch_cases() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -89,6 +90,7 @@ fn test_eliminate_dead_code_sinks_tail_into_switch_exit_paths() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -138,6 +140,7 @@ fn test_eliminate_dead_code_sinks_tail_into_switch_break_paths() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,

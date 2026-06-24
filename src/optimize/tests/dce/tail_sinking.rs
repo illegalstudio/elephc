@@ -42,6 +42,7 @@ fn test_eliminate_dead_code_reduces_empty_if_chain_to_needed_condition_checks() 
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -89,6 +90,7 @@ fn test_eliminate_dead_code_sinks_tail_into_if_fallthrough_branch() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -142,6 +144,7 @@ fn test_eliminate_dead_code_sinks_tail_into_implicit_else_path() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -196,6 +199,7 @@ fn test_eliminate_dead_code_sinks_tail_into_ifdef_fallthrough_paths() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -261,6 +265,7 @@ fn test_eliminate_dead_code_reduces_empty_if_to_effectful_condition_eval() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,

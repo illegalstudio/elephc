@@ -436,6 +436,7 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::FunctionDecl {
             name: "f".to_string(),
             params: vec![("x".to_string(), Some(TypeExpr::Int), None, false)],
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: Some(TypeExpr::Int),

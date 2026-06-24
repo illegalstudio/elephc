@@ -77,6 +77,7 @@ fn test_program_function_effects_recognize_pure_user_functions() {
         StmtKind::FunctionDecl {
             name: "len3".to_string(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -109,6 +110,7 @@ fn test_program_function_effects_propagate_throwing_calls() {
             StmtKind::FunctionDecl {
                 name: "boom".to_string(),
                 params: Vec::new(),
+                param_attributes: Vec::new(),
                 variadic: None,
                 variadic_type: None,
                 return_type: None,
@@ -129,6 +131,7 @@ fn test_program_function_effects_propagate_throwing_calls() {
             StmtKind::FunctionDecl {
                 name: "wrapper".to_string(),
                 params: Vec::new(),
+                param_attributes: Vec::new(),
                 variadic: None,
                 variadic_type: None,
                 return_type: None,

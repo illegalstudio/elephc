@@ -20,6 +20,7 @@ fn test_eliminate_dead_code_drops_unreachable_catches_after_non_throwing_try() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -58,6 +59,7 @@ fn test_eliminate_dead_code_drops_unreachable_catches_before_finally() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -96,6 +98,7 @@ fn test_eliminate_dead_code_drops_catches_shadowed_by_throwable() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -150,6 +153,7 @@ fn test_eliminate_dead_code_drops_duplicate_shadowed_catch_types() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -206,6 +210,7 @@ fn test_eliminate_dead_code_merges_identical_catches_exposed_by_shadow_drop() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,

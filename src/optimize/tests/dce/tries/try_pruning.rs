@@ -18,6 +18,7 @@ fn test_eliminate_dead_code_drops_statements_after_exhaustive_try_catch() {
         StmtKind::FunctionDecl {
             name: "answer".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -81,6 +82,7 @@ fn test_eliminate_dead_code_drops_empty_try_shell_created_by_branch_dce() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -117,6 +119,7 @@ fn test_eliminate_dead_code_keeps_unknown_truthy_switch_entry_before_matching_ca
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -182,6 +185,7 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -263,6 +267,7 @@ fn test_eliminate_dead_code_invalidates_outer_guard_before_catch_body_from_switc
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -349,6 +354,7 @@ fn test_eliminate_dead_code_ignores_unreachable_switch_throw_path_writes_before_
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -439,6 +445,7 @@ fn test_eliminate_dead_code_preserves_outer_guard_for_catch_when_only_non_throw_
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,

@@ -31,6 +31,7 @@ fn test_eliminate_dead_code_drops_empty_switch_shell_created_by_branch_dce() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,

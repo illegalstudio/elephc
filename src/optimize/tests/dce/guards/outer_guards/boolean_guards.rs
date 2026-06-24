@@ -35,6 +35,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_strict_bool_guard
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -85,6 +86,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_and_guard() {
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -132,6 +134,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_negated_and_guard
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -187,6 +190,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_or_false_branch()
         StmtKind::FunctionDecl {
             name: "main".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,

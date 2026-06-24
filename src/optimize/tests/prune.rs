@@ -127,6 +127,7 @@ fn test_prune_block_drops_statements_after_return() {
         StmtKind::FunctionDecl {
             name: "answer".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -155,6 +156,7 @@ fn test_prune_drops_pure_expr_stmt() {
         StmtKind::FunctionDecl {
             name: "answer".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -228,6 +230,7 @@ fn test_prune_block_drops_statements_after_exhaustive_if() {
         StmtKind::FunctionDecl {
             name: "answer".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
@@ -272,6 +275,7 @@ fn test_prune_block_drops_statements_after_exhaustive_switch() {
         StmtKind::FunctionDecl {
             name: "answer".into(),
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_type: None,
             return_type: None,
