@@ -55,6 +55,7 @@ const NATIVE_DEFAULT_NULL: i64 = 0;
 const NATIVE_DEFAULT_BOOL: i64 = 1;
 const NATIVE_DEFAULT_INT: i64 = 2;
 const NATIVE_DEFAULT_FLOAT: i64 = 3;
+const NATIVE_DEFAULT_EMPTY_ARRAY: i64 = 4;
 const NATIVE_MEMBER_ATTRIBUTE_METHOD: u8 = 0;
 const NATIVE_MEMBER_ATTRIBUTE_PROPERTY: u8 = 1;
 const NATIVE_ATTRIBUTE_ARGS_UNSUPPORTED: u8 = 0;
@@ -131,7 +132,7 @@ struct EvalNativeMemberAttributeRegistration {
     attribute_args: Option<Vec<AttrArgValue>>,
 }
 
-/// Scalar native callable default that can be registered with libelephc-magician.
+/// Native callable default that can be registered with libelephc-magician.
 enum EvalNativeCallableDefault {
     Scalar { kind: i64, payload: i64 },
     String(String),
@@ -1142,6 +1143,12 @@ fn eval_native_callable_default(expr: &Expr) -> Option<EvalNativeCallableDefault
             payload: value.to_bits() as i64,
         }),
         ExprKind::StringLiteral(value) => Some(EvalNativeCallableDefault::String(value.clone())),
+        ExprKind::ArrayLiteral(elements) if elements.is_empty() => {
+            Some(EvalNativeCallableDefault::Scalar {
+                kind: NATIVE_DEFAULT_EMPTY_ARRAY,
+                payload: 0,
+            })
+        }
         ExprKind::Negate(inner) => eval_native_callable_negated_default(inner),
         _ => None,
     }

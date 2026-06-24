@@ -342,8 +342,9 @@ reflected method is `__construct` or `__destruct`.
 `getNumberOfRequiredParameters()` report retained eval-declared function and
 method metadata, plus registered generated/AOT method parameter names, declared
 parameter and return types, required/optional counts, by-reference and variadic
-flags, and scalar or null default values when native method/static-method or
-constructor signatures are registered. Eval code can also reflect supported callable-builtin signatures, including
+flags, and scalar, null, or empty-array default values when native
+method/static-method or constructor signatures are registered. Eval code can
+also reflect supported callable-builtin signatures, including
 internal origin, parameter names, parameter types, and return type metadata.
 Eval-declared
 functions and methods expose declared-type presence for parameters and return types, simple
@@ -644,8 +645,9 @@ remaining class-system gaps are broader reflection APIs beyond the supported
 ReflectionClass/Function/Method/Parameter/Property/NamedType/UnionType/IntersectionType
 and attribute slice, Reflection type APIs beyond retained parameter, generated
 property, and function/method return metadata, broader
-parameter and generated property default-value materialization beyond the
-eval-supported constant-expression subset, object-valued generated defaults
+parameter and generated property default-value materialization beyond scalar
+or null defaults during generated/AOT invocation, empty-array defaults beyond
+metadata/reflection exposure, object-valued generated defaults
 beyond the supported parameter `new C(<supported scalar/null args>)` slice, and broader generated/AOT method bridge signatures beyond the current public
 non-by-reference fixed scalar/Mixed/object slice plus visibility-checked
 `__clone()` hooks. Generated/AOT method type

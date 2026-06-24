@@ -50,10 +50,10 @@ impl ElephcRuntimeOps {
     /// Packs source-order argument cells into the boxed eval array ABI.
     fn arg_array(args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
         let arg_array = unsafe { __elephc_eval_value_array_new(args.len() as u64) };
-        let arg_array = Self::handle(arg_array)?;
+        let mut arg_array = Self::handle(arg_array)?;
         for (index, value) in args.into_iter().enumerate() {
             let index = Self::handle(unsafe { __elephc_eval_value_int(index as i64) })?;
-            Self::handle(unsafe {
+            arg_array = Self::handle(unsafe {
                 __elephc_eval_value_array_set(arg_array.as_ptr(), index.as_ptr(), value.as_ptr())
             })?;
         }

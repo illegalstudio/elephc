@@ -4526,7 +4526,7 @@ fn bind_native_signature_args(
         .ok_or(EvalStatus::RuntimeFatal)
 }
 
-/// Allocates a fresh runtime cell for one registered native AOT scalar default.
+/// Allocates a fresh runtime cell for one invocation-safe native AOT default.
 fn materialize_native_callable_default(
     default: &NativeCallableDefault,
     values: &mut impl RuntimeValueOps,
@@ -4537,6 +4537,7 @@ fn materialize_native_callable_default(
         NativeCallableDefault::Int(value) => values.int(*value),
         NativeCallableDefault::Float(value) => values.float(*value),
         NativeCallableDefault::String(value) => values.string(value),
+        NativeCallableDefault::EmptyArray => Err(EvalStatus::RuntimeFatal),
     }
 }
 
