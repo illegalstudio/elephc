@@ -8957,6 +8957,16 @@ foreach ((new ReflectionClass("EvalAotReflectPropertyDefaultTarget"))->getProper
 echo "listed:";
 echo $listed->hasDefaultValue() ? "D:" : "d:";
 echo $listed->getDefaultValue();
+$defaults = (new ReflectionClass("EvalAotReflectPropertyDefaultTarget"))->getDefaultProperties();
+echo "|defaults:";
+echo $defaults["label"] . ":";
+echo $defaults["count"] . ":";
+echo $defaults["base"] . ":";
+echo array_key_exists("implicit", $defaults) && $defaults["implicit"] === null ? "I:" : "i:";
+echo array_key_exists("nullable", $defaults) && $defaults["nullable"] === null ? "N:" : "n:";
+echo $defaults["flag"] ? "F:" : "f:";
+echo $defaults["neg"] . ":";
+echo array_key_exists("typed", $defaults) ? "T" : "t";
 ');
 "#,
     );
@@ -8967,7 +8977,7 @@ echo $listed->getDefaultValue();
     );
     assert_eq!(
         out.stdout,
-        "count:D:7|label:D:ok|nullable:D:null|implicit:D:null|typed:d:null|base:D:3|flag:D:1|neg:D:-1.5|listed:D:7"
+        "count:D:7|label:D:ok|nullable:D:null|implicit:D:null|typed:d:null|base:D:3|flag:D:1|neg:D:-1.5|listed:D:7|defaults:ok:7:3:I:N:F:-1.5:t"
     );
 }
 

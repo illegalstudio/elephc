@@ -296,7 +296,8 @@ names, declared parameter types, declared return types, required/optional
 counts, and registered scalar, null, empty-array, or supported object-valued default values for generated
 constructor, instance-method, and static-method signatures. AOT property
 reflection exposes registered declared property types and supported scalar,
-string, or null default values for generated property metadata. AOT method and
+string, or null default values for generated property metadata, including
+`ReflectionClass::getDefaultProperties()`. AOT method and
 property/class-constant reflection expose generated member attributes when
 their arguments fit the materializable literal subset.
 `ReflectionMethod::getDeclaringClass()` and
