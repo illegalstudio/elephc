@@ -3843,27 +3843,25 @@ fn eval_reflection_class_new_instance_result(
         return Ok(None);
     };
     if let Some(class) = context.class(&reflected_name).cloned() {
-        let mut scope = ElephcEvalScope::new();
-        return eval_dynamic_class_new_object(
-            &class,
-            constructor_args,
-            context,
-            &mut scope,
-            values,
-        )
-        .map(Some);
+        return eval_reflection_public_constructor_scope(context, values, |context, values| {
+            let mut scope = ElephcEvalScope::new();
+            eval_dynamic_class_new_object(&class, constructor_args, context, &mut scope, values)
+                .map(Some)
+        });
     }
     let class_name = context
         .resolve_class_name(&reflected_name)
         .unwrap_or(reflected_name);
-    let args = bind_native_callable_args(
-        context.native_constructor_signature(&class_name),
-        constructor_args,
-        values,
-    )?;
-    let instance = values.new_object(&class_name)?;
-    values.construct_object(instance, args)?;
-    Ok(Some(instance))
+    eval_reflection_public_constructor_scope(context, values, |context, values| {
+        let args = bind_native_callable_args(
+            context.native_constructor_signature(&class_name),
+            constructor_args,
+            values,
+        )?;
+        let instance = values.new_object(&class_name)?;
+        values.construct_object(instance, args)?;
+        Ok(Some(instance))
+    })
 }
 
 /// Expands the single `ReflectionClass::newInstanceArgs()` array argument.
@@ -3873,6 +3871,18 @@ fn eval_reflection_class_new_instance_args(
 ) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("args")], evaluated_args)?;
     eval_array_call_arg_values(args[0], values)
+}
+
+/// Runs ReflectionClass construction with only public constructor visibility.
+fn eval_reflection_public_constructor_scope<T, V: RuntimeValueOps>(
+    context: &mut ElephcEvalContext,
+    values: &mut V,
+    action: impl FnOnce(&mut ElephcEvalContext, &mut V) -> Result<T, EvalStatus>,
+) -> Result<T, EvalStatus> {
+    context.push_class_scope(String::new());
+    let result = action(context, values);
+    context.pop_class_scope();
+    result
 }
 
 /// Allocates the class named by a materialized eval `ReflectionClass` without running `__construct()`.

@@ -11097,6 +11097,49 @@ echo $fourth->label();');
     assert_eq!(out, "EF:GH:IJ:KL");
 }
 
+/// Verifies eval ReflectionClass::newInstance rejects non-public eval constructors like PHP.
+#[test]
+fn test_eval_reflection_class_new_instance_rejects_private_eval_constructor() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalReflectNewPrivateCtor {
+    private function __construct() {}
+}
+$ref = new ReflectionClass("EvalReflectNewPrivateCtor");
+$ref->newInstance();');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "unexpected stderr: {err}"
+    );
+}
+
+/// Verifies eval ReflectionClass::newInstance rejects non-public AOT constructors like PHP.
+#[test]
+fn test_eval_reflection_class_new_instance_rejects_protected_aot_constructor_from_child_scope() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalReflectNewProtectedAotCtorBase {
+    protected function __construct() {}
+}
+
+class EvalReflectNewProtectedAotCtorChild extends EvalReflectNewProtectedAotCtorBase {
+    public static function run(): void {
+        eval('$ref = new ReflectionClass("EvalReflectNewProtectedAotCtorBase");
+            $ref->newInstance();');
+    }
+}
+
+EvalReflectNewProtectedAotCtorChild::run();
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "unexpected stderr: {err}"
+    );
+}
+
 /// Verifies eval ReflectionMethod::invoke and invokeArgs call eval-declared methods.
 #[test]
 fn test_eval_reflection_method_invoke_calls_eval_method() {
@@ -11637,6 +11680,100 @@ echo eval('$box = new EvalDynamicNewOneArgCtor(11); return $box->x;');
 "#,
     );
     assert_eq!(out, "11");
+}
+
+/// Verifies eval object construction can call private AOT constructors from the declaring scope.
+#[test]
+fn test_eval_dynamic_new_runs_private_constructor_from_declaring_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewPrivateCtor {
+    public int $x = 0;
+    private function __construct(int $x) { $this->x = $x + 2; }
+
+    public static function run(): void {
+        $box = eval('return new EvalDynamicNewPrivateCtor(3);');
+        echo $box->x;
+    }
+}
+
+EvalDynamicNewPrivateCtor::run();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval object construction rejects private AOT constructors outside the declaring scope.
+#[test]
+fn test_eval_dynamic_new_rejects_private_constructor_from_child_scope() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalDynamicNewPrivateCtorBase {
+    private function __construct(int $x) {}
+}
+
+class EvalDynamicNewPrivateCtorChild extends EvalDynamicNewPrivateCtorBase {
+    public static function run(): void {
+        eval('return new EvalDynamicNewPrivateCtorBase(3);');
+    }
+}
+
+EvalDynamicNewPrivateCtorChild::run();
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "unexpected stderr: {err}"
+    );
+}
+
+/// Verifies eval object construction can call protected AOT constructors from child scopes.
+#[test]
+fn test_eval_dynamic_new_runs_protected_constructor_from_child_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewProtectedCtorBase {
+    public int $x = 0;
+    protected function __construct(int $x) { $this->x = $x + 2; }
+}
+
+class EvalDynamicNewProtectedCtorChild extends EvalDynamicNewProtectedCtorBase {
+    public static function run(): void {
+        $box = eval('return new EvalDynamicNewProtectedCtorBase(3);');
+        echo $box->x;
+    }
+}
+
+EvalDynamicNewProtectedCtorChild::run();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval object construction rejects protected AOT constructors between sibling scopes.
+#[test]
+fn test_eval_dynamic_new_rejects_protected_constructor_from_sibling_scope() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalDynamicNewProtectedCtorSiblingBase {}
+
+class EvalDynamicNewProtectedCtorLeft extends EvalDynamicNewProtectedCtorSiblingBase {
+    protected function __construct(int $x) {}
+}
+
+class EvalDynamicNewProtectedCtorRight extends EvalDynamicNewProtectedCtorSiblingBase {
+    public static function run(): void {
+        eval('return new EvalDynamicNewProtectedCtorLeft(3);');
+    }
+}
+
+EvalDynamicNewProtectedCtorRight::run();
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "unexpected stderr: {err}"
+    );
 }
 
 /// Verifies eval object construction fills registered AOT constructor defaults.

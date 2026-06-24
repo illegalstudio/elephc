@@ -450,15 +450,22 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         }
     }
 
-    /// Calls a public AOT constructor through the generated user bridge when one exists.
+    /// Calls an AOT constructor through the generated user bridge when one exists.
     fn construct_object(
         &mut self,
         object: RuntimeCellHandle,
         args: Vec<RuntimeCellHandle>,
     ) -> Result<(), EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let arg_array = Self::arg_array(args)?;
-        let ok =
-            unsafe { __elephc_eval_value_construct_object(object.as_ptr(), arg_array.as_ptr()) };
+        let ok = unsafe {
+            __elephc_eval_value_construct_object(
+                object.as_ptr(),
+                arg_array.as_ptr(),
+                scope_ptr,
+                scope_len,
+            )
+        };
         unsafe {
             __elephc_eval_value_release(arg_array.as_ptr());
         }

@@ -561,7 +561,7 @@ fn eval_native_constructor_registrations(
         let Some(signature) = class_info.methods.get(&method_key) else {
             continue;
         };
-        let bridge_supported = class_method_is_public(class_info, &method_key)
+        let bridge_supported = class_method_visibility_bridge_supported(class_info, &method_key)
             && constructor_signature_can_bridge_with_eval(signature);
         registrations.push(EvalNativeConstructorRegistration {
             class_name: class_name.clone(),
@@ -1265,14 +1265,6 @@ fn encode_eval_native_default_string(bytes: &mut Vec<u8>, value: &str) {
     let len = u32::try_from(value.len()).unwrap_or(u32::MAX);
     bytes.extend_from_slice(&len.to_le_bytes());
     bytes.extend_from_slice(value.as_bytes());
-}
-
-/// Returns true when an instance method is public in the class metadata.
-fn class_method_is_public(class_info: &ClassInfo, method_name: &str) -> bool {
-    class_info
-        .method_visibilities
-        .get(method_name)
-        .is_none_or(|visibility| matches!(visibility, Visibility::Public))
 }
 
 /// Returns true when eval can enforce this instance method visibility in the bridge.
