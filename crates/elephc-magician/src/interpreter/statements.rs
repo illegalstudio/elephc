@@ -2601,16 +2601,21 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
     {
         return Ok(value);
     }
-    let class_name = resolve_eval_static_class_like_name(class_name, context)?;
+    let class_name = resolve_eval_static_member_class_name(class_name, context)?;
     if let Some(case) = context.enum_case(&class_name, constant_name) {
         return Ok(case);
     }
-    let (declaring_class, constant) = context
-        .class_constant(&class_name, constant_name)
-        .ok_or(EvalStatus::RuntimeFatal)?;
-    validate_eval_member_access(&declaring_class, constant.visibility(), context)?;
-    context
-        .class_constant_cell(&declaring_class, constant.name())
+    if let Some((declaring_class, constant)) = context.class_constant(&class_name, constant_name) {
+        validate_eval_member_access(&declaring_class, constant.visibility(), context)?;
+        return context
+            .class_constant_cell(&declaring_class, constant.name())
+            .ok_or(EvalStatus::RuntimeFatal);
+    }
+    if eval_static_member_context_owns_class(&class_name, context) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    values
+        .class_constant_get(&class_name, constant_name)?
         .ok_or(EvalStatus::RuntimeFatal)
 }
 
@@ -3130,19 +3135,6 @@ fn eval_static_member_context_owns_class(
         || context.has_interface(class_name)
         || context.has_trait(class_name)
         || context.has_enum(class_name)
-}
-
-/// Resolves `self`, `parent`, `static`, and named class-like receivers for constant access.
-fn resolve_eval_static_class_like_name(
-    class_name: &str,
-    context: &ElephcEvalContext,
-) -> Result<String, EvalStatus> {
-    match class_name.to_ascii_lowercase().as_str() {
-        "self" | "parent" | "static" => resolve_eval_static_class_name(class_name, context),
-        _ => context
-            .resolve_class_like_name(class_name)
-            .ok_or(EvalStatus::RuntimeFatal),
-    }
 }
 
 /// Resolves class-name literal receivers without requiring named classes to exist.

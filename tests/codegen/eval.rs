@@ -5346,6 +5346,127 @@ echo (new EvalAotScopeParentChild())->run();
     assert_eq!(out, "parent");
 }
 
+/// Verifies eval fragments read generated/AOT class constants through inherited class scope.
+#[test]
+fn test_eval_fragment_reads_aot_class_constants() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotConstBase {
+    public const PUBLIC_BASE = 4;
+    protected const PROTECTED_BASE = "base";
+}
+
+class EvalAotConstChild extends EvalAotConstBase {
+    private const SECRET = "secret";
+    public const SUM = self::PUBLIC_BASE + 6;
+
+    public function run() {
+        return eval('return self::SECRET . ":" . parent::PROTECTED_BASE . ":" . static::SUM;');
+    }
+}
+
+enum EvalAotConstState {
+    case Ready;
+}
+
+echo (new EvalAotConstChild())->run();
+echo ":";
+echo eval('return EvalAotConstChild::PUBLIC_BASE . ":" . (EvalAotConstState::Ready === EvalAotConstState::Ready ? "case" : "bad");');
+"#,
+    );
+    assert_eq!(out, "secret:base:10:4:case");
+}
+
+/// Verifies eval Reflection hides private AOT constants inherited from a parent class.
+#[test]
+fn test_eval_reflection_hides_private_inherited_aot_class_constants() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotPrivateConstBase {
+    private const HIDDEN = "hidden";
+    protected const VISIBLE = "visible";
+}
+
+class EvalAotPrivateConstChild extends EvalAotPrivateConstBase {}
+
+echo eval('$ref = new ReflectionClass("EvalAotPrivateConstChild");
+$private = $ref->getConstants(ReflectionClassConstant::IS_PRIVATE);
+echo $ref->hasConstant("HIDDEN") ? "bad" : "ok";
+echo ":" . count($private);
+echo ":" . $ref->getConstant("VISIBLE");
+return "";');
+"#,
+    );
+    assert_eq!(out, "ok:0:visible");
+}
+
+/// Verifies eval rejects direct fetches of private AOT constants through child names.
+#[test]
+fn test_eval_rejects_private_inherited_aot_class_constant_fetch() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalAotPrivateConstFetchBase {
+    private const HIDDEN = "hidden";
+}
+
+class EvalAotPrivateConstFetchChild extends EvalAotPrivateConstFetchBase {}
+
+eval('return EvalAotPrivateConstFetchChild::HIDDEN;');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "unexpected stderr: {err}"
+    );
+}
+
+/// Verifies eval ReflectionClass exposes generated/AOT class constants and reflectors.
+#[test]
+fn test_eval_reflection_aot_class_constants() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalAotReflectConstIface {
+    public const IFACE_LIMIT = 8;
+}
+
+class EvalAotReflectConstBase {
+    public const BASE = 4;
+    protected const LIMIT = 5;
+}
+
+class EvalAotReflectConstChild extends EvalAotReflectConstBase implements EvalAotReflectConstIface {
+    private const SECRET = "s";
+    final public const OWN = self::BASE + 6;
+}
+
+enum EvalAotReflectConstEnum {
+    case Ready;
+    public const LEVEL = 7;
+}
+
+echo eval('$ref = new ReflectionClass("EvalAotReflectConstChild");
+echo $ref->hasConstant("OWN") ? "O" : "o";
+echo $ref->hasConstant("BASE") ? "B" : "b";
+echo $ref->hasConstant("IFACE_LIMIT") ? "I" : "i";
+echo $ref->hasConstant("own") ? "bad" : "z";
+$all = $ref->getConstants();
+$private = $ref->getConstants(ReflectionClassConstant::IS_PRIVATE);
+$final = $ref->getReflectionConstants(filter: ReflectionClassConstant::IS_FINAL);
+$own = $ref->getReflectionConstant("OWN");
+$direct = new ReflectionClassConstant("EvalAotReflectConstChild", "SECRET");
+echo ":" . $ref->getConstant("OWN") . ":" . $ref->getConstant("SECRET") . ":" . $all["BASE"] . ":" . $all["IFACE_LIMIT"];
+echo ":" . count($private) . ":" . $private["SECRET"];
+echo ":" . count($final) . ":" . $own->getName() . ":" . $own->getValue() . ":" . ($own->isFinal() ? "F" : "f");
+echo ":" . $direct->getDeclaringClass()->getName() . ":" . $direct->getValue();
+$enum = new ReflectionClass("EvalAotReflectConstEnum");
+$case = $enum->getReflectionConstant("Ready");
+echo ":" . ($case->getValue() === EvalAotReflectConstEnum::Ready ? "case" : "bad") . ":" . $enum->getConstant("LEVEL");
+return "";');
+"#,
+    );
+    assert_eq!(out, "OBIz:10:s:4:8:1:s:1:OWN:10:F:EvalAotReflectConstChild:s:case:7");
+}
+
 /// Verifies eval fragments can unpack numeric arrays into public AOT method calls.
 #[test]
 fn test_eval_fragment_can_call_this_public_method_with_spread_args() {

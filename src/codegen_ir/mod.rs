@@ -14,6 +14,7 @@
 
 mod block_emit;
 mod context;
+mod eval_class_constant_helpers;
 mod eval_constructor_helpers;
 mod eval_method_helpers;
 mod eval_property_helpers;
@@ -156,6 +157,11 @@ fn finalize_user_asm(
 ) -> String {
     eval_property_helpers::emit_eval_property_helpers(module, &mut emitter, &mut data);
     eval_static_property_helpers::emit_eval_static_property_helpers(module, &mut emitter, &mut data);
+    eval_class_constant_helpers::emit_eval_class_constant_helpers(
+        module,
+        &mut emitter,
+        &mut data,
+    );
     eval_constructor_helpers::emit_eval_constructor_helpers(module, &mut emitter, &mut data);
     eval_method_helpers::emit_eval_method_helpers(module, &mut emitter, &mut data);
     eval_reflection_helpers::emit_eval_reflection_helpers(module, &mut emitter);

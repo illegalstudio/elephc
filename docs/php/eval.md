@@ -71,7 +71,7 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Expression area | Support |
 |---|---|
 | Scalars | `null`, booleans, integers, floats, and strings. |
-| Variables and properties | Variable reads, `$this->property` reads/writes from native methods including public/protected/private scalar, nullable-int, string, Mixed, array, and object AOT property slots when eval is executing in a PHP-visible native class scope, dynamic `stdClass` properties, eval object property access including `__get()` / `__set()` fallback for missing or inaccessible eval properties, `isset()`, `empty()`, and `unset()` magic property dispatch through `__isset()` / `__unset()`, `instanceof` over static and dynamic class/interface targets, eval-declared static property access, public/protected/private scalar/nullable-int/string/Mixed/array/object AOT static property access from PHP-visible native class scopes, and class constant fetches through the bridge. |
+| Variables and properties | Variable reads, `$this->property` reads/writes from native methods including public/protected/private scalar, nullable-int, string, Mixed, array, and object AOT property slots when eval is executing in a PHP-visible native class scope, dynamic `stdClass` properties, eval object property access including `__get()` / `__set()` fallback for missing or inaccessible eval properties, `isset()`, `empty()`, and `unset()` magic property dispatch through `__isset()` / `__unset()`, `instanceof` over static and dynamic class/interface targets, eval-declared static property access, public/protected/private scalar/nullable-int/string/Mixed/array/object AOT static property access from PHP-visible native class scopes, and public/protected/private generated/AOT class-like constant fetches through the bridge. |
 | Arrays | Indexed and associative literals, modern `[...]` and legacy `array(...)`, keyed elements, append writes (`$array[] = value`), numeric-index reads/writes, string-key reads/writes, and eval-declared or generated/AOT `ArrayAccess` object reads, writes, appends, `isset()`, `empty()`, and `unset()` through `offsetGet()`, `offsetSet()`, `offsetExists()`, and `offsetUnset()`. |
 | Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, invokable eval objects, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
 | Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; `new self()`, `new static()`, and `new parent()` inside eval-declared methods; anonymous `new class [(args)] [extends Parent] [implements Iface, ...] { ... }` expressions; `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, positional variadic tails, array-typed arguments, iterable-typed arguments, object-typed arguments, and registered scalar, nullable-int, null, empty-array, or supported object-valued default arguments for public/protected/private non-by-reference scalar/nullable-int/Mixed/array/iterable/object constructor signatures when the current eval class scope satisfies PHP visibility. |
@@ -274,7 +274,10 @@ member lists to be materialized on the `ReflectionClass` object.
 `getReflectionConstant()`, and `getReflectionConstants()` expose eval-visible
 class constants, interface constants, trait constants, enum constants, enum
 cases, supported materialized property defaults, and current eval-declared
-static property values. Constant lookup is case-sensitive; single-value
+static property values. For generated/AOT class-like symbols, the constant APIs
+also expose materializable scalar, string, null, `::class`, simple arithmetic or
+concatenation, and enum-case constant metadata through runtime hooks. Constant
+lookup is case-sensitive; single-value
 lookups return `false` when no constant or case is visible. `getConstants()`
 and `getReflectionConstants()` accept PHP's `ReflectionClassConstant::IS_*`
 visibility/finality filter bitmask; `null` means no filter and `0` returns no

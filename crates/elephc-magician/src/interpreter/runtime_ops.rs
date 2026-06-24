@@ -94,6 +94,13 @@ pub trait RuntimeValueOps {
         value: RuntimeCellHandle,
     ) -> Result<bool, EvalStatus>;
 
+    /// Reads a generated/AOT class-like constant through the generated bridge.
+    fn class_constant_get(
+        &mut self,
+        class_name: &str,
+        constant: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus>;
+
     /// Creates a shallow clone of a runtime object held in a boxed Mixed cell.
     fn object_clone_shallow(
         &mut self,
@@ -195,6 +202,33 @@ pub trait RuntimeValueOps {
 
     /// Returns generated AOT ReflectionProperty names visible for one class.
     fn reflection_property_names(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Returns generated AOT ReflectionClassConstant values without visibility checks.
+    fn reflection_constant_value(
+        &mut self,
+        class_name: &str,
+        constant_name: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus>;
+
+    /// Returns generated AOT ReflectionClassConstant flags for a class/constant pair.
+    fn reflection_constant_flags(
+        &mut self,
+        class_name: &str,
+        constant_name: &str,
+    ) -> Result<Option<u64>, EvalStatus>;
+
+    /// Returns the generated AOT declaring class for a class/constant pair.
+    fn reflection_constant_declaring_class(
+        &mut self,
+        class_name: &str,
+        constant_name: &str,
+    ) -> Result<Option<String>, EvalStatus>;
+
+    /// Returns generated AOT ReflectionClassConstant names visible for one class.
+    fn reflection_constant_names(
         &mut self,
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;

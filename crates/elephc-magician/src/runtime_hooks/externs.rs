@@ -72,6 +72,14 @@ unsafe extern "C" {
         scope_ptr: *const u8,
         scope_len: u64,
     ) -> u64;
+    pub(super) fn __elephc_eval_value_class_constant_get(
+        class_ptr: *const u8,
+        class_len: u64,
+        name_ptr: *const u8,
+        name_len: u64,
+        scope_ptr: *const u8,
+        scope_len: u64,
+    ) -> *mut RuntimeCell;
     /// Returns a boxed shallow clone for stdClass/eval object storage.
     pub(super) fn __elephc_eval_value_object_clone_shallow(
         object: *mut RuntimeCell,
@@ -157,6 +165,28 @@ unsafe extern "C" {
         property_len: u64,
     ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_reflection_property_names(
+        class_ptr: *const u8,
+        class_len: u64,
+    ) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_reflection_constant_value(
+        class_ptr: *const u8,
+        class_len: u64,
+        constant_ptr: *const u8,
+        constant_len: u64,
+    ) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_reflection_constant_flags(
+        class_ptr: *const u8,
+        class_len: u64,
+        constant_ptr: *const u8,
+        constant_len: u64,
+    ) -> u64;
+    pub(super) fn __elephc_eval_reflection_constant_declaring_class(
+        class_ptr: *const u8,
+        class_len: u64,
+        constant_ptr: *const u8,
+        constant_len: u64,
+    ) -> *mut RuntimeCell;
+    pub(super) fn __elephc_eval_reflection_constant_names(
         class_ptr: *const u8,
         class_len: u64,
     ) -> *mut RuntimeCell;
