@@ -221,6 +221,22 @@ fn http_request(addr: &str, method: &str, path: &str, headers: &[(&str, &str)], 
     buf
 }
 
+/// Like `http_request` GET, but tolerates a refused/reset connection (returns the
+/// empty string). Used while a worker is crashing/respawning.
+fn try_http_get(addr: &str, path: &str) -> String {
+    use std::io::{Read, Write};
+    let Ok(mut s) = std::net::TcpStream::connect(addr) else {
+        return String::new();
+    };
+    let req = format!("GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", path, addr);
+    if s.write_all(req.as_bytes()).is_err() {
+        return String::new();
+    }
+    let mut buf = String::new();
+    let _ = s.read_to_string(&mut buf);
+    buf
+}
+
 /// Verifies the extern getters are callable from --web PHP and return request data.
 #[test]
 fn web_extern_method_getter() {
@@ -505,4 +521,31 @@ fn web_sigterm_shuts_down_cleanly() {
         std::thread::sleep(Duration::from_millis(50));
     };
     assert_eq!(status.code(), Some(0), "master should exit 0 on SIGTERM");
+}
+
+/// Verifies that a worker which dies mid-request is respawned, so the single-worker
+/// server keeps serving subsequent requests.
+#[test]
+fn web_worker_respawns_after_crash() {
+    let dir = make_test_dir("web_respawn");
+    let src = "<?php if (($_SERVER['REQUEST_URI'] ?? '') === '/crash') { exit(1); } echo \"alive\";";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    assert!(http_request(&addr, "GET", "/", &[], "").ends_with("alive"));
+    // Crash the only worker (the connection is dropped mid-handler).
+    let _ = try_http_get(&addr, "/crash");
+    // The master must respawn a worker; retry until / serves again.
+    let mut served = false;
+    for _ in 0..40 {
+        if try_http_get(&addr, "/").ends_with("alive") {
+            served = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(served, "worker was not respawned after a crash");
 }

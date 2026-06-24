@@ -101,6 +101,24 @@ fn default_workers() -> usize {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
 }
 
+/// Forks one worker child that serves forever, returning the child pid in the
+/// master. The child restores default signal disposition and never returns. A
+/// fork failure aborts the whole process. Used for both initial spawn and respawn.
+fn spawn_worker(listen: &str, handler: extern "C" fn(), max_body: usize) -> libc::pid_t {
+    match unsafe { libc::fork() } {
+        -1 => {
+            eprintln!("error: fork failed");
+            std::process::exit(1);
+        }
+        0 => {
+            reset_signal_handlers_to_default();
+            worker::serve(listen, handler, max_body);
+            std::process::exit(0);
+        }
+        pid => pid,
+    }
+}
+
 /// Server entry: parse args, prefork workers, supervise. Returns an exit code.
 ///
 /// # Safety
@@ -120,17 +138,7 @@ pub extern "C" fn elephc_web_run(
     // Fork workers BEFORE creating any tokio runtime.
     let mut children: Vec<libc::pid_t> = Vec::new();
     for _ in 0..args.workers {
-        match unsafe { libc::fork() } {
-            -1 => { eprintln!("error: fork failed"); return 1; }
-            0 => {
-                // Child: restore default signal disposition (so a forwarded
-                // SIGTERM terminates it), then serve forever.
-                reset_signal_handlers_to_default();
-                worker::serve(&args.listen, handler, args.max_body);
-                std::process::exit(0);
-            }
-            pid => children.push(pid),
-        }
+        children.push(spawn_worker(&args.listen, handler, args.max_body));
     }
     // Supervise: wait for any child; break on a shutdown request (SIGINT/SIGTERM).
     loop {
@@ -144,7 +152,10 @@ pub extern "C" fn elephc_web_run(
         }
         if pid > 0 {
             children.retain(|&c| c != pid);
-            if children.is_empty() {
+            if !SHUTDOWN.load(Ordering::SeqCst) {
+                // A worker died unexpectedly: replace it to keep the pool at N.
+                children.push(spawn_worker(&args.listen, handler, args.max_body));
+            } else if children.is_empty() {
                 break;
             }
         } else if pid == -1 {
