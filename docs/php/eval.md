@@ -326,9 +326,10 @@ tracked reflectors when the reflected method has declared parameter types;
 the lowered call supports instance and static methods, constructors returned by
 `ReflectionClass::getConstructor()`, method-name
 case-insensitivity, defaults, and named arguments. Generated/AOT
-invoke targets whose parameter types only come from call-site inference and
-runtime-only or non-literal argument arrays still require richer
-runtime/typechecker support.
+bridge-supported invoke targets also bypass public/protected/private visibility
+like PHP reflection. Generated/AOT invoke targets whose parameter types only
+come from call-site inference and runtime-only or non-literal argument arrays
+still require richer runtime/typechecker support.
 Eval-declared method parameter type hints are checked when the method is
 entered. Supported checks include scalar hints with PHP-style weak scalar
 coercion, `array`, `object`, `iterable`, `mixed`, nullable/union forms, and

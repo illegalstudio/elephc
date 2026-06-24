@@ -8975,7 +8975,7 @@ echo $listed->getDeclaringClass()->getName();
     );
 }
 
-/// Verifies eval ReflectionMethod::invoke can dispatch public generated/AOT methods.
+/// Verifies eval ReflectionMethod::invoke can dispatch generated/AOT methods.
 #[test]
 fn test_eval_reflection_method_invoke_calls_aot_method() {
     let out = compile_and_run_capture(
@@ -9014,6 +9014,35 @@ return $join->invokeArgs($object, ["b" => "2", "a" => "1"]);');
         out.stdout,
         "EvalAotReflectInvokeChild:EvalAotReflectInvokeBase:XY:EvalAotReflectInvokeBase:AS:QB:12"
     );
+}
+
+/// Verifies eval ReflectionMethod::invoke bypasses generated/AOT method visibility.
+#[test]
+fn test_eval_reflection_method_invoke_bypasses_aot_method_visibility() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectVisibilityBox {
+    private function secret(int $n): int {
+        return $n + 2;
+    }
+
+    protected static function label(string $value): string {
+        return "H" . $value;
+    }
+}
+
+echo eval('$object = new EvalAotReflectVisibilityBox();
+$secret = new ReflectionMethod(EvalAotReflectVisibilityBox::class, "secret");
+$label = new ReflectionMethod(EvalAotReflectVisibilityBox::class, "label");
+return $secret->invoke($object, 3) . ":" . $label->invoke(null, "x");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "5:Hx");
 }
 
 /// Verifies eval ReflectionMethod exposes registered generated/AOT parameter metadata.
