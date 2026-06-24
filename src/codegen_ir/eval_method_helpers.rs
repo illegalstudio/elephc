@@ -8,8 +8,8 @@
 //! Key details:
 //! - The cacheable runtime object cannot know user class ids, method symbols,
 //!   or return types, so this bridge is emitted into the user assembly.
-//! - This method-call slice supports public AOT methods plus non-public
-//!   `__clone` hooks after interpreter-side visibility checks.
+//! - This method-call slice supports public methods plus protected/private
+//!   methods when the active eval class scope satisfies PHP visibility.
 
 use std::collections::BTreeMap;
 
@@ -19,7 +19,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::ir::{Function, LocalKind, Module};
-use crate::names::{method_symbol, php_symbol_key, static_method_symbol};
+use crate::names::{method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
@@ -30,6 +30,8 @@ struct EvalMethodSlot {
     class_name: String,
     method: String,
     impl_class: String,
+    visibility: Visibility,
+    allowed_scopes: Vec<String>,
     params: Vec<PhpType>,
     return_ty: PhpType,
 }
@@ -41,6 +43,8 @@ struct EvalStaticMethodSlot {
     class_name: String,
     method: String,
     impl_class: String,
+    visibility: Visibility,
+    allowed_scopes: Vec<String>,
     params: Vec<PhpType>,
     return_ty: PhpType,
 }
@@ -122,19 +126,19 @@ fn collect_eval_method_slots(module: &Module) -> Vec<EvalMethodSlot> {
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in classes {
-        collect_class_method_slots(class_name, class_info, &emitted_methods, &mut slots);
+        collect_class_method_slots(module, class_name, class_info, &emitted_methods, &mut slots);
     }
     slots
 }
 
-/// Collects public bridge-supported static methods backed by emitted EIR symbols.
+/// Collects bridge-supported static methods backed by emitted EIR symbols.
 fn collect_eval_static_method_slots(module: &Module) -> Vec<EvalStaticMethodSlot> {
     let emitted_methods = super::eir_class_method_keys(module);
     let mut slots = Vec::new();
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in classes {
-        collect_class_static_method_slots(class_name, class_info, &emitted_methods, &mut slots);
+        collect_class_static_method_slots(module, class_name, class_info, &emitted_methods, &mut slots);
     }
     slots
 }
@@ -153,6 +157,7 @@ fn collect_builtin_throwable_method_class_ids(module: &Module) -> Vec<u64> {
 
 /// Adds bridge-supported instance methods for one class.
 fn collect_class_method_slots(
+    module: &Module,
     class_name: &str,
     class_info: &ClassInfo,
     emitted_methods: &std::collections::HashSet<(String, String, bool)>,
@@ -161,7 +166,8 @@ fn collect_class_method_slots(
     let mut methods = class_info.methods.iter().collect::<Vec<_>>();
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method, sig) in methods {
-        if !method_can_dispatch_through_eval_bridge(class_info, method)
+        let visibility = method_visibility(class_info, method);
+        if !method_visibility_supported(visibility)
             || !method_signature_supported(sig)
             || !method_return_supported(&sig.return_type)
         {
@@ -180,14 +186,17 @@ fn collect_class_method_slots(
             class_name: class_name.to_string(),
             method: method.clone(),
             impl_class: impl_class.to_string(),
+            visibility: visibility.clone(),
+            allowed_scopes: visibility_scope_names(module, impl_class, visibility),
             params: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
             return_ty: sig.return_type.codegen_repr(),
         });
     }
 }
 
-/// Adds bridge-supported public static methods for one class.
+/// Adds bridge-supported static methods for one class.
 fn collect_class_static_method_slots(
+    module: &Module,
     class_name: &str,
     class_info: &ClassInfo,
     emitted_methods: &std::collections::HashSet<(String, String, bool)>,
@@ -196,7 +205,8 @@ fn collect_class_static_method_slots(
     let mut methods = class_info.static_methods.iter().collect::<Vec<_>>();
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method, sig) in methods {
-        if !static_method_is_public(class_info, method)
+        let visibility = static_method_visibility(class_info, method);
+        if !method_visibility_supported(visibility)
             || !method_signature_supported(sig)
             || !method_return_supported(&sig.return_type)
         {
@@ -215,31 +225,36 @@ fn collect_class_static_method_slots(
             class_name: class_name.to_string(),
             method: method.clone(),
             impl_class: impl_class.to_string(),
+            visibility: visibility.clone(),
+            allowed_scopes: visibility_scope_names(module, impl_class, visibility),
             params: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
             return_ty: sig.return_type.codegen_repr(),
         });
     }
 }
 
-/// Returns true when an instance method can be reached through eval's native bridge.
-fn method_can_dispatch_through_eval_bridge(class_info: &ClassInfo, method: &str) -> bool {
-    method_is_public(class_info, method) || php_symbol_key(method) == "__clone"
-}
-
-/// Returns true when a method is publicly visible to runtime eval.
-fn method_is_public(class_info: &ClassInfo, method: &str) -> bool {
+/// Returns the declared instance-method visibility, defaulting to public metadata.
+fn method_visibility<'a>(class_info: &'a ClassInfo, method: &str) -> &'a Visibility {
     class_info
         .method_visibilities
         .get(method)
-        .is_none_or(|visibility| matches!(visibility, Visibility::Public))
+        .unwrap_or(&Visibility::Public)
 }
 
-/// Returns true when a static method is publicly visible to runtime eval.
-fn static_method_is_public(class_info: &ClassInfo, method: &str) -> bool {
+/// Returns the declared static-method visibility, defaulting to public metadata.
+fn static_method_visibility<'a>(class_info: &'a ClassInfo, method: &str) -> &'a Visibility {
     class_info
         .static_method_visibilities
         .get(method)
-        .is_none_or(|visibility| matches!(visibility, Visibility::Public))
+        .unwrap_or(&Visibility::Public)
+}
+
+/// Returns true when the eval method bridge can enforce this visibility.
+fn method_visibility_supported(visibility: &Visibility) -> bool {
+    matches!(
+        visibility,
+        Visibility::Public | Visibility::Protected | Visibility::Private
+    )
 }
 
 /// Returns true for method signatures supported by the eval bridge.
@@ -285,7 +300,7 @@ fn method_return_supported(ty: &PhpType) -> bool {
     )
 }
 
-/// Emits `__elephc_eval_value_method_call(Mixed*, name, len, MixedArray*) -> Mixed*`.
+/// Emits `__elephc_eval_value_method_call(Mixed*, name, len, MixedArray*, scope, scope_len) -> Mixed*`.
 fn emit_method_call_helper(
     module: &Module,
     emitter: &mut Emitter,
@@ -306,7 +321,7 @@ fn emit_method_call_helper(
     }
 }
 
-/// Emits `__elephc_eval_value_static_method_call(class, method, MixedArray*) -> Mixed*`.
+/// Emits `__elephc_eval_value_static_method_call(class, method, MixedArray*, scope, scope_len) -> Mixed*`.
 fn emit_static_method_call_helper(
     module: &Module,
     emitter: &mut Emitter,
@@ -331,22 +346,24 @@ fn emit_static_method_call_aarch64(
 ) {
     let fail_label = "__elephc_eval_value_static_method_call_fail";
     let done_label = "__elephc_eval_value_static_method_call_done";
-    emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for class, method, args, and fp/lr
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
-    emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
+    emitter.instruction("sub sp, sp, #80");                                     // reserve helper frame for class, method, args, scope, and fp/lr
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #64");                                    // establish a stable helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the requested class-name length
     emitter.instruction("str x2, [sp, #16]");                                   // save the requested method-name pointer
     emitter.instruction("str x4, [sp, #24]");                                   // save the boxed eval argument array
+    emitter.instruction("str x5, [sp, #32]");                                   // save the active eval class-scope pointer
     emitter.instruction("str x3, [sp, #40]");                                   // save the requested method-name length
-    emit_aarch64_static_method_dispatch(module, emitter, data, slots);
-    emitter.instruction(&format!("b {}", fail_label));                          // no supported public static method matched the request
+    emitter.instruction("str x6, [sp, #48]");                                   // save the active eval class-scope length
+    emit_aarch64_static_method_dispatch(module, emitter, data, slots, fail_label);
+    emitter.instruction(&format!("b {}", fail_label));                          // no supported static method matched the request
     emit_aarch64_static_method_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
-    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #80");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the boxed static method result to Rust
 }
 
@@ -361,14 +378,17 @@ fn emit_static_method_call_x86_64(
     let done_label = "__elephc_eval_value_static_method_call_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for class, method, args, and one argument
+    emitter.instruction("sub rsp, 80");                                         // reserve aligned slots for class, method, args, scope, and one argument
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested method-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], r8");                        // save the boxed eval argument array
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save the requested method-name length
-    emit_x86_64_static_method_dispatch(module, emitter, data, slots);
-    emitter.instruction(&format!("jmp {}", fail_label));                        // no supported public static method matched the request
+    emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // save the active eval class-scope pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp + 16]");                       // load the active eval class-scope length stack argument
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the active eval class-scope length
+    emit_x86_64_static_method_dispatch(module, emitter, data, slots, fail_label);
+    emitter.instruction(&format!("jmp {}", fail_label));                        // no supported static method matched the request
     emit_x86_64_static_method_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
@@ -388,12 +408,14 @@ fn emit_method_call_aarch64(
 ) {
     let fail_label = "__elephc_eval_value_method_call_fail";
     let done_label = "__elephc_eval_value_method_call_done";
-    emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for inputs, object, and fp/lr
+    emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for inputs, object, scope, and fp/lr
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
     emitter.instruction("str x1, [sp, #0]");                                    // save the requested method-name pointer
     emitter.instruction("str x2, [sp, #8]");                                    // save the requested method-name length
     emitter.instruction("str x3, [sp, #24]");                                   // save the boxed eval argument array
+    emitter.instruction("str x4, [sp, #32]");                                   // save the active eval class-scope pointer
+    emitter.instruction("str x5, [sp, #40]");                                   // save the active eval class-scope length
     emitter.instruction(&format!("cbz x0, {}", fail_label));                    // null Mixed receiver cannot dispatch a method
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
@@ -405,7 +427,7 @@ fn emit_method_call_aarch64(
         data,
         builtin_throwable_class_ids,
     );
-    emit_aarch64_method_dispatch(module, emitter, data, slots);
+    emit_aarch64_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("b {}", fail_label));                          // no supported method matched the request
     emit_aarch64_builtin_throwable_method_bodies(module, emitter, done_label, fail_label);
     emit_aarch64_method_bodies(module, emitter, data, slots, done_label, fail_label);
@@ -429,10 +451,12 @@ fn emit_method_call_x86_64(
     let done_label = "__elephc_eval_value_method_call_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for name, length, object, args, and first argument
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned slots for name, length, object, args, scope, and first argument
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the requested method-name pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the requested method-name length
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the boxed eval argument array
+    emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // save the active eval class-scope pointer
+    emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // save the active eval class-scope length
     emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver pointer is null
     emitter.instruction(&format!("jz {}", fail_label));                         // null Mixed receiver cannot dispatch a method
     emitter.instruction("mov rax, rdi");                                        // move the receiver into the mixed-unbox input register
@@ -446,7 +470,7 @@ fn emit_method_call_x86_64(
         data,
         builtin_throwable_class_ids,
     );
-    emit_x86_64_method_dispatch(module, emitter, data, slots);
+    emit_x86_64_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported method matched the request
     emit_x86_64_builtin_throwable_method_bodies(module, emitter, done_label, fail_label);
     emit_x86_64_method_bodies(module, emitter, data, slots, done_label, fail_label);
@@ -464,6 +488,7 @@ fn emit_aarch64_method_dispatch(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalMethodSlot],
+    fail_label: &str,
 ) {
     for (class_id, class_slots) in grouped_slots(slots) {
         let next_label = format!("__elephc_eval_method_next_{}", class_id);
@@ -473,7 +498,7 @@ fn emit_aarch64_method_dispatch(
         emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this eval bridge class
         emitter.instruction(&format!("b.ne {}", next_label));                   // try the next class when ids differ
         for slot in class_slots {
-            emit_aarch64_method_name_compare(module, emitter, data, slot);
+            emit_aarch64_method_name_compare(module, emitter, data, slot, fail_label);
         }
         emitter.label(&next_label);
     }
@@ -485,6 +510,7 @@ fn emit_x86_64_method_dispatch(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalMethodSlot],
+    fail_label: &str,
 ) {
     for (class_id, class_slots) in grouped_slots(slots) {
         let next_label = format!("__elephc_eval_method_next_{}_x", class_id);
@@ -494,7 +520,7 @@ fn emit_x86_64_method_dispatch(
         emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this eval bridge class
         emitter.instruction(&format!("jne {}", next_label));                    // try the next class when ids differ
         for slot in class_slots {
-            emit_x86_64_method_name_compare(module, emitter, data, slot);
+            emit_x86_64_method_name_compare(module, emitter, data, slot, fail_label);
         }
         emitter.label(&next_label);
     }
@@ -506,6 +532,7 @@ fn emit_aarch64_static_method_dispatch(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalStaticMethodSlot],
+    fail_label: &str,
 ) {
     for (class_name, class_slots) in grouped_static_slots(slots) {
         let next_label = format!(
@@ -514,7 +541,7 @@ fn emit_aarch64_static_method_dispatch(
         );
         emit_aarch64_static_class_name_compare(emitter, data, class_name, &next_label);
         for slot in class_slots {
-            emit_aarch64_static_method_name_compare(module, emitter, data, slot);
+            emit_aarch64_static_method_name_compare(module, emitter, data, slot, fail_label);
         }
         emitter.label(&next_label);
     }
@@ -526,6 +553,7 @@ fn emit_x86_64_static_method_dispatch(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalStaticMethodSlot],
+    fail_label: &str,
 ) {
     for (class_name, class_slots) in grouped_static_slots(slots) {
         let next_label = format!(
@@ -534,7 +562,7 @@ fn emit_x86_64_static_method_dispatch(
         );
         emit_x86_64_static_class_name_compare(emitter, data, class_name, &next_label);
         for slot in class_slots {
-            emit_x86_64_static_method_name_compare(module, emitter, data, slot);
+            emit_x86_64_static_method_name_compare(module, emitter, data, slot, fail_label);
         }
         emitter.label(&next_label);
     }
@@ -678,15 +706,23 @@ fn emit_aarch64_method_name_compare(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slot: &EvalMethodSlot,
+    fail_label: &str,
 ) {
     let (label, len) = data.add_string(slot.method.as_bytes());
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload requested method-name pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload requested method-name length
     abi::emit_symbol_address(emitter, "x3", &label);
     abi::emit_load_int_immediate(emitter, "x4", len as i64);
-    emitter.instruction("bl __rt_strcasecmp");                                  // compare public method names with PHP case-insensitive rules
+    emitter.instruction("bl __rt_strcasecmp");                                  // compare method names with PHP case-insensitive rules
     let target_label = method_body_label(module, slot);
-    emitter.instruction(&format!("cbz x0, {}", target_label));                  // dispatch to the method body when the names match
+    if matches!(slot.visibility, Visibility::Public) {
+        emitter.instruction(&format!("cbz x0, {}", target_label));              // dispatch to the method body when the names match
+        return;
+    }
+    let miss_label = method_access_miss_label(module, slot);
+    emitter.instruction(&format!("cbnz x0, {}", miss_label));                   // continue method dispatch when names differ
+    emit_aarch64_method_scope_check(emitter, data, &slot.allowed_scopes, false, &target_label, fail_label);
+    emitter.label(&miss_label);
 }
 
 /// Emits one x86_64 method-name comparison and branch to the matching body.
@@ -695,15 +731,24 @@ fn emit_x86_64_method_name_compare(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slot: &EvalMethodSlot,
+    fail_label: &str,
 ) {
     let (label, len) = data.add_string(slot.method.as_bytes());
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload requested method-name pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload requested method-name length
     abi::emit_symbol_address(emitter, "rdx", &label);
     abi::emit_load_int_immediate(emitter, "rcx", len as i64);
-    emitter.instruction("call __rt_strcasecmp");                                // compare public method names with PHP case-insensitive rules
+    emitter.instruction("call __rt_strcasecmp");                                // compare method names with PHP case-insensitive rules
     emitter.instruction("test rax, rax");                                       // check whether the method names matched
-    emitter.instruction(&format!("je {}", method_body_label(module, slot)));    // dispatch to the method body when the names match
+    let target_label = method_body_label(module, slot);
+    if matches!(slot.visibility, Visibility::Public) {
+        emitter.instruction(&format!("je {}", target_label));                   // dispatch to the method body when the names match
+        return;
+    }
+    let miss_label = method_access_miss_label(module, slot);
+    emitter.instruction(&format!("jne {}", miss_label));                        // continue method dispatch when names differ
+    emit_x86_64_method_scope_check(emitter, data, &slot.allowed_scopes, false, &target_label, fail_label);
+    emitter.label(&miss_label);
 }
 
 /// Emits one ARM64 static method-name comparison and branch to the matching body.
@@ -712,6 +757,7 @@ fn emit_aarch64_static_method_name_compare(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slot: &EvalStaticMethodSlot,
+    fail_label: &str,
 ) {
     let (label, len) = data.add_string(slot.method.as_bytes());
     emitter.instruction("ldr x1, [sp, #16]");                                   // reload requested static method-name pointer
@@ -720,7 +766,14 @@ fn emit_aarch64_static_method_name_compare(
     abi::emit_load_int_immediate(emitter, "x4", len as i64);
     emitter.instruction("bl __rt_strcasecmp");                                  // compare static method names with PHP case-insensitive rules
     let target_label = static_method_body_label(module, slot);
-    emitter.instruction(&format!("cbz x0, {}", target_label));                  // dispatch to the static method body when the names match
+    if matches!(slot.visibility, Visibility::Public) {
+        emitter.instruction(&format!("cbz x0, {}", target_label));              // dispatch to the static method body when the names match
+        return;
+    }
+    let miss_label = static_method_access_miss_label(module, slot);
+    emitter.instruction(&format!("cbnz x0, {}", miss_label));                   // continue static method dispatch when names differ
+    emit_aarch64_method_scope_check(emitter, data, &slot.allowed_scopes, true, &target_label, fail_label);
+    emitter.label(&miss_label);
 }
 
 /// Emits one x86_64 static method-name comparison and branch to the matching body.
@@ -729,6 +782,7 @@ fn emit_x86_64_static_method_name_compare(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slot: &EvalStaticMethodSlot,
+    fail_label: &str,
 ) {
     let (label, len) = data.add_string(slot.method.as_bytes());
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload requested static method-name pointer
@@ -738,7 +792,84 @@ fn emit_x86_64_static_method_name_compare(
     emitter.instruction("call __rt_strcasecmp");                                // compare static method names with PHP case-insensitive rules
     emitter.instruction("test rax, rax");                                       // check whether the static method names matched
     let target_label = static_method_body_label(module, slot);
-    emitter.instruction(&format!("je {}", target_label));                       // dispatch to the static method body when the names match
+    if matches!(slot.visibility, Visibility::Public) {
+        emitter.instruction(&format!("je {}", target_label));                   // dispatch to the static method body when the names match
+        return;
+    }
+    let miss_label = static_method_access_miss_label(module, slot);
+    emitter.instruction(&format!("jne {}", miss_label));                        // continue static method dispatch when names differ
+    emit_x86_64_method_scope_check(emitter, data, &slot.allowed_scopes, true, &target_label, fail_label);
+    emitter.label(&miss_label);
+}
+
+/// Emits ARM64 visibility checks for a protected/private method bridge hit.
+fn emit_aarch64_method_scope_check(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    allowed_scopes: &[String],
+    is_static: bool,
+    success_label: &str,
+    fail_label: &str,
+) {
+    let (scope_ptr_offset, scope_len_offset) = aarch64_method_scope_offsets(is_static);
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));       // reload the active eval class-scope pointer
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));       // reload the active eval class-scope length
+    emitter.instruction(&format!("cbz x1, {}", fail_label));                    // reject scoped method access outside a class scope
+    for scope_name in allowed_scopes {
+        let (label, len) = data.add_string(scope_name.as_bytes());
+        emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));   // reload the active eval class-scope pointer
+        emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));   // reload the active eval class-scope length
+        abi::emit_symbol_address(emitter, "x3", &label);
+        abi::emit_load_int_immediate(emitter, "x4", len as i64);
+        emitter.instruction("bl __rt_strcasecmp");                              // compare current eval scope with an allowed class
+        emitter.instruction(&format!("cbz x0, {}", success_label));             // dispatch when scoped visibility is satisfied
+    }
+    emitter.instruction(&format!("b {}", fail_label));                          // reject scoped method access from unrelated classes
+}
+
+/// Emits x86_64 visibility checks for a protected/private method bridge hit.
+fn emit_x86_64_method_scope_check(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    allowed_scopes: &[String],
+    is_static: bool,
+    success_label: &str,
+    fail_label: &str,
+) {
+    let (scope_ptr_offset, scope_len_offset) = x86_64_method_scope_offsets(is_static);
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)); // reload the active eval class-scope pointer
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)); // reload the active eval class-scope length
+    emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject scoped method access outside a class scope
+    for scope_name in allowed_scopes {
+        let (label, len) = data.add_string(scope_name.as_bytes());
+        emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)); // reload the active eval class-scope pointer
+        emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)); // reload the active eval class-scope length
+        abi::emit_symbol_address(emitter, "rdx", &label);
+        abi::emit_load_int_immediate(emitter, "rcx", len as i64);
+        emitter.instruction("call __rt_strcasecmp");                            // compare current eval scope with an allowed class
+        emitter.instruction("test rax, rax");                                   // check whether the current scope matched
+        emitter.instruction(&format!("je {}", success_label));                  // dispatch when scoped visibility is satisfied
+    }
+    emitter.instruction(&format!("jmp {}", fail_label));                        // reject scoped method access from unrelated classes
+}
+
+/// Returns ARM64 stack offsets for method class-scope pointer and length.
+fn aarch64_method_scope_offsets(is_static: bool) -> (usize, usize) {
+    if is_static {
+        (32, 48)
+    } else {
+        (32, 40)
+    }
+}
+
+/// Returns x86_64 frame offsets for method class-scope pointer and length.
+fn x86_64_method_scope_offsets(is_static: bool) -> (usize, usize) {
+    if is_static {
+        (56, 64)
+    } else {
+        (48, 56)
+    }
 }
 
 /// Emits ARM64 bodies for compact Throwable methods used by eval.
@@ -997,7 +1128,7 @@ fn emit_aarch64_prepare_method_args(
     emitter.instruction("ldr x0, [sp, #16]");                                   // load the unboxed receiver as the first method argument
     abi::emit_push_result_value(emitter, &receiver_ty);
     for (index, param_ty) in slot.params.iter().enumerate() {
-        emit_aarch64_load_eval_arg(module, emitter, index);
+        emit_aarch64_load_eval_arg(module, emitter, index, 24);
         let label_prefix = format!("{}_arg_{}", method_body_label(module, slot), index);
         emit_aarch64_cast_eval_arg(module, emitter, data, param_ty, &label_prefix, fail_label);
         abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
@@ -1016,7 +1147,7 @@ fn emit_aarch64_prepare_static_method_args(
     abi::emit_load_int_immediate(emitter, "x0", slot.class_id as i64);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     for (index, param_ty) in slot.params.iter().enumerate() {
-        emit_aarch64_load_eval_arg(module, emitter, index);
+        emit_aarch64_load_eval_arg(module, emitter, index, 40);
         let label_prefix = format!("{}_arg_{}", static_method_body_label(module, slot), index);
         emit_aarch64_cast_eval_arg(module, emitter, data, param_ty, &label_prefix, fail_label);
         abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
@@ -1091,14 +1222,19 @@ fn materialize_static_method_args(
 }
 
 /// Loads one eval argument into an ARM64 spill slot as a boxed Mixed cell.
-fn emit_aarch64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usize) {
+fn emit_aarch64_load_eval_arg(
+    module: &Module,
+    emitter: &mut Emitter,
+    index: usize,
+    arg_array_frame_offset: usize,
+) {
     let value_int_symbol = module.target.extern_symbol("__elephc_eval_value_int");
     let array_get_symbol = module.target.extern_symbol("__elephc_eval_value_array_get");
     abi::emit_load_int_immediate(emitter, "x0", index as i64);
     abi::emit_call_label(emitter, &value_int_symbol);
     emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed index while loading from the argument array
     emitter.instruction("ldr x1, [x29, #-16]");                                 // pass the boxed index to the eval array reader
-    emitter.instruction("ldr x0, [x29, #-24]");                                 // pass the eval argument array to the reader
+    emitter.instruction(&format!("ldr x0, [x29, #-{}]", arg_array_frame_offset)); // pass the eval argument array to the reader
     abi::emit_call_label(emitter, &array_get_symbol);
     emitter.instruction("str x0, [x29, #-16]");                                 // save the boxed eval argument for coercion
 }
@@ -1476,11 +1612,17 @@ fn method_body_label(module: &Module, slot: &EvalMethodSlot) -> String {
         Arch::X86_64 => "_x",
     };
     format!(
-        "__elephc_eval_method_{}_{}{}",
+        "__elephc_eval_method_{}_{}_{}{}",
         label_fragment(&slot.class_name),
+        label_fragment(&slot.impl_class),
         label_fragment(&slot.method),
         suffix
     )
+}
+
+/// Returns a platform-safe label for continuing after a scoped method name miss.
+fn method_access_miss_label(module: &Module, slot: &EvalMethodSlot) -> String {
+    format!("{}_access_miss", method_body_label(module, slot))
 }
 
 /// Returns a platform-safe body label for a static method slot.
@@ -1490,11 +1632,73 @@ fn static_method_body_label(module: &Module, slot: &EvalStaticMethodSlot) -> Str
         Arch::X86_64 => "_x",
     };
     format!(
-        "__elephc_eval_static_method_{}_{}{}",
+        "__elephc_eval_static_method_{}_{}_{}{}",
         label_fragment(&slot.class_name),
+        label_fragment(&slot.impl_class),
         label_fragment(&slot.method),
         suffix
     )
+}
+
+/// Returns a platform-safe label for continuing after a scoped static method name miss.
+fn static_method_access_miss_label(module: &Module, slot: &EvalStaticMethodSlot) -> String {
+    format!("{}_access_miss", static_method_body_label(module, slot))
+}
+
+/// Returns class scopes that satisfy one method visibility for a declaring class.
+fn visibility_scope_names(
+    module: &Module,
+    declaring_class: &str,
+    visibility: &Visibility,
+) -> Vec<String> {
+    match visibility {
+        Visibility::Public => Vec::new(),
+        Visibility::Private => vec![declaring_class.to_string()],
+        Visibility::Protected => related_class_scope_names(module, declaring_class),
+    }
+}
+
+/// Returns AOT classes in the same inheritance line as `declaring_class`.
+fn related_class_scope_names(module: &Module, declaring_class: &str) -> Vec<String> {
+    let mut scopes = module
+        .class_infos
+        .keys()
+        .filter(|class_name| {
+            is_same_or_descendant(module, class_name, declaring_class)
+                || is_same_or_descendant(module, declaring_class, class_name)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    scopes.sort_by(|left, right| {
+        class_id_for_scope(module, left)
+            .cmp(&class_id_for_scope(module, right))
+            .then_with(|| left.cmp(right))
+    });
+    scopes
+}
+
+/// Returns true when `class_name` is `ancestor` or descends from it.
+fn is_same_or_descendant(module: &Module, class_name: &str, ancestor: &str) -> bool {
+    let mut cursor = Some(class_name);
+    while let Some(name) = cursor {
+        if name == ancestor {
+            return true;
+        }
+        cursor = module
+            .class_infos
+            .get(name)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
+}
+
+/// Returns the deterministic class id used to order generated scope checks.
+fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
+    module
+        .class_infos
+        .get(class_name)
+        .map(|class_info| class_info.class_id)
+        .unwrap_or(u64::MAX)
 }
 
 /// Converts arbitrary PHP metadata names into assembly-label-safe fragments.

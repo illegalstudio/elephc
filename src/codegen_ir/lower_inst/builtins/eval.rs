@@ -915,7 +915,7 @@ fn collect_eval_native_instance_methods(
         if method_name == "__construct" {
             continue;
         }
-        let bridge_supported = class_method_is_public(class_info, method_name)
+        let bridge_supported = class_method_visibility_bridge_supported(class_info, method_name)
             && method_signature_can_bridge_with_eval(signature);
         registrations.push(EvalNativeMethodRegistration {
             class_name: class_name.to_string(),
@@ -936,7 +936,7 @@ fn collect_eval_native_static_methods(
     let mut methods = class_info.static_methods.iter().collect::<Vec<_>>();
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method_name, signature) in methods {
-        let bridge_supported = class_static_method_is_public(class_info, method_name)
+        let bridge_supported = class_static_method_visibility_bridge_supported(class_info, method_name)
             && method_signature_can_bridge_with_eval(signature);
         registrations.push(EvalNativeMethodRegistration {
             class_name: class_name.to_string(),
@@ -1275,12 +1275,33 @@ fn class_method_is_public(class_info: &ClassInfo, method_name: &str) -> bool {
         .is_none_or(|visibility| matches!(visibility, Visibility::Public))
 }
 
-/// Returns true when a static method is public in the class metadata.
-fn class_static_method_is_public(class_info: &ClassInfo, method_name: &str) -> bool {
+/// Returns true when eval can enforce this instance method visibility in the bridge.
+fn class_method_visibility_bridge_supported(class_info: &ClassInfo, method_name: &str) -> bool {
+    class_info
+        .method_visibilities
+        .get(method_name)
+        .is_none_or(|visibility| {
+            matches!(
+                visibility,
+                Visibility::Public | Visibility::Protected | Visibility::Private
+            )
+        })
+}
+
+/// Returns true when eval can enforce this static method visibility in the bridge.
+fn class_static_method_visibility_bridge_supported(
+    class_info: &ClassInfo,
+    method_name: &str,
+) -> bool {
     class_info
         .static_method_visibilities
         .get(method_name)
-        .is_none_or(|visibility| matches!(visibility, Visibility::Public))
+        .is_none_or(|visibility| {
+            matches!(
+                visibility,
+                Visibility::Public | Visibility::Protected | Visibility::Private
+            )
+        })
 }
 
 /// Emits one native-function registration call into the just-created eval context.

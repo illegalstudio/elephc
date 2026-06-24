@@ -209,6 +209,7 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         method: &str,
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let arg_array = Self::arg_array(args)?;
         let result = Self::handle(unsafe {
             __elephc_eval_value_method_call(
@@ -216,6 +217,8 @@ impl RuntimeValueOps for ElephcRuntimeOps {
                 method.as_ptr(),
                 method.len() as u64,
                 arg_array.as_ptr(),
+                scope_ptr,
+                scope_len,
             )
         });
         unsafe {
@@ -224,13 +227,14 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         result
     }
 
-    /// Calls a public AOT static method through the generated user helper.
+    /// Calls an AOT static method through the generated user helper.
     fn static_method_call(
         &mut self,
         class_name: &str,
         method: &str,
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let arg_array = Self::arg_array(args)?;
         let result = Self::handle(unsafe {
             __elephc_eval_value_static_method_call(
@@ -239,6 +243,8 @@ impl RuntimeValueOps for ElephcRuntimeOps {
                 method.as_ptr(),
                 method.len() as u64,
                 arg_array.as_ptr(),
+                scope_ptr,
+                scope_len,
             )
         });
         unsafe {
