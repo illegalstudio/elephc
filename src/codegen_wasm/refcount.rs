@@ -127,8 +127,8 @@ mod tests {
     use super::super::arrays::emit_array_runtime;
     use super::super::heap::emit_heap_runtime;
     use super::super::mixed::emit_mixed_runtime;
-    use super::super::objects::emit_object_runtime;
-    use super::super::wat::WatModule;
+    use super::super::objects::{emit_gc_desc_stub, emit_object_runtime};
+    use super::super::wat::{DataSegment, Global, ValType, WatModule};
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static TMP_SEQ: AtomicU32 = AtomicU32::new(0);
@@ -165,6 +165,9 @@ mod tests {
         // `__rt_decref_any` kind-4 dispatches to `__rt_decref_object`, so the object
         // runtime must be present to validate (generate() emits it alongside refcount).
         emit_object_runtime(&mut wm);
+        // `__rt_decref_object` references the `$__gc_desc_*` globals; the stub declares
+        // empty-table globals so the walk is skipped for harness blocks (no classes).
+        emit_gc_desc_stub(&mut wm);
         wm.add_raw_func(driver);
         let wat = wm.render();
         let bytes = ::wat::parse_str(&wat)
@@ -296,5 +299,82 @@ mod tests {
         if let Some(o) = run_driver(driver, "t") {
             assert_ne!(o, "0");
         }
+    }
+
+    /// `__rt_decref_object` on an object holding a kind-1 (string) property value walks the
+    /// real gc_desc, releases the string child via `__rt_decref_any`, then frees the object,
+    /// so `_gc_live` returns to 0. Unlike the stub-based P6a tests, this registers a real
+    /// one-class descriptor (class 0 = one property of tag 1 / string) so the property walk
+    /// actually executes and the child is released — exercising the full P6b deep-free path.
+    #[test]
+    fn decref_object_walks_and_releases_string_property() {
+        let mut wm = WatModule::new();
+        wm.set_memory(3, Some("memory"));
+        emit_heap_runtime(&mut wm, 1024, 3 * 65536);
+        emit_refcount_runtime(&mut wm);
+        // `__rt_decref_any` dispatches to the array/hash/mixed object runtimes.
+        emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
+        super::super::hashes::emit_hash_runtime(&mut wm);
+        emit_object_runtime(&mut wm);
+        // Real gc_desc for class 0: one property of tag 1 (string). The desc byte and the
+        // 4-aligned pointer table sit in the free [0, 64) region below CONCAT_BASE so they
+        // never collide with the concat scratch (never written here) or the heap (>= 1024).
+        wm.add_data(DataSegment { offset: 8, bytes: vec![1u8] });
+        wm.add_data(DataSegment { offset: 12, bytes: 8u32.to_le_bytes().to_vec() });
+        wm.add_global(Global {
+            name: "__gc_desc_ptrs".to_string(),
+            ty: ValType::I32,
+            mutable: false,
+            init: 12,
+        });
+        wm.add_global(Global {
+            name: "__gc_desc_count".to_string(),
+            ty: ValType::I32,
+            mutable: false,
+            init: 1,
+        });
+        // Static "hi" source for __rt_str_persist, also in the free [0, 64) region.
+        wm.add_data(DataSegment { offset: 32, bytes: b"hi".to_vec() });
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $o i32) (local $s i32)
+  (local.set $o (call $__rt_heap_alloc (i32.const 24)))            ;; object: 8 + 1*16 payload
+  (i64.store (i32.sub (local.get $o) (i32.const 8)) (i64.const 4)) ;; stamp kind 4 (object)
+  (i64.store (local.get $o) (i64.const 0))                         ;; class_id = 0
+  (i32.const 32) (i64.const 2) (call $__rt_str_persist)            ;; persist "hi" -> (ptr i32, len i64)
+  (drop)                                                           ;; discard the length
+  (local.set $s)                                                   ;; $s = owned string ptr (rc 1)
+  (i32.store (i32.add (local.get $o) (i32.const 8)) (local.get $s)) ;; store string in slot 0 lo
+  (call $__rt_decref_object (local.get $o))                        ;; walk releases string, then frees object
+  (global.get $_gc_live))"#;
+        wm.add_raw_func(driver);
+        let wat = wm.render();
+        let bytes = ::wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("WAT did not assemble: {e}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|e| panic!("wasm did not validate: {e}\n{wat}"));
+        if !wasmer_available() {
+            return;
+        }
+        let dir = unique_tmp_dir();
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg("t")
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer --invoke t failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            wat
+        );
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "0");
     }
 }

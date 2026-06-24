@@ -104,6 +104,14 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
         cursor = (cursor + bytes.len() as u32 + 3) & !3;
     }
 
+    // Emit the per-class gc_desc data (one runtime tag byte per property) plus the
+    // class-indexed pointer table and the `$__gc_desc_ptrs` / `$__gc_desc_count` globals,
+    // advancing the static-data cursor. This must land before `heap_base` is computed so
+    // the descriptor data sits in static memory below the heap and is never overwritten by
+    // allocation. `__rt_decref_object` walks these descriptors to release refcounted
+    // property values before freeing an object at refcount zero.
+    cursor = objects::emit_gc_desc_table(&mut wm, &module.class_infos, cursor);
+
     // The heap begins 16-aligned just above the string/data region; reserve two
     // pages of initial headroom above it. The bump allocator grows beyond
     // `heap_end` with `memory.grow` when this region is exhausted.
@@ -115,7 +123,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     heap::emit_heap_runtime(&mut wm, heap_base, heap_end);
     refcount::emit_refcount_runtime(&mut wm);
     // Object refcount runtime: `__rt_decref_object`, called from `__rt_decref_any`
-    // kind-4. P6a scalar-only release; P6b replaces it with the deep-free + gc_desc walk.
+    // kind-4. P6b performs the full gc_desc-driven property walk + `__rt_heap_free`.
     objects::emit_object_runtime(&mut wm);
     arrays::emit_array_runtime(&mut wm);
     mixed::emit_mixed_runtime(&mut wm);
@@ -3758,6 +3766,80 @@ mod tests {
         );
         if let Some(o) = run_main(&m) {
             assert_eq!(o, "");
+        }
+    }
+
+    /// `new P{mixed m}; $o->m = 42; echo $o->m` -> "42". Verifies the P6b Mixed-property
+    /// BOX path: PropSet of a scalar into a mixed slot boxes it via `__rt_mixed_from_value`
+    /// (tag 0 / int) after releasing the previous (zero) slot value, and PropGet returns an
+    /// owned mixed cell whose `EchoValue` dispatches by runtime tag to `__rt_itoa`.
+    #[test]
+    fn object_mixed_prop_box_int_then_echo() {
+        let class = "P";
+        let m = object_main_module(
+            class,
+            vec![("m".to_string(), PhpType::Mixed)],
+            vec![None],
+            |b, cd, pd| {
+                let obj = emit_object_new(b, class, cd);
+                let v = b.emit_const_i64(42);
+                emit_prop_set(b, obj, pd[0], v);
+                let mv = emit_prop_get(b, obj, pd[0], IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![mv],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            },
+        );
+        if let Some(o) = run_main(&m) {
+            assert_eq!(o, "42");
+        }
+    }
+
+    /// `new P{string s}; $o->s = "hi"; echo $o->s` -> "hi". Verifies the P6b string-property
+    /// path: PropSet persists a copy into the slot (lo = ptr, hi = len) after releasing the
+    /// previous (zero) value, and PropGet persists the read copy so `EchoValue` writes the
+    /// exact bytes via `__rt_echo_str`. Built inline (not via `object_main_module`) so the
+    /// string literal can be interned and its `DataId` moved into the body.
+    #[test]
+    fn object_string_prop_set_then_echo() {
+        let class = "P";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let prop_data = module.data.intern_string("s");
+        let hi = module.data.intern_string("hi");
+        module.class_infos.insert(
+            class.to_string(),
+            test_class_info(1, vec![("s".to_string(), PhpType::Str)], vec![None], false),
+        );
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let s = b.emit_const_str(hi);
+            emit_prop_set(&mut b, obj, prop_data, s);
+            let sv = emit_prop_get(&mut b, obj, prop_data, IrType::Str, PhpType::Str);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![sv],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "hi");
         }
     }
 }
