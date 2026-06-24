@@ -871,6 +871,7 @@ mod tests {
         emit_refcount_runtime(&mut wm);
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
         emit_hash_runtime(&mut wm);
         wm.add_raw_func(driver);
         let wat = wm.render();
