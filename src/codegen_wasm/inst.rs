@@ -102,6 +102,9 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::IterCurrentKey => lower_iter_current_key(ctx, &inst),
         Op::IterCurrentValue => lower_iter_current_value(ctx, &inst),
         Op::IterEnd => Ok(()),
+        Op::ObjectNew => super::objects::lower_object_new(ctx, &inst),
+        Op::PropGet => super::objects::lower_prop_get(ctx, &inst),
+        Op::PropSet => super::objects::lower_prop_set(ctx, &inst),
         other => Err(WasmError::Unsupported(format!("op {:?}", other))),
     }
 }
@@ -178,7 +181,7 @@ fn slot_immediate(inst: &Instruction) -> Result<LocalSlotId> {
 }
 
 /// Extracts a `DataId` from the instruction's immediate, or an error.
-fn data_immediate(inst: &Instruction) -> Result<DataId> {
+pub(super) fn data_immediate(inst: &Instruction) -> Result<DataId> {
     match &inst.immediate {
         Some(Immediate::Data(d)) => Ok(*d),
         _ => Err(WasmError::Unsupported(format!(

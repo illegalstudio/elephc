@@ -15,8 +15,10 @@
 //!   "non-heap pointers are skipped" contract holds without a sentinel refcount.
 //! - `__rt_decref_any` dispatches on the header kind low-byte. Kind 1 (string) is
 //!   freed directly via `__rt_heap_free_safe` (strings use copy-on-acquire, so a
-//!   release is a free). Kinds 2..5 (array/hash/object/mixed) gain their per-kind
-//!   deep-free branches in later phases; any other kind is a no-op today.
+//!   release is a free). Kinds 2/3/5 (array/hash/mixed) deep-free at zero through
+//!   `__rt_decref_array`/`__rt_decref_hash`/`__rt_decref_mixed`; kind 4 (object)
+//!   releases through `__rt_decref_object` (P6a: scalar-only, no property walk); any
+//!   other kind is a no-op today.
 //! - `__rt_str_persist` always copies into a fresh heap block (PHP string value
 //!   semantics). The native runtime may incref an already-heap string instead; the
 //!   observable string content and lifetime are identical.
@@ -48,10 +50,10 @@ const RT_INCREF: &str = r#"(func $__rt_incref (param $ptr i32)
 
 /// `__rt_decref_any`: the kind-dispatched release entry. Frees a string (kind 1)
 /// directly (copy-on-acquire model); decrefs an indexed array (kind 2) via
-/// `__rt_decref_array`, an associative hash (kind 3) via `__rt_decref_hash`, and a
-/// boxed Mixed cell (kind 5) via `__rt_decref_mixed`. Kind 4 (object) gets its
-/// branch in a later phase; any other kind
-/// is a no-op. No-ops on non-heap pointers.
+/// `__rt_decref_array`, an associative hash (kind 3) via `__rt_decref_hash`, a
+/// boxed Mixed cell (kind 5) via `__rt_decref_mixed`, and an object (kind 4) via
+/// `__rt_decref_object` (P6a scalar-only release). Any other kind is a no-op.
+/// No-ops on non-heap pointers.
 const RT_DECREF_ANY: &str = r#"(func $__rt_decref_any (param $ptr i32)
   (local $kind i32)
   (if (i32.eqz (local.get $ptr))                  ;; guard: null pointer
@@ -77,6 +79,10 @@ const RT_DECREF_ANY: &str = r#"(func $__rt_decref_any (param $ptr i32)
   (if (i32.eq (local.get $kind) (i32.const 5))    ;; kind 5 = boxed mixed cell
     (then
       (call $__rt_decref_mixed (local.get $ptr))   ;; decrement; deep-free at zero
+      (return)))
+  (if (i32.eq (local.get $kind) (i32.const 4))    ;; kind 4 = object instance
+    (then
+      (call $__rt_decref_object (local.get $ptr))  ;; P6a: scalar-only release, frees at zero
       (return)))
   (return))
 "#;
@@ -121,6 +127,7 @@ mod tests {
     use super::super::arrays::emit_array_runtime;
     use super::super::heap::emit_heap_runtime;
     use super::super::mixed::emit_mixed_runtime;
+    use super::super::objects::emit_object_runtime;
     use super::super::wat::WatModule;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -155,6 +162,9 @@ mod tests {
         emit_mixed_runtime(&mut wm);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
+        // `__rt_decref_any` kind-4 dispatches to `__rt_decref_object`, so the object
+        // runtime must be present to validate (generate() emits it alongside refcount).
+        emit_object_runtime(&mut wm);
         wm.add_raw_func(driver);
         let wat = wm.render();
         let bytes = ::wat::parse_str(&wat)
@@ -248,6 +258,43 @@ mod tests {
     (i32.load8_u (i32.add (local.get $new) (i32.const 2)))))"#;
         if let Some(o) = run_driver(driver, "t") {
             assert_eq!(o, "4276803");
+        }
+    }
+
+    // ----- P6a: kind-4 (object) release through __rt_decref_object -----
+
+    /// Allocates a kind-4 block, releases it via `__rt_decref_object` (refcount 1 -> 0
+    /// -> `__rt_heap_free_safe`), and reads the live-byte counter `_gc_live`. A freed
+    /// block contributes zero live bytes, so the result is "0" — deterministically
+    /// proving the kind-4 release frees the block (mirrors `decref_any_frees_string_kind`).
+    #[test]
+    fn decref_object_frees_block() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32)
+  (local.set $a (call $__rt_heap_alloc (i32.const 40)))            ;; 40 = 8 + 2*16 payload
+  (i64.store (i32.sub (local.get $a) (i32.const 8)) (i64.const 4)) ;; stamp kind 4 (object)
+  (call $__rt_decref_object (local.get $a))                       ;; rc 1 -> 0 -> free
+  (global.get $_gc_live))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// Allocates a kind-4 block, increfs it to refcount 2, then releases once via
+    /// `__rt_decref_object` (rc 2 -> 1, NOT freed). The block stays live, so `_gc_live`
+    /// is nonzero — proving the above-zero path keeps the block alive (the negative
+    /// scoping guarantee for P6a's no-walk release: a shared object is never freed early).
+    #[test]
+    fn decref_object_above_zero_keeps_block() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $a i32)
+  (local.set $a (call $__rt_heap_alloc (i32.const 40)))            ;; 40 = 8 + 2*16 payload
+  (i64.store (i32.sub (local.get $a) (i32.const 8)) (i64.const 4)) ;; stamp kind 4 (object)
+  (call $__rt_incref (local.get $a))                              ;; rc 1 -> 2
+  (call $__rt_decref_object (local.get $a))                       ;; rc 2 -> 1, not freed
+  (global.get $_gc_live))"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_ne!(o, "0");
         }
     }
 }

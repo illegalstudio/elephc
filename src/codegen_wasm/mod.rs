@@ -28,6 +28,7 @@ mod heap;
 mod inst;
 mod inst_hash;
 mod mixed;
+mod objects;
 mod refcount;
 mod runtime;
 mod values;
@@ -113,6 +114,9 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     wm.set_memory(pages, Some("memory"));
     heap::emit_heap_runtime(&mut wm, heap_base, heap_end);
     refcount::emit_refcount_runtime(&mut wm);
+    // Object refcount runtime: `__rt_decref_object`, called from `__rt_decref_any`
+    // kind-4. P6a scalar-only release; P6b replaces it with the deep-free + gc_desc walk.
+    objects::emit_object_runtime(&mut wm);
     arrays::emit_array_runtime(&mut wm);
     mixed::emit_mixed_runtime(&mut wm);
     hashes::emit_hash_runtime(&mut wm);
@@ -151,10 +155,13 @@ mod tests {
     use crate::codegen::platform::Target;
     use crate::codegen::Emit;
     use crate::ir::{
-        Builder, CmpPredicate, Function, FunctionParam, Immediate, IrHeapKind, IrType, LocalKind,
-        Module, Op, Ownership, Terminator, ValueId,
+        Builder, CmpPredicate, DataId, Function, FunctionParam, Immediate, IrHeapKind, IrType,
+        LocalKind, Module, Op, Ownership, Terminator, ValueId,
     };
-    use crate::types::PhpType;
+    use crate::parser::ast::{Expr, ExprKind};
+    use crate::span::Span;
+    use crate::types::{ClassInfo, PhpType};
+    use std::collections::{HashMap, HashSet};
 
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -3210,6 +3217,547 @@ mod tests {
         module.add_function(f);
         if let Some(o) = run_main(&module) {
             assert_eq!(o, "1030");
+        }
+    }
+
+    // ----- P6a: object allocation + scalar properties + kind-4 decref -----
+
+    /// Builds a `ClassInfo` with only the P6a-relevant fields populated
+    /// (`class_id`, `properties`, `property_offsets`, `defaults`,
+    /// `allow_dynamic_properties`) and every other field empty, mirroring a
+    /// freshly-declared scalar-property class. Property offsets are assigned
+    /// parent-first as `8 + i*16`, matching the object payload layout the lowering
+    /// emits and reads.
+    fn test_class_info(
+        class_id: u64,
+        properties: Vec<(String, PhpType)>,
+        defaults: Vec<Option<Expr>>,
+        allow_dynamic_properties: bool,
+    ) -> ClassInfo {
+        let property_offsets = properties
+            .iter()
+            .enumerate()
+            .map(|(i, (n, _))| (n.clone(), 8 + i * 16))
+            .collect::<HashMap<_, _>>();
+        ClassInfo {
+            class_id,
+            parent: None,
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            allow_dynamic_properties,
+            constants: HashMap::new(),
+            attribute_names: Vec::new(),
+            attribute_args: Vec::new(),
+            method_attribute_names: HashMap::new(),
+            method_attribute_args: HashMap::new(),
+            property_attribute_names: HashMap::new(),
+            property_attribute_args: HashMap::new(),
+            used_traits: Vec::new(),
+            properties,
+            property_offsets,
+            property_declaring_classes: HashMap::new(),
+            defaults,
+            property_visibilities: HashMap::new(),
+            property_set_visibilities: HashMap::new(),
+            declared_properties: HashSet::new(),
+            final_properties: HashSet::new(),
+            readonly_properties: HashSet::new(),
+            reference_properties: HashSet::new(),
+            abstract_properties: HashSet::new(),
+            abstract_property_hooks: HashMap::new(),
+            static_properties: Vec::new(),
+            static_defaults: Vec::new(),
+            static_property_declaring_classes: HashMap::new(),
+            static_property_visibilities: HashMap::new(),
+            declared_static_properties: HashSet::new(),
+            final_static_properties: HashSet::new(),
+            method_decls: Vec::new(),
+            methods: HashMap::new(),
+            static_methods: HashMap::new(),
+            callable_method_return_sigs: HashMap::new(),
+            callable_array_method_return_sigs: HashMap::new(),
+            method_visibilities: HashMap::new(),
+            final_methods: HashSet::new(),
+            method_declaring_classes: HashMap::new(),
+            method_impl_classes: HashMap::new(),
+            vtable_methods: Vec::new(),
+            vtable_slots: HashMap::new(),
+            static_method_visibilities: HashMap::new(),
+            final_static_methods: HashSet::new(),
+            static_method_declaring_classes: HashMap::new(),
+            static_method_impl_classes: HashMap::new(),
+            static_vtable_methods: Vec::new(),
+            static_vtable_slots: HashMap::new(),
+            interfaces: Vec::new(),
+            constructor_param_to_prop: Vec::new(),
+        }
+    }
+
+    /// Builds a module with one declared class and one `fn_obj` function (no params,
+    /// returns i64) whose body is `body`. The class is registered in
+    /// `module.class_infos` and its name interned into `module.data.class_names`;
+    /// each property name is interned into `module.data.strings` in declaration
+    /// order. `body` receives the builder, the class data id, and the per-property
+    /// string data ids (declaration order) and returns the i64 result. Run with
+    /// `invoke(&module, "fn_obj", &[])`.
+    fn object_fn_module(
+        class_name: &str,
+        properties: Vec<(String, PhpType)>,
+        defaults: Vec<Option<Expr>>,
+        body: impl FnOnce(&mut Builder, DataId, &[DataId]) -> ValueId,
+    ) -> Module {
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class_name);
+        let prop_data: Vec<DataId> = properties
+            .iter()
+            .map(|(n, _)| module.data.intern_string(n))
+            .collect();
+        module
+            .class_infos
+            .insert(class_name.to_string(), test_class_info(1, properties, defaults, false));
+        let mut f = Function::new("obj".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let result = body(&mut b, class_data, &prop_data);
+            b.terminate(Terminator::Return { value: Some(result) });
+        }
+        module.add_function(f);
+        module
+    }
+
+    /// Like `object_fn_module` but builds a `main` function (void, command mode) whose
+    /// body is `body` (it performs its own `EchoValue`s and returns nothing). Run with
+    /// `run_main(&module)`.
+    fn object_main_module(
+        class_name: &str,
+        properties: Vec<(String, PhpType)>,
+        defaults: Vec<Option<Expr>>,
+        body: impl FnOnce(&mut Builder, DataId, &[DataId]),
+    ) -> Module {
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class_name);
+        let prop_data: Vec<DataId> = properties
+            .iter()
+            .map(|(n, _)| module.data.intern_string(n))
+            .collect();
+        module
+            .class_infos
+            .insert(class_name.to_string(), test_class_info(1, properties, defaults, false));
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            body(&mut b, class_data, &prop_data);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        module
+    }
+
+    /// Emits `new ClassName()` and returns the object value id (kind-4 heap block).
+    fn emit_object_new(b: &mut Builder, class_name: &str, class_data: DataId) -> ValueId {
+        b.emit(
+            Op::ObjectNew,
+            Vec::new(),
+            Some(Immediate::Data(class_data)),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class_name.to_string()),
+            Ownership::Owned,
+        )
+        .expect("ObjectNew lowers")
+    }
+
+    /// Emits `$obj->$prop = $value` (PropSet is void).
+    fn emit_prop_set(b: &mut Builder, obj: ValueId, prop_data: DataId, value: ValueId) {
+        let _ = b.emit(
+            Op::PropSet,
+            vec![obj, value],
+            Some(Immediate::Data(prop_data)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+    }
+
+    /// Emits `$obj->$prop` (PropGet) with the given scalar result type and returns it.
+    fn emit_prop_get(
+        b: &mut Builder,
+        obj: ValueId,
+        prop_data: DataId,
+        ir: IrType,
+        php: PhpType,
+    ) -> ValueId {
+        b.emit(
+            Op::PropGet,
+            vec![obj],
+            Some(Immediate::Data(prop_data)),
+            ir,
+            php,
+            Ownership::NonHeap,
+        )
+        .expect("PropGet lowers")
+    }
+
+    /// `new P{int x; int y}; x=3; y=4; return x+y` -> "7". Verifies alloc + scalar
+    /// PropSet/PropGet round-trip for two int properties at offsets 8 and 24.
+    #[test]
+    fn object_new_scalar_props_roundtrip() {
+        let class = "P";
+        let m = object_fn_module(
+            class,
+            vec![("x".to_string(), PhpType::Int), ("y".to_string(), PhpType::Int)],
+            vec![None, None],
+            |b, cd, pd| {
+                let obj = emit_object_new(b, class, cd);
+                let v0 = b.emit_const_i64(3);
+                emit_prop_set(b, obj, pd[0], v0);
+                let v1 = b.emit_const_i64(4);
+                emit_prop_set(b, obj, pd[1], v1);
+                let x = emit_prop_get(b, obj, pd[0], IrType::I64, PhpType::Int);
+                let y = emit_prop_get(b, obj, pd[1], IrType::I64, PhpType::Int);
+                b.emit(Op::IAdd, vec![x, y], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                    .unwrap()
+            },
+        );
+        if let Some(o) = invoke(&m, "fn_obj", &[]) {
+            assert_eq!(o, "7");
+        }
+    }
+
+    /// `new P{int x = 5}; return x` -> "5". Verifies the int property default is
+    /// emitted by `ObjectNew` (read straight back, no PropSet).
+    #[test]
+    fn object_int_default_is_emitted() {
+        let class = "P";
+        let m = object_fn_module(
+            class,
+            vec![("x".to_string(), PhpType::Int)],
+            vec![Some(Expr { kind: ExprKind::IntLiteral(5), span: Span::dummy() })],
+            |b, cd, pd| {
+                let obj = emit_object_new(b, class, cd);
+                emit_prop_get(b, obj, pd[0], IrType::I64, PhpType::Int)
+            },
+        );
+        if let Some(o) = invoke(&m, "fn_obj", &[]) {
+            assert_eq!(o, "5");
+        }
+    }
+
+    /// `new P{int x}; return x` -> "0". Verifies an unset (no-default) int property
+    /// reads as zero: the `ObjectNew` zeroing loop wrote `(0, 0)` and no default follows.
+    #[test]
+    fn object_unset_int_property_reads_zero() {
+        let class = "P";
+        let m = object_fn_module(
+            class,
+            vec![("x".to_string(), PhpType::Int)],
+            vec![None],
+            |b, cd, pd| {
+                let obj = emit_object_new(b, class, cd);
+                emit_prop_get(b, obj, pd[0], IrType::I64, PhpType::Int)
+            },
+        );
+        if let Some(o) = invoke(&m, "fn_obj", &[]) {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// `new P{int x}; x=1; x=2; return x` -> "2". Verifies PropSet overwrites the
+    /// previous scalar value in place (same slot, last write wins).
+    #[test]
+    fn object_prop_set_overwrites() {
+        let class = "P";
+        let m = object_fn_module(
+            class,
+            vec![("x".to_string(), PhpType::Int)],
+            vec![None],
+            |b, cd, pd| {
+                let obj = emit_object_new(b, class, cd);
+                let one = b.emit_const_i64(1);
+                emit_prop_set(b, obj, pd[0], one);
+                let two = b.emit_const_i64(2);
+                emit_prop_set(b, obj, pd[0], two);
+                emit_prop_get(b, obj, pd[0], IrType::I64, PhpType::Int)
+            },
+        );
+        if let Some(o) = invoke(&m, "fn_obj", &[]) {
+            assert_eq!(o, "2");
+        }
+    }
+
+    /// Two instances of `P{int x}` with `a.x=1`, `b.x=2` -> `a.x*10 + b.x` = "12".
+    /// Verifies distinct `ObjectNew` allocations do not share property storage.
+    #[test]
+    fn object_two_instances_are_independent() {
+        let class = "P";
+        let m = object_fn_module(
+            class,
+            vec![("x".to_string(), PhpType::Int)],
+            vec![None],
+            |b, cd, pd| {
+                let a = emit_object_new(b, class, cd);
+                let bb = emit_object_new(b, class, cd);
+                let one = b.emit_const_i64(1);
+                emit_prop_set(b, a, pd[0], one);
+                let two = b.emit_const_i64(2);
+                emit_prop_set(b, bb, pd[0], two);
+                let av = emit_prop_get(b, a, pd[0], IrType::I64, PhpType::Int);
+                let bv = emit_prop_get(b, bb, pd[0], IrType::I64, PhpType::Int);
+                let ten = b.emit_const_i64(10);
+                let scaled = b.emit(
+                    Op::IMul,
+                    vec![av, ten],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+                b.emit(Op::IAdd, vec![scaled, bv], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                    .unwrap()
+            },
+        );
+        if let Some(o) = invoke(&m, "fn_obj", &[]) {
+            assert_eq!(o, "12");
+        }
+    }
+
+    /// `new Q{int x; int y}` (Q inherits P{x}) with the flattened parent-first
+    /// property list `[(x,Int),(y,Int)]`; `x=1; y=2; return x+y` -> "3". Verifies the
+    /// parent-first offset layout (`x` at offset 8, `y` at offset 24) the lowering
+    /// reads from `ClassInfo.property_offsets`.
+    #[test]
+    fn object_inherited_property_offsets() {
+        let class = "Q";
+        let m = object_fn_module(
+            class,
+            vec![("x".to_string(), PhpType::Int), ("y".to_string(), PhpType::Int)],
+            vec![None, None],
+            |b, cd, pd| {
+                let obj = emit_object_new(b, class, cd);
+                let one = b.emit_const_i64(1);
+                emit_prop_set(b, obj, pd[0], one);
+                let two = b.emit_const_i64(2);
+                emit_prop_set(b, obj, pd[1], two);
+                let x = emit_prop_get(b, obj, pd[0], IrType::I64, PhpType::Int);
+                let y = emit_prop_get(b, obj, pd[1], IrType::I64, PhpType::Int);
+                b.emit(Op::IAdd, vec![x, y], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                    .unwrap()
+            },
+        );
+        if let Some(o) = invoke(&m, "fn_obj", &[]) {
+            assert_eq!(o, "3");
+        }
+    }
+
+    /// `new P{int a; int b; int c}; a=1; b=2; c=3; return c*100+b*10+a` -> "321".
+    /// Verifies the non-zero-index offset math `8 + i*16` for i = 0, 1, 2 (slots at
+    /// 8, 24, 40) so a later property does not clobber an earlier one.
+    #[test]
+    fn object_multi_property_nonzero_index_offsets() {
+        let class = "P";
+        let m = object_fn_module(
+            class,
+            vec![
+                ("a".to_string(), PhpType::Int),
+                ("b".to_string(), PhpType::Int),
+                ("c".to_string(), PhpType::Int),
+            ],
+            vec![None, None, None],
+            |b, cd, pd| {
+                let obj = emit_object_new(b, class, cd);
+                let one = b.emit_const_i64(1);
+                emit_prop_set(b, obj, pd[0], one);
+                let two = b.emit_const_i64(2);
+                emit_prop_set(b, obj, pd[1], two);
+                let three = b.emit_const_i64(3);
+                emit_prop_set(b, obj, pd[2], three);
+                let a = emit_prop_get(b, obj, pd[0], IrType::I64, PhpType::Int);
+                let bb = emit_prop_get(b, obj, pd[1], IrType::I64, PhpType::Int);
+                let c = emit_prop_get(b, obj, pd[2], IrType::I64, PhpType::Int);
+                let hundred = b.emit_const_i64(100);
+                let c100 = b.emit(
+                    Op::IMul,
+                    vec![c, hundred],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+                let ten = b.emit_const_i64(10);
+                let b10 = b.emit(
+                    Op::IMul,
+                    vec![bb, ten],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+                let sum = b.emit(
+                    Op::IAdd,
+                    vec![c100, b10],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+                b.emit(Op::IAdd, vec![sum, a], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                    .unwrap()
+            },
+        );
+        if let Some(o) = invoke(&m, "fn_obj", &[]) {
+            assert_eq!(o, "321");
+        }
+    }
+
+    /// `echo $p->x` for `new P{int x}; x=42` -> "42". Verifies the int property load
+    /// feeds `EchoValue` (int -> decimal stdout) through `run_main`.
+    #[test]
+    fn object_echo_int_property() {
+        let class = "P";
+        let m = object_main_module(
+            class,
+            vec![("x".to_string(), PhpType::Int)],
+            vec![None],
+            |b, cd, pd| {
+                let obj = emit_object_new(b, class, cd);
+                let v = b.emit_const_i64(42);
+                emit_prop_set(b, obj, pd[0], v);
+                let x = emit_prop_get(b, obj, pd[0], IrType::I64, PhpType::Int);
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![x],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            },
+        );
+        if let Some(o) = run_main(&m) {
+            assert_eq!(o, "42");
+        }
+    }
+
+    /// `echo $p->f` for `new P{float f = 2.5}` -> "2.5". Verifies the float property
+    /// default is emitted as raw f64 bits and read back by `f64.load`, then echoed.
+    #[test]
+    fn object_float_default_echo() {
+        let class = "P";
+        let m = object_main_module(
+            class,
+            vec![("f".to_string(), PhpType::Float)],
+            vec![Some(Expr { kind: ExprKind::FloatLiteral(2.5), span: Span::dummy() })],
+            |b, cd, pd| {
+                let obj = emit_object_new(b, class, cd);
+                let f = emit_prop_get(b, obj, pd[0], IrType::F64, PhpType::Float);
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![f],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            },
+        );
+        if let Some(o) = run_main(&m) {
+            assert_eq!(o, "2.5");
+        }
+    }
+
+    /// `echo $p->f` for `new P{float f}; f=3.5` -> "3.5". Verifies a PropSet float
+    /// stores via `f64.store` and reads back via `f64.load` then echoes.
+    #[test]
+    fn object_float_prop_set_then_echo() {
+        let class = "P";
+        let m = object_main_module(
+            class,
+            vec![("f".to_string(), PhpType::Float)],
+            vec![None],
+            |b, cd, pd| {
+                let obj = emit_object_new(b, class, cd);
+                let v = b.emit_const_f64(3.5);
+                emit_prop_set(b, obj, pd[0], v);
+                let f = emit_prop_get(b, obj, pd[0], IrType::F64, PhpType::Float);
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![f],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            },
+        );
+        if let Some(o) = run_main(&m) {
+            assert_eq!(o, "3.5");
+        }
+    }
+
+    /// `echo $p->b` for `new P{bool b = true}` -> "1". Verifies the bool property
+    /// default is emitted as i64 1 and echoed (true -> "1").
+    #[test]
+    fn object_bool_default_echo() {
+        let class = "P";
+        let m = object_main_module(
+            class,
+            vec![("b".to_string(), PhpType::Bool)],
+            vec![Some(Expr { kind: ExprKind::BoolLiteral(true), span: Span::dummy() })],
+            |b, cd, pd| {
+                let obj = emit_object_new(b, class, cd);
+                let bv = emit_prop_get(b, obj, pd[0], IrType::I64, PhpType::Bool);
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![bv],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            },
+        );
+        if let Some(o) = run_main(&m) {
+            assert_eq!(o, "1");
+        }
+    }
+
+    /// `echo $p->b` for `new P{bool b}; b=false` -> "" (false echoes as empty). Verifies
+    /// a PropSet bool stores 0 and echoes as nothing (matching the `echo_booleans` test).
+    #[test]
+    fn object_bool_prop_set_false_echo_empty() {
+        let class = "P";
+        let m = object_main_module(
+            class,
+            vec![("b".to_string(), PhpType::Bool)],
+            vec![None],
+            |b, cd, pd| {
+                let obj = emit_object_new(b, class, cd);
+                let v = b.emit_const_bool(false);
+                emit_prop_set(b, obj, pd[0], v);
+                let bv = emit_prop_get(b, obj, pd[0], IrType::I64, PhpType::Bool);
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![bv],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            },
+        );
+        if let Some(o) = run_main(&m) {
+            assert_eq!(o, "");
         }
     }
 }

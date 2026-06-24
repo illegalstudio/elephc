@@ -18,6 +18,10 @@ mod fibers;
 mod frame;
 mod function_variants;
 mod literal_defaults;
+// Re-export only the pure scalar-default extractor and its enum so other backends
+// (codegen_wasm) can reuse them without widening the module's FunctionContext-taking
+// emitters, which must stay private to `codegen_ir`.
+pub(crate) use literal_defaults::{literal_default_value, LiteralDefaultValue};
 mod lower_inst;
 mod lower_term;
 pub mod value_placement;
