@@ -118,7 +118,7 @@ pub trait RuntimeValueOps {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
-    /// Calls a named public static method through the generated AOT bridge.
+    /// Calls a named static method through the generated AOT bridge.
     fn static_method_call(
         &mut self,
         class_name: &str,

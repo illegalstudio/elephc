@@ -4849,6 +4849,125 @@ $box->run();
     assert_eq!(out, "42");
 }
 
+/// Verifies eval fragments can call private AOT instance methods from the declaring scope.
+#[test]
+fn test_eval_fragment_can_call_private_aot_method_from_declaring_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalPrivateAotMethodBox {
+    private function secret(int $n): int {
+        return $n + 2;
+    }
+
+    public function run(): void {
+        echo eval('return $this->secret(3);');
+    }
+}
+
+(new EvalPrivateAotMethodBox())->run();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval callable arrays can call private AOT instance methods from the declaring scope.
+#[test]
+fn test_eval_fragment_callable_array_can_call_private_aot_method_from_declaring_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalPrivateAotCallableMethodBox {
+    private function secret(int $n): int {
+        return $n + 2;
+    }
+
+    public function run(): void {
+        echo eval('$cb = [$this, "secret"]; return call_user_func($cb, 3);');
+    }
+}
+
+(new EvalPrivateAotCallableMethodBox())->run();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval fragments reject private AOT instance methods from child scopes.
+#[test]
+fn test_eval_fragment_rejects_private_aot_method_from_child_scope() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalPrivateAotMethodBase {
+    private function secret(int $n): int {
+        return $n + 2;
+    }
+}
+
+class EvalPrivateAotMethodChild extends EvalPrivateAotMethodBase {
+    public function run(): void {
+        echo eval('return $this->secret(3);');
+    }
+}
+
+(new EvalPrivateAotMethodChild())->run();
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "unexpected stderr: {err}"
+    );
+}
+
+/// Verifies eval fragments can call inherited protected AOT methods from child scopes.
+#[test]
+fn test_eval_fragment_can_call_protected_aot_method_from_child_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalProtectedAotMethodBase {
+    protected function add(int $n): int {
+        return $n + 2;
+    }
+}
+
+class EvalProtectedAotMethodChild extends EvalProtectedAotMethodBase {
+    public function run(): void {
+        echo eval('return $this->add(3);');
+    }
+}
+
+(new EvalProtectedAotMethodChild())->run();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval fragments reject protected AOT instance methods between sibling scopes.
+#[test]
+fn test_eval_fragment_rejects_protected_aot_method_from_sibling_scope() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalProtectedAotMethodSiblingBase {}
+
+class EvalProtectedAotMethodLeft extends EvalProtectedAotMethodSiblingBase {
+    protected function add(int $n): int {
+        return $n + 2;
+    }
+}
+
+class EvalProtectedAotMethodRight extends EvalProtectedAotMethodSiblingBase {
+    public function run(): void {
+        echo eval('return (new EvalProtectedAotMethodLeft())->add(3);');
+    }
+}
+
+(new EvalProtectedAotMethodRight())->run();
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "unexpected stderr: {err}"
+    );
+}
+
 /// Verifies eval fragments pass one scalar argument to public AOT methods through `$this`.
 #[test]
 fn test_eval_fragment_can_call_this_public_one_arg_method() {
@@ -5314,6 +5433,127 @@ echo EvalAotStaticBox::sum4(1, 2, 3, 4);');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "AB:CD:EF:7:10");
+}
+
+/// Verifies eval fragments can call private AOT static methods from the declaring scope.
+#[test]
+fn test_eval_fragment_can_call_private_aot_static_method_from_declaring_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalPrivateAotStaticMethodBox {
+    private static function secret(int $n): int {
+        return $n + 2;
+    }
+
+    public function run(): void {
+        echo eval('return self::secret(3);');
+    }
+}
+
+(new EvalPrivateAotStaticMethodBox())->run();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval fragments reject private AOT static methods from child scopes.
+#[test]
+fn test_eval_fragment_rejects_private_aot_static_method_from_child_scope() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalPrivateAotStaticMethodBase {
+    private static function secret(int $n): int {
+        return $n + 2;
+    }
+}
+
+class EvalPrivateAotStaticMethodChild extends EvalPrivateAotStaticMethodBase {
+    public function run(): void {
+        echo eval('return EvalPrivateAotStaticMethodBase::secret(3);');
+    }
+}
+
+(new EvalPrivateAotStaticMethodChild())->run();
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "unexpected stderr: {err}"
+    );
+}
+
+/// Verifies eval fragments can call inherited protected AOT static methods from child scopes.
+#[test]
+fn test_eval_fragment_can_call_protected_aot_static_method_from_child_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalProtectedAotStaticMethodBase {
+    protected static function add(int $n): int {
+        return $n + 2;
+    }
+}
+
+class EvalProtectedAotStaticMethodChild extends EvalProtectedAotStaticMethodBase {
+    public function run(): void {
+        echo eval('return EvalProtectedAotStaticMethodBase::add(3);');
+    }
+}
+
+(new EvalProtectedAotStaticMethodChild())->run();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval static method callables can call protected AOT methods from child scopes.
+#[test]
+fn test_eval_fragment_callable_can_call_protected_aot_static_method_from_child_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalProtectedAotStaticCallableBase {
+    protected static function add(int $n): int {
+        return $n + 2;
+    }
+}
+
+class EvalProtectedAotStaticCallableChild extends EvalProtectedAotStaticCallableBase {
+    public function run(): void {
+        echo eval('return call_user_func([EvalProtectedAotStaticCallableBase::class, "add"], 3);');
+    }
+}
+
+(new EvalProtectedAotStaticCallableChild())->run();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval fragments reject protected AOT static methods between sibling scopes.
+#[test]
+fn test_eval_fragment_rejects_protected_aot_static_method_from_sibling_scope() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalProtectedAotStaticMethodSiblingBase {}
+
+class EvalProtectedAotStaticMethodLeft extends EvalProtectedAotStaticMethodSiblingBase {
+    protected static function add(int $n): int {
+        return $n + 2;
+    }
+}
+
+class EvalProtectedAotStaticMethodRight extends EvalProtectedAotStaticMethodSiblingBase {
+    public function run(): void {
+        echo eval('return EvalProtectedAotStaticMethodLeft::add(3);');
+    }
+}
+
+(new EvalProtectedAotStaticMethodRight())->run();
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "unexpected stderr: {err}"
+    );
 }
 
 /// Verifies eval static dispatch passes AOT static method arguments on the caller stack.
