@@ -119,7 +119,7 @@ unsafe fn call_eval_function_inner(
             .collect()
     };
     clear_result(out);
-    let mut values = ElephcRuntimeOps::new();
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_function_outcome(
         context,
         &name.to_ascii_lowercase(),
@@ -157,7 +157,7 @@ unsafe fn call_eval_function_array_inner(
         return EvalStatus::RuntimeFatal.code();
     }
     clear_result(out);
-    let mut values = ElephcRuntimeOps::new();
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_function_call_array_outcome(
         context,
         &name.to_ascii_lowercase(),
