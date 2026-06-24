@@ -223,11 +223,12 @@ named, nullable, union, and intersection declarations, including `void` and
 supported non-closure function reflectors.
 `ReflectionClass::isFinal()`, `ReflectionClass::isAbstract()`,
 `ReflectionClass::isInterface()`, `ReflectionClass::isTrait()`, and
-`ReflectionClass::isEnum()` report eval class-like metadata, including
-PHP-compatible enum finality and class-like kind checks for eval interfaces,
-traits, and enums. `ReflectionClass::isReadOnly()` reports eval `readonly class`
-metadata. `ReflectionClass::isAnonymous()` reports true for eval anonymous
-classes and false for eval-declared named class-like symbols.
+`ReflectionClass::isEnum()` report eval and generated/AOT class-like metadata,
+including PHP-compatible enum finality and class-like kind checks for eval
+interfaces, traits, and enums. `ReflectionClass::isReadOnly()` reports eval and
+generated/AOT `readonly class` metadata. `ReflectionClass::isAnonymous()`
+reports true for eval anonymous classes and false for eval-declared named
+class-like symbols.
 `ReflectionClass::isInstantiable()` reports whether eval or generated/AOT
 class-like metadata describes a concrete class with no constructor or a public
 constructor. `ReflectionClass::isCloneable()` reports whether eval or

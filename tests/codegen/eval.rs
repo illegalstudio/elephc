@@ -8111,6 +8111,41 @@ echo (new ReflectionClass("EvalInstEnum"))->isInstantiable() ? "E" : "e";');
     assert_eq!(out.stdout, "aBCprite");
 }
 
+/// Verifies eval ReflectionClass modifier and lifecycle predicates use generated/AOT class flags.
+#[test]
+fn test_eval_reflection_class_aot_modifier_flags() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class EvalAotModifierAbstract {}
+final class EvalAotModifierFinal {}
+readonly class EvalAotModifierReadonly {}
+enum EvalAotModifierEnum { case Ready; }
+
+echo eval('
+function eval_aot_modifier_line($name) {
+    $ref = new ReflectionClass($name);
+    echo $ref->isAbstract() ? "A" : "a";
+    echo $ref->isFinal() ? "F" : "f";
+    echo $ref->isReadOnly() ? "R" : "r";
+    echo $ref->isEnum() ? "E" : "e";
+    echo "/" . $ref->getModifiers() . "/";
+    echo $ref->isInstantiable() ? "I" : "i";
+    echo $ref->isCloneable() ? "C" : "c";
+    echo ":";
+}
+eval_aot_modifier_line("EvalAotModifierAbstract");
+eval_aot_modifier_line("EvalAotModifierFinal");
+eval_aot_modifier_line("EvalAotModifierReadonly");
+eval_aot_modifier_line("EvalAotModifierEnum");
+');
+"#,
+    );
+    assert_eq!(
+        out,
+        "Afre/64/ic:aFre/32/IC:afRe/65536/IC:aFrE/32/ic:"
+    );
+}
+
 /// Verifies eval ReflectionClass lifecycle predicates use generated/AOT lifecycle visibility.
 #[test]
 fn test_eval_reflection_class_aot_lifecycle_visibility_predicates() {

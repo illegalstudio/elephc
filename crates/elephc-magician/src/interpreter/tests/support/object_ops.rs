@@ -9,6 +9,9 @@
 
 use super::*;
 
+const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
+const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
+const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
 const EVAL_REFLECTION_MEMBER_FLAG_STATIC: u64 = 1;
 const EVAL_REFLECTION_MEMBER_FLAG_PUBLIC: u64 = 2;
 const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
@@ -1132,6 +1135,18 @@ impl FakeOps {
     /// Reports one fake AOT class for eval `class_exists` unit tests.
     pub(super) fn runtime_class_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
         Ok(name.eq_ignore_ascii_case("KnownClass"))
+    }
+    /// Reports fake generated AOT ReflectionClass flags for eval metadata unit tests.
+    pub(super) fn runtime_reflection_class_flags(
+        &mut self,
+        class_name: &str,
+    ) -> Result<Option<u64>, EvalStatus> {
+        match class_name.to_ascii_lowercase().as_str() {
+            "knownabstract" => Ok(Some(EVAL_REFLECTION_CLASS_FLAG_ABSTRACT)),
+            "knownfinal" => Ok(Some(EVAL_REFLECTION_CLASS_FLAG_FINAL)),
+            "knownreadonly" => Ok(Some(EVAL_REFLECTION_CLASS_FLAG_READONLY)),
+            _ => Ok(None),
+        }
     }
     /// Reports fake generated AOT ReflectionMethod flags for eval metadata unit tests.
     pub(super) fn runtime_reflection_method_flags(

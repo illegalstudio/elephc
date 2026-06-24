@@ -19,6 +19,9 @@ use crate::types::{ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
 
 use super::instanceof::{escaped_ascii, escaped_bytes};
 
+const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
+const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
+const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
 const EVAL_REFLECTION_PROPERTY_FLAG_STATIC: u64 = 1;
 const EVAL_REFLECTION_PROPERTY_FLAG_PUBLIC: u64 = 2;
 const EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED: u64 = 4;
@@ -427,6 +430,8 @@ pub(crate) fn emit_runtime_data_user(
     emit_eval_reflection_method_lookup_data(&mut out, &sorted_classes);
     out.push_str(".p2align 3\n");
     emit_eval_reflection_property_lookup_data(&mut out, &sorted_classes);
+    out.push_str(".p2align 3\n");
+    emit_eval_reflection_class_lookup_data(&mut out, &sorted_classes);
     out.push_str(".p2align 3\n");
     emit_eval_reflection_class_interface_lookup_data(&mut out, &sorted_classes, interfaces);
 
@@ -1151,6 +1156,54 @@ fn eval_reflection_static_property_declaring_class<'a>(
         .get(property_name)
         .map(String::as_str)
         .unwrap_or(reflected_class)
+}
+
+/// Emits AOT class flag rows consumed by eval ReflectionClass metadata probes.
+fn emit_eval_reflection_class_lookup_data(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+) {
+    let mut entries = Vec::new();
+    let mut index = 0usize;
+    for (class_name, class_info) in sorted_classes {
+        let flags = eval_reflection_class_flags(class_info);
+        if flags == 0 {
+            continue;
+        }
+        let class_label = format!("_eval_reflection_class_name_{}", index);
+        out.push_str(&format!(
+            ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+            class_label,
+            escaped_ascii(class_name)
+        ));
+        entries.push((class_label, class_name.len(), flags));
+        index += 1;
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _eval_reflection_class_count\n_eval_reflection_class_count:\n");
+    out.push_str(&format!("    .quad {}\n", entries.len()));
+    out.push_str(".globl _eval_reflection_classes\n_eval_reflection_classes:\n");
+    for (class_label, class_len, flags) in entries {
+        out.push_str(&format!("    .quad {}\n", class_label));
+        out.push_str(&format!("    .quad {}\n", class_len));
+        out.push_str(&format!("    .quad {}\n", flags));
+    }
+}
+
+/// Returns eval ReflectionClass flag bits retained for one generated/AOT class.
+fn eval_reflection_class_flags(class_info: &ClassInfo) -> u64 {
+    let mut flags = 0;
+    if class_info.is_final {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_FINAL;
+    }
+    if class_info.is_abstract {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_ABSTRACT;
+    }
+    if class_info.is_readonly_class {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_READONLY;
+    }
+    flags
 }
 
 /// Emits class-like/interface-name rows consumed by eval ReflectionClass metadata probes.

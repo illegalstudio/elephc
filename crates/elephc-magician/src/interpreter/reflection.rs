@@ -1941,6 +1941,14 @@ fn eval_reflection_aot_class_flags(
     } else {
         flags |= EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED;
     }
+    let mut class_flags = values.reflection_class_flags(runtime_class_name)?.unwrap_or(0);
+    if is_enum {
+        class_flags &= !EVAL_REFLECTION_CLASS_FLAG_READONLY;
+    }
+    flags |= class_flags
+        & (EVAL_REFLECTION_CLASS_FLAG_FINAL
+            | EVAL_REFLECTION_CLASS_FLAG_ABSTRACT
+            | EVAL_REFLECTION_CLASS_FLAG_READONLY);
     if is_interface {
         flags |= EVAL_REFLECTION_CLASS_FLAG_INTERFACE;
     }
@@ -1953,7 +1961,7 @@ fn eval_reflection_aot_class_flags(
     if eval_reflection_builtin_class_is_iterable(runtime_class_name) {
         flags |= EVAL_REFLECTION_CLASS_FLAG_ITERABLE;
     }
-    if is_class {
+    if is_class && !is_enum && flags & EVAL_REFLECTION_CLASS_FLAG_ABSTRACT == 0 {
         if eval_reflection_aot_lifecycle_method_allows_public_reflection(
             runtime_class_name,
             "__construct",
@@ -1969,7 +1977,12 @@ fn eval_reflection_aot_class_flags(
             flags |= EVAL_REFLECTION_CLASS_FLAG_CLONEABLE;
         }
     }
-    let modifiers = if is_enum { 32 } else { 0 };
+    let modifiers = eval_reflection_class_modifiers(
+        flags & EVAL_REFLECTION_CLASS_FLAG_FINAL != 0,
+        flags & EVAL_REFLECTION_CLASS_FLAG_ABSTRACT != 0,
+        flags & EVAL_REFLECTION_CLASS_FLAG_READONLY != 0,
+        is_enum,
+    );
     Ok(Some((flags, modifiers)))
 }
 

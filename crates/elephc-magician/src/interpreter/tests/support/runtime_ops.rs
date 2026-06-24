@@ -209,6 +209,10 @@ impl RuntimeValueOps for FakeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_reflection_method_names(class_name)
     }
+    /// Reports fake generated AOT ReflectionClass flags for metadata bridge tests.
+    fn reflection_class_flags(&mut self, class_name: &str) -> Result<Option<u64>, EvalStatus> {
+        self.runtime_reflection_class_flags(class_name)
+    }
     /// Reports fake generated AOT ReflectionProperty flags for metadata bridge tests.
     fn reflection_property_flags(
         &mut self,

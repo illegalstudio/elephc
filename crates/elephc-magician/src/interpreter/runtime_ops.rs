@@ -176,6 +176,9 @@ pub trait RuntimeValueOps {
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Returns generated AOT ReflectionClass modifier flags for one class.
+    fn reflection_class_flags(&mut self, class_name: &str) -> Result<Option<u64>, EvalStatus>;
+
     /// Returns generated AOT ReflectionProperty flags for a class/property pair.
     fn reflection_property_flags(
         &mut self,
