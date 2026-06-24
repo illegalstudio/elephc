@@ -94,11 +94,14 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         object: RuntimeCellHandle,
         property: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
         Self::handle(unsafe {
             __elephc_eval_value_property_get(
                 object.as_ptr(),
                 property.as_ptr(),
                 property.len() as u64,
+                scope_ptr,
+                scope_len,
             )
         })
     }
@@ -110,12 +113,15 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         property: &str,
         value: RuntimeCellHandle,
     ) -> Result<(), EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let ok = unsafe {
             __elephc_eval_value_property_set(
                 object.as_ptr(),
                 property.as_ptr(),
                 property.len() as u64,
                 value.as_ptr(),
+                scope_ptr,
+                scope_len,
             )
         };
         if ok == 0 {

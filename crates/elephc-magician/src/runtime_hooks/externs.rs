@@ -44,12 +44,16 @@ unsafe extern "C" {
         object: *mut RuntimeCell,
         name_ptr: *const u8,
         name_len: u64,
+        scope_ptr: *const u8,
+        scope_len: u64,
     ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_property_set(
         object: *mut RuntimeCell,
         name_ptr: *const u8,
         name_len: u64,
         value: *mut RuntimeCell,
+        scope_ptr: *const u8,
+        scope_len: u64,
     ) -> u64;
     pub(super) fn __elephc_eval_value_static_property_get(
         class_ptr: *const u8,

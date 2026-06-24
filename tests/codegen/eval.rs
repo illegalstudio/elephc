@@ -4430,6 +4430,45 @@ echo $box->x;
     assert_eq!(out, "2");
 }
 
+/// Verifies eval fragments inherit native method scope for private AOT property access.
+#[test]
+fn test_eval_fragment_can_mutate_this_private_property_from_declaring_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalPrivatePropBox {
+    private int $x = 1;
+
+    public function run(): void {
+        echo eval('$this->x = $this->x + 4; return $this->x;');
+    }
+}
+
+$box = new EvalPrivatePropBox();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies eval fragments outside the declaring scope cannot read private AOT properties.
+#[test]
+fn test_eval_fragment_rejects_private_property_outside_declaring_scope() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalPrivatePropOutsideBox {
+    private int $x = 1;
+}
+
+$box = new EvalPrivatePropOutsideBox();
+eval('return $box->x;');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "unexpected stderr: {err}"
+    );
+}
+
 /// Verifies eval fragments can read and write public nullable-int AOT properties through `$this`.
 #[test]
 fn test_eval_fragment_can_mutate_this_nullable_int_property() {

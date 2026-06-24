@@ -21,6 +21,8 @@ mod tags;
 #[cfg(not(test))]
 use crate::errors::EvalStatus;
 #[cfg(not(test))]
+use crate::abi::ElephcEvalContext;
+#[cfg(not(test))]
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 #[cfg(not(test))]
 use externs::{
@@ -29,13 +31,22 @@ use externs::{
 
 /// Runtime hook adapter that produces and consumes boxed elephc Mixed cells.
 #[cfg(not(test))]
-pub struct ElephcRuntimeOps;
+pub struct ElephcRuntimeOps {
+    context: *const ElephcEvalContext,
+}
 
 #[cfg(not(test))]
 impl ElephcRuntimeOps {
-    /// Creates a new stateless runtime hook adapter.
+    /// Creates a runtime hook adapter without caller-sensitive eval context.
     pub const fn new() -> Self {
-        Self
+        Self {
+            context: std::ptr::null(),
+        }
+    }
+
+    /// Creates a runtime hook adapter that can expose the active class scope to generated helpers.
+    pub const fn with_context(context: *const ElephcEvalContext) -> Self {
+        Self { context }
     }
 
     /// Converts a runtime wrapper result into an interpreter handle.
@@ -58,5 +69,16 @@ impl ElephcRuntimeOps {
             })?;
         }
         Ok(arg_array)
+    }
+
+    /// Returns the active eval class-scope bytes in the generated helper ABI shape.
+    fn current_class_scope_abi(&self) -> (*const u8, u64) {
+        let Some(context) = (unsafe { self.context.as_ref() }) else {
+            return (std::ptr::null(), 0);
+        };
+        let Some(class_scope) = context.current_class_scope() else {
+            return (std::ptr::null(), 0);
+        };
+        (class_scope.as_ptr(), class_scope.len() as u64)
     }
 }
