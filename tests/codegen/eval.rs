@@ -4729,6 +4729,31 @@ return $defaulted->label . ":" . $fromInt->label . ":" . $fromInt->describe(null
     assert_eq!(out, "N:I7:N:I42:N:I5");
 }
 
+/// Verifies eval fragments can read nullable-int return values from AOT methods.
+#[test]
+fn test_eval_fragment_dispatches_aot_nullable_int_returns() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotNullableIntReturnBox {
+    public function maybe(bool $keep): ?int {
+        return $keep ? 7 : null;
+    }
+
+    public static function maybeStatic(bool $keep): ?int {
+        return $keep ? 11 : null;
+    }
+
+    public function run() {
+        return eval('return ($this->maybe(true) === 7 ? "I7" : "bad") . ":" . (is_null($this->maybe(false)) ? "N" : "bad") . ":" . (EvalAotNullableIntReturnBox::maybeStatic(true) === 11 ? "S11" : "bad") . ":" . (is_null(EvalAotNullableIntReturnBox::maybeStatic(false)) ? "SN" : "bad");');
+    }
+}
+
+echo (new EvalAotNullableIntReturnBox())->run();
+"#,
+    );
+    assert_eq!(out, "I7:N:S11:SN");
+}
+
 /// Verifies eval fragments can read iterable return values from AOT methods.
 #[test]
 fn test_eval_fragment_dispatches_aot_method_with_iterable_return() {

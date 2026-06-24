@@ -1023,6 +1023,7 @@ fn eval_native_method_return_supported(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
+            | PhpType::TaggedScalar
             | PhpType::Mixed
             | PhpType::Union(_)
             | PhpType::Iterable
