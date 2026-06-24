@@ -648,7 +648,7 @@ property, and function/method return metadata, broader
 parameter and generated property default-value materialization beyond scalar,
 null, empty-array, and supported object-valued parameter defaults during generated/AOT invocation,
 object-valued generated defaults beyond the positional
-`new C(<supported scalar/string/null/empty-array args>)` parameter slice, and broader generated/AOT method bridge signatures beyond the current public
+`new C(<up to eight supported scalar/string/null/empty-array args>)` parameter slice, and broader generated/AOT method bridge signatures beyond the current public
 non-by-reference scalar/Mixed/array/object slice plus visibility-checked
 `__clone()` hooks. Generated/AOT method type
 metadata, by-reference and variadic parameter flags, and generated/AOT

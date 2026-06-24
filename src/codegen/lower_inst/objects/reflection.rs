@@ -3595,7 +3595,7 @@ fn reflection_object_parameter_default_args(
     class_name: &str,
     args: &[Expr],
 ) -> Result<Option<Vec<ReflectionParameterDefaultValue>>> {
-    if args.len() > 3 {
+    if args.len() > 8 {
         return Ok(None);
     }
     let mut values = Vec::with_capacity(args.len());
@@ -3620,7 +3620,7 @@ fn reflection_object_parameter_default_args(
     };
     if constructor.variadic.is_some()
         || values.len() > constructor.params.len()
-        || constructor.params.len() > 3
+        || constructor.params.len() > 8
     {
         return Ok(None);
     }

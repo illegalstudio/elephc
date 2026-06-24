@@ -8378,17 +8378,17 @@ fn test_eval_aot_method_call_uses_object_default() {
         r#"<?php
 class EvalAotObjectDefaultMethodDep {
     public string $label;
-    public function __construct(string $label = "dep") {
-        $this->label = $label;
+    public function __construct(string $left = "d", string $right = "e", string $third = "p", string $fourth = "") {
+        $this->label = $left . $right . $third . $fourth;
     }
 }
 
 class EvalAotObjectDefaultMethodTarget {
-    public function describe(EvalAotObjectDefaultMethodDep $dep = new EvalAotObjectDefaultMethodDep("method")): string {
+    public function describe(EvalAotObjectDefaultMethodDep $dep = new EvalAotObjectDefaultMethodDep("m", "e", "t", "h")): string {
         return $dep->label;
     }
 
-    public static function describeStatic(EvalAotObjectDefaultMethodDep $dep = new EvalAotObjectDefaultMethodDep("static")): string {
+    public static function describeStatic(EvalAotObjectDefaultMethodDep $dep = new EvalAotObjectDefaultMethodDep("s", "t", "a", "t")): string {
         return $dep->label;
     }
 }
@@ -8399,7 +8399,7 @@ $default = $method->getParameters()[0]->getDefaultValue();
 return $obj->describe() . ":" . EvalAotObjectDefaultMethodTarget::describeStatic() . ":" . $default->label;');
 "#,
     );
-    assert_eq!(out, "method:static:method");
+    assert_eq!(out, "meth:stat:meth");
 }
 
 /// Verifies eval ReflectionMethod exposes generated/AOT by-ref and variadic parameter flags.
@@ -10908,14 +10908,14 @@ fn test_eval_dynamic_new_uses_constructor_object_default() {
         r#"<?php
 class EvalDynamicNewObjectDefaultDep {
     public string $label;
-    public function __construct(string $label = "dep") {
-        $this->label = $label;
+    public function __construct(string $left = "d", string $right = "e", string $third = "p", string $fourth = "") {
+        $this->label = $left . $right . $third . $fourth;
     }
 }
 
 class EvalDynamicNewObjectDefaultCtor {
     public string $label = "";
-    public function __construct(EvalDynamicNewObjectDefaultDep $dep = new EvalDynamicNewObjectDefaultDep("ctor")) {
+    public function __construct(EvalDynamicNewObjectDefaultDep $dep = new EvalDynamicNewObjectDefaultDep("c", "t", "o", "r")) {
         $this->label = $dep->label;
     }
 }
