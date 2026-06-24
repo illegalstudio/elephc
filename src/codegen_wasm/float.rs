@@ -548,6 +548,94 @@ const RT_BIGNUM_SUB: &str = r#"  (func $__rt_bignum_sub (param $a i32) (param $b
       (loop $top (br_if $end (i32.ge_u (local.get $i) (local.get $n))) (local.set $addr (i32.add (local.get $a) (i32.shl (local.get $i) (i32.const 2)))) (local.set $va (i64.load32_u (local.get $addr))) (local.set $vb (i64.load32_u (i32.add (local.get $b) (i32.shl (local.get $i) (i32.const 2))))) (local.set $acc (i64.sub (i64.sub (local.get $va) (local.get $vb)) (local.get $borrow))) (i64.store32 (local.get $addr) (local.get $acc)) (local.set $borrow (select (i64.const 1) (i64.const 0) (i64.lt_s (local.get $acc) (i64.const 0)))) (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $top))) (local.get $borrow))  ;; limb subtract loop
 "#;
 
+/// Adds a small unsigned 32-bit value to a fixed-width big integer in place.
+///
+/// `$ptr` is `$n` little-endian base-2^32 limbs; `$k` is the addend in [0, 2^32-1] passed
+/// in an i64 (it becomes the initial carry). Each limb becomes `(limb + carry) mod 2^32`
+/// with carry propagated low-to-high. Returns the final carry (i64), which the caller may
+/// store as an `(n+1)`-th limb. Used by the S5c ratio rounder to build the decimal
+/// mantissa `M` digit-by-digit (`M = M*10 + d` via `mul_u32(10)` then `add_u32(d)`).
+const RT_BIGNUM_ADD_U32: &str = r#"  (func $__rt_bignum_add_u32 (param $ptr i32) (param $n i32) (param $k i64) (result i64) (local $i i32) (local $carry i64) (local $acc i64) (local $addr i32) ;; in-place a += k (k u32 in i64) over n limbs; returns final carry
+    (local.set $i (i32.const 0))                                                 ;; limb index = 0
+    (local.set $carry (local.get $k))                                           ;; running carry = k (first addend)
+    (block $end                                                                 ;; add loop exit target
+      (loop $top                                                                ;; iterate limbs low-to-high
+        (br_if $end (i32.ge_u (local.get $i) (local.get $n)))                    ;; stop once i >= n
+        (local.set $addr (i32.add (local.get $ptr) (i32.shl (local.get $i) (i32.const 2)))) ;; &limb[i] = ptr + i*4
+        (local.set $acc (i64.add (i64.load32_u (local.get $addr)) (local.get $carry))) ;; acc = limb[i] + carry
+        (i64.store32 (local.get $addr) (local.get $acc))                         ;; limb[i] = low 32 bits of acc
+        (local.set $carry (i64.shr_u (local.get $acc) (i64.const 32)))           ;; carry = high 32 bits of acc
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))                    ;; i = i + 1
+        (br $top))                                                              ;; continue the loop
+    )                                                                           ;; end block $end
+    (local.get $carry))                                                         ;; return the final carry
+"#;
+
+/// Copies `$n` little-endian limbs from `$src` to `$dst`.
+///
+/// A plain word-by-word copy (4 bytes per limb). Used by the S5c ratio rounder to take a
+/// private copy of the numerator before the binary long-division loop mutates it as the
+/// running remainder. Returns nothing.
+const RT_BIGNUM_COPY: &str = r#"  (func $__rt_bignum_copy (param $dst i32) (param $src i32) (param $n i32) (local $i i32) (local $addr i32) ;; copy n limbs (4 bytes each) from src to dst
+    (local.set $i (i32.const 0))                                                 ;; limb index = 0
+    (block $end                                                                  ;; copy loop exit target
+      (loop $top                                                                 ;; iterate limbs low-to-high
+        (br_if $end (i32.ge_u (local.get $i) (local.get $n)))                    ;; stop once i >= n
+        (local.set $addr (i32.add (local.get $src) (i32.shl (local.get $i) (i32.const 2)))) ;; &src[i] = src + i*4
+        (i32.store (i32.add (local.get $dst) (i32.shl (local.get $i) (i32.const 2))) (i32.load (local.get $addr))) ;; dst[i] = src[i] (copy one limb)
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))                    ;; i = i + 1
+        (br $top))                                                               ;; continue the loop
+    )                                                                            ;; end block $end
+  )                                                                              ;; end func
+"#;
+
+/// Returns the bit length of a fixed-width big integer (1-indexed count of bits).
+///
+/// Trims leading zero limbs top-down to find the effective length `ha`, then returns
+/// `(ha-1)*32 + (32 - clz(top_limb))` (0 when the value is zero). Used by the S5c ratio
+/// rounder to estimate `floor(log2(num/den))` so the numerator/denominator can be scaled
+/// by powers of two into the `[2^52, 2^53)` mantissa window.
+const RT_BIGNUM_BITLEN: &str = r#"  (func $__rt_bignum_bitlen (param $ptr i32) (param $n i32) (result i32) (local $ha i32) (local $v i32) ;; position of the highest set bit (1-indexed count), 0 if zero
+    (local.set $ha (local.get $n))                                               ;; ha = n (start from the top limb)
+    (block $ae                                                                   ;; trim leading zero limbs top-down
+      (loop $al                                                                  ;; trim loop
+        (br_if $ae (i32.eqz (local.get $ha)))                                    ;; ha==0 -> all limbs zero, stop
+        (br_if $ae (i64.ne (i64.load32_u (i32.add (local.get $ptr) (i32.shl (i32.sub (local.get $ha) (i32.const 1)) (i32.const 2)))) (i64.const 0))) ;; top limb nonzero -> stop
+        (local.set $ha (i32.sub (local.get $ha) (i32.const 1)))                  ;; drop zero top limb (ha--)
+        (br $al))                                                                ;; continue the trim loop
+    )                                                                            ;; end block $ae
+    (if (i32.eqz (local.get $ha))                                                ;; all limbs zero?
+      (then                                                                      ;; then branch: value is zero
+        (return (i32.const 0))                                                   ;; zero value -> 0 bits
+      )                                                                          ;; end then
+    )                                                                            ;; end if
+    (local.set $v (i32.wrap_i64 (i64.load32_u (i32.add (local.get $ptr) (i32.shl (i32.sub (local.get $ha) (i32.const 1)) (i32.const 2)))))) ;; v = top significant limb (i32, for clz)
+    (return (i32.sub (i32.add (i32.shl (i32.sub (local.get $ha) (i32.const 1)) (i32.const 5)) (i32.const 32)) (i32.clz (local.get $v))))) ;; bitlen = (ha-1)*32 + (32 - clz(v))
+"#;
+
+/// Right-shifts a fixed-width big integer in place by exactly one bit.
+///
+/// Processes limbs low-to-high: each limb becomes `(limb[i] >> 1) | (lsb(limb[i+1]) << 31)`,
+/// with the top limb taking no borrowed bit. Used by the S5c ratio rounder's binary
+/// long-division loop, which starts from `den << 52` and halves the comparison target
+/// each of the 53 iterations. Returns nothing.
+const RT_BIGNUM_SHR1: &str = r#"  (func $__rt_bignum_shr1 (param $ptr i32) (param $n i32) (local $i i32) (local $cur i64) (local $nxt i64) (local $bit i64) (local $acc i64) (local $addr i32) ;; in-place right shift by 1 bit (low-to-high; borrows lsb of limb[i+1])
+    (local.set $i (i32.const 0))                                                 ;; limb index = 0
+    (block $end                                                                  ;; shift loop exit target
+      (loop $top                                                                 ;; iterate limbs low-to-high
+        (br_if $end (i32.ge_u (local.get $i) (local.get $n)))                    ;; stop once i >= n
+        (local.set $addr (i32.add (local.get $ptr) (i32.shl (local.get $i) (i32.const 2)))) ;; &limb[i] = ptr + i*4
+        (local.set $cur (i64.load32_u (local.get $addr)))                        ;; cur = limb[i]
+        (local.set $nxt (select (i64.load32_u (i32.add (local.get $ptr) (i32.shl (i32.add (local.get $i) (i32.const 1)) (i32.const 2)))) (i64.const 0) (i32.lt_u (local.get $i) (i32.sub (local.get $n) (i32.const 1))))) ;; nxt = (i < n-1) ? limb[i+1] : 0
+        (local.set $bit (i64.shl (i64.and (local.get $nxt) (i64.const 1)) (i64.const 31))) ;; bit = lsb of limb[i+1] shifted into bit 31
+        (local.set $acc (i64.or (i64.shr_u (local.get $cur) (i64.const 1)) (local.get $bit))) ;; acc = (cur >> 1) | bit
+        (i64.store32 (local.get $addr) (local.get $acc))                         ;; limb[i] = shifted value
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))                    ;; i = i + 1
+        (br $top))                                                               ;; continue the loop
+    )                                                                            ;; end block $end
+  )                                                                              ;; end func
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
 /// Currently emits the full float<->string pipeline: the `__rt_f64_decompose` decoder,
@@ -574,6 +662,10 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_PARSE_DECIMAL);
     wm.add_raw_func(RT_BIGNUM_CMP);
     wm.add_raw_func(RT_BIGNUM_SUB);
+    wm.add_raw_func(RT_BIGNUM_ADD_U32);
+    wm.add_raw_func(RT_BIGNUM_COPY);
+    wm.add_raw_func(RT_BIGNUM_BITLEN);
+    wm.add_raw_func(RT_BIGNUM_SHR1);
 }
 
 #[cfg(test)]
@@ -1708,6 +1800,215 @@ mod tests {
     fn bignum_sub_borrow_propagation() {
         if let Some(o) = run_float_driver(&bignum_sub_driver(&[5, 5], &[6, 5], 0), "t") {
             assert_eq!(o, "5294967295");
+        }
+    }
+
+    /// Builds a driver that stores `a` at 256, calls `__rt_bignum_add_u32(256, n, k)`, and
+    /// returns `(carry << 32) | limb[watch]` so both the propagated carry and the resulting
+    /// low limb are observable.
+    fn bignum_add_u32_driver(a: &[u32], k: u32, watch: usize) -> String {
+        let mut stores = String::new();
+        for (i, &v) in a.iter().enumerate() {
+            stores.push_str(&format!(
+                "  (i64.store32 (i32.const {}) (i64.const {}))\n",
+                256 + i * 4,
+                v
+            ));
+        }
+        format!(
+            r#"(func $t (export "t") (result i64)
+{stores}  (i64.or
+    (i64.shl (call $__rt_bignum_add_u32 (i32.const 256) (i32.const {n}) (i64.const {k})) (i64.const 32))
+    (i64.load32_u (i32.const {watch_addr}))))"#,
+            n = a.len(),
+            k = k,
+            watch_addr = 256 + watch * 4
+        )
+    }
+
+    /// `[5] + 0` -> carry 0, limb 5 -> `0<<32 | 5` = 5.
+    #[test]
+    fn bignum_add_u32_zero_addend() {
+        if let Some(o) = run_float_driver(&bignum_add_u32_driver(&[5], 0, 0), "t") {
+            assert_eq!(o, "5");
+        }
+    }
+
+    /// `[5] + 3` -> 8, no carry -> 8.
+    #[test]
+    fn bignum_add_u32_single_limb() {
+        if let Some(o) = run_float_driver(&bignum_add_u32_driver(&[5], 3, 0), "t") {
+            assert_eq!(o, "8");
+        }
+    }
+
+    /// `[0xFFFFFFFF] + 1` -> limb 0, carry 1 -> `1<<32 | 0` = 4294967296.
+    #[test]
+    fn bignum_add_u32_overflow_carry() {
+        if let Some(o) = run_float_driver(&bignum_add_u32_driver(&[0xFFFFFFFF], 1, 0), "t") {
+            assert_eq!(o, "4294967296");
+        }
+    }
+
+    /// `[0xFFFFFFFF, 0xFFFFFFFF] + 1` -> limb0 0, limb1 0, carry 1 (propagated through
+    /// both limbs) -> `1<<32 | 0` = 4294967296 (watching limb0).
+    #[test]
+    fn bignum_add_u32_multi_limb_carry() {
+        if let Some(o) = run_float_driver(&bignum_add_u32_driver(&[0xFFFFFFFF, 0xFFFFFFFF], 1, 0), "t") {
+            assert_eq!(o, "4294967296");
+        }
+    }
+
+    /// Builds a driver that stores `src` at 256, copies it to 4096, and returns the copied
+    /// limb at `4096 + watch*4`.
+    fn bignum_copy_driver(src: &[u32], watch: usize) -> String {
+        let mut stores = String::new();
+        for (i, &v) in src.iter().enumerate() {
+            stores.push_str(&format!(
+                "  (i64.store32 (i32.const {}) (i64.const {}))\n",
+                256 + i * 4,
+                v
+            ));
+        }
+        format!(
+            r#"(func $t (export "t") (result i64)
+{stores}  (call $__rt_bignum_copy (i32.const 4096) (i32.const 256) (i32.const {n}))
+  (i64.load32_u (i32.const {watch_addr})))"#,
+            n = src.len(),
+            watch_addr = 4096 + watch * 4
+        )
+    }
+
+    /// Copy `[10, 20, 30]`, watch limb 1 -> 20.
+    #[test]
+    fn bignum_copy_middle_limb() {
+        if let Some(o) = run_float_driver(&bignum_copy_driver(&[10, 20, 30], 1), "t") {
+            assert_eq!(o, "20");
+        }
+    }
+
+    /// Copy a full 32-bit limb across the boundary.
+    #[test]
+    fn bignum_copy_full_limb() {
+        if let Some(o) = run_float_driver(&bignum_copy_driver(&[0xDEADBEEF], 0), "t") {
+            assert_eq!(o, "3735928559");
+        }
+    }
+
+    /// Builds a driver that stores `a` at 256 and returns `__rt_bignum_bitlen(256, n)`.
+    fn bignum_bitlen_driver(a: &[u32]) -> String {
+        let mut stores = String::new();
+        for (i, &v) in a.iter().enumerate() {
+            stores.push_str(&format!(
+                "  (i64.store32 (i32.const {}) (i64.const {}))\n",
+                256 + i * 4,
+                v
+            ));
+        }
+        format!(
+            r#"(func $t (export "t") (result i64)
+{stores}  (i64.extend_i32_u (call $__rt_bignum_bitlen (i32.const 256) (i32.const {n}))))"#,
+            n = a.len()
+        )
+    }
+
+    /// Zero -> 0 bits.
+    #[test]
+    fn bignum_bitlen_zero() {
+        if let Some(o) = run_float_driver(&bignum_bitlen_driver(&[0]), "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// `[1]` -> 1 bit.
+    #[test]
+    fn bignum_bitlen_one() {
+        if let Some(o) = run_float_driver(&bignum_bitlen_driver(&[1]), "t") {
+            assert_eq!(o, "1");
+        }
+    }
+
+    /// `[0xFFFFFFFF]` -> 32 bits.
+    #[test]
+    fn bignum_bitlen_full_limb() {
+        if let Some(o) = run_float_driver(&bignum_bitlen_driver(&[0xFFFFFFFF]), "t") {
+            assert_eq!(o, "32");
+        }
+    }
+
+    /// `[0, 1]` = 2^32 -> 33 bits; leading-zero trim does not apply (top limb nonzero).
+    #[test]
+    fn bignum_bitlen_two_limbs() {
+        if let Some(o) = run_float_driver(&bignum_bitlen_driver(&[0, 1]), "t") {
+            assert_eq!(o, "33");
+        }
+    }
+
+    /// `[0, 0, 0]` trims to zero -> 0 bits.
+    #[test]
+    fn bignum_bitlen_all_zero_trimmed() {
+        if let Some(o) = run_float_driver(&bignum_bitlen_driver(&[0, 0, 0]), "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// `[0xFFFFFFFF, 0xFFFFFFFF]` -> 64 bits.
+    #[test]
+    fn bignum_bitlen_two_full_limbs() {
+        if let Some(o) = run_float_driver(&bignum_bitlen_driver(&[0xFFFFFFFF, 0xFFFFFFFF]), "t") {
+            assert_eq!(o, "64");
+        }
+    }
+
+    /// Builds a driver that stores `a` at 256, right-shifts it by 1, and returns
+    /// `limb[watch]` after the shift.
+    fn bignum_shr1_driver(a: &[u32], watch: usize) -> String {
+        let mut stores = String::new();
+        for (i, &v) in a.iter().enumerate() {
+            stores.push_str(&format!(
+                "  (i64.store32 (i32.const {}) (i64.const {}))\n",
+                256 + i * 4,
+                v
+            ));
+        }
+        format!(
+            r#"(func $t (export "t") (result i64)
+{stores}  (call $__rt_bignum_shr1 (i32.const 256) (i32.const {n}))
+  (i64.load32_u (i32.const {watch_addr})))"#,
+            n = a.len(),
+            watch_addr = 256 + watch * 4
+        )
+    }
+
+    /// `[4]` >> 1 -> `[2]` -> 2.
+    #[test]
+    fn bignum_shr1_even_single() {
+        if let Some(o) = run_float_driver(&bignum_shr1_driver(&[4], 0), "t") {
+            assert_eq!(o, "2");
+        }
+    }
+
+    /// `[3]` >> 1 -> `[1]` (truncate) -> 1.
+    #[test]
+    fn bignum_shr1_truncate_single() {
+        if let Some(o) = run_float_driver(&bignum_shr1_driver(&[3], 0), "t") {
+            assert_eq!(o, "1");
+        }
+    }
+
+    /// `[0, 1]` (2^32) >> 1 -> 2^31: limb0 = 0x80000000 = 2147483648, limb1 = 0.
+    #[test]
+    fn bignum_shr1_borrows_into_low_limb() {
+        if let Some(o) = run_float_driver(&bignum_shr1_driver(&[0, 1], 0), "t") {
+            assert_eq!(o, "2147483648");
+        }
+    }
+
+    /// `[0, 0xFFFFFFFF]` (0xFFFFFFFF_00000000) >> 1 -> 0x7FFFFFFF_80000000: limb1 = 0x7FFFFFFF.
+    #[test]
+    fn bignum_shr1_top_limb_shifts() {
+        if let Some(o) = run_float_driver(&bignum_shr1_driver(&[0, 0xFFFFFFFF], 1), "t") {
+            assert_eq!(o, "2147483647");
         }
     }
 
