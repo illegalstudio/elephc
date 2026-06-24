@@ -8,8 +8,8 @@
 //! Key details:
 //! - The cacheable runtime object cannot know user static-property symbols, so
 //!   these C-ABI bridge symbols are emitted into the user assembly.
-//! - Supported slots include public static properties and private static
-//!   properties when the active eval class scope matches the declaring class.
+//! - Supported slots include public static properties plus protected/private
+//!   static properties when the active eval class scope satisfies PHP visibility.
 //! - Null helper returns mean "no bridge match"; boxed PHP null is returned as
 //!   a real Mixed cell pointer.
 
@@ -30,6 +30,7 @@ use crate::types::{ClassInfo, PhpType};
 struct EvalStaticPropertySlot {
     class_name: String,
     declaring_class: String,
+    allowed_scopes: Vec<String>,
     property: String,
     visibility: Visibility,
     symbol: String,
@@ -117,6 +118,7 @@ fn collect_class_static_property_slots(
         slots.push(EvalStaticPropertySlot {
             class_name: class_name.to_string(),
             declaring_class: declaring_class.to_string(),
+            allowed_scopes: visibility_scope_names(module, declaring_class, visibility),
             property: property.clone(),
             visibility: visibility.clone(),
             symbol: static_property_symbol(declaring_class, property),
@@ -136,7 +138,10 @@ fn static_property_visibility<'a>(class_info: &'a ClassInfo, property: &str) -> 
 
 /// Returns true when the eval static-property bridge can enforce this visibility.
 fn static_property_visibility_supported(visibility: &Visibility) -> bool {
-    matches!(visibility, Visibility::Public | Visibility::Private)
+    matches!(
+        visibility,
+        Visibility::Public | Visibility::Protected | Visibility::Private
+    )
 }
 
 /// Returns true for static-property storage shapes the bridge can box and update.
@@ -403,7 +408,7 @@ fn emit_aarch64_static_property_name_compare(
     }
     let miss_label = slot_access_miss_label(module, slot, mode);
     emitter.instruction(&format!("cbz x0, {}", miss_label));                    // continue static-property dispatch when names differ
-    emit_aarch64_private_static_property_scope_check(emitter, data, slot, mode, &target_label);
+    emit_aarch64_static_property_scope_check(emitter, data, slot, mode, &target_label);
     emitter.label(&miss_label);
 }
 
@@ -429,12 +434,12 @@ fn emit_x86_64_static_property_name_compare(
     }
     let miss_label = slot_access_miss_label(module, slot, mode);
     emitter.instruction(&format!("je {}", miss_label));                         // continue static-property dispatch when names differ
-    emit_x86_64_private_static_property_scope_check(emitter, data, slot, mode, &target_label);
+    emit_x86_64_static_property_scope_check(emitter, data, slot, mode, &target_label);
     emitter.label(&miss_label);
 }
 
-/// Emits an ARM64 exact-class check for a private static-property bridge hit.
-fn emit_aarch64_private_static_property_scope_check(
+/// Emits ARM64 visibility checks for a protected/private static-property bridge hit.
+fn emit_aarch64_static_property_scope_check(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slot: &EvalStaticPropertySlot,
@@ -442,19 +447,23 @@ fn emit_aarch64_private_static_property_scope_check(
     target_label: &str,
 ) {
     let (scope_ptr_offset, scope_len_offset) = aarch64_scope_offsets(mode);
-    let (label, len) = data.add_string(slot.declaring_class.as_bytes());
     emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));       // reload the active eval class-scope pointer
     emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));       // reload the active eval class-scope length
-    emitter.instruction("cbz x1, 1f");                                          // skip private dispatch outside a class scope
-    abi::emit_symbol_address(emitter, "x3", &label);
-    abi::emit_load_int_immediate(emitter, "x4", len as i64);
-    emitter.instruction("bl __rt_strcasecmp");                                  // compare current eval class scope with the declaring class
-    emitter.instruction(&format!("cbz x0, {}", target_label));                  // dispatch when private visibility is satisfied
+    emitter.instruction("cbz x1, 1f");                                          // skip scoped dispatch outside a class scope
+    for scope_name in &slot.allowed_scopes {
+        let (label, len) = data.add_string(scope_name.as_bytes());
+        emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));   // reload the active eval class-scope pointer
+        emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));   // reload the active eval class-scope length
+        abi::emit_symbol_address(emitter, "x3", &label);
+        abi::emit_load_int_immediate(emitter, "x4", len as i64);
+        emitter.instruction("bl __rt_strcasecmp");                              // compare current eval scope with an allowed class
+        emitter.instruction(&format!("cbz x0, {}", target_label));              // dispatch when scoped visibility is satisfied
+    }
     emitter.label("1");
 }
 
-/// Emits an x86_64 exact-class check for a private static-property bridge hit.
-fn emit_x86_64_private_static_property_scope_check(
+/// Emits x86_64 visibility checks for a protected/private static-property bridge hit.
+fn emit_x86_64_static_property_scope_check(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slot: &EvalStaticPropertySlot,
@@ -462,16 +471,20 @@ fn emit_x86_64_private_static_property_scope_check(
     target_label: &str,
 ) {
     let (scope_ptr_offset, scope_len_offset) = x86_64_scope_offsets(mode);
-    let (label, len) = data.add_string(slot.declaring_class.as_bytes());
     emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)); // reload the active eval class-scope pointer
     emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)); // reload the active eval class-scope length
     emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
-    emitter.instruction("jz 1f");                                               // skip private dispatch outside a class scope
-    abi::emit_symbol_address(emitter, "rdx", &label);
-    abi::emit_load_int_immediate(emitter, "rcx", len as i64);
-    emitter.instruction("call __rt_strcasecmp");                                // compare current eval class scope with the declaring class
-    emitter.instruction("test rax, rax");                                       // check whether the scope matched the declaring class
-    emitter.instruction(&format!("je {}", target_label));                       // dispatch when private visibility is satisfied
+    emitter.instruction("jz 1f");                                               // skip scoped dispatch outside a class scope
+    for scope_name in &slot.allowed_scopes {
+        let (label, len) = data.add_string(scope_name.as_bytes());
+        emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)); // reload the active eval class-scope pointer
+        emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)); // reload the active eval class-scope length
+        abi::emit_symbol_address(emitter, "rdx", &label);
+        abi::emit_load_int_immediate(emitter, "rcx", len as i64);
+        emitter.instruction("call __rt_strcasecmp");                            // compare current eval scope with an allowed class
+        emitter.instruction("test rax, rax");                                   // check whether the current scope matched
+        emitter.instruction(&format!("je {}", target_label));                   // dispatch when scoped visibility is satisfied
+    }
     emitter.label("1");
 }
 
@@ -988,7 +1001,7 @@ fn slot_body_label(module: &Module, slot: &EvalStaticPropertySlot, mode: &str) -
     format!("{}{}", slot_body_label_raw(slot, mode), suffix)
 }
 
-/// Returns a platform-safe label for continuing after a private static-property name miss.
+/// Returns a platform-safe label for continuing after a scoped static-property name miss.
 fn slot_access_miss_label(
     module: &Module,
     slot: &EvalStaticPropertySlot,
@@ -1000,11 +1013,68 @@ fn slot_access_miss_label(
 /// Returns the architecture-independent body label stem for a static property slot.
 fn slot_body_label_raw(slot: &EvalStaticPropertySlot, mode: &str) -> String {
     format!(
-        "__elephc_eval_static_property_{}_{}_{}",
+        "__elephc_eval_static_property_{}_{}_{}_{}",
         mode,
         label_fragment(&slot.class_name),
+        label_fragment(&slot.declaring_class),
         label_fragment(&slot.property)
     )
+}
+
+/// Returns class scopes that satisfy one member visibility for a declaring class.
+fn visibility_scope_names(
+    module: &Module,
+    declaring_class: &str,
+    visibility: &Visibility,
+) -> Vec<String> {
+    match visibility {
+        Visibility::Public => Vec::new(),
+        Visibility::Private => vec![declaring_class.to_string()],
+        Visibility::Protected => related_class_scope_names(module, declaring_class),
+    }
+}
+
+/// Returns AOT classes in the same inheritance line as `declaring_class`.
+fn related_class_scope_names(module: &Module, declaring_class: &str) -> Vec<String> {
+    let mut scopes = module
+        .class_infos
+        .keys()
+        .filter(|class_name| {
+            is_same_or_descendant(module, class_name, declaring_class)
+                || is_same_or_descendant(module, declaring_class, class_name)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    scopes.sort_by(|left, right| {
+        class_id_for_scope(module, left)
+            .cmp(&class_id_for_scope(module, right))
+            .then_with(|| left.cmp(right))
+    });
+    scopes
+}
+
+/// Returns true when `class_name` is `ancestor` or descends from it.
+fn is_same_or_descendant(module: &Module, class_name: &str, ancestor: &str) -> bool {
+    let mut cursor = Some(class_name);
+    while let Some(name) = cursor {
+        if name == ancestor {
+            return true;
+        }
+        cursor = module
+            .class_infos
+            .get(name)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
+}
+
+/// Returns the deterministic class id used to order generated scope checks.
+fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
+    module
+        .class_infos
+        .get(class_name)
+        .map(|class_info| class_info.class_id)
+        .unwrap_or(u64::MAX)
 }
 
 /// Converts arbitrary PHP metadata names into assembly-label-safe fragments.
