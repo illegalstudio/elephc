@@ -92,6 +92,7 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
         results: vec![ValType::I32],
     });
     wm.add_raw_func(RT_ECHO_I64);
+    wm.add_raw_func(RT_ECHO_F64);
     wm.add_raw_func(RT_ECHO_STR);
     wm.add_raw_func(RT_ECHO_BOOL);
     wm.add_raw_func(RT_ARGC);
@@ -150,10 +151,9 @@ const RT_ARGV: &str = r#"(func $__rt_argv (result i32)
   (local.get $arr))"#;
 
 /// `__rt_mixed_write_stdout`: echoes a boxed Mixed value by dispatching on its tag:
-/// int (0) via `__rt_echo_i64`, string (1) via `__rt_echo_str`, bool (3) via
-/// `__rt_echo_bool`; null (8) and non-scalar tags print nothing (PHP semantics).
-/// Float (tag 2) needs `%.14G` formatting (ftoa), which is deferred — the same gap
-/// as scalar float `echo`; it currently prints nothing rather than wrong output.
+/// int (0) via `__rt_echo_i64`, float (2) via `__rt_echo_f64` (`%.14G`), string (1)
+/// via `__rt_echo_str`, bool (3) via `__rt_echo_bool`; null (8) and non-scalar tags
+/// print nothing (PHP semantics).
 const RT_MIXED_WRITE_STDOUT: &str = r#"(func $__rt_mixed_write_stdout (param $ptr i32)
   (local $tag i64)
   (if (i32.eqz (local.get $ptr))
@@ -168,6 +168,10 @@ const RT_MIXED_WRITE_STDOUT: &str = r#"(func $__rt_mixed_write_stdout (param $pt
       (call $__rt_echo_str
         (i32.wrap_i64 (i64.load (i32.add (local.get $ptr) (i32.const 8))))
         (i64.load (i32.add (local.get $ptr) (i32.const 16))))
+      (return)))
+  (if (i64.eq (local.get $tag) (i64.const 2))                       ;; tag 2 = float
+    (then
+      (call $__rt_echo_f64 (f64.load (i32.add (local.get $ptr) (i32.const 8)))) ;; %.14G text via __rt_ftoa + fd_write
       (return)))
   (if (i64.eq (local.get $tag) (i64.const 3))                       ;; tag 3 = bool
     (then
@@ -262,4 +266,21 @@ const RT_ECHO_I64: &str = r#"(func $__rt_echo_i64 (param $v i64)
   (local.set $len (i32.sub (i32.const 64) (local.get $ptr)))   ;; byte count
   (i32.store (i32.const 0) (local.get $ptr))                   ;; iovec.buf_ptr
   (i32.store (i32.const 4) (local.get $len))                   ;; iovec.buf_len
+  (drop (call $wasi_fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))) ;; write to stdout"#;
+
+/// `__rt_echo_f64`: writes a PHP float to stdout as `%.14G` text. The float arrives
+/// as a wasm `f64`; its bits are reinterpreted to an `i64` for `__rt_ftoa`, which
+/// renders into the float-scratch output region (scratch+4096) and returns
+/// `(ptr, len)`. The iovec at [0, 16) is then pointed at those bytes and `fd_write`
+/// flushes them to stdout. Mirrors `__rt_echo_str` once the text is materialized.
+const RT_ECHO_F64: &str = r#"(func $__rt_echo_f64 (param $v f64)
+  (local $bits i64)                                         ;; f64 bits handed to __rt_ftoa
+  (local $ptr i32)                                          ;; formatted text pointer (from __rt_ftoa)
+  (local $len i32)                                          ;; formatted text length (from __rt_ftoa)
+  (local.set $bits (i64.reinterpret_f64 (local.get $v)))    ;; f64 value -> raw bits for __rt_ftoa
+  (call $__rt_ftoa (local.get $bits) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 768) (i32.add (global.get $__float_scratch) (i32.const 4096))) ;; format into scratch+4096 -> (ptr,len)
+  (local.set $len)                                          ;; pop ftoa length (result 1, on top)
+  (local.set $ptr)                                          ;; pop ftoa pointer (result 0)
+  (i32.store (i32.const 0) (local.get $ptr))                ;; iovec.buf_ptr
+  (i32.store (i32.const 4) (local.get $len))                ;; iovec.buf_len
   (drop (call $wasi_fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))) ;; write to stdout"#;

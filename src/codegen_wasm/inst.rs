@@ -564,8 +564,9 @@ fn lower_exit(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 ///
 /// Integers and booleans share the i64 representation, so the PHP type is used to
 /// pick the right runtime helper (booleans print "1"/"" rather than "0"/"1").
-/// Float, mixed, array, and object output need more runtime support and are not
-/// handled yet.
+/// Floats render as `%.14G` text via `__rt_echo_f64`; mixed values defer to the
+/// tag-dispatching `__rt_mixed_write_stdout`. Array and object output still need
+/// more runtime support and are not handled yet.
 fn lower_echo(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let op0 = operand(inst, 0)?;
     let php = ctx
@@ -582,6 +583,12 @@ fn lower_echo(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         PhpType::Int => {
             ctx.emit_load_value(op0)?;
             ctx.fb.ins("call $__rt_echo_i64", "echo integer to stdout");
+            Ok(())
+        }
+        PhpType::Float => {
+            // Pushes the f64 value; __rt_echo_f64 reinterprets it to bits for __rt_ftoa.
+            ctx.emit_load_value(op0)?;
+            ctx.fb.ins("call $__rt_echo_f64", "echo float to stdout");
             Ok(())
         }
         PhpType::Str => {

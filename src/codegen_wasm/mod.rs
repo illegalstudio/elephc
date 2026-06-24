@@ -412,6 +412,83 @@ mod tests {
         }
     }
 
+    /// Verifies `echo` of floats writes correct `%.14G` text to stdout via the
+    /// `__rt_echo_f64` runtime helper, covering fractional, integer-valued, zero,
+    /// negative, INF, and NAN floats. Each value's text was verified against `php -r`
+    /// by the ftoa suite (S4) and the mixed cast_string tests (S6d); this test
+    /// exercises the scalar-float `EchoValue` lowering + `__rt_echo_f64` glue
+    /// (`f64.reinterpret_i64` -> `__rt_ftoa` -> `fd_write`).
+    #[test]
+    fn echo_float_writes_to_stdout() {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            // (value, PHP %.14G text) — all confirmed against `php -r`.
+            for v in [1.9_f64, 100.0, 0.0, -1.5, f64::INFINITY, f64::NAN] {
+                let c = b.emit_const_f64(v);
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "1.91000-1.5INFNAN");
+        }
+    }
+
+    /// Verifies `echo` of a Mixed cell holding a float routes through the tag-2 arm
+    /// of `__rt_mixed_write_stdout` (wired to `__rt_echo_f64`) and writes `%.14G`
+    /// text. `MixedBox` of a float operand stamps runtime tag 2, so this exercises
+    /// the previously-deferred mixed-float stdout path end to end.
+    #[test]
+    fn echo_mixed_float_writes_to_stdout() {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let flt = b.emit_const_f64(1.9);
+            let m = b
+                .emit(
+                    Op::MixedBox,
+                    vec![flt],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![m],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "1.9");
+        }
+    }
+
     /// Generates and validates a command module, runs it under `wasmer`, and
     /// returns its process exit code (not asserting success). Returns `None` when
     /// `wasmer` is absent.
