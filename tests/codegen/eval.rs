@@ -4696,6 +4696,39 @@ return $box->describe(["A", "B"]) . ":" . EvalAotIterableParamBox::describeStati
     assert_eq!(out, "AB:I0I1:CD:I0I1");
 }
 
+/// Verifies eval fragments can pass nullable-int arguments to AOT methods and constructors.
+#[test]
+fn test_eval_fragment_dispatches_aot_nullable_int_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotNullableIntParamBox {
+    public string $label;
+
+    public function __construct(?int $count = null) {
+        $this->label = self::format($count);
+    }
+
+    public function describe(?int $count): string {
+        return self::format($count);
+    }
+
+    public static function describeStatic(?int $count = null): string {
+        return self::format($count);
+    }
+
+    private static function format(?int $count): string {
+        return $count === null ? "N" : "I" . $count;
+    }
+}
+
+echo eval('$defaulted = new EvalAotNullableIntParamBox();
+$fromInt = new EvalAotNullableIntParamBox(7);
+return $defaulted->label . ":" . $fromInt->label . ":" . $fromInt->describe(null) . ":" . $fromInt->describe("42") . ":" . EvalAotNullableIntParamBox::describeStatic() . ":" . EvalAotNullableIntParamBox::describeStatic(5);');
+"#,
+    );
+    assert_eq!(out, "N:I7:N:I42:N:I5");
+}
+
 /// Verifies eval fragments can read iterable return values from AOT methods.
 #[test]
 fn test_eval_fragment_dispatches_aot_method_with_iterable_return() {

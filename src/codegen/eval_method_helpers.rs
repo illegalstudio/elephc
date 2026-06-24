@@ -257,6 +257,7 @@ fn method_param_supported(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
+            | PhpType::TaggedScalar
             | PhpType::Mixed
             | PhpType::Iterable
             | PhpType::Array(_)
@@ -1140,6 +1141,9 @@ fn emit_aarch64_cast_eval_arg(
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for string coercion
             emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval argument to a PHP string pair in x1/x2
         }
+        PhpType::TaggedScalar => {
+            emit_aarch64_cast_eval_tagged_scalar_arg(emitter, label_prefix);
+        }
         PhpType::Mixed => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for a Mixed method parameter
         }
@@ -1157,6 +1161,25 @@ fn emit_aarch64_cast_eval_arg(
         }
         _ => {}
     }
+}
+
+/// Coerces one ARM64 eval argument into the inline nullable-int tagged-scalar ABI pair.
+fn emit_aarch64_cast_eval_tagged_scalar_arg(emitter: &mut Emitter, label_prefix: &str) {
+    let null_label = format!("{}_tagged_scalar_null", label_prefix);
+    let done_label = format!("{}_tagged_scalar_done", label_prefix);
+    emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for nullable-int inspection
+    emitter.instruction("str x0, [sp, #-16]!");                                 // preserve the boxed eval argument across tag inspection
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the concrete eval argument tag and payload words
+    emitter.instruction("cmp x0, #8");                                          // runtime tag 8 means the nullable-int argument is null
+    emitter.instruction(&format!("b.eq {}", null_label));                       // materialize a tagged null for null eval arguments
+    emitter.instruction("ldr x0, [sp]");                                        // reload the boxed eval argument for integer coercion
+    emitter.instruction("bl __rt_mixed_cast_int");                              // coerce the non-null eval argument to a PHP int payload
+    crate::codegen::sentinels::emit_tagged_scalar_from_int_result(emitter);
+    emitter.instruction(&format!("b {}", done_label));                          // skip the null materialization path after integer coercion
+    emitter.label(&null_label);
+    crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+    emitter.label(&done_label);
+    emitter.instruction("add sp, sp, #16");                                     // discard the preserved boxed eval argument
 }
 
 /// Validates and unboxes one ARM64 object-typed eval argument for native method dispatch.
@@ -1273,6 +1296,9 @@ fn emit_x86_64_cast_eval_arg(
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for string coercion
             emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval argument to a PHP string pair
         }
+        PhpType::TaggedScalar => {
+            emit_x86_64_cast_eval_tagged_scalar_arg(emitter, label_prefix);
+        }
         PhpType::Mixed => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for a Mixed method parameter
         }
@@ -1290,6 +1316,23 @@ fn emit_x86_64_cast_eval_arg(
         }
         _ => {}
     }
+}
+
+/// Coerces one x86_64 eval argument into the inline nullable-int tagged-scalar ABI pair.
+fn emit_x86_64_cast_eval_tagged_scalar_arg(emitter: &mut Emitter, label_prefix: &str) {
+    let null_label = format!("{}_tagged_scalar_null", label_prefix);
+    let done_label = format!("{}_tagged_scalar_done", label_prefix);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for nullable-int inspection
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the concrete eval argument tag and payload words
+    emitter.instruction("cmp rax, 8");                                          // runtime tag 8 means the nullable-int argument is null
+    emitter.instruction(&format!("je {}", null_label));                         // materialize a tagged null for null eval arguments
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for integer coercion
+    emitter.instruction("call __rt_mixed_cast_int");                            // coerce the non-null eval argument to a PHP int payload
+    crate::codegen::sentinels::emit_tagged_scalar_from_int_result(emitter);
+    emitter.instruction(&format!("jmp {}", done_label));                        // skip the null materialization path after integer coercion
+    emitter.label(&null_label);
+    crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
+    emitter.label(&done_label);
 }
 
 /// Validates and unboxes one x86_64 object-typed eval argument for native method dispatch.
