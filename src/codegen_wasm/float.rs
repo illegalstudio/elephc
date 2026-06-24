@@ -808,6 +808,53 @@ const RT_STR_TO_F64: &str = r#"  (func $__rt_str_to_f64 (param $ptr i32) (param 
   )                                                                              ;; end func
 "#;
 
+/// `__rt_itoa`: convert a signed 64-bit integer to its PHP decimal string, written
+/// into the caller-provided 21-byte scratch buffer `$out`, and return `(ptr, len)`
+/// where `ptr` is the buffer start and `len` is the byte count (digits, plus one for a
+/// '-' on negatives). The magnitude is taken as unsigned via `0 - value` (wrapping), so
+/// `i64::MIN` becomes 2^63 and yields the correct 19 digits with a '-' prefix — matching
+/// PHP's `(string)PHP_INT_MIN` = "-9223372036854775808". Zero is a single '0'. Unlike the
+/// native `__rt_itoa` (which writes into the concat buffer), the wasm path writes into a
+/// caller-provided `out` so the always-persist `cast_string` path can own the result.
+const RT_ITOA: &str = r#"  (func $__rt_itoa (param $value i64) (param $out i32) (result i32 i32) (local $neg i32) (local $v i64) (local $tmp i64) (local $len i32) (local $i i32) (local $w i32) ;; signed i64 -> PHP decimal string at $out, returns (ptr,len)
+    (if (i64.lt_s (local.get $value) (i64.const 0))                              ;; negative input?
+      (then
+        (local.set $neg (i32.const 1))                                           ;; neg flag = 1 (emit a leading '-')
+        (local.set $v (i64.sub (i64.const 0) (local.get $value))))               ;; magnitude = -value (wrapping; INT64_MIN -> 2^63 unsigned)
+      (else
+        (local.set $neg (i32.const 0))                                           ;; non-negative: no sign
+        (local.set $v (local.get $value))))                                      ;; magnitude = value
+    (if (i64.eqz (local.get $v))                                                 ;; magnitude zero (input was 0)?
+      (then
+        (i32.store8 (local.get $out) (i32.const 48))                             ;; write '0'
+        (return (local.get $out) (i32.const 1))))                                ;; return (out, 1) -> "0"
+    (local.set $tmp (local.get $v))                                              ;; digit-counting copy of the magnitude
+    (local.set $len (i32.const 0))                                               ;; digit count = 0
+    (block $ce                                                                   ;; count-loop exit target
+      (loop $cl                                                                  ;; count base-10 digits of the unsigned magnitude
+        (br_if $ce (i64.eqz (local.get $tmp)))                                   ;; stop when the copy reaches 0
+        (local.set $len (i32.add (local.get $len) (i32.const 1)))                ;; one more digit
+        (local.set $tmp (i64.div_u (local.get $tmp) (i64.const 10)))             ;; drop the lowest digit
+        (br $cl)))                                                               ;; continue counting
+    (local.set $w (i32.const 0))                                                 ;; write offset (0, or 1 when a '-' is emitted)
+    (if (local.get $neg)                                                         ;; negative?
+      (then
+        (i32.store8 (local.get $out) (i32.const 45))                             ;; write '-' at out+0
+        (local.set $w (i32.const 1))))                                           ;; digits start at out+1
+    (local.set $tmp (local.get $v))                                              ;; write copy of the magnitude
+    (local.set $i (local.get $len))                                              ;; cursor = len (one past the last digit position)
+    (block $we                                                                   ;; write-loop exit target
+      (loop $wl                                                                  ;; write digits right-to-left into out+$w..out+$w+len-1
+        (br_if $we (i32.eqz (local.get $i)))                                     ;; stop after writing all digits
+        (local.set $i (i32.sub (local.get $i) (i32.const 1)))                    ;; pre-decrement to the current byte index
+        (i32.store8                                                              ;; out+$w+$i = '0' + (magnitude mod 10)
+          (i32.add (local.get $out) (i32.add (local.get $w) (local.get $i)))
+          (i32.add (i32.const 48) (i32.wrap_i64 (i64.rem_u (local.get $tmp) (i64.const 10)))))
+        (local.set $tmp (i64.div_u (local.get $tmp) (i64.const 10)))             ;; drop the digit just written
+        (br $wl)))                                                               ;; continue writing
+    (return (local.get $out) (i32.add (local.get $len) (local.get $neg))))       ;; return (out, digits + sign)
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
 /// Currently emits the full float<->string pipeline: the `__rt_f64_decompose` decoder,
@@ -848,6 +895,7 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule, base: i32) {
     wm.add_raw_func(RT_BIGNUM_ZERO);
     wm.add_raw_func(RT_DIGITS_TO_F64);
     wm.add_raw_func(RT_STR_TO_F64);
+    wm.add_raw_func(RT_ITOA);
 }
 
 #[cfg(test)]
@@ -1823,6 +1871,94 @@ mod tests {
         }
     }
 
+    /// Builds a driver that calls `__rt_itoa(value, 512)` and returns the rolling hash of
+    /// the `len` output bytes (matching `str_hash`), validating the exact decimal string.
+    /// `value` is a decimal i64 literal (signed), so `i64::MIN` is written verbatim.
+    fn itoa_driver(value: &str) -> String {
+        format!(
+            r#"(func $t (export "t") (result i64)
+  (local $ptr i32) (local $len i32) (local $i i32) (local $h i64)
+  (call $__rt_itoa (i64.const {value}) (i32.const 512))
+  (local.set $len)
+  (local.set $ptr)
+  (local.set $h (i64.const 0))
+  (local.set $i (i32.const 0))
+  (block $e
+    (loop $l
+      (br_if $e (i32.ge_s (local.get $i) (local.get $len)))
+      (local.set $h (i64.rem_u (i64.add (i64.mul (local.get $h) (i64.const 257)) (i64.load8_u (i32.add (local.get $ptr) (local.get $i)))) (i64.const 1000000000000000)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+  (local.get $h))"#,
+        )
+    }
+
+    /// 0 -> "0" (the zero special case writes a single '0').
+    #[test]
+    fn itoa_zero() {
+        if let Some(o) = run_float_driver(&itoa_driver("0"), "t") {
+            assert_eq!(o, str_hash("0").to_string());
+        }
+    }
+
+    /// 1 -> "1" (single positive digit).
+    #[test]
+    fn itoa_one() {
+        if let Some(o) = run_float_driver(&itoa_driver("1"), "t") {
+            assert_eq!(o, str_hash("1").to_string());
+        }
+    }
+
+    /// 42 -> "42" (multi-digit positive, written right-to-left into the buffer).
+    #[test]
+    fn itoa_positive_small() {
+        if let Some(o) = run_float_driver(&itoa_driver("42"), "t") {
+            assert_eq!(o, str_hash("42").to_string());
+        }
+    }
+
+    /// 1000000 -> "1000000" (seven digits, exercises the count + write loops).
+    #[test]
+    fn itoa_positive_large() {
+        if let Some(o) = run_float_driver(&itoa_driver("1000000"), "t") {
+            assert_eq!(o, str_hash("1000000").to_string());
+        }
+    }
+
+    /// -5 -> "-5" (negative: '-' prefix then magnitude digits).
+    #[test]
+    fn itoa_negative_small() {
+        if let Some(o) = run_float_driver(&itoa_driver("-5"), "t") {
+            assert_eq!(o, str_hash("-5").to_string());
+        }
+    }
+
+    /// -1 -> "-1" (negative single digit).
+    #[test]
+    fn itoa_negative_one() {
+        if let Some(o) = run_float_driver(&itoa_driver("-1"), "t") {
+            assert_eq!(o, str_hash("-1").to_string());
+        }
+    }
+
+    /// PHP_INT_MAX 9223372036854775807 -> "9223372036854775807" (19 digits, positive).
+    #[test]
+    fn itoa_int_max() {
+        if let Some(o) = run_float_driver(&itoa_driver("9223372036854775807"), "t") {
+            assert_eq!(o, str_hash("9223372036854775807").to_string());
+        }
+    }
+
+    /// PHP_INT_MIN -9223372036854775808 -> "-9223372036854775808". The wrapping negate
+    /// `0 - INT64_MIN` yields 2^63 as an unsigned magnitude, so `div_u`/`rem_u` produce
+    /// the correct 19 digits and the '-' is prepended (verified vs `php -r`).
+    #[test]
+    fn itoa_int_min() {
+        if let Some(o) = run_float_driver(&itoa_driver("-9223372036854775808"), "t") {
+            assert_eq!(o, str_hash("-9223372036854775808").to_string());
+        }
+    }
+
     /// Builds a driver that stores two little-endian base-2^32 big integers (`a` at 256,
     /// `b` at 4096) and calls `__rt_bignum_cmp(256, a.len, 4096, b.len)`, returning the
     /// signed i32 result (-1/0/1) extended to i64 so wasmer prints `-1`/`0`/`1`.
@@ -2690,3 +2826,4 @@ mod tests {
     }
 
 }
+
