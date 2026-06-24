@@ -726,6 +726,12 @@ fn register_native_member_attribute_records_metadata() {
         ]),
     );
     let property_record = native_member_attribute_record(1, "KnownClass::id", "Column", None);
+    let constant_record = native_member_attribute_record(
+        2,
+        "KnownClass::LIMIT",
+        "Limit",
+        Some(&[EvalAttributeArg::Int(100)]),
+    );
     let invalid_record = [99, 0, 0, 0, 0];
 
     let method_registered = unsafe {
@@ -740,6 +746,13 @@ fn register_native_member_attribute_records_metadata() {
             &mut ctx,
             property_record.as_ptr(),
             property_record.len() as u64,
+        )
+    };
+    let constant_registered = unsafe {
+        __elephc_eval_register_native_member_attribute(
+            &mut ctx,
+            constant_record.as_ptr(),
+            constant_record.len() as u64,
         )
     };
     let invalid_registered = unsafe {
@@ -771,6 +784,14 @@ fn register_native_member_attribute_records_metadata() {
     assert_eq!(property_attributes.len(), 1);
     assert_eq!(property_attributes[0].name(), "Column");
     assert!(property_attributes[0].args().is_none());
+    assert_eq!(constant_registered, 1);
+    let constant_attributes = ctx.native_constant_attributes("KnownClass", "LIMIT");
+    assert_eq!(constant_attributes.len(), 1);
+    assert_eq!(constant_attributes[0].name(), "Limit");
+    assert_eq!(
+        constant_attributes[0].args(),
+        Some([EvalAttributeArg::Int(100)].as_slice())
+    );
     assert_eq!(invalid_registered, 0);
 }
 

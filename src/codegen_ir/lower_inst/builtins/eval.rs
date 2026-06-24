@@ -57,6 +57,7 @@ const NATIVE_DEFAULT_FLOAT: i64 = 3;
 const NATIVE_DEFAULT_EMPTY_ARRAY: i64 = 4;
 const NATIVE_MEMBER_ATTRIBUTE_METHOD: u8 = 0;
 const NATIVE_MEMBER_ATTRIBUTE_PROPERTY: u8 = 1;
+const NATIVE_MEMBER_ATTRIBUTE_CLASS_CONSTANT: u8 = 2;
 const NATIVE_ATTRIBUTE_ARGS_UNSUPPORTED: u8 = 0;
 const NATIVE_ATTRIBUTE_ARGS_SUPPORTED: u8 = 1;
 const NATIVE_ATTRIBUTE_ARG_NULL: u8 = 0;
@@ -610,6 +611,7 @@ fn eval_native_member_attribute_registrations(
     for (class_name, class_info) in classes {
         collect_eval_native_method_attributes(class_name, class_info, &mut registrations);
         collect_eval_native_property_attributes(class_name, class_info, &mut registrations);
+        collect_eval_native_class_constant_attributes(class_name, class_info, &mut registrations);
     }
     dedupe_eval_native_member_attribute_registrations(registrations)
 }
@@ -702,6 +704,34 @@ fn collect_eval_native_property_attributes(
             NATIVE_MEMBER_ATTRIBUTE_PROPERTY,
             eval_native_property_attribute_declaring_class(class_name, class_info, property_name),
             property_name,
+            attribute_names,
+            &attribute_args,
+            registrations,
+        );
+    }
+}
+
+/// Adds class-constant attribute metadata for one class to eval registration.
+fn collect_eval_native_class_constant_attributes(
+    class_name: &str,
+    class_info: &ClassInfo,
+    registrations: &mut Vec<EvalNativeMemberAttributeRegistration>,
+) {
+    let mut constants = class_info
+        .constant_attribute_names
+        .iter()
+        .collect::<Vec<_>>();
+    constants.sort_by_key(|(constant_name, _)| constant_name.as_str());
+    for (constant_name, attribute_names) in constants {
+        let attribute_args = class_info
+            .constant_attribute_args
+            .get(constant_name)
+            .cloned()
+            .unwrap_or_default();
+        collect_eval_native_member_attributes(
+            NATIVE_MEMBER_ATTRIBUTE_CLASS_CONSTANT,
+            class_name,
+            constant_name,
             attribute_names,
             &attribute_args,
             registrations,

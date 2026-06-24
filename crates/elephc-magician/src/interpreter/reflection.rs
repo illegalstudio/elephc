@@ -4607,6 +4607,12 @@ fn eval_reflection_class_constant_metadata(
     let declaring_class = values
         .reflection_constant_declaring_class(runtime_class_name, constant_name)?
         .unwrap_or_else(|| runtime_class_name.to_string());
+    let attributes = eval_reflection_aot_constant_attributes(
+        runtime_class_name,
+        &declaring_class,
+        constant_name,
+        context,
+    );
     let visibility = if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
         EvalVisibility::Private
     } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED != 0 {
@@ -4616,11 +4622,25 @@ fn eval_reflection_class_constant_metadata(
     };
     Ok(Some((
         declaring_class,
-        Vec::new(),
+        attributes,
         visibility,
         flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL != 0,
         flags & EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE != 0,
     )))
+}
+
+/// Returns registered generated/AOT class-constant attributes for one reflected constant.
+fn eval_reflection_aot_constant_attributes(
+    runtime_class_name: &str,
+    declaring_class_name: &str,
+    constant_name: &str,
+    context: &ElephcEvalContext,
+) -> Vec<EvalAttribute> {
+    let attributes = context.native_constant_attributes(declaring_class_name, constant_name);
+    if !attributes.is_empty() || declaring_class_name == runtime_class_name {
+        return attributes;
+    }
+    context.native_constant_attributes(runtime_class_name, constant_name)
 }
 
 /// Returns true when a name resolves to an eval-declared class-like symbol.
