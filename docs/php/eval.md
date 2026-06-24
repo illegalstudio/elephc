@@ -74,9 +74,9 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Variables and properties | Variable reads, `$this->property` reads/writes from native methods, dynamic `stdClass` properties, eval object property access including `__get()` / `__set()` fallback for missing or inaccessible eval properties, `isset()`, `empty()`, and `unset()` magic property dispatch through `__isset()` / `__unset()`, `instanceof` over static and dynamic class/interface targets, static property access, and class constant fetches through the bridge. |
 | Arrays | Indexed and associative literals, modern `[...]` and legacy `array(...)`, keyed elements, append writes (`$array[] = value`), numeric-index reads/writes, string-key reads/writes, and eval-declared or generated/AOT `ArrayAccess` object reads, writes, appends, `isset()`, `empty()`, and `unset()` through `offsetGet()`, `offsetSet()`, `offsetExists()`, and `offsetUnset()`. |
 | Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, invokable eval objects, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
-| Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; `new self()`, `new static()`, and `new parent()` inside eval-declared methods; anonymous `new class [(args)] [extends Parent] [implements Iface, ...] { ... }` expressions; `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, and registered scalar or null default arguments for supported public scalar/Mixed constructor signatures. |
+| Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; `new self()`, `new static()`, and `new parent()` inside eval-declared methods; anonymous `new class [(args)] [extends Parent] [implements Iface, ...] { ... }` expressions; `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, and registered scalar, null, or empty-array default arguments for supported public scalar/Mixed constructor signatures. |
 | Object cloning | `clone $object` shallow-copies eval-declared objects, `stdClass` storage, and ordinary emitted/AOT object storage. Eval-declared and emitted/AOT `__clone()` hooks run after the copy and obey public/protected/private visibility. |
-| Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, and by-reference parameters for direct variable, array-element, and object-property arguments. Missing or inaccessible eval methods dispatch through `__call()` / `__callStatic()` when those hooks are available. Runtime/AOT object-method and static-method fallback supports the same argument binding plus registered scalar or null default arguments for supported public scalar/Mixed/object method signatures. |
+| Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, and by-reference parameters for direct variable, array-element, and object-property arguments. Missing or inaccessible eval methods dispatch through `__call()` / `__callStatic()` when those hooks are available. Runtime/AOT object-method and static-method fallback supports the same argument binding plus registered scalar, null, or empty-array default arguments for supported public scalar/Mixed/object method signatures. |
 | Includes | `include`, `include_once`, `require`, and `require_once` are expressions. |
 | Magic constants | `__LINE__`, call-site `__FILE__` / `__DIR__`, empty eval-scope `__CLASS__` / `__TRAIT__`, namespace-aware `__NAMESPACE__`, and eval-declared-function `__FUNCTION__` / `__METHOD__`. |
 | Constants | Predefined eval-visible constants, dynamic constants from `define()`, namespaced constant fallback, and bare constant fetches are supported. |
@@ -286,7 +286,7 @@ or tracked receivers with known integer or `ReflectionMethod::IS_*` /
 `ReflectionProperty::IS_*` constants can also be statically narrowed before
 materialization. AOT method reflection also exposes registered parameter
 names, declared parameter types, declared return types, required/optional
-counts, and registered scalar or null default values for generated
+counts, and registered scalar, null, or empty-array default values for generated
 constructor, instance-method, and static-method signatures. AOT property
 reflection exposes registered declared property types and supported scalar,
 string, or null default values for generated property metadata. AOT method and
@@ -645,10 +645,10 @@ remaining class-system gaps are broader reflection APIs beyond the supported
 ReflectionClass/Function/Method/Parameter/Property/NamedType/UnionType/IntersectionType
 and attribute slice, Reflection type APIs beyond retained parameter, generated
 property, and function/method return metadata, broader
-parameter and generated property default-value materialization beyond scalar
-or null defaults during generated/AOT invocation, empty-array defaults beyond
-metadata/reflection exposure, object-valued generated defaults
-beyond the supported parameter `new C(<supported scalar/null args>)` slice, and broader generated/AOT method bridge signatures beyond the current public
+parameter and generated property default-value materialization beyond scalar,
+null, or empty-array defaults during generated/AOT invocation, object-valued
+generated defaults beyond the supported parameter
+`new C(<supported scalar/null/empty-array args>)` slice, and broader generated/AOT method bridge signatures beyond the current public
 non-by-reference fixed scalar/Mixed/object slice plus visibility-checked
 `__clone()` hooks. Generated/AOT method type
 metadata, by-reference and variadic parameter flags, and generated/AOT

@@ -44,7 +44,9 @@ fn test_eval_codegen_requires_eval_bridge() {
         "user assembly should free the persistent eval context:\n{user_asm}"
     );
     assert!(
-        required_libraries.iter().any(|lib| lib == "elephc_magician"),
+        required_libraries
+            .iter()
+            .any(|lib| lib == "elephc_magician"),
         "required libraries should include elephc_magician: {required_libraries:?}"
     );
     let _ = fs::remove_dir_all(&dir);
@@ -65,7 +67,9 @@ fn test_non_eval_program_does_not_request_eval_bridge() {
         "non-eval runtime assembly should not reference eval bridge:\n{runtime_asm}"
     );
     assert!(
-        !required_libraries.iter().any(|lib| lib == "elephc_magician"),
+        !required_libraries
+            .iter()
+            .any(|lib| lib == "elephc_magician"),
         "non-eval required libraries should not include elephc_magician: {required_libraries:?}"
     );
     let _ = fs::remove_dir_all(&dir);
@@ -4818,6 +4822,44 @@ echo (new EvalAotNamedMethodBox())->run();
     assert_eq!(out, "AB");
 }
 
+/// Verifies eval preserves string values passed through an untyped AOT method parameter.
+#[test]
+fn test_eval_fragment_dispatches_aot_instance_method_with_mixed_string_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotMixedStringMethodBox {
+    public function relay($value) {
+        return $value;
+    }
+}
+
+echo eval('$obj = new EvalAotMixedStringMethodBox();
+$value = $obj->relay("abc");
+return gettype($value) . ":" . $value;');
+"#,
+    );
+    assert_eq!(out, "string:abc");
+}
+
+/// Verifies eval preserves array values passed through an untyped AOT method parameter.
+#[test]
+fn test_eval_fragment_dispatches_aot_instance_method_with_mixed_array_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotMixedArrayMethodBox {
+    public function relay($value) {
+        return $value;
+    }
+}
+
+echo eval('$obj = new EvalAotMixedArrayMethodBox();
+$value = $obj->relay([]);
+return gettype($value) . ":" . (is_array($value) ? count($value) : 9);');
+"#,
+    );
+    assert_eq!(out, "array:0");
+}
+
 /// Verifies eval binds named arguments before dispatching an AOT static method.
 #[test]
 fn test_eval_fragment_dispatches_aot_static_method_with_named_args() {
@@ -8241,21 +8283,21 @@ echo is_array($default) ? count($default) : "bad";
     assert_eq!(out.stdout, "O=0");
 }
 
-/// Verifies eval rejects generated/AOT empty-array defaults during method dispatch.
+/// Verifies eval materializes generated/AOT empty-array defaults during method dispatch.
 #[test]
-fn test_eval_aot_method_call_rejects_empty_array_default() {
-    let out = compile_and_run_capture(
+fn test_eval_aot_method_call_uses_empty_array_default() {
+    let out = compile_and_run(
         r#"<?php
 class EvalAotArrayDefaultMethodTarget {
     public function countItems($items = []): int {
-        return 1;
+        return is_array($items) ? 0 : 9;
     }
 }
 echo eval('$obj = new EvalAotArrayDefaultMethodTarget();
 return $obj->countItems();');
 "#,
     );
-    assert!(!out.success, "program unexpectedly succeeded: {:?}", out.stdout);
+    assert_eq!(out, "0");
 }
 
 /// Verifies eval ReflectionMethod exposes generated/AOT by-ref and variadic parameter flags.
@@ -10713,22 +10755,22 @@ return $second->label;');
     assert_eq!(out, "AB:XY");
 }
 
-/// Verifies eval rejects generated/AOT empty-array defaults during constructor dispatch.
+/// Verifies eval materializes generated/AOT empty-array defaults during constructor dispatch.
 #[test]
-fn test_eval_dynamic_new_rejects_constructor_empty_array_default() {
-    let out = compile_and_run_capture(
+fn test_eval_dynamic_new_uses_constructor_empty_array_default() {
+    let out = compile_and_run(
         r#"<?php
 class EvalDynamicNewArrayDefaultCtor {
     public int $count = -1;
     public function __construct($items = []) {
-        $this->count = 1;
+        $this->count = is_array($items) ? 0 : 9;
     }
 }
 echo eval('$box = new EvalDynamicNewArrayDefaultCtor();
 return $box->count;');
 "#,
     );
-    assert!(!out.success, "program unexpectedly succeeded: {:?}", out.stdout);
+    assert_eq!(out, "0");
 }
 
 /// Verifies eval object construction passes more than two arguments to an AOT constructor.

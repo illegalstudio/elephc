@@ -4537,7 +4537,7 @@ fn materialize_native_callable_default(
         NativeCallableDefault::Int(value) => values.int(*value),
         NativeCallableDefault::Float(value) => values.float(*value),
         NativeCallableDefault::String(value) => values.string(value),
-        NativeCallableDefault::EmptyArray => Err(EvalStatus::RuntimeFatal),
+        NativeCallableDefault::EmptyArray => values.array_new(0),
     }
 }
 
