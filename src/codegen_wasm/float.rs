@@ -408,13 +408,73 @@ const RT_FTOA_FIXED: &str = r#"(func $__rt_ftoa_fixed (param $digptr i32) (param
   (local.get $w))                                                ;; total bytes written
 "#;
 
+/// Top-level `__rt_ftoa` orchestrator: converts an IEEE-754 double (given by its raw
+/// bit pattern in `$bits`) to its PHP-compatible decimal string. This is the single
+/// entry point PHP-visible code calls; it owns the full pipeline.
+///
+/// Flow: decode the bits via `__rt_f64_digits` into (sign, class, digptr, ndigits, p),
+/// short-circuit INF/NAN/zero, otherwise compute `X = ndigits-1-p` (the leading digit's
+/// decimal exponent), round to 14 significant digits (bumping X on all-9s carry
+/// overflow), clamp `nsig = min(ndigits, 14)`, strip trailing '0' digits (keeping at
+/// least one), then dispatch to `__rt_ftoa_scientific` when `X < -4` or `X >= 14` and to
+/// `__rt_ftoa_fixed` otherwise. Writes into `$out` and returns the pointer and byte
+/// length. `$big`/`$nlimbs` and `$dbuf`/`$dmax` are scratch handed straight to
+/// `__rt_f64_digits`.
+const RT_FTOA: &str = r#"(func $__rt_ftoa (param $bits i64) (param $big i32) (param $nlimbs i32) (param $dbuf i32) (param $dmax i32) (param $out i32) (result i32 i32)
+  (local $sign i32) (local $class i32) (local $digptr i32) (local $ndigits i32) (local $p i32)
+  (local $x i32) (local $nsig i32) (local $w i32)
+  (call $__rt_f64_digits (local.get $bits) (local.get $big) (local.get $nlimbs) (local.get $dbuf) (local.get $dmax))  ;; -> sign, class, digptr, ndigits, p
+  (local.set $p)                                                   ;; pop p
+  (local.set $ndigits)                                            ;; pop ndigits
+  (local.set $digptr)                                            ;; pop digptr
+  (local.set $class)                                            ;; pop class
+  (local.set $sign)                                            ;; pop sign
+  (if (i32.eq (local.get $class) (i32.const 1))                  ;; infinity
+    (then
+      (local.set $w (i32.const 0))                              ;; length cursor
+      (if (local.get $sign)                                     ;; negative infinity
+        (then (i32.store8 (local.get $out) (i32.const 45)) (local.set $w (i32.const 1))))  ;; '-'
+      (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 73))  ;; 'I'
+      (i32.store8 (i32.add (local.get $out) (i32.add (local.get $w) (i32.const 1))) (i32.const 78))  ;; 'N'
+      (i32.store8 (i32.add (local.get $out) (i32.add (local.get $w) (i32.const 2))) (i32.const 70))  ;; 'F'
+      (return (local.get $out) (i32.add (local.get $w) (i32.const 3)))))  ;; "INF"
+  (if (i32.eq (local.get $class) (i32.const 2))                  ;; NaN
+    (then
+      (i32.store8 (local.get $out) (i32.const 78))              ;; 'N'
+      (i32.store8 (i32.add (local.get $out) (i32.const 1)) (i32.const 65))  ;; 'A'
+      (i32.store8 (i32.add (local.get $out) (i32.const 2)) (i32.const 78))  ;; 'N'
+      (return (local.get $out) (i32.const 3))))                 ;; "NAN"
+  (if (i32.eq (local.get $class) (i32.const 3))                  ;; zero
+    (then
+      (local.set $w (i32.const 0))                              ;; length cursor
+      (if (local.get $sign)                                     ;; negative zero
+        (then (i32.store8 (local.get $out) (i32.const 45)) (local.set $w (i32.const 1))))  ;; '-'
+      (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 48))  ;; '0'
+      (return (local.get $out) (i32.add (local.get $w) (i32.const 1)))))  ;; "0" or "-0"
+  (local.set $x (i32.sub (i32.sub (local.get $ndigits) (i32.const 1)) (local.get $p)))  ;; X = ndigits-1-p
+  (if (call $__rt_round_digits (local.get $digptr) (local.get $ndigits) (i32.const 14))  ;; round to 14 sig digits
+    (then (local.set $x (i32.add (local.get $x) (i32.const 1)))))  ;; carry overflow shifts the exponent
+  (local.set $nsig (local.get $ndigits))                         ;; nsig = min(ndigits, 14)
+  (if (i32.gt_s (local.get $ndigits) (i32.const 14))             ;; clamp to 14 significant digits
+    (then (local.set $nsig (i32.const 14))))
+  (block $st                                                     ;; trailing-zero strip exit
+    (loop $sl                                                    ;; drop trailing '0' digits, keep at least one
+      (br_if $st (i32.le_s (local.get $nsig) (i32.const 1)))     ;; keep at least one digit
+      (br_if $st (i32.ne (i32.load8_u (i32.add (local.get $digptr) (i32.sub (local.get $nsig) (i32.const 1)))) (i32.const 48)))  ;; last digit not '0'
+      (local.set $nsig (i32.sub (local.get $nsig) (i32.const 1)))  ;; drop it
+      (br $sl)))                                                 ;; continue
+  (if (i32.or (i32.lt_s (local.get $x) (i32.const -4)) (i32.ge_s (local.get $x) (i32.const 14)))  ;; scientific range
+    (then (return (local.get $out) (call $__rt_ftoa_scientific (local.get $digptr) (local.get $nsig) (local.get $x) (local.get $sign) (local.get $out)))))  ;; scientific notation
+  (return (local.get $out) (call $__rt_ftoa_fixed (local.get $digptr) (local.get $nsig) (local.get $x) (local.get $sign) (local.get $out))))  ;; fixed notation
+"#;
+
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.
 ///
-/// Currently emits `__rt_f64_decompose` (the float decoder) plus the big-integer
-/// primitives `__rt_bignum_mul_u32` and `__rt_bignum_divmod_u32`. Later stages append
-/// the remaining primitives, digit-extraction, `%.14G` formatting, and string-to-float
-/// parsing routines here. Must be called before rendering any function that references
-/// these symbols.
+/// Currently emits the full float<->string pipeline: the `__rt_f64_decompose` decoder,
+/// the big-integer primitives, exact decimal digit extraction, round-to-14-significant,
+/// the `__rt_ftoa_scientific`/`__rt_ftoa_fixed` formatters, and the `__rt_ftoa`
+/// top-level orchestrator. String-to-float parsing lands here in a later stage. Must be
+/// called before rendering any function that references these symbols.
 // Not yet referenced by a non-test caller: PHP-visible float formatting wires this
 // into the command/reactor runtime in stage S6. Exercised by the unit tests below.
 #[allow(dead_code)]
@@ -430,6 +490,7 @@ pub(super) fn emit_float_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_U32_TO_DEC);
     wm.add_raw_func(RT_FTOA_SCIENTIFIC);
     wm.add_raw_func(RT_FTOA_FIXED);
+    wm.add_raw_func(RT_FTOA);
 }
 
 #[cfg(test)]
@@ -1243,6 +1304,165 @@ mod tests {
     fn fixed_short_fraction() {
         if let Some(o) = run_float_driver(&fixed_driver("125", 3, 1, 0), "t") {
             assert_eq!(o, str_hash("12.5").to_string());
+        }
+    }
+
+    /// Builds a driver that runs the full `__rt_ftoa` orchestrator on a raw f64 bit
+    /// pattern (big scratch at 1024 with 80 limbs, digit buffer at 2048 with 768 bytes,
+    /// output buffer at 4096) and returns the rolling hash of the `len` output bytes,
+    /// matching `str_hash` for byte-exact validation of the formatted string.
+    fn ftoa_driver(bits_hex: &str) -> String {
+        format!(
+            r#"(func $t (export "t") (result i64)
+  (local $ptr i32) (local $len i32) (local $i i32) (local $h i64)
+  (call $__rt_ftoa (i64.const {bits_hex}) (i32.const 1024) (i32.const 80) (i32.const 2048) (i32.const 768) (i32.const 4096))
+  (local.set $len)
+  (local.set $ptr)
+  (local.set $h (i64.const 0))
+  (local.set $i (i32.const 0))
+  (block $e
+    (loop $l
+      (br_if $e (i32.ge_s (local.get $i) (local.get $len)))
+      (local.set $h (i64.rem_u (i64.add (i64.mul (local.get $h) (i64.const 257)) (i64.load8_u (i32.add (local.get $ptr) (local.get $i)))) (i64.const 1000000000000000)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+  (local.get $h))"#
+        )
+    }
+
+    /// 2.0 -> "2".
+    #[test]
+    fn ftoa_two() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x4000000000000000"), "t") {
+            assert_eq!(o, str_hash("2").to_string());
+        }
+    }
+
+    /// 0.5 -> "0.5" (fixed notation with a single fractional digit).
+    #[test]
+    fn ftoa_half() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x3FE0000000000000"), "t") {
+            assert_eq!(o, str_hash("0.5").to_string());
+        }
+    }
+
+    /// 1.5 -> "1.5" (integer digit plus one fractional digit).
+    #[test]
+    fn ftoa_one_point_five() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x3FF8000000000000"), "t") {
+            assert_eq!(o, str_hash("1.5").to_string());
+        }
+    }
+
+    /// 100.0 -> "100" (integer with zero padding, fixed notation).
+    #[test]
+    fn ftoa_hundred() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x4059000000000000"), "t") {
+            assert_eq!(o, str_hash("100").to_string());
+        }
+    }
+
+    /// 0.1 -> "0.1" (exercises the exp2 < 0 exact-decimal path and rounding).
+    #[test]
+    fn ftoa_one_tenth() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x3FB999999999999A"), "t") {
+            assert_eq!(o, str_hash("0.1").to_string());
+        }
+    }
+
+    /// 1e20 -> "1.0E+20" (scientific: mantissa forced ".0", minimal exponent).
+    #[test]
+    fn ftoa_one_e20() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x4415AF1D78B58C40"), "t") {
+            assert_eq!(o, str_hash("1.0E+20").to_string());
+        }
+    }
+
+    /// 1e-7 -> "1.0E-7" (scientific with a negative, no-leading-zero exponent).
+    #[test]
+    fn ftoa_one_e_minus_seven() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x3E7AD7F29ABCAF48"), "t") {
+            assert_eq!(o, str_hash("1.0E-7").to_string());
+        }
+    }
+
+    /// 12345.6789 -> "12345.6789" (fixed notation with integer and fraction).
+    #[test]
+    fn ftoa_mixed_int_frac() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x40C81CD6E631F8A1"), "t") {
+            assert_eq!(o, str_hash("12345.6789").to_string());
+        }
+    }
+
+    /// 1e14 -> "1.0E+14" (boundary: X == 14 selects scientific notation).
+    #[test]
+    fn ftoa_one_e14_boundary() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x42D6BCC41E900000"), "t") {
+            assert_eq!(o, str_hash("1.0E+14").to_string());
+        }
+    }
+
+    /// 1e15 -> "1.0E+15" (X == 15, scientific).
+    #[test]
+    fn ftoa_one_e15() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x430C6BF526340000"), "t") {
+            assert_eq!(o, str_hash("1.0E+15").to_string());
+        }
+    }
+
+    /// 123456789012345.0 -> "1.2345678901234E+14" (14 significant digits, scientific).
+    #[test]
+    fn ftoa_fourteen_sig_digits() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x42DC12218377DE40"), "t") {
+            assert_eq!(o, str_hash("1.2345678901234E+14").to_string());
+        }
+    }
+
+    /// 0.0001 -> "0.0001" (fixed notation with three leading fractional zeros).
+    #[test]
+    fn ftoa_one_over_ten_thousand() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x3F1A36E2EB1C432D"), "t") {
+            assert_eq!(o, str_hash("0.0001").to_string());
+        }
+    }
+
+    /// +0.0 -> "0".
+    #[test]
+    fn ftoa_positive_zero() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x0000000000000000"), "t") {
+            assert_eq!(o, str_hash("0").to_string());
+        }
+    }
+
+    /// -0.0 -> "-0".
+    #[test]
+    fn ftoa_negative_zero() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x8000000000000000"), "t") {
+            assert_eq!(o, str_hash("-0").to_string());
+        }
+    }
+
+    /// +INF -> "INF".
+    #[test]
+    fn ftoa_positive_inf() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x7FF0000000000000"), "t") {
+            assert_eq!(o, str_hash("INF").to_string());
+        }
+    }
+
+    /// -INF -> "-INF".
+    #[test]
+    fn ftoa_negative_inf() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0xFFF0000000000000"), "t") {
+            assert_eq!(o, str_hash("-INF").to_string());
+        }
+    }
+
+    /// NaN -> "NAN" (never signed).
+    #[test]
+    fn ftoa_nan() {
+        if let Some(o) = run_float_driver(&ftoa_driver("0x7FF8000000000000"), "t") {
+            assert_eq!(o, str_hash("NAN").to_string());
         }
     }
 }
