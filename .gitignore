@@ -3,5 +3,7 @@ target/
 # Python bytecode cache from repo tooling scripts (e.g. crates/elephc-image/tools/)
 __pycache__/
 *.pyc
+# macOS Finder metadata — never track
+.DS_Store
 # Internal planning docs (specs/plans) — kept locally, not tracked
 docs/superpowers/
