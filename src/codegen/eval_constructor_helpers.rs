@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits user-assembly helpers that let libelephc-magician run public native
+//! Emits user-assembly helpers that let libelephc-magician run native
 //! constructors after allocating AOT objects by class name.
 //!
 //! Called from:
@@ -11,10 +11,13 @@
 //! - Classes without constructors are treated as successful no-ops, matching PHP.
 //! - Constructors are bridged for non-by-ref scalar/Mixed/array/object arguments,
 //!   including a generated variadic array slot when the signature has one.
+//! - Non-public constructors are accepted when the active eval class scope
+//!   satisfies PHP visibility.
 
 use std::collections::BTreeMap;
 
 use crate::codegen::abi;
+use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::{Function, LocalKind, Module};
@@ -52,18 +55,24 @@ struct EvalConstructorSlot {
     class_id: u64,
     class_name: String,
     impl_class: String,
+    visibility: Visibility,
+    allowed_scopes: Vec<String>,
     params: Vec<PhpType>,
     supported: bool,
 }
 
 /// Emits eval constructor helpers when any lowered function owns an eval context.
-pub(super) fn emit_eval_constructor_helpers(module: &Module, emitter: &mut Emitter) {
+pub(super) fn emit_eval_constructor_helpers(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
     if !module_uses_eval(module) {
         return;
     }
     let slots = collect_eval_constructor_slots(module);
     let builtin_throwable_class_ids = collect_builtin_throwable_constructor_class_ids(module);
-    emit_constructor_helper(module, emitter, &slots, &builtin_throwable_class_ids);
+    emit_constructor_helper(module, emitter, data, &slots, &builtin_throwable_class_ids);
 }
 
 /// Returns true when the EIR module contains a function that can call eval.
@@ -101,7 +110,7 @@ fn collect_eval_constructor_slots(module: &Module) -> Vec<EvalConstructorSlot> {
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in classes {
-        collect_class_constructor_slot(class_name, class_info, &emitted_methods, &mut slots);
+        collect_class_constructor_slot(module, class_name, class_info, &emitted_methods, &mut slots);
     }
     slots
 }
@@ -120,6 +129,7 @@ fn collect_builtin_throwable_constructor_class_ids(module: &Module) -> Vec<u64> 
 
 /// Adds one constructor slot for a class when the constructor has emitted code.
 fn collect_class_constructor_slot(
+    module: &Module,
     class_name: &str,
     class_info: &ClassInfo,
     emitted_methods: &std::collections::HashSet<(String, String, bool)>,
@@ -137,8 +147,9 @@ fn collect_class_constructor_slot(
     if !emitted_methods.contains(&(impl_class.to_string(), method_key.clone(), false)) {
         return;
     }
+    let visibility = constructor_visibility(class_info, &method_key);
     let supported =
-        constructor_is_public(class_info, &method_key) && constructor_signature_supported(sig);
+        constructor_visibility_supported(visibility) && constructor_signature_supported(sig);
     let params = if supported {
         sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect()
     } else {
@@ -148,17 +159,27 @@ fn collect_class_constructor_slot(
         class_id: class_info.class_id,
         class_name: class_name.to_string(),
         impl_class: impl_class.to_string(),
+        visibility: visibility.clone(),
+        allowed_scopes: visibility_scope_names(module, impl_class, visibility),
         params,
         supported,
     });
 }
 
-/// Returns true when the constructor is publicly visible to runtime eval.
-fn constructor_is_public(class_info: &ClassInfo, method_key: &str) -> bool {
+/// Returns the declared constructor visibility, defaulting to public metadata.
+fn constructor_visibility<'a>(class_info: &'a ClassInfo, method_key: &str) -> &'a Visibility {
     class_info
         .method_visibilities
         .get(method_key)
-        .is_none_or(|visibility| matches!(visibility, Visibility::Public))
+        .unwrap_or(&Visibility::Public)
+}
+
+/// Returns true when the eval constructor bridge can enforce this visibility.
+fn constructor_visibility_supported(visibility: &Visibility) -> bool {
+    matches!(
+        visibility,
+        Visibility::Public | Visibility::Protected | Visibility::Private
+    )
 }
 
 /// Returns true for constructor signatures supported by this eval bridge slice.
@@ -188,10 +209,11 @@ fn constructor_param_supported(ty: &PhpType) -> bool {
     )
 }
 
-/// Emits `__elephc_eval_value_construct_object(Mixed*, MixedArray*) -> bool`.
+/// Emits `__elephc_eval_value_construct_object(Mixed*, MixedArray*, scope, scope_len) -> bool`.
 fn emit_constructor_helper(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalConstructorSlot],
     builtin_throwable_class_ids: &[u64],
 ) {
@@ -200,10 +222,10 @@ fn emit_constructor_helper(
     label_c_global(module, emitter, "__elephc_eval_value_construct_object");
     match module.target.arch {
         Arch::AArch64 => {
-            emit_constructor_aarch64(module, emitter, slots, builtin_throwable_class_ids)
+            emit_constructor_aarch64(module, emitter, data, slots, builtin_throwable_class_ids)
         }
         Arch::X86_64 => {
-            emit_constructor_x86_64(module, emitter, slots, builtin_throwable_class_ids)
+            emit_constructor_x86_64(module, emitter, data, slots, builtin_throwable_class_ids)
         }
     }
 }
@@ -212,15 +234,18 @@ fn emit_constructor_helper(
 fn emit_constructor_aarch64(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalConstructorSlot],
     builtin_throwable_class_ids: &[u64],
 ) {
     let success_label = "__elephc_eval_value_construct_success";
     let fail_label = "__elephc_eval_value_construct_fail";
     let done_label = "__elephc_eval_value_construct_done";
-    emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for args, object, and fp/lr
+    emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for scope, args, object, and fp/lr
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
+    emitter.instruction("str x2, [sp, #0]");                                    // save the active eval class-scope pointer
+    emitter.instruction("str x3, [sp, #8]");                                    // save the active eval class-scope length
     emitter.instruction("str x1, [sp, #24]");                                   // save the boxed eval argument array
     emitter.instruction(&format!("cbz x0, {}", success_label));                 // a null object pointer means there is nothing to construct
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
@@ -234,7 +259,7 @@ fn emit_constructor_aarch64(
         fail_label,
         success_label,
     );
-    emit_aarch64_constructor_dispatch(module, emitter, slots, fail_label, success_label);
+    emit_aarch64_constructor_dispatch(module, emitter, data, slots, fail_label, success_label);
     emitter.instruction(&format!("b {}", success_label));                       // no constructor metadata matched this class id
     emitter.label(fail_label);
     emitter.instruction("mov x0, #0");                                          // report constructor dispatch failure to Rust
@@ -251,6 +276,7 @@ fn emit_constructor_aarch64(
 fn emit_constructor_x86_64(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalConstructorSlot],
     builtin_throwable_class_ids: &[u64],
 ) {
@@ -259,7 +285,9 @@ fn emit_constructor_x86_64(
     let done_label = "__elephc_eval_value_construct_done_x";
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for object, args, and temp values
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned slots for object, args, scope, and temp values
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the active eval class-scope pointer
+    emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the active eval class-scope length
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the boxed eval argument array
     emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver pointer is null
     emitter.instruction(&format!("jz {}", success_label));                      // a null object pointer means there is nothing to construct
@@ -275,7 +303,7 @@ fn emit_constructor_x86_64(
         fail_label,
         success_label,
     );
-    emit_x86_64_constructor_dispatch(module, emitter, slots, fail_label, success_label);
+    emit_x86_64_constructor_dispatch(module, emitter, data, slots, fail_label, success_label);
     emitter.instruction(&format!("jmp {}", success_label));                     // no constructor metadata matched this class id
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // report constructor dispatch failure to Rust
@@ -454,6 +482,7 @@ fn emit_x86_64_default_builtin_throwable_fields(emitter: &mut Emitter) {
 fn emit_aarch64_constructor_dispatch(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalConstructorSlot],
     fail_label: &str,
     success_label: &str,
@@ -466,7 +495,7 @@ fn emit_aarch64_constructor_dispatch(
         emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this constructor class
         emitter.instruction(&format!("b.ne {}", next_label));                   // try the next constructor class when ids differ
         for slot in class_slots {
-            emit_aarch64_constructor_body(module, emitter, slot, fail_label, success_label);
+            emit_aarch64_constructor_body(module, emitter, data, slot, fail_label, success_label);
         }
         emitter.label(&next_label);
     }
@@ -476,6 +505,7 @@ fn emit_aarch64_constructor_dispatch(
 fn emit_x86_64_constructor_dispatch(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalConstructorSlot],
     fail_label: &str,
     success_label: &str,
@@ -488,7 +518,7 @@ fn emit_x86_64_constructor_dispatch(
         emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this constructor class
         emitter.instruction(&format!("jne {}", next_label));                    // try the next constructor class when ids differ
         for slot in class_slots {
-            emit_x86_64_constructor_body(module, emitter, slot, fail_label, success_label);
+            emit_x86_64_constructor_body(module, emitter, data, slot, fail_label, success_label);
         }
         emitter.label(&next_label);
     }
@@ -498,6 +528,7 @@ fn emit_x86_64_constructor_dispatch(
 fn emit_aarch64_constructor_body(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slot: &EvalConstructorSlot,
     fail_label: &str,
     success_label: &str,
@@ -505,6 +536,11 @@ fn emit_aarch64_constructor_body(
     if !slot.supported {
         emitter.instruction(&format!("b {}", fail_label));                      // reject constructors outside this bridge's supported ABI slice
         return;
+    }
+    if !matches!(slot.visibility, Visibility::Public) {
+        let scope_ok_label = constructor_scope_ok_label(module, slot);
+        emit_aarch64_constructor_scope_check(emitter, data, slot, &scope_ok_label, fail_label);
+        emitter.label(&scope_ok_label);
     }
     emit_aarch64_validate_constructor_arg_count(module, emitter, slot, fail_label);
     let overflow_bytes = emit_aarch64_prepare_constructor_args(module, emitter, slot, fail_label);
@@ -520,6 +556,7 @@ fn emit_aarch64_constructor_body(
 fn emit_x86_64_constructor_body(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slot: &EvalConstructorSlot,
     fail_label: &str,
     success_label: &str,
@@ -527,6 +564,11 @@ fn emit_x86_64_constructor_body(
     if !slot.supported {
         emitter.instruction(&format!("jmp {}", fail_label));                    // reject constructors outside this bridge's supported ABI slice
         return;
+    }
+    if !matches!(slot.visibility, Visibility::Public) {
+        let scope_ok_label = constructor_scope_ok_label(module, slot);
+        emit_x86_64_constructor_scope_check(emitter, data, slot, &scope_ok_label, fail_label);
+        emitter.label(&scope_ok_label);
     }
     emit_x86_64_validate_constructor_arg_count(module, emitter, slot, fail_label);
     let overflow_bytes = emit_x86_64_prepare_constructor_args(module, emitter, slot, fail_label);
@@ -536,6 +578,54 @@ fn emit_x86_64_constructor_body(
     abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
     emitter.instruction(&format!("jmp {}", success_label));                     // constructor returned normally
+}
+
+/// Emits ARM64 visibility checks for a protected/private constructor bridge hit.
+fn emit_aarch64_constructor_scope_check(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalConstructorSlot,
+    success_label: &str,
+    fail_label: &str,
+) {
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the active eval class-scope pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the active eval class-scope length
+    emitter.instruction(&format!("cbz x1, {}", fail_label));                    // reject scoped constructor access outside a class scope
+    for scope_name in &slot.allowed_scopes {
+        let (label, len) = data.add_string(scope_name.as_bytes());
+        emitter.instruction("ldr x1, [sp, #0]");                                // reload the active eval class-scope pointer
+        emitter.instruction("ldr x2, [sp, #8]");                                // reload the active eval class-scope length
+        abi::emit_symbol_address(emitter, "x3", &label);
+        abi::emit_load_int_immediate(emitter, "x4", len as i64);
+        emitter.instruction("bl __rt_strcasecmp");                              // compare current eval scope with an allowed class
+        emitter.instruction(&format!("cbz x0, {}", success_label));             // run the constructor when scoped visibility is satisfied
+    }
+    emitter.instruction(&format!("b {}", fail_label));                          // reject constructor access from unrelated classes
+}
+
+/// Emits x86_64 visibility checks for a protected/private constructor bridge hit.
+fn emit_x86_64_constructor_scope_check(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalConstructorSlot,
+    success_label: &str,
+    fail_label: &str,
+) {
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the active eval class-scope pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // reload the active eval class-scope length
+    emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject scoped constructor access outside a class scope
+    for scope_name in &slot.allowed_scopes {
+        let (label, len) = data.add_string(scope_name.as_bytes());
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                   // reload the active eval class-scope pointer
+        emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                   // reload the active eval class-scope length
+        abi::emit_symbol_address(emitter, "rdx", &label);
+        abi::emit_load_int_immediate(emitter, "rcx", len as i64);
+        emitter.instruction("call __rt_strcasecmp");                            // compare current eval scope with an allowed class
+        emitter.instruction("test rax, rax");                                   // check whether the current scope matched
+        emitter.instruction(&format!("je {}", success_label));                  // run the constructor when scoped visibility is satisfied
+    }
+    emitter.instruction(&format!("jmp {}", fail_label));                        // reject constructor access from unrelated classes
 }
 
 /// Emits ARM64 arity validation for one constructor body.
@@ -956,12 +1046,77 @@ fn constructor_arg_label(module: &Module, slot: &EvalConstructorSlot, index: usi
     )
 }
 
+/// Returns a platform-safe label for a successful scoped constructor access check.
+fn constructor_scope_ok_label(module: &Module, slot: &EvalConstructorSlot) -> String {
+    let suffix = match module.target.arch {
+        Arch::AArch64 => "",
+        Arch::X86_64 => "_x",
+    };
+    format!("__elephc_eval_constructor_{}_scope_ok{}", slot.class_id, suffix)
+}
+
 /// Returns runtime interface ids for object values accepted by PHP iterable parameters.
 fn traversable_interface_ids(module: &Module) -> Vec<u64> {
     ["Iterator", "IteratorAggregate"]
         .into_iter()
         .filter_map(|name| module.interface_infos.get(name).map(|info| info.interface_id))
         .collect()
+}
+
+/// Returns class scopes that satisfy one constructor visibility for a declaring class.
+fn visibility_scope_names(
+    module: &Module,
+    declaring_class: &str,
+    visibility: &Visibility,
+) -> Vec<String> {
+    match visibility {
+        Visibility::Public => Vec::new(),
+        Visibility::Private => vec![declaring_class.to_string()],
+        Visibility::Protected => related_class_scope_names(module, declaring_class),
+    }
+}
+
+/// Returns AOT classes in the same inheritance line as `declaring_class`.
+fn related_class_scope_names(module: &Module, declaring_class: &str) -> Vec<String> {
+    let mut scopes = module
+        .class_infos
+        .keys()
+        .filter(|class_name| {
+            is_same_or_descendant(module, class_name, declaring_class)
+                || is_same_or_descendant(module, declaring_class, class_name)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    scopes.sort_by(|left, right| {
+        class_id_for_scope(module, left)
+            .cmp(&class_id_for_scope(module, right))
+            .then_with(|| left.cmp(right))
+    });
+    scopes
+}
+
+/// Returns true when `class_name` is `ancestor` or descends from it.
+fn is_same_or_descendant(module: &Module, class_name: &str, ancestor: &str) -> bool {
+    let mut cursor = Some(class_name);
+    while let Some(name) = cursor {
+        if name == ancestor {
+            return true;
+        }
+        cursor = module
+            .class_infos
+            .get(name)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
+}
+
+/// Returns the deterministic class id used to order generated scope checks.
+fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
+    module
+        .class_infos
+        .get(class_name)
+        .map(|class_info| class_info.class_id)
+        .unwrap_or(u64::MAX)
 }
 
 /// Emits a platform-C global label for a user assembly helper.

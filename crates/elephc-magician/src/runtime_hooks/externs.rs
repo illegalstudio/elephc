@@ -167,6 +167,8 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_construct_object(
         object: *mut RuntimeCell,
         args: *mut RuntimeCell,
+        scope_ptr: *const u8,
+        scope_len: u64,
     ) -> u64;
     pub(super) fn __elephc_eval_class_exists(name_ptr: *const u8, name_len: u64) -> u64;
     pub(super) fn __elephc_eval_interface_exists(name_ptr: *const u8, name_len: u64) -> u64;
