@@ -10653,6 +10653,49 @@ try {
     assert_eq!(out.stdout, "2:start:2:start:changed:9:9:fallback:S");
 }
 
+/// Verifies eval ReflectionProperty value APIs bridge generated/AOT storage.
+#[test]
+fn test_eval_reflection_property_value_apis_bridge_aot_storage() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectPropertyValueTarget {
+    public string $name = "Ada";
+    private int $secret = 3;
+    public static string $label = "start";
+    private static int $hidden = 4;
+
+    public function reveal() {
+        return $this->secret . "," . self::$hidden;
+    }
+}
+$object = new EvalAotReflectPropertyValueTarget();
+echo eval('$name = new ReflectionProperty("EvalAotReflectPropertyValueTarget", "name");
+$secret = new ReflectionProperty("EvalAotReflectPropertyValueTarget", "secret");
+$label = new ReflectionProperty("EvalAotReflectPropertyValueTarget", "label");
+$hidden = new ReflectionProperty("EvalAotReflectPropertyValueTarget", "hidden");
+echo $name->getValue($object) . ":";
+$name->setValue($object, "Grace");
+echo $object->name . ":";
+echo $secret->getValue($object) . ":";
+$secret->setValue($object, 9);
+echo $object->reveal() . ":";
+echo $label->getValue() . ":";
+$label->setValue("changed");
+echo EvalAotReflectPropertyValueTarget::$label . ":";
+echo $hidden->getValue() . ":";
+$hidden->setValue(8);
+echo $object->reveal();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Ada:Grace:3:9,4:start:changed:4:9,8");
+}
+
 /// Verifies eval ReflectionParameter exposes the declaring class for method parameters.
 #[test]
 fn test_eval_reflection_parameter_reports_declaring_class() {

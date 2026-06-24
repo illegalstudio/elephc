@@ -739,7 +739,17 @@ pub(in crate::interpreter) fn eval_reflection_class_set_static_property_value_re
         {
             values.release(replaced)?;
         }
-    } else if !values.static_property_set(&reflected_name, &property_name, args[1])? {
+    } else {
+        let declaring_class = member
+            .declaring_class_name
+            .as_deref()
+            .unwrap_or(reflected_name.as_str());
+        let updated = eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+            values.static_property_set(&reflected_name, &property_name, args[1])
+        })?;
+        if updated {
+            return values.null().map(Some);
+        }
         return eval_reflection_static_property_missing_for_set(
             &reflected_name,
             &property_name,
@@ -1220,7 +1230,8 @@ pub(in crate::interpreter) fn eval_reflection_property_get_value_result(
         )
         .map(Some);
     }
-    let Some(member) = eval_reflection_property_metadata(&declaring_class, &property_name, context)
+    let Some(member) =
+        eval_reflection_reflected_property_metadata(&declaring_class, &property_name, context, values)?
     else {
         return Err(EvalStatus::RuntimeFatal);
     };
@@ -1235,13 +1246,23 @@ pub(in crate::interpreter) fn eval_reflection_property_get_value_result(
         .ok_or(EvalStatus::RuntimeFatal);
     }
     let object = object.ok_or(EvalStatus::RuntimeFatal)?;
-    eval_reflection_instance_property_get_value(
-        &declaring_class,
-        &property_name,
-        object,
-        context,
-        values,
-    )
+    if eval_reflection_class_like_exists(&declaring_class, context) {
+        eval_reflection_instance_property_get_value(
+            &declaring_class,
+            &property_name,
+            object,
+            context,
+            values,
+        )
+    } else {
+        eval_reflection_aot_instance_property_get_value(
+            &declaring_class,
+            &property_name,
+            object,
+            context,
+            values,
+        )
+    }
     .map(Some)
 }
 
@@ -1278,31 +1299,57 @@ pub(in crate::interpreter) fn eval_reflection_property_set_value_result(
         )?;
         return values.null().map(Some);
     }
-    let Some(member) = eval_reflection_property_metadata(&declaring_class, &property_name, context)
+    let Some(member) =
+        eval_reflection_reflected_property_metadata(&declaring_class, &property_name, context, values)?
     else {
         return Err(EvalStatus::RuntimeFatal);
     };
     if member.is_static {
         let value = value.unwrap_or(object_or_value);
-        let declaring_class = member
-            .declaring_class_name
-            .as_deref()
-            .ok_or(EvalStatus::RuntimeFatal)?;
-        if let Some(replaced) = context.set_static_property(declaring_class, &property_name, value)
-        {
-            values.release(replaced)?;
+        if eval_reflection_class_like_exists(&declaring_class, context) {
+            let declaring_class = member
+                .declaring_class_name
+                .as_deref()
+                .ok_or(EvalStatus::RuntimeFatal)?;
+            if let Some(replaced) =
+                context.set_static_property(declaring_class, &property_name, value)
+            {
+                values.release(replaced)?;
+            }
+        } else {
+            let declaring_class = member
+                .declaring_class_name
+                .as_deref()
+                .unwrap_or(declaring_class.as_str());
+            let updated = eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+                values.static_property_set(declaring_class, &property_name, value)
+            })?;
+            if !updated {
+                return Err(EvalStatus::RuntimeFatal);
+            }
         }
         return values.null().map(Some);
     }
     let value = value.ok_or(EvalStatus::RuntimeFatal)?;
-    eval_reflection_instance_property_set_value(
-        &declaring_class,
-        &property_name,
-        object_or_value,
-        value,
-        context,
-        values,
-    )?;
+    if eval_reflection_class_like_exists(&declaring_class, context) {
+        eval_reflection_instance_property_set_value(
+            &declaring_class,
+            &property_name,
+            object_or_value,
+            value,
+            context,
+            values,
+        )?;
+    } else {
+        eval_reflection_aot_instance_property_set_value(
+            &declaring_class,
+            &property_name,
+            object_or_value,
+            value,
+            context,
+            values,
+        )?;
+    }
     values.null().map(Some)
 }
 
@@ -3218,7 +3265,7 @@ fn eval_reflection_owner_object_with_members(
                     declaring_class,
                     reflected_name,
                 );
-            } else if eval_reflection_class_like_exists(declaring_class, context) {
+            } else {
                 let identity = values.object_identity(object)?;
                 context.register_eval_reflection_property(
                     identity,
@@ -5092,6 +5139,19 @@ fn eval_reflection_default_property_metadata(
     eval_reflection_aot_property_metadata_if_exists(reflected_name, property_name, context, values)
 }
 
+/// Returns eval or generated/AOT metadata for a materialized `ReflectionProperty`.
+fn eval_reflection_reflected_property_metadata(
+    declaring_class: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalReflectionMemberMetadata>, EvalStatus> {
+    if let Some(member) = eval_reflection_property_metadata(declaring_class, property_name, context) {
+        return Ok(Some(member));
+    }
+    eval_reflection_aot_property_metadata_if_exists(declaring_class, property_name, context, values)
+}
+
 /// Returns eval-declared property names for reflection APIs that do not use AOT lists.
 fn eval_reflection_eval_property_names(
     reflected_name: &str,
@@ -5141,10 +5201,7 @@ fn eval_reflection_static_property_metadata(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalReflectionMemberMetadata>, EvalStatus> {
-    if let Some(member) = eval_reflection_property_metadata(reflected_name, property_name, context) {
-        return Ok(Some(member));
-    }
-    eval_reflection_aot_property_metadata_if_exists(reflected_name, property_name, context, values)
+    eval_reflection_reflected_property_metadata(reflected_name, property_name, context, values)
 }
 
 /// Returns the current eval or generated/AOT static property value.
@@ -5176,7 +5233,13 @@ fn eval_reflection_static_property_value(
             .map(|default| eval_method_parameter_default(default, context, values))
             .transpose();
     }
-    values.static_property_get(reflected_name, property_name)
+    let declaring_class = member
+        .declaring_class_name
+        .as_deref()
+        .unwrap_or(reflected_name);
+    eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+        values.static_property_get(reflected_name, property_name)
+    })
 }
 
 /// Binds `getStaticPropertyValue()` arguments while preserving whether a default was supplied.
@@ -5832,6 +5895,64 @@ fn eval_reflection_instance_property_set_value(
     let identity = values.object_identity(object)?;
     context.mark_dynamic_property_initialized(identity, &storage_property_name);
     Ok(())
+}
+
+/// Reads one generated/AOT instance property through ReflectionProperty semantics.
+fn eval_reflection_aot_instance_property_get_value(
+    declaring_class: &str,
+    property_name: &str,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_reflection_aot_instance_property_validate_object(
+        declaring_class,
+        object,
+        context,
+        values,
+    )?;
+    eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+        values.property_get(object, property_name)
+    })
+}
+
+/// Writes one generated/AOT instance property through ReflectionProperty semantics.
+fn eval_reflection_aot_instance_property_set_value(
+    declaring_class: &str,
+    property_name: &str,
+    object: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    eval_reflection_aot_instance_property_validate_object(
+        declaring_class,
+        object,
+        context,
+        values,
+    )?;
+    eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+        values.property_set(object, property_name, value)
+    })
+}
+
+/// Verifies a generated/AOT ReflectionProperty instance target is compatible.
+fn eval_reflection_aot_instance_property_validate_object(
+    declaring_class: &str,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if values.is_null(object)? || values.type_tag(object)? != EVAL_TAG_OBJECT {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let is_instance = dynamic_object_is_a(object, declaring_class, false, context, values)?
+        .map_or_else(|| values.object_is_a(object, declaring_class, false), Ok)?;
+    if is_instance {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
 }
 
 /// Returns whether one eval instance property is initialized for ReflectionProperty.

@@ -450,9 +450,9 @@ for those APIs, including `PropertyHookType::cases()`, `from()`, and
 `tryFrom()`.
 `ReflectionProperty::setAccessible()` is accepted as a PHP-compatible no-op.
 `ReflectionProperty::getValue()` and `setValue()` read and write eval-declared
-instance and static property values, bypass public/protected/private visibility
-like PHP reflection, route concrete property hooks through their accessors, and
-still reject readonly writes.
+and bridge-supported generated/AOT instance and static property values, bypass
+public/protected/private visibility like PHP reflection, route concrete eval
+property hooks through their accessors, and still reject readonly writes.
 `ReflectionProperty::getRawValue()` and `setRawValue()` are supported for
 eval-declared backed instance properties, including backed property hooks, and
 bypass concrete property hook accessors. Virtual property hooks reject raw
