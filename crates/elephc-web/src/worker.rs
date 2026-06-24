@@ -13,7 +13,7 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -38,8 +38,9 @@ fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener
 
 /// Serves HTTP forever on `listen` (host:port) in this worker process.
 /// Builds a current-thread tokio runtime and loops accepting connections,
-/// serving each with the PHP handler.
-pub fn serve(listen: &str, handler: extern "C" fn()) {
+/// serving each with the PHP handler. `max_body` caps the request body in bytes
+/// (`0` = unlimited); an over-limit body short-circuits to HTTP 413.
+pub fn serve(listen: &str, handler: extern "C" fn(), max_body: usize) {
     let addr: SocketAddr = listen.parse().expect("invalid --listen host:port");
     let std_listener = reuseport_listener(addr).expect("failed to bind SO_REUSEPORT socket");
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -67,11 +68,28 @@ pub fn serve(listen: &str, handler: extern "C" fn()) {
                         .iter()
                         .map(|(n, v)| (n.as_str().to_string(), String::from_utf8_lossy(v.as_bytes()).into_owned()))
                         .collect();
-                    // The body must be fully collected (async) BEFORE the blocking handler runs,
-                    // since handler() cannot yield on the current-thread runtime.
-                    let body = match req.into_body().collect().await {
-                        Ok(c) => c.to_bytes().to_vec(),
-                        Err(_) => Vec::new(),
+                    // The body must be fully collected (async) BEFORE the blocking handler
+                    // runs, since handler() cannot yield on the current-thread runtime.
+                    // Collect with a size cap (0 = unlimited); an over-limit body
+                    // short-circuits to 413 without ever running the PHP handler.
+                    let collected = if max_body == 0 {
+                        req.into_body().collect().await.map(|c| c.to_bytes().to_vec()).map_err(|_| ())
+                    } else {
+                        Limited::new(req.into_body(), max_body)
+                            .collect()
+                            .await
+                            .map(|c| c.to_bytes().to_vec())
+                            .map_err(|_| ())
+                    };
+                    let body = match collected {
+                        Ok(b) => b,
+                        Err(_) => {
+                            let resp = Response::builder()
+                                .status(413)
+                                .body(Full::new(Bytes::from_static(b"Payload Too Large")))
+                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b""))));
+                            return Ok::<_, Infallible>(resp);
+                        }
                     };
                     request_state::set_request(method, uri, path, query, headers, body);
                     let resp_body = run_handler(handler);

@@ -68,6 +68,18 @@ fn free_port() -> u16 {
     l.local_addr().unwrap().port()
 }
 
+/// Blocks until `addr` accepts a TCP connection (server ready), or panics after 10s.
+fn wait_until_ready(addr: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if TcpStream::connect(addr).is_ok() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("server did not start listening on {}", addr);
+}
+
 /// Spawns the server binary on `addr`, waits until it accepts connections.
 fn spawn_server(bin: &Path, addr: &str, workers: &str) -> std::process::Child {
     let child = Command::new(bin)
@@ -75,14 +87,8 @@ fn spawn_server(bin: &Path, addr: &str, workers: &str) -> std::process::Child {
         .arg("--workers").arg(workers)
         .spawn()
         .expect("failed to spawn web server");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        if TcpStream::connect(addr).is_ok() {
-            return child;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    panic!("server did not start listening on {}", addr);
+    wait_until_ready(addr);
+    child
 }
 
 /// Sends one HTTP/1.1 GET and returns the full raw response text.
@@ -452,4 +458,26 @@ fn web_conditional_early_return_halts() {
     assert!(!bad.contains("good"), "no-ok must not run code after return: {:?}", bad);
     assert!(good.starts_with("HTTP/1.1 200"), "ok status: {:?}", good);
     assert!(good.ends_with("good"), "ok body must be 'good': {:?}", good);
+}
+
+/// Verifies a request body over --max-body-size is rejected with 413, and a body
+/// under the limit is served normally.
+#[test]
+fn web_body_size_limit_returns_413() {
+    let dir = make_test_dir("web_bodylimit");
+    let src = "<?php echo strlen(file_get_contents('php://input'));";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1", "--max-body-size", "64"])
+        .spawn()
+        .expect("spawn");
+    wait_until_ready(&addr);
+    let small = http_request(&addr, "POST", "/", &[("Content-Type", "text/plain")], &"x".repeat(10));
+    let big = http_request(&addr, "POST", "/", &[("Content-Type", "text/plain")], &"x".repeat(1000));
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(small.ends_with("10"), "under-limit body should serve: {:?}", small);
+    assert!(big.starts_with("HTTP/1.1 413"), "over-limit body should be 413: {:?}", big);
 }
