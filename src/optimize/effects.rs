@@ -56,6 +56,9 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             expr_effect(value).with_side_effects()
         }
         StmtKind::RefAssign { .. } => Effect::PURE.with_side_effects(),
+        StmtKind::RefAssignTarget { target, .. } => {
+            expr_effect(target).with_side_effects().with_may_throw()
+        }
         StmtKind::ArrayPush { value, .. } | StmtKind::StaticPropertyArrayPush { value, .. } => {
             expr_effect(value).with_side_effects().with_may_throw()
         }
@@ -180,6 +183,8 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         | StmtKind::Return(None)
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => Effect::PURE,
@@ -226,6 +231,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             expr_effect(value).combine(instanceof_target_effect(target))
         }
         ExprKind::Throw(inner) => expr_effect(inner).with_side_effects().with_may_throw(),
+        // `clone $obj` allocates a new object (heap write), shallow-copies properties, and may
+        // dispatch a user `__clone()` that reads/writes properties and throws. Conservative.
+        ExprKind::Clone(inner) => expr_effect(inner).with_side_effects().with_may_throw(),
         ExprKind::NullCoalesce { value, default } => expr_effect(value).combine(expr_effect(default)),
         ExprKind::Pipe { value, callable } => expr_effect(value)
             .combine(expr_effect(callable))
@@ -246,6 +254,8 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                     .unwrap_or(Effect::PURE),
             )
             .with_side_effects(),
+        // `[$a, $b] = EXPR` reads EXPR and writes the target locals, so it is impure.
+        ExprKind::ListUnpack { value, .. } => expr_effect(value).with_side_effects(),
         ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)

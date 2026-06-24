@@ -20,6 +20,7 @@ mod static_closure;
 use super::super::Checker;
 use super::syntactic::wider_type_syntactic;
 use static_closure::body_must_not_use_this;
+pub(crate) use static_closure::closure_body_uses_this;
 impl Checker {
     /// Infers the PHP return type of `expr` in the given `env`.
     ///
@@ -63,6 +64,27 @@ impl Checker {
             ExprKind::Print(inner) => {
                 self.infer_type(inner, env)?;
                 Ok(PhpType::Int)
+            }
+            // `clone $expr` shallow-copies an object and runs `__clone()` on the
+            // copy. The operand type flows through unchanged (cloning an
+            // `Object(Foo)` yields another `Object(Foo)`; cloning a `Mixed`/union
+            // value yields the same `Mixed`/union so downstream code keeps the
+            // boxed-cell representation). Definite non-object scalar types are a
+            // compile error, matching PHP's "Call to __clone() on a non-object";
+            // nullable, mixed, iterable, and never operands are allowed and defer
+            // the runtime non-object check to the clone helper.
+            ExprKind::Clone(inner) => {
+                let operand_ty = self.infer_type(inner, env)?;
+                if !type_could_hold_object(&operand_ty) {
+                    return Err(CompileError::new(
+                        expr.span,
+                        &format!(
+                            "clone expects an object, {:?} given",
+                            operand_ty
+                        ),
+                    ));
+                }
+                Ok(operand_ty)
             }
             ExprKind::PreIncrement(name)
             | ExprKind::PostIncrement(name)
@@ -417,6 +439,13 @@ impl Checker {
                     &mut scoped_env,
                 )
             }
+            ExprKind::ListUnpack { value, .. } => {
+                // `[$a, $b] = EXPR` evaluates to EXPR, so the expression's type is the type of
+                // EXPR. The destructured target locals are typed by the statement-flow checker
+                // (env is immutable here, as for `ExprKind::Assignment`); their element type is
+                // recovered at codegen time in `lower_list_unpack_expr`.
+                self.infer_type(value, env)
+            }
             ExprKind::ConstRef(name) => {
                 self.constants.get(name.as_str()).cloned().ok_or_else(|| {
                     CompileError::new(expr.span, &format!("Undefined constant: {}", name))
@@ -688,4 +717,25 @@ fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
             ExprKind::StringLiteral(value)
                 if crate::types::parse_php_string_offset_literal(value).is_some()
         )
+}
+
+/// Returns true when a value of `ty` could be a PHP object instance at runtime,
+/// so `clone` is admissible on the operand.
+///
+/// Definite scalar types (`Int`, `Float`, `Str`, `Bool`, `Array`, `AssocArray`,
+/// `Buffer`, `Callable`, `Resource`, `Pointer`, `Packed`) are rejected — cloning
+/// them is a compile error, mirroring PHP's "Call to __clone() on a non-object".
+/// `Object`, `Mixed`, `Union`, `Iterable`, nullable `Void`, and `Never` are
+/// allowed: the first four may hold an object at runtime, `Void` is the nullable
+/// null case (PHP defers `clone null` to a runtime error), and `Never` means the
+/// operand cannot produce a value at all. For unions, any object-capable member
+/// makes the whole type cloneable.
+fn type_could_hold_object(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) | PhpType::Mixed | PhpType::Iterable | PhpType::Void | PhpType::Never => {
+            true
+        }
+        PhpType::Union(members) => members.iter().any(type_could_hold_object),
+        _ => false,
+    }
 }

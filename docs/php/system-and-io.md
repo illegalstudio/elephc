@@ -22,12 +22,15 @@ sidebar:
 | `defined()` | `defined($name): bool` | Check whether a string-literal constant name is defined |
 | `php_uname()` | `php_uname($mode = "a"): string` | Get system information from the target runtime |
 | `phpversion()` | `phpversion(): string` | Get the elephc package version from `Cargo.toml` |
+| `extension_loaded()` | `extension_loaded($extension): bool` | Check whether a PHP extension is loaded (always `false`; see below) |
 | `exec()` | `exec($command): string` | Execute command, return output |
 | `shell_exec()` | `shell_exec($command): string` | Execute via shell, return output |
 | `system()` | `system($command): string` | Execute, output to stdout |
 | `passthru()` | `passthru($command): void` | Execute, pass raw output |
 
 `define()` returns `true` the first time a constant is defined at runtime. Duplicate attempts keep the first value, return `false`, and emit a suppressible runtime warning. `defined()` currently requires a string literal in AOT mode.
+
+`extension_loaded()` resolves at compile time. elephc is a closed-world AOT compiler with no dynamically loaded PHP extensions, so it currently reports every extension as not loaded (`false`), matching extension names case-insensitively like PHP. This is the correct value for code that uses `extension_loaded()` to choose between a native extension and a userland fallback: the fallback path is selected, and elephc-provided functions remain available through `function_exists()` and the builtin catalog.
 
 `php_uname()` supports PHP's standard one-character modes:
 
@@ -268,6 +271,8 @@ wrappers are documented in [Streams](streams.md).
 | `realpath_cache_get()` | `realpath_cache_get(): array` | Empty array; elephc does not maintain a realpath cache. |
 | `realpath_cache_size()` | `realpath_cache_size(): int` | `0`; elephc does not maintain a realpath cache. |
 | `fnmatch()` | `fnmatch($pattern, $filename [, $flags = 0]): bool` | Shell-glob match. Supports `*`, `?`, `[abc]`, `[a-z]`, `[!abc]`/`[^abc]`, `\\<char>`, and PHP flags. |
+
+> `dirname()` is foldable at compile time inside `include`/`require` path expressions when its `$path` argument is a compile-time-constant string (a string literal, a concatenation of foldable strings, or a `const`/`define()`-d string constant) and its optional `$levels` argument is an integer literal `>= 1`. This is what makes the Symfony front-controller pattern `require dirname(__DIR__) . '/vendor/autoload.php';` resolve: `__DIR__` is lowered to a string literal before the resolver runs, `dirname()` folds to the project root, and the concatenation produces a static include path. `dirname()` of a runtime value (a variable, a call result, etc.) is **not** folded — it emits the runtime `dirname` helper as usual. `basename()`, `realpath()`, and `pathinfo()` are not yet folded in include paths.
 
 > `pathinfo()` accepts `PATHINFO_DIRNAME` (1), `PATHINFO_BASENAME` (2), `PATHINFO_EXTENSION` (4), `PATHINFO_FILENAME` (8), and `PATHINFO_ALL` (15) constants, integer literals, variables, and bitmasks such as `PATHINFO_DIRNAME | PATHINFO_EXTENSION`. Component bitmasks follow PHP priority: dirname, basename, extension, then filename. The component-flag form returns the requested component as a string (or empty string when it is absent, for example `pathinfo("foo", PATHINFO_EXTENSION)` returns `""`). The no-flag and exact `PATHINFO_ALL` forms return an associative array; the `extension` key is omitted only when the basename has no dot, matching PHP's behaviour.
 

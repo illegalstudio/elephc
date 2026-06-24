@@ -170,6 +170,42 @@ Non-local assignment expression targets stabilize receiver and index subexpressi
 
 For `??=` expression form, elephc preserves the PHP short-circuit rule and the conditional write order for non-local targets. If the current target value is non-null, the right-hand side is not evaluated. If it is null, the right-hand side runs before the final write target is evaluated, so forms such as `$items[$i] ??= ($i = 1)` write through the updated simple index while computed/effectful index parts remain stabilized.
 
+### Assignment binds to the adjacent lvalue
+
+As in PHP, an assignment `=` binds to the lvalue immediately to its left even when it appears as the operand of a higher-precedence operator. The assignment is performed first and its value is fed to the surrounding operator:
+
+```php
+<?php
+// `false !== $pos = strrpos(...)` parses as `false !== ($pos = strrpos(...))`.
+$path = "App\\Service\\Mailer";
+if (false !== $pos = strrpos($path, "\\")) {
+    echo substr($path, $pos + 1); // Mailer
+}
+
+$b = 0;
+echo 1 + $b = 5;   // 6   (parsed as 1 + ($b = 5)); $b is now 5
+echo !$b = 0;      // 1   (parsed as !($b = 0)); $b is now 0
+```
+
+This applies to any preceding operator (`+`, `*`, `&&`, `!==`, prefix `!`, the short ternary `?:`, …) and to any assignment target, including complex lvalues such as object properties and array elements. The assignment becomes the operator's adjacent operand:
+
+```php
+<?php
+class Text { public string $value = "hello"; }
+$t = new Text();
+
+// `cond ?: $t->value = X` parses as `cond ?: ($t->value = X)` — the property assignment is the
+// else-branch, run only when the condition is falsy.
+strlen($t->value) > 100 ?: $t->value = strtoupper($t->value);
+echo $t->value; // HELLO
+
+$a = [1, 2];
+true && $a[0] = 99;   // parsed as `true && ($a[0] = 99)`
+echo $a[0];           // 99
+```
+
+It only kicks in when the left operand of `=` is a real assignment target; `($a + $b) = 5` and `cond ?: f() = 5` are still "Invalid assignment target" errors.
+
 ## List Unpacking
 
 ```php
@@ -233,6 +269,26 @@ Nullsafe access cannot be used as an assignment target or combined with first-cl
 | `$i++` | Post-increment | Old value |
 | `--$i` | Pre-decrement | New value |
 | `$i--` | Post-decrement | Old value |
+
+Increment and decrement work on simple variables, object properties (including
+`$this->prop`), and array elements, in both statement and expression position:
+
+```php
+++$obj->count;            // like $obj->count += 1;
+--$arr["k"];
+$arr[0]++;
+
+$next = ++$obj->count;    // prefix: store, then read the NEW value
+$old  = $obj->count++;    // postfix: read the OLD value, then store
+$token = $tokens[$pos++]; // postfix in expression position
+```
+
+As in PHP, a prefix `++`/`--` yields the new value and a postfix `++`/`--` yields
+the old value. In statement position the produced value is discarded, so the two
+forms are interchangeable there. The target's receiver or index is evaluated
+exactly once, so `$a[next_index()]++` calls `next_index()` a single time. The
+PHP string-increment behavior (`"a"++` → `"b"`) applies only to plain variables;
+on a property or array element the operation is numeric.
 
 ## Ternary
 

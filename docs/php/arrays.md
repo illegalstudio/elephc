@@ -15,6 +15,17 @@ $arr[1] = 99;          // modify
 $arr[] = 40;           // push
 ```
 
+## Long-form `array()` syntax
+The short `[...]` form and the long-form `array(...)` construct are exactly equivalent — `array(...)` is a language construct, not a function call. Both produce the same array and may be mixed freely, including `key => value` entries, `...` spreads, and nesting. The keyword is case-insensitive.
+
+```php
+<?php
+$indexed = array(10, 20, 30);
+$assoc   = array("name" => "Alice", "city" => "Paris");
+$nested  = array("point" => array(1, 2), "label" => "p");
+$spread  = array(...$indexed, 40);   // 10, 20, 30, 40
+```
+
 ## String arrays
 ```php
 <?php
@@ -56,6 +67,52 @@ echo $map["1"];  // one
 echo $map[2];    // two
 echo $map["02"]; // leading
 ```
+
+## Removing elements with unset
+
+`unset($map[$key])` removes a single entry from an associative array. The removed key's owned
+key and value storage is released, the live `count()` drops by one, and `isset()`, `foreach`,
+and re-insertion all observe the entry as gone. Iteration order follows PHP: surviving entries
+keep their original order, and re-adding a removed key appends it at the end.
+
+```php
+<?php
+$map = ["a" => 1, "b" => 2, "c" => 3];
+unset($map["b"]);
+
+echo count($map);          // 2
+echo isset($map["b"]) ? "y" : "n"; // n
+$map["b"] = 9;             // re-added at the end
+foreach ($map as $k => $v) { echo "$k=$v "; } // a=1 c=3 b=9
+```
+
+`unset()` also works on indexed arrays. PHP removes the key **without renumbering** the survivors,
+so the array becomes sparse (a hole is left). The remaining keys keep their original values, and a
+later `$arr[] = ...` append continues at `max_key + 1`.
+
+```php
+<?php
+$arr = [1, 2, 3];
+unset($arr[1]);
+foreach ($arr as $k => $v) { echo "$k=$v "; } // 0=1 2=3 (no key 1)
+$arr[] = 9;                                    // appended at key 3
+echo isset($arr[1]) ? "y" : "n";               // n
+```
+
+`unset()` respects copy-on-write: removing a key from one array never mutates another array that
+was assigned from it. Unsetting a key that is not present is a no-op.
+
+```php
+<?php
+$a = ["x" => 1, "y" => 2];
+$b = $a;
+unset($b["x"]);
+echo count($a); // 2 — original is untouched
+echo count($b); // 1
+```
+
+> Removing an element from an array passed **by reference** (`function f(array &$a)`) is not yet
+> supported and reports a compile error.
 
 ## Array union
 
@@ -107,6 +164,28 @@ echo $b[0];   // 9
 
 The same applies to function parameters and mutating built-ins (`array_push()`, `sort()`, `shuffle()`, etc.).
 
+## References to array elements and object properties
+An array element (or a `stdClass` dynamic property) can be bound by reference to a variable with `=&`, so the two share one underlying value — writing either is observed through the other:
+```php
+<?php
+$total = 0;
+$report = ['label' => 'sales', 'total' => 0];
+$report['total'] =& $total;   // element and variable now share a value
+$total += 42;
+echo $report['total'];        // 42 — written through $total
+$report['total'] += 8;
+echo $total;                  // 50 — written back through the element
+
+$score = 1;
+$player = new stdClass();
+$player->score =& $score;     // dynamic property aliased to the variable
+$score = 100;
+echo $player->score;          // 100
+```
+The shared value lives in a reference cell co-owned by the container and the source variable; copying the array preserves the reference (a copy-on-write split keeps the element shared), matching PHP.
+
+The source must be a scalar (`int`, `bool`, `float`) or a `mixed` value, and the property form requires a statically-typed `stdClass` receiver. The following are not yet supported and are reported at compile time: a `string` source; a reference into a declared typed-class property or a `mixed`-typed object; reference *return* values (`$x =& f()`); and `unset()` of a referenced source variable.
+
 ## Multi-dimensional arrays
 ```php
 <?php
@@ -140,6 +219,39 @@ $items = [0];
 ```
 
 PHP does not allow keyed and unkeyed entries in the same destructuring pattern, and elephc reports that as a compile-time error.
+
+A simple positional destructuring `[$a, $b] = EXPR` can also be used in **expression position** — for example as a condition. It binds the targets and evaluates to `EXPR` (the whole right-hand side), exactly as in PHP, so the classic assign-and-test idiom works:
+
+```php
+<?php
+if ([$id, $name] = $row) {
+    echo $id . ":" . $name;
+}
+```
+
+In expression position only the simple positional form (`[$a, $b]`) is supported; keyed or nested destructuring there is a compile-time error (it remains available as a statement).
+
+Destructuring can also appear directly in a `foreach` value pattern. The pattern is bound from each element (or each value, when a key is present), so you can unpack rows while iterating.
+
+```php
+<?php
+// Positional: bind each element pair.
+foreach ([["a", "b"], ["c", "d"]] as [$x, $y]) {
+    echo $x . $y; // abcd
+}
+
+// Keyed: pick fields by name from each row.
+foreach ([["id" => 1, "name" => "Ada"]] as ["id" => $id, "name" => $name]) {
+    echo $id . ':' . $name; // 1:Ada
+}
+
+// Key with a destructured value.
+foreach (["k" => [1, 2]] as $key => [$m, $n]) {
+    echo $key . $m . $n; // k12
+}
+```
+
+By-reference destructuring targets (`foreach ($arr as [&$a, $b])` and `[&$a, $b] = $arr`) are not supported; the pattern must bind by value.
 
 ## Built-in array functions
 
@@ -198,7 +310,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 
 `array_filter()` accepts `ARRAY_FILTER_USE_VALUE` (`0`), `ARRAY_FILTER_USE_BOTH` (`1`), and `ARRAY_FILTER_USE_KEY` (`2`). Invalid mode values throw `ValueError`.
 
-> Callback arguments can be string literals, runtime string names for user functions, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, and `uasort()` resolve runtime string callback variables through descriptor dispatch. `array_map()` stores mixed result elements when the selected callback return shape is only known at runtime.
+> Callback arguments can be string literals, runtime string names for user functions, first-class callable values, anonymous functions, arrow functions, or variables holding captured closures. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, and `uasort()` resolve runtime string callback variables through descriptor dispatch. `array_map()` stores mixed result elements when the selected callback return shape is only known at runtime. `array_map()` also runs over a heterogeneous (boxed `mixed`) input array: each element is passed to the callback as a `mixed` value, so a callback with a `mixed` (or untyped) parameter sees and can return each element with its original runtime type.
 > `call_user_func_array()` also accepts dynamic indexed and associative argument arrays for callbacks with a known signature, including userland variadic callbacks. When a callable value has no single static signature at the call site, elephc emits an AOT runtime dispatch over user functions and closure/FCC wrappers available in that codegen context, then applies the matched target's descriptor metadata: parameter names, defaults, by-reference flags, variadic position, return shape, captures, hidden receiver arguments, and callable shape. Runtime string callback names dispatch over user functions, supported builtins, and public static-method strings by case-insensitive name matching, materialize the matched descriptor, and invoke its generated descriptor invoker. Descriptor invokers receive a temporary boxed Mixed clone of the argument container and inspect its runtime tag to handle indexed arrays and associative hashes through the same signature-level wrapper, so the source `$args` remains usable with its original static layout after the call. String keys bind named parameters; unconsumed string and numeric keys are copied into `...$rest` for variadic callbacks. Dynamic arrays passed to by-reference callback parameters use temporary reference cells, so callback writes do not mutate the source argument array.
 
 `usort()` and `uasort()` sort arrays of **objects** as well as scalars. The comparator receives each element as its object handle, so an unannotated comparator's parameters are typed from the array element automatically — `usort($items, fn($a, $b) => $a->weight <=> $b->weight)` works without writing `($a, $b)` type hints, and `usort($dates, fn($a, $b) => $a <=> $b)` over `DateTime`/`DateTimeImmutable` compares by instant. Explicit hints (`function (Item $a, Item $b)`) are equally accepted. Sorting an array of **strings** with a user comparator is not yet supported and reports a clear unsupported-feature error.

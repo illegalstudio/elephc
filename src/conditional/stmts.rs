@@ -114,6 +114,10 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             value: rewrite_expr(value, defines),
         },
         StmtKind::RefAssign { target, source } => StmtKind::RefAssign { target, source },
+        StmtKind::RefAssignTarget { target, source } => StmtKind::RefAssignTarget {
+            target: rewrite_expr(target, defines),
+            source,
+        },
         StmtKind::If {
             condition,
             then_body,
@@ -230,6 +234,8 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
         },
         StmtKind::Break(levels) => StmtKind::Break(levels),
         StmtKind::Continue(levels) => StmtKind::Continue(levels),
+        StmtKind::Goto(label) => StmtKind::Goto(label),
+        StmtKind::Label(label) => StmtKind::Label(label),
         StmtKind::ExprStmt(expr) => StmtKind::ExprStmt(rewrite_expr(expr, defines)),
         StmtKind::FunctionDecl {
             name,

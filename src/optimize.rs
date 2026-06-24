@@ -36,6 +36,28 @@ thread_local! {
     static ACTIVE_PRIVATE_INSTANCE_METHOD_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
     static ACTIVE_CLASS_EFFECT_CONTEXT: RefCell<Option<ClassEffectContext>> = const { RefCell::new(None) };
     static ACTIVE_CALLABLE_ALIAS_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
+    /// Names of variables that have been bound as the source of a reference assignment
+    /// (`$arr[$k] =& $v`, `$obj->p =& $v`, or a local `$a =& $v`) during the current constant
+    /// propagation. Once a variable is reference-aliased, a write through one of its aliases can
+    /// change its value invisibly to per-variable constant tracking, so it must never be propagated
+    /// as a known constant for the rest of the pass. The set grows monotonically and is reset at the
+    /// start of each `propagate_constants` run.
+    static REF_ESCAPED_VARS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+}
+
+/// Records `name` as reference-escaped, suppressing constant propagation/recording for it from this
+/// point on (see `REF_ESCAPED_VARS`). Called when constant propagation processes a reference
+/// assignment whose source is the named variable.
+pub(crate) fn mark_ref_escaped_var(name: &str) {
+    REF_ESCAPED_VARS.with(|slot| {
+        slot.borrow_mut().insert(name.to_string());
+    });
+}
+
+/// Returns whether `name` is a reference-escaped variable whose constant value must not be
+/// propagated or re-recorded (see `REF_ESCAPED_VARS`).
+pub(crate) fn is_ref_escaped_var(name: &str) -> bool {
+    REF_ESCAPED_VARS.with(|slot| slot.borrow().contains(name))
 }
 
 /// Folds constant expressions to their compile-time values.
@@ -45,6 +67,7 @@ pub fn fold_constants(program: Program) -> Program {
 
 /// Propagates scalar constants across statements and control flow.
 pub fn propagate_constants(program: Program) -> Program {
+    REF_ESCAPED_VARS.with(|slot| slot.borrow_mut().clear());
     propagate_block(program, HashMap::new()).0
 }
 

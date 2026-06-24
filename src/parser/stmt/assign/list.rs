@@ -43,6 +43,24 @@ pub(in crate::parser::stmt) fn parse_list_unpack(
     Ok(lower_list_unpack(pattern, value, span))
 }
 
+/// Parses a foreach destructuring value pattern (`foreach ($arr as [pattern])` or
+/// `foreach ($arr as $k => [pattern])`) and lowers it into a single statement that binds
+/// each pattern target from `source`, ready to be prepended to the foreach body.
+///
+/// Unlike `parse_list_unpack`, this consumes only the bracket-enclosed pattern (no `=` or
+/// trailing right-hand side) and takes `source` from the caller — the synthetic foreach
+/// element variable. Reuses `parse_bracket_list_pattern` and `lower_list_unpack` so foreach
+/// destructuring stays in lockstep with standalone list/bracket destructuring.
+pub(crate) fn parse_and_lower_foreach_destructure(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+    source: Expr,
+) -> Result<Stmt, CompileError> {
+    let pattern = parse_bracket_list_pattern(tokens, pos, span)?;
+    Ok(lower_list_unpack(pattern, source, span))
+}
+
 /// Parses a `list() = $x;` destructuring assignment statement using the `list()` construct syntax.
 /// Consumes the `list` keyword, parses the parenthesized pattern, expects `=`, parses the
 /// right-hand side expression, and consumes the trailing semicolon. Returns the lowered statement.

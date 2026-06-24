@@ -46,6 +46,11 @@ pub enum ExprKind {
     Throw(Box<Expr>),
     ErrorSuppress(Box<Expr>),
     Print(Box<Expr>),
+    /// PHP `clone $expr`: shallow-copies the object held by `expr` and, if the runtime
+    /// class (or an ancestor) declares `__clone()`, invokes it on the new object with no
+    /// arguments. The operand must evaluate to an object. Binds tighter than `**` and
+    /// looser than postfix `->`/`[]`/`()`, matching PHP's `clone new` precedence tier.
+    Clone(Box<Expr>),
     NullCoalesce {
         value: Box<Expr>,
         default: Box<Expr>,
@@ -63,6 +68,17 @@ pub enum ExprKind {
         result_target: Option<Box<Expr>>,
         prelude: Vec<Stmt>,
         conditional_value_temp: Option<String>,
+    },
+    /// List-destructuring assignment used in expression position:
+    /// `[$a, $b] = EXPR` (e.g. `if ([$a, $b] = $pairs ?? null)`). Evaluates `value`
+    /// once, assigns each element positionally to the simple variables in `vars`, and
+    /// yields `value` (the whole right-hand side), matching PHP. This is the
+    /// expression-position twin of `StmtKind::ListUnpack`; the parser only produces it
+    /// for the all-simple-`$variable` positional case (keyed/nested/non-variable targets
+    /// stay statement-only).
+    ListUnpack {
+        vars: Vec<String>,
+        value: Box<Expr>,
     },
     PreIncrement(String),
     PostIncrement(String),

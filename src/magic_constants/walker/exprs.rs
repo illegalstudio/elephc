@@ -54,6 +54,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(walk_expr(*inner, pass))),
         ExprKind::ErrorSuppress(inner) => ExprKind::ErrorSuppress(Box::new(walk_expr(*inner, pass))),
         ExprKind::Print(inner) => ExprKind::Print(Box::new(walk_expr(*inner, pass))),
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(walk_expr(*inner, pass))),
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
             value: Box::new(walk_expr(*value, pass)),
             default: Box::new(walk_expr(*default, pass)),
@@ -61,6 +62,10 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         ExprKind::Pipe { value, callable } => ExprKind::Pipe {
             value: Box::new(walk_expr(*value, pass)),
             callable: Box::new(walk_expr(*callable, pass)),
+        },
+        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
+            vars,
+            value: Box::new(walk_expr(*value, pass)),
         },
         ExprKind::Assignment {
             target,

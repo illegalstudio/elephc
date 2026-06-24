@@ -140,6 +140,17 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = key_hi
     emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=value_lo, x2=value_hi, x3=value_tag
     emitter.instruction("cbz x0, __rt_mixed_array_get_null");                   // miss → null
+    // A value_tag == 11 entry stores a reference cell; dereference it so callers
+    // observe the shared value (PHP reference read-through through a nested element).
+    emitter.instruction("cmp x3, #11");                                         // is the hash entry a stored reference cell?
+    emitter.instruction("b.ne __rt_mixed_array_get_assoc_not_ref");             // no → fall through to the boxed/typed entry handling
+    emitter.instruction("mov x0, x1");                                          // x0 = reference cell pointer from the entry value_lo
+    emitter.instruction("bl __rt_refcell_load");                                // x0=tag, x1=lo, x2=hi of the referenced value
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the dereferenced value into a fresh Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return the dereferenced Mixed* in x0
+    emitter.label("__rt_mixed_array_get_assoc_not_ref");
     // For value_tag == 7 the entry already holds a boxed Mixed pointer
     // (json_decode and stdClass populate hashes this way). Anything else
     // (typed string/int/array entries from non-Mixed assoc arrays passing
@@ -358,6 +369,18 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_get");                                  // rax=found, rdi=value_lo, rsi=value_hi, rcx=value_tag
     emitter.instruction("test rax, rax");                                       // miss → null
     emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    // A value_tag == 11 entry stores a reference cell; dereference it so callers
+    // observe the shared value (PHP reference read-through through a nested element).
+    emitter.instruction("cmp rcx, 11");                                         // is the hash entry a stored reference cell?
+    emitter.instruction("jne __rt_mixed_array_get_assoc_not_ref");              // no → fall through to the boxed/typed entry handling
+    emitter.instruction("mov rax, rdi");                                        // rax = reference cell pointer from the entry value_lo
+    emitter.instruction("call __rt_refcell_load");                              // rax=tag, rdi=lo, rdx=hi of the referenced value
+    emitter.instruction("mov rsi, rdx");                                        // mixed_from_value expects the value_hi word in rsi
+    emitter.instruction("call __rt_mixed_from_value");                          // box the dereferenced value into a fresh Mixed cell
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return the dereferenced Mixed* in rax
+    emitter.label("__rt_mixed_array_get_assoc_not_ref");
     // For value_tag == 7 the entry is already a boxed Mixed pointer; for
     // any other tag (typed string/int/array entries from non-Mixed assoc
     // arrays passing through a Mixed receiver) re-box (lo, hi, tag) so

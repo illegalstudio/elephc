@@ -17,6 +17,48 @@ use crate::span::Span;
 use super::super::expect_semicolon;
 use super::compound::{assignment_operator, assignment_value, AssignmentOperator};
 
+/// Detects and parses a reference assignment into a complex lvalue (`$arr[$k] =& $src;`,
+/// `$obj->prop =& $src;`) once the `=` has been consumed and `*pos` sits at what follows it.
+///
+/// Returns `Ok(Some(RefAssignTarget))` when the next token is `&` followed by a variable (the only
+/// supported source form; ref-to-expression-result is rejected). Returns `Ok(None)` when this is
+/// not a reference assignment, so the caller falls back to ordinary value parsing. Only plain `=`
+/// (not compound operators) and non-append targets can carry a reference.
+fn try_parse_complex_ref_assign(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    op: &AssignmentOperator,
+    is_append: bool,
+    lhs_expr: &Expr,
+    span: Span,
+) -> Result<Option<Stmt>, CompileError> {
+    if *op != AssignmentOperator::Assign
+        || is_append
+        || !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+    {
+        return Ok(None);
+    }
+    *pos += 1;
+    let source = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::Variable(source)) => source.clone(),
+        _ => {
+            return Err(CompileError::new(
+                span,
+                "Reference assignment source must be a variable",
+            ));
+        }
+    };
+    *pos += 1;
+    expect_semicolon(tokens, pos)?;
+    Ok(Some(Stmt::new(
+        StmtKind::RefAssignTarget {
+            target: lhs_expr.clone(),
+            source,
+        },
+        span,
+    )))
+}
+
 /// Parses a postfix assignment where the target involves property access, array access,
 /// or other complex expressions. Detects `+=` append style via `[]` in the target.
 /// Returns the lowered `StmtKind` directly for simple targets, or synthesizes a
@@ -62,7 +104,23 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
 
+    // The tokens before the top-level `=` parse to a complete expression, but if that expression
+    // is not itself an assignable target shape — e.g. `A ?: $x->p` (short-ternary) or `cond && $x->p`
+    // — then this is not a statement-level assignment: the `=` binds to the adjacent lvalue *inside*
+    // the expression (PHP parses `A ?: $x = B` as `A ?: ($x = B)`). Bail without consuming so the
+    // caller parses the whole statement as a bare expression statement, where the Pratt parser
+    // performs that adjacent-lvalue binding. A genuinely invalid target still surfaces an error there.
+    if !parsed_lhs_is_assignable_target(&lhs_expr) {
+        return Ok(None);
+    }
+
     *pos = assign_pos + 1;
+    // `$arr[$k] =& $src;` / `$obj->prop =& $src;` — reference assignment into a complex lvalue.
+    // The `&` after `=` cannot be parsed as a value expression, so intercept it here and build a
+    // dedicated `RefAssignTarget` node (the bare-variable form `$x =& $y` is handled in compound.rs).
+    if let Some(stmt) = try_parse_complex_ref_assign(tokens, pos, &op, is_append, &lhs_expr, span)? {
+        return Ok(Some(stmt));
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
@@ -234,6 +292,16 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
         return Ok(None);
     }
 
+    // A top-level assignment before the trailing `++`/`--` means this is an assignment
+    // statement whose right-hand side ends in a postfix increment (`$x = $o->n++;`),
+    // not a discarded postfix-increment statement. Defer to the expression parser, which
+    // desugars the complex-l-value postfix increment in value position.
+    if let Some((assign_pos, _)) = find_top_level_assignment(tokens, start) {
+        if assign_pos < incdec_pos {
+            return Ok(None);
+        }
+    }
+
     let lhs = &tokens[start..incdec_pos];
     let contains_complex_target = lhs
         .iter()
@@ -250,6 +318,54 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
     }
 
     *pos = incdec_pos + 1;
+    expect_semicolon(tokens, pos)?;
+
+    lower_postfix_incdec_assignment(lhs_expr, is_increment, span).map(Some)
+}
+
+/// Parses a discarded pre-increment/decrement on a complex l-value target
+/// (`++$obj->prop;`, `--$arr[$k];`).
+///
+/// In a statement context the expression result is unused, so a prefix `++`/`--`
+/// is observably identical to the postfix form and lowers to the same
+/// read-modify-write shape as `$target += 1`. A bare local target (`++$x;`) is
+/// left to the existing local-variable parser so its `PreIncrement` AST node,
+/// which downstream passes already handle, is preserved.
+///
+/// Returns `Ok(None)` when the statement does not start with `++`/`--` followed
+/// by a variable and a complex-target marker, so the caller falls back to
+/// `parse_incdec_stmt`.
+pub(in crate::parser::stmt) fn try_parse_prefix_incdec(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Option<Stmt>, CompileError> {
+    let start = *pos;
+    let is_increment = match tokens.get(start).map(|(token, _)| token) {
+        Some(Token::PlusPlus) => true,
+        Some(Token::MinusMinus) => false,
+        _ => return Ok(None),
+    };
+
+    // The l-value must begin with a variable or `$this`, and the token after it must
+    // be a complex-target marker (`->`, `?->`, `[`). A bare `++$x;` (marker is `;`)
+    // is left to `parse_incdec_stmt`, which keeps the `PreIncrement` node.
+    if !matches!(
+        tokens.get(start + 1).map(|(token, _)| token),
+        Some(Token::Variable(_) | Token::This)
+    ) {
+        return Ok(None);
+    }
+    if !matches!(
+        tokens.get(start + 2).map(|(token, _)| token),
+        Some(Token::Arrow | Token::QuestionArrow | Token::LBracket)
+    ) {
+        return Ok(None);
+    }
+
+    let mut probe = start + 1;
+    let lhs_expr = parse_expr(tokens, &mut probe)?;
+    *pos = probe;
     expect_semicolon(tokens, pos)?;
 
     lower_postfix_incdec_assignment(lhs_expr, is_increment, span).map(Some)
@@ -330,6 +446,23 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     };
 
     Ok(Some(Stmt::new(stmt, span)))
+}
+
+/// Returns true when `expr` (the expression parsed from the tokens before a top-level `=`) is an
+/// assignable target shape: a variable, array element, or object/static property access. When it
+/// is anything else — a short-ternary, ternary, binary operation, or call result that merely
+/// *contains* a postfix access — the leading `=` is not a statement-level assignment but binds to
+/// an lvalue inside the expression, so `try_parse_postfix_assignment` bails to bare-expression
+/// parsing. Mirrors the shapes accepted by `expr::is_assignment_expression_target`.
+fn parsed_lhs_is_assignable_target(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::Variable(_)
+            | ExprKind::ArrayAccess { .. }
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+    )
 }
 
 /// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)

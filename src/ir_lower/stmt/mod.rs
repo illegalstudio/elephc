@@ -30,6 +30,13 @@ use crate::types::PhpType;
 /// Lowers one AST statement into the current EIR insertion block.
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     if ctx.builder.insertion_block_is_terminated() {
+        // A `label:` opens a new block that a `goto` elsewhere may branch into, so it must be lowered
+        // even when the straight-line predecessor already terminated (e.g. the statement right before
+        // it was a `goto`/`return`). Every other statement after a terminator is genuinely unreachable
+        // and is skipped. Lowering the label repositions emission at its (reachable) block.
+        if let StmtKind::Label(label) = &stmt.kind {
+            lower_label(ctx, label);
+        }
         return;
     }
     lower_statement_concat_reset(ctx, stmt.span);
@@ -37,6 +44,9 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Echo(expr) => lower_echo(ctx, expr, stmt.span),
         StmtKind::Assign { name, value } => lower_assign(ctx, name, value, stmt.span),
         StmtKind::RefAssign { target, source } => lower_ref_assign(ctx, target, source, stmt.span),
+        StmtKind::RefAssignTarget { target, source } => {
+            lower_ref_assign_target(ctx, target, source, stmt.span)
+        }
         StmtKind::If {
             condition,
             then_body,
@@ -98,6 +108,8 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         } => lower_try(ctx, try_body, catches, finally_body.as_deref(), stmt.span),
         StmtKind::Break(level) => lower_break(ctx, *level),
         StmtKind::Continue(level) => lower_continue(ctx, *level),
+        StmtKind::Goto(label) => lower_goto(ctx, label),
+        StmtKind::Label(label) => lower_label(ctx, label),
         StmtKind::ExprStmt(expr) => {
             let value = lower_expr(ctx, expr);
             release_expr_statement_result(ctx, value, expr.span);
@@ -247,10 +259,15 @@ fn lower_statement_concat_reset(ctx: &mut LoweringContext<'_, '_>, span: Span) {
 /// Lowers a sequence of statements until the current block terminates.
 fn lower_block(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
     for stmt in body {
-        lower_stmt(ctx, stmt);
-        if ctx.builder.insertion_block_is_terminated() {
-            break;
+        // Once the current block is terminated the remaining statements are unreachable in straight-
+        // line order — except a `label:`, which a `goto` may branch into. Skip unreachable non-label
+        // statements, but still lower labels so their block is opened and emission resumes there.
+        if ctx.builder.insertion_block_is_terminated()
+            && !matches!(stmt.kind, StmtKind::Label(_))
+        {
+            continue;
         }
+        lower_stmt(ctx, stmt);
     }
 }
 
@@ -338,6 +355,216 @@ fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &st
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(target, sig);
     }
+}
+
+/// Lowers `$arr[$key] =& $source` for an associative-array element target with a scalar local
+/// source (M2 scope; richer targets/sources are gated in the type checker).
+///
+/// Emits a `RefAssignElement` instruction whose codegen promotes the source local into a shared
+/// boxed REFCELL, retains it for the new hash-slot owner, and stores it into the entry with
+/// per-entry value_tag 11. The source is then marked a by-reference alias so its subsequent reads
+/// and writes dereference through the cell.
+fn lower_ref_assign_target(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    source: &str,
+    span: Span,
+) {
+    match &target.kind {
+        // Array-element target `$base[$index] =& $source` (single- or two-level nested).
+        ExprKind::ArrayAccess { array, index } => match &array.kind {
+            // Single-level target `$base[$index] =& $source`.
+            ExprKind::Variable(array_name) => {
+                lower_single_level_ref_assign(ctx, array_name, index, source, span);
+            }
+            // Two-level nested target `$base[$outer][$inner] =& $source` with a plain `Variable` base.
+            ExprKind::ArrayAccess {
+                array: inner_array,
+                index: outer_index,
+            } => {
+                let ExprKind::Variable(array_name) = &inner_array.kind else {
+                    return;
+                };
+                lower_nested_ref_assign(ctx, array_name, outer_index, index, source, span);
+            }
+            _ => {}
+        },
+        // Object dynamic-property target `$object->property =& $source` (stdClass hash path).
+        ExprKind::PropertyAccess { object, property } => {
+            lower_property_ref_assign(ctx, object, property, source, span);
+        }
+        _ => {}
+    }
+}
+
+/// Lowers `$object->property =& $source` for a dynamic-property object target (`stdClass`).
+///
+/// The property reference rides the object's dynamic-property hash: the source local is promoted to
+/// a shared boxed REFCELL and stored into the hash under the property name with per-entry value_tag
+/// 11 (codegen `RefAssignProperty` → `__rt_stdclass_set_ref`). The property name is materialized as
+/// a string constant and passed as the second operand; the source slot travels in the immediate, so
+/// the instruction shape mirrors `RefAssignElement`. The source is then marked a by-reference alias
+/// so later reads/writes dereference the cell, and property reads dereference through the existing
+/// `__rt_stdclass_get` → `__rt_hash_get` tag-11 path.
+fn lower_property_ref_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    source: &str,
+    span: Span,
+) {
+    let object = lower_expr(ctx, object);
+    let data = ctx.intern_string(property);
+    let propname = ctx
+        .builder
+        .emit_with_effects(
+            Op::ConstStr,
+            Vec::new(),
+            Some(Immediate::Data(data)),
+            IrType::Str,
+            PhpType::Str,
+            Ownership::Persistent,
+            Op::ConstStr.default_effects(),
+            Some(span),
+        )
+        .expect("const_str produces a value");
+    let source_ty = ctx.local_type(source);
+    let source_slot = ctx.declare_local(source, source_ty);
+    ctx.emit_void(
+        Op::RefAssignProperty,
+        vec![object.value, propname],
+        Some(Immediate::LocalSlot(source_slot)),
+        Op::RefAssignProperty.default_effects(),
+        Some(span),
+    );
+    ctx.mark_ref_bound_local(source);
+}
+
+/// Lowers a single-level reference assignment `$base[$index] =& $source`.
+///
+/// Promotes an indexed/empty base to a Mixed-valued associative array so the reference entry can be
+/// stored with value_tag 11 and read back through the Mixed hash path. A base that already lowers to
+/// a hash needs no promotion. The freshly promoted hash is its own sole owner, so `RefAssignElement`
+/// mutates it without a copy-on-write clone; the promoted hash is then written back to the base
+/// local explicitly (the promoted hash value is not sourced from a local, so the instruction's own
+/// table writeback would not target the base).
+fn lower_single_level_ref_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_name: &str,
+    index: &Expr,
+    source: &str,
+    span: Span,
+) {
+    let array_value = ctx.load_local(array_name, Some(span));
+    let index_value = lower_expr(ctx, index);
+    let promotion = if array_set_op(array_value.ir_type) != Op::HashSet {
+        let current_ty = ctx.builder.value_php_type(array_value.value);
+        let assoc_ty = promoted_assoc_array_type(current_ty, PhpType::Mixed);
+        let hash = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![array_value.value],
+            None,
+            assoc_ty.clone(),
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+        Some((hash, assoc_ty))
+    } else {
+        None
+    };
+    let hash_value = promotion
+        .as_ref()
+        .map_or(array_value.value, |(hash, _)| hash.value);
+    let source_ty = ctx.local_type(source);
+    let source_slot = ctx.declare_local(source, source_ty);
+    ctx.emit_void(
+        Op::RefAssignElement,
+        vec![hash_value, index_value.value],
+        Some(Immediate::LocalSlot(source_slot)),
+        Op::RefAssignElement.default_effects(),
+        Some(span),
+    );
+    if let Some((hash, assoc_ty)) = promotion {
+        ctx.store_mutated_local(array_name, hash, assoc_ty, Some(span));
+    }
+    ctx.mark_ref_bound_local(source);
+}
+
+/// Lowers a two-level nested reference assignment `$base[$outer][$inner] =& $source`.
+///
+/// The outer base is promoted to a Mixed-valued associative hash. The inner element is materialized
+/// as an independently-owned hash table (`MixedToOwnedHash`: a shallow clone of an existing inner
+/// hash, or a fresh empty hash when the outer key is absent), the reference is stored into that
+/// inner hash through the tested single-level path, and the mutated inner hash is written back into
+/// the outer entry. The shallow clone keeps the write copy-on-write safe and independent of the
+/// outer entry, so the write-back's release of the previous inner value cannot free it.
+fn lower_nested_ref_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_name: &str,
+    outer_index: &Expr,
+    inner_index: &Expr,
+    source: &str,
+    span: Span,
+) {
+    // Promote the base to a Mixed hash, write it back, then reload it so the final inner write-back
+    // (`HashSet`) targets the base local through the instruction's own table writeback.
+    let base_value = ctx.load_local(array_name, Some(span));
+    if array_set_op(base_value.ir_type) != Op::HashSet {
+        let current_ty = ctx.builder.value_php_type(base_value.value);
+        let assoc_ty = promoted_assoc_array_type(current_ty, PhpType::Mixed);
+        let hash = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![base_value.value],
+            None,
+            assoc_ty.clone(),
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+        ctx.store_mutated_local(array_name, hash, assoc_ty, Some(span));
+    }
+    let outer_table = ctx.load_local(array_name, Some(span));
+    let outer_key = lower_expr(ctx, outer_index);
+
+    // Read the current inner entry as a boxed Mixed and materialize an owned inner hash from it.
+    let boxed_inner = ctx.emit_value(
+        Op::HashGet,
+        vec![outer_table.value, outer_key.value],
+        None,
+        PhpType::Mixed,
+        Op::HashGet.default_effects(),
+        Some(span),
+    );
+    let inner_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let inner_hash = ctx.emit_value(
+        Op::MixedToOwnedHash,
+        vec![boxed_inner.value],
+        None,
+        inner_ty.clone(),
+        Op::MixedToOwnedHash.default_effects(),
+        Some(span),
+    );
+
+    // Park the owned inner hash in a hidden temp local, store the reference into it through the
+    // single-level path, then reload it for the write-back into the outer entry.
+    let inner_name = ctx.declare_hidden_temp(inner_ty.clone());
+    ctx.store_mutated_local(&inner_name, inner_hash, inner_ty.clone(), Some(span));
+    lower_single_level_ref_assign(ctx, &inner_name, inner_index, source, span);
+    let inner_result = ctx.load_local(&inner_name, Some(span));
+
+    // Write the mutated inner hash back into the outer entry; `HashSet` boxes it as a Mixed value
+    // and releases the previously stored inner value. The outer table was reloaded from the base
+    // local, so the instruction's table writeback re-stores the (possibly grown) base.
+    let outer_table = ctx.load_local(array_name, Some(span));
+    ctx.emit_void(
+        Op::HashSet,
+        vec![outer_table.value, outer_key.value, inner_result.value],
+        None,
+        Op::HashSet.default_effects(),
+        Some(span),
+    );
 }
 
 /// Lowers an `if` / `elseif` / `else` chain and terminates unreachable merge blocks explicitly.
@@ -662,6 +889,34 @@ fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) -> PhpType 
 
 /// Lowers a nested array assignment that already carries an expression target.
 fn lower_nested_array_assign(ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span) {
+    // A nested element write `$base[$k1][$k2] = $v` (and deeper) must write through the shared inner
+    // container, not a detached snapshot of the leaf cell. Lowering the whole target as an rvalue
+    // reads the leaf via `__rt_mixed_array_get`, which for a precise-typed (non-tag-7) inner entry
+    // re-boxes a *copy* of the value; a write into that copy is silently lost. This is why a literal
+    // base `['a' => ['x' => 1], 'b' => 2]` discarded `$m['a']['x'] = 99` while a `json_decode()` base
+    // (already tag-7 shared) kept it.
+    //
+    // Split the outermost `[$key]` off the target and lower the write as
+    // `__rt_mixed_array_set($parent, $key, $v)`, which unboxes the parent to the shared inner hash
+    // and writes the entry in place — so the mutation reaches the container the parent wraps. Only
+    // applies when the parent reads as a Mixed/Union box (the case `__rt_mixed_array_set` handles);
+    // other shapes keep the leaf-cell write path.
+    if let ExprKind::ArrayAccess { array, index } = &target.kind {
+        let parent = lower_expr(ctx, array);
+        let parent_ty = ctx.builder.value_php_type(parent.value).codegen_repr();
+        if matches!(parent_ty, PhpType::Mixed | PhpType::Union(_)) {
+            let index = lower_expr(ctx, index);
+            let value = lower_expr(ctx, value);
+            ctx.emit_void(
+                Op::RuntimeCall,
+                vec![parent.value, index.value, value.value],
+                None,
+                effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            return;
+        }
+    }
     let target = lower_expr(ctx, target);
     let value = lower_expr(ctx, value);
     ctx.emit_void(
@@ -1600,6 +1855,31 @@ fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
     terminate_branch(ctx, frame.continue_block);
 }
 
+/// Lowers `goto label;` as an unconditional branch to the label's block.
+///
+/// The target block is shared with the matching `label:` (created lazily by whichever is lowered
+/// first), so forward and backward jumps both resolve to one block. Routed through
+/// `terminate_branch` so the jump runs any pending `finally` bodies exactly as `break`/`continue`
+/// do. PHP variables live in memory slots, not SSA block arguments, so the branch needs no args:
+/// the label block reloads them from the same slots.
+fn lower_goto(ctx: &mut LoweringContext<'_, '_>, label: &str) {
+    let target = ctx.label_block(label);
+    terminate_branch(ctx, target);
+}
+
+/// Lowers a `label:` marker by closing the current straight-line block with a fall-through branch
+/// into the label's (shared) block and continuing emission there.
+///
+/// Uses `branch_to` rather than `terminate_branch`: falling into a label does not leave any
+/// enclosing `try`, so no `finally` runs. If control reaching the label is already terminated
+/// (e.g. the preceding statement was a `return`/`goto`), `branch_to` is a no-op and emission simply
+/// resumes in the label block, which remains reachable through any `goto` that targets it.
+fn lower_label(ctx: &mut LoweringContext<'_, '_>, label: &str) {
+    let target = ctx.label_block(label);
+    branch_to(ctx, target);
+    ctx.builder.position_at_end(target);
+}
+
 /// Lowers a return statement using the current function return contract.
 fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, span: Span) {
     if ctx.return_type == IrType::Void {
@@ -1802,7 +2082,7 @@ fn lower_list_unpack(ctx: &mut LoweringContext<'_, '_>, vars: &[String], value: 
 }
 
 /// Emits the positional integer key used to read one list-unpack element.
-fn lower_list_unpack_index(ctx: &mut LoweringContext<'_, '_>, index: usize, span: Span) -> LoweredValue {
+pub(super) fn lower_list_unpack_index(ctx: &mut LoweringContext<'_, '_>, index: usize, span: Span) -> LoweredValue {
     ctx.emit_value(
         Op::ConstI64,
         Vec::new(),
@@ -1814,7 +2094,7 @@ fn lower_list_unpack_index(ctx: &mut LoweringContext<'_, '_>, index: usize, span
 }
 
 /// Returns the element-read opcode for a list-unpack source value.
-fn list_unpack_get_op(source_type: IrType) -> Op {
+pub(super) fn list_unpack_get_op(source_type: IrType) -> Op {
     match source_type {
         IrType::Heap(crate::ir::IrHeapKind::Array) => Op::ArrayGet,
         IrType::Heap(crate::ir::IrHeapKind::Hash) => Op::HashGet,
@@ -1823,7 +2103,7 @@ fn list_unpack_get_op(source_type: IrType) -> Op {
 }
 
 /// Returns the PHP type assigned to each simple list-unpack destination.
-fn list_unpack_item_type(ctx: &LoweringContext<'_, '_>, source: crate::ir::ValueId) -> PhpType {
+pub(super) fn list_unpack_item_type(ctx: &LoweringContext<'_, '_>, source: crate::ir::ValueId) -> PhpType {
     let item_type = match ctx.builder.value_php_type(source).codegen_repr() {
         PhpType::Array(elem_ty) => *elem_ty,
         PhpType::AssocArray { value, .. } => *value,

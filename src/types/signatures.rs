@@ -98,8 +98,8 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             Some(fixed(&["text"]))
         }
 
-        "intval" | "floatval" | "boolval" | "gettype" | "is_bool" | "is_null"
-        | "is_float" | "is_int" | "is_iterable" | "is_string" | "is_numeric"
+        "intval" | "floatval" | "boolval" | "gettype" | "get_debug_type" | "is_bool"
+        | "is_null" | "is_float" | "is_int" | "is_iterable" | "is_string" | "is_numeric"
         | "is_array" | "is_object" | "is_scalar"
         | "empty" | "var_dump" | "print_r" => {
             Some(fixed(&["value"]))
@@ -112,6 +112,7 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             Some(sig)
         }
         "function_exists" => Some(fixed(&["function"])),
+        "extension_loaded" => Some(fixed(&["extension"])),
         "is_callable" => Some(fixed(&["value"])),
         "defined" => Some(fixed(&["constant_name"])),
         "class_alias" => Some(optional(

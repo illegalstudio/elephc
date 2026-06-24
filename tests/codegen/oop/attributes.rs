@@ -921,6 +921,176 @@ foreach ($attrs as $attr) {
     assert_eq!(out, "2\nAuthor:[Ada][1815]\nVersion:[1.0][1]\n");
 }
 
+/// Verifies that floating-point attribute arguments (including a negated
+/// literal) round-trip through `ReflectionClass::getAttributes()` /
+/// `getArguments()` and echo identically to PHP.
+#[test]
+fn test_reflection_attribute_float_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+#[Config(3.14, 2.5, -0.5)]
+class Widget {}
+$args = (new ReflectionClass('Widget'))->getAttributes()[0]->getArguments();
+echo $args[0], "|", $args[1], "|", $args[2];
+"#,
+    );
+    assert_eq!(out, "3.14|2.5|-0.5");
+}
+
+/// Verifies that floating-point attribute arguments are exposed by the
+/// `class_attribute_args()` procedural helper (runtime data-table path).
+#[test]
+fn test_class_attribute_args_float_value() {
+    let out = compile_and_run(
+        r#"<?php
+#[Threshold(0.75, 1)]
+class Sensor {}
+$args = class_attribute_args('Sensor', 'Threshold');
+echo count($args), "/", $args[0], "/", $args[1];
+"#,
+    );
+    assert_eq!(out, "2/0.75/1");
+}
+
+/// Verifies that a positional array attribute argument (with heterogeneous
+/// element types) round-trips through `getAttributes()->getArguments()`.
+#[test]
+fn test_reflection_attribute_positional_array_argument() {
+    let out = compile_and_run(
+        r#"<?php
+#[Tags([10, 'x', 2.5, true])]
+class A {}
+$arr = (new ReflectionClass('A'))->getAttributes()[0]->getArguments()[0];
+echo count($arr), ":", $arr[0], ",", $arr[1], ",", $arr[2], ",", $arr[3] ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "4:10,x,2.5,T");
+}
+
+/// Verifies that nested array attribute arguments materialize recursively.
+#[test]
+fn test_reflection_attribute_nested_array_argument() {
+    let out = compile_and_run(
+        r#"<?php
+#[Matrix([[1, 2], [3, 4]])]
+class A {}
+$m = (new ReflectionClass('A'))->getAttributes()[0]->getArguments()[0];
+echo $m[0][0], $m[0][1], $m[1][0], $m[1][1];
+"#,
+    );
+    assert_eq!(out, "1234");
+}
+
+/// Verifies that an empty array attribute argument materializes as an empty
+/// array (count 0) rather than being dropped.
+#[test]
+fn test_reflection_attribute_empty_array_argument() {
+    let out = compile_and_run(
+        r#"<?php
+#[Cfg([])]
+class A {}
+$arr = (new ReflectionClass('A'))->getAttributes()[0]->getArguments()[0];
+echo count($arr);
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
+/// Verifies that named attribute arguments are exposed by `getArguments()`
+/// under their string keys (alongside positional integer-keyed arguments),
+/// including an array value passed to a named argument.
+#[test]
+fn test_reflection_attribute_named_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+#[\Attribute]
+class Route {
+    public function __construct(
+        public string $path,
+        public ?string $name = null,
+        public array $methods = []
+    ) {}
+}
+#[Route('/home', name: 'home_page', methods: ['GET', 'POST'])]
+class HomeController {}
+$args = (new ReflectionClass('HomeController'))->getAttributes()[0]->getArguments();
+echo count($args), "|", $args[0], "|", $args['name'], "|", $args['methods'][0], $args['methods'][1];
+"#,
+    );
+    assert_eq!(out, "3|/home|home_page|GETPOST");
+}
+
+/// Verifies that an associative-array attribute argument round-trips through
+/// `getArguments()` with its string keys preserved.
+#[test]
+fn test_reflection_attribute_associative_array_argument() {
+    let out = compile_and_run(
+        r#"<?php
+#[Cfg(['width' => 80, 'height' => 25])]
+class A {}
+$cfg = (new ReflectionClass('A'))->getAttributes()[0]->getArguments()[0];
+echo $cfg['width'], "x", $cfg['height'];
+"#,
+    );
+    assert_eq!(out, "80x25");
+}
+
+/// Verifies that `ReflectionAttribute::newInstance()` constructs the attribute
+/// object when the attribute uses named arguments.
+#[test]
+fn test_reflection_attribute_new_instance_named_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+#[\Attribute]
+class Opt {
+    public function __construct(public int $a, public int $b) {}
+}
+#[Opt(a: 7, b: 9)]
+class A {}
+$obj = (new ReflectionClass('A'))->getAttributes()[0]->newInstance();
+echo $obj->a, "-", $obj->b;
+"#,
+    );
+    assert_eq!(out, "7-9");
+}
+
+/// Verifies that `ReflectionAttribute::newInstance()` constructs the attribute
+/// object with an array constructor argument.
+#[test]
+fn test_reflection_attribute_new_instance_array_argument() {
+    let out = compile_and_run(
+        r#"<?php
+#[\Attribute]
+class Cfg {
+    public function __construct(public array $items) {}
+}
+#[Cfg([7, 8, 9])]
+class A {}
+$obj = (new ReflectionClass('A'))->getAttributes()[0]->newInstance();
+echo $obj->items[0], $obj->items[1], $obj->items[2];
+"#,
+    );
+    assert_eq!(out, "789");
+}
+
+/// Verifies that `ReflectionAttribute::newInstance()` constructs the attribute
+/// object with floating-point constructor arguments, mixed with an int.
+#[test]
+fn test_reflection_attribute_new_instance_float_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class Range {
+    public function __construct(public float $min, public float $max, public int $steps) {}
+}
+#[Range(1.5, 9.5, 4)]
+class Dial {}
+$r = (new ReflectionClass('Dial'))->getAttributes()[0]->newInstance();
+echo $r->min, "|", $r->max, "|", $r->steps;
+"#,
+    );
+    assert_eq!(out, "1.5|9.5|4");
+}
+
 /// Verifies that `ReflectionClass::getName()` returns the declared class name
 /// for a regular class reflector.
 #[test]
@@ -1204,4 +1374,210 @@ $attrs[0]->newInstance();
 "#,
     );
     assert_eq!(out, "-65537/-65537");
+}
+
+/// Verifies `ReflectionFunction` exposes a user function's name, short name, and
+/// parameter counts (total and required), including variadic handling.
+#[test]
+fn test_reflection_function_name_and_parameter_counts() {
+    let out = compile_and_run(
+        r#"<?php
+function greet(int $a, string $b = "x", ...$rest) {
+    return $a;
+}
+$r = new ReflectionFunction('greet');
+echo $r->getName(), "|";
+echo $r->getShortName(), "|";
+echo $r->getNumberOfParameters(), "|";
+echo $r->getNumberOfRequiredParameters();
+"#,
+    );
+    assert_eq!(out, "greet|greet|3|1");
+}
+
+/// Verifies `ReflectionFunction::getParameters()` returns `ReflectionParameter`
+/// objects exposing each parameter's name, position, optional, and variadic state.
+#[test]
+fn test_reflection_function_get_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function greet(int $a, string $b = "x", ...$rest) {
+    return $a;
+}
+$params = (new ReflectionFunction('greet'))->getParameters();
+echo count($params), "|";
+foreach ($params as $p) {
+    echo $p->getName(), ":", $p->getPosition();
+    echo $p->isOptional() ? "o" : "r";
+    echo $p->isVariadic() ? "v" : "-";
+    echo " ";
+}
+"#,
+    );
+    assert_eq!(out, "3|a:0r- b:1o- rest:2ov ");
+}
+
+/// Verifies `ReflectionParameter::getType()`/`hasType()` expose a builtin named
+/// type for typed parameters and null/false for untyped ones. The `mixed` slot
+/// must round-trip the type object so `getType()->getName()` dispatches.
+#[test]
+fn test_reflection_parameter_get_type_builtin() {
+    let out = compile_and_run(
+        r#"<?php
+function greet(int $a, $b): void {}
+$params = (new ReflectionFunction('greet'))->getParameters();
+echo $params[0]->hasType() ? "y" : "n";
+echo "|", $params[0]->getType()->getName();
+echo "|", $params[0]->getType()->isBuiltin() ? "b" : "-";
+echo "|", $params[0]->getType()->allowsNull() ? "n" : "-";
+echo "|", $params[1]->hasType() ? "y" : "n";
+echo "|", $params[1]->getType() === null ? "null" : "obj";
+"#,
+    );
+    assert_eq!(out, "y|int|b|-|n|null");
+}
+
+/// Verifies `ReflectionParameter::getType()` reports nullable class types: the
+/// named type carries the bare class name, `isBuiltin()` is false, and
+/// `allowsNull()` is true for a `?Class` hint.
+#[test]
+fn test_reflection_parameter_get_type_nullable_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Widget {}
+function build(?Widget $w, string $label): void {}
+$params = (new ReflectionFunction('build'))->getParameters();
+$t0 = $params[0]->getType();
+echo $t0->getName(), "|", $t0->isBuiltin() ? "b" : "-", "|", $t0->allowsNull() ? "n" : "-";
+$t1 = $params[1]->getType();
+echo "|", $t1->getName(), "|", $t1->isBuiltin() ? "b" : "-", "|", $t1->allowsNull() ? "n" : "-";
+"#,
+    );
+    assert_eq!(out, "Widget|-|n|string|b|-");
+}
+
+/// Verifies a global-constant attribute argument (`#[A(CONST)]`) resolves to the
+/// constant's value through `getArguments()`, preserving its integer type.
+#[test]
+fn test_attribute_global_constant_argument() {
+    let out = compile_and_run(
+        r#"<?php
+const MAX_LEN = 50;
+#[Constraint(MAX_LEN)]
+class Field {}
+$args = (new ReflectionClass('Field'))->getAttributes()[0]->getArguments();
+var_dump($args[0]);
+"#,
+    );
+    assert_eq!(out, "int(50)\n");
+}
+
+/// Verifies a class-constant attribute argument (`#[A(C::CONST)]`) resolves to
+/// the constant's value, not the syntactic `::class`-is-string default, so the
+/// hash value-type stamp matches the lowered value.
+#[test]
+fn test_attribute_class_constant_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class Limits { const DEFAULT_MAX = 7; const LABEL = "hi"; }
+#[Constraint(Limits::DEFAULT_MAX, Limits::LABEL)]
+class Field {}
+$args = (new ReflectionClass('Field'))->getAttributes()[0]->getArguments();
+var_dump($args[0]);
+var_dump($args[1]);
+"#,
+    );
+    assert_eq!(out, "int(7)\nstring(2) \"hi\"\n");
+}
+
+/// Verifies an enum-case attribute argument (`#[A(E::Case)]`) materializes the
+/// enum *case object* through `getArguments()`, matching PHP — the attribute
+/// name is reflectable and the resolved argument is the case object, so reading
+/// its backing `->value` yields the case value.
+#[test]
+fn test_attribute_enum_case_argument() {
+    let out = compile_and_run(
+        r#"<?php
+enum Priority: string { case High = 'high'; case Low = 'low'; }
+#[Level(Priority::High)]
+class Task {}
+$attr = (new ReflectionClass('Task'))->getAttributes()[0];
+echo $attr->getName(), ":", $attr->getArguments()[0]->value;
+"#,
+    );
+    assert_eq!(out, "Level:high");
+}
+
+/// Verifies symbolic references nested inside an array attribute argument
+/// resolve element-by-element through `getArguments()`.
+#[test]
+fn test_attribute_constant_argument_in_array() {
+    let out = compile_and_run(
+        r#"<?php
+const FLOOR = 1;
+class Limits { const CEIL = 9; }
+#[Range([FLOOR, Limits::CEIL])]
+class Field {}
+$bounds = (new ReflectionClass('Field'))->getAttributes()[0]->getArguments()[0];
+echo $bounds[0], "-", $bounds[1];
+"#,
+    );
+    assert_eq!(out, "1-9");
+}
+
+/// Verifies a class-constant supplied as a named argument resolves and is
+/// returned under its string key by `getArguments()`.
+#[test]
+fn test_attribute_named_constant_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class Limits { const DEFAULT_MAX = 42; }
+#[Constraint(max: Limits::DEFAULT_MAX)]
+class Field {}
+$args = (new ReflectionClass('Field'))->getAttributes()[0]->getArguments();
+var_dump($args['max']);
+"#,
+    );
+    assert_eq!(out, "int(42)\n");
+}
+
+/// Verifies `newInstance()` constructs the attribute with global- and
+/// class-constant arguments resolved to their values.
+#[test]
+fn test_attribute_new_instance_with_constant_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+const MAX_LEN = 50;
+class Limits { const DEFAULT_MAX = 7; }
+#[\Attribute]
+class Config {
+    public int $limit;
+    public int $max;
+    public function __construct(int $limit, int $max) {
+        $this->limit = $limit;
+        $this->max = $max;
+    }
+}
+#[Config(MAX_LEN, Limits::DEFAULT_MAX)]
+class Service {}
+$cfg = (new ReflectionClass('Service'))->getAttributes()[0]->newInstance();
+echo $cfg->limit, "|", $cfg->max;
+"#,
+    );
+    assert_eq!(out, "50|7");
+}
+
+/// Verifies an attribute argument referencing an *unresolvable* class constant
+/// (the built-in `Attribute::TARGET_CLASS`, which elephc does not register)
+/// still compiles — its arguments are simply not reflectable.
+#[test]
+fn test_attribute_unresolvable_constant_argument_compiles() {
+    let out = compile_and_run(
+        r#"<?php
+#[Attribute(Attribute::TARGET_CLASS)]
+class MyAttr {}
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
 }

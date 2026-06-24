@@ -563,7 +563,9 @@ echo isset($map["name"]);
 echo isset($map["missing"]);
 "#,
     );
-    assert_eq!(out, "100110");
+    // `isset` is a bool: echoing `false` yields "" (not "0"), matching PHP.
+    // Set/false sequence T,F,F,T,T,F renders as "1","","","1","1","" = "111".
+    assert_eq!(out, "111");
 }
 
 /// Verifies unset multiple variables.
@@ -579,6 +581,220 @@ echo isset($b) ? "b\n" : "nb\n";
 "#,
     );
     assert_eq!(out, "na\nnb\n");
+}
+
+/// Verifies `unset($hash[$key])` removes a string-keyed associative-array entry, leaving the
+/// remaining entries, their iteration order, and `count()`/`isset()` consistent with PHP.
+#[test]
+fn test_unset_assoc_string_key() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ['a' => 1, 'b' => 2, 'c' => 3];
+unset($m['b']);
+echo count($m), "\n";
+foreach ($m as $k => $v) { echo "$k=$v\n"; }
+echo isset($m['b']) ? "has-b\n" : "no-b\n";
+echo isset($m['a']) ? "has-a\n" : "no-a\n";
+"#,
+    );
+    assert_eq!(out, "2\na=1\nc=3\nno-b\nhas-a\n");
+}
+
+/// Verifies a removed entry leaves a tombstone that keeps probe chains intact: after removing
+/// a key, later inserts still resolve, and re-adding the removed key appends it at the end in
+/// PHP insertion order.
+#[test]
+fn test_unset_assoc_then_reinsert_preserves_order() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ['a' => 1, 'b' => 2, 'c' => 3];
+unset($m['a']);
+$m['d'] = 4;
+$m['a'] = 99;
+foreach ($m as $k => $v) { echo "$k=$v "; }
+echo "\n", count($m), "\n";
+echo $m['c'], "\n";
+"#,
+    );
+    assert_eq!(out, "b=2 c=3 d=4 a=99 \n4\n3\n");
+}
+
+/// Verifies `unset()` on an integer-keyed associative array removes the matching entry.
+#[test]
+fn test_unset_assoc_int_key() {
+    let out = compile_and_run(
+        r#"<?php
+$m = [0 => 'x', 1 => 'y', 2 => 'z'];
+unset($m[1]);
+foreach ($m as $k => $v) { echo "$k=$v "; }
+echo "\n", count($m), "\n";
+"#,
+    );
+    assert_eq!(out, "0=x 2=z \n2\n");
+}
+
+/// Verifies copy-on-write: removing a key from a copy of an associative array does not mutate
+/// the shared original.
+#[test]
+fn test_unset_assoc_copy_on_write() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ['x' => 1, 'y' => 2, 'z' => 3];
+$b = $a;
+unset($b['x']);
+echo "a:"; foreach ($a as $k => $v) { echo " $k=$v"; }
+echo "\nb:"; foreach ($b as $k => $v) { echo " $k=$v"; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "a: x=1 y=2 z=3\nb: y=2 z=3\n");
+}
+
+/// Verifies removing entries that own heap payloads (a string and a nested array) releases them
+/// without corrupting the surviving entries.
+#[test]
+fn test_unset_assoc_releases_heap_values() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ['s' => 'hello world', 'arr' => [1, 2, 3], 'n' => 5];
+unset($m['s']);
+unset($m['arr']);
+foreach ($m as $k => $v) { echo "$k=$v "; }
+echo "\n", count($m), "\n";
+"#,
+    );
+    assert_eq!(out, "n=5 \n1\n");
+}
+
+/// Verifies repeatedly setting and unsetting an associative-array key in a bounded heap does not
+/// leak storage (the loop would exhaust the heap if the removed values were not released).
+#[test]
+fn test_unset_assoc_no_leak_under_churn() {
+    let out = compile_and_run(
+        r#"<?php
+$m = [];
+for ($i = 0; $i < 5000; $i++) {
+    $m['key'] = "value-" . $i;
+    unset($m['key']);
+}
+echo count($m), "\n";
+echo "done\n";
+"#,
+    );
+    assert_eq!(out, "0\ndone\n");
+}
+
+/// Verifies unsetting a key that is absent from an associative array is a no-op.
+#[test]
+fn test_unset_assoc_missing_key_is_noop() {
+    let out = compile_and_run(
+        r#"<?php
+$m = ['a' => 1, 'b' => 2];
+unset($m['zzz']);
+echo count($m), "\n";
+foreach ($m as $k => $v) { echo "$k=$v "; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "2\na=1 b=2 \n");
+}
+
+/// Verifies `unset($arr[$key])` on a packed indexed array removes the element without renumbering
+/// the survivors: PHP keeps the original keys (a hole), so the array becomes sparse/associative.
+#[test]
+fn test_unset_indexed_creates_hole() {
+    let out = compile_and_run(
+        r#"<?php
+$arr = [1, 2, 3];
+unset($arr[1]);
+foreach ($arr as $k => $v) { echo "$k=$v "; }
+echo "\n", count($arr), "\n";
+echo isset($arr[1]) ? "has1\n" : "no1\n";
+echo isset($arr[2]) ? "has2\n" : "no2\n";
+"#,
+    );
+    assert_eq!(out, "0=1 2=3 \n2\nno1\nhas2\n");
+}
+
+/// Verifies that appending after an indexed unset continues at `max_key + 1`, matching PHP.
+#[test]
+fn test_unset_indexed_then_append_continues_max_key() {
+    let out = compile_and_run(
+        r#"<?php
+$arr = [1, 2, 3];
+unset($arr[1]);
+$arr[] = 9;
+foreach ($arr as $k => $v) { echo "$k=$v "; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "0=1 2=3 3=9 \n");
+}
+
+/// Verifies indexed-array element unset inside a function local (the array is converted to a hash
+/// at the unset site).
+#[test]
+fn test_unset_indexed_in_function_local() {
+    let out = compile_and_run(
+        r#"<?php
+function dump(): void {
+    $arr = [10, 20, 30, 40];
+    unset($arr[1]);
+    foreach ($arr as $k => $v) { echo "$k=$v "; }
+    echo "\n";
+}
+dump();
+"#,
+    );
+    assert_eq!(out, "0=10 2=30 3=40 \n");
+}
+
+/// Verifies indexed-array element unset on a by-value array parameter.
+#[test]
+fn test_unset_indexed_by_value_param() {
+    let out = compile_and_run(
+        r#"<?php
+function strip(array $a): int {
+    unset($a[1]);
+    return count($a);
+}
+echo strip([1, 2, 3]), "\n";
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+/// Verifies copy-on-write for the indexed-unset conversion path: removing an element from a copy
+/// does not mutate the shared original packed array.
+#[test]
+fn test_unset_indexed_copy_on_write() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3, 4];
+$b = $a;
+unset($b[1]);
+echo "a:"; foreach ($a as $k => $v) { echo " $k=$v"; }
+echo "\nb:"; foreach ($b as $k => $v) { echo " $k=$v"; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "a: 0=1 1=2 2=3 3=4\nb: 0=1 2=3 3=4\n");
+}
+
+/// Verifies unsetting an element of an empty array is a no-op (the array stays empty and can still
+/// be appended to afterwards).
+#[test]
+fn test_unset_indexed_empty_array_noop() {
+    let out = compile_and_run(
+        r#"<?php
+$arr = [];
+unset($arr[0]);
+echo count($arr), "\n";
+$arr[] = 5;
+echo $arr[0], "\n";
+"#,
+    );
+    assert_eq!(out, "0\n5\n");
 }
 
 /// Verifies isset string offset respects bounds.
@@ -612,8 +828,10 @@ echo isset($a[1]) ? "y\n" : "n\n";
 /// Verifies isset null variable is false.
 #[test]
 fn test_isset_null_variable_is_false() {
+    // `isset` is a bool: `isset($x)` on null is `false`, which echoes as "" (not
+    // "0") in PHP; `isset($y)` on 0 is `true`, echoing "1". So the result is "1".
     let out = compile_and_run("<?php $x = null; $y = 0; echo isset($x); echo isset($y);");
-    assert_eq!(out, "01");
+    assert_eq!(out, "1");
 }
 
 /// Verifies array values.
@@ -745,4 +963,331 @@ echo (in_array("hello", $a) ? "y" : "n"),
 "#,
     );
     assert_eq!(out, "yyn");
+}
+
+// --- Long-form `array(...)` literal ---
+
+/// Verifies that the long-form `array(...)` produces an indexed array equivalent to `[...]`.
+#[test]
+fn test_long_array_indexed() {
+    let out = compile_and_run("<?php $a = array(10, 20, 30); echo count($a) . \":\" . $a[0] . \":\" . $a[2];");
+    assert_eq!(out, "3:10:30");
+}
+
+/// Verifies that an empty long-form `array()` is an empty array.
+#[test]
+fn test_long_array_empty() {
+    let out = compile_and_run("<?php $a = array(); echo count($a);");
+    assert_eq!(out, "0");
+}
+
+/// Verifies that long-form `array("k" => v)` produces an associative array with the given keys.
+#[test]
+fn test_long_array_assoc() {
+    let out = compile_and_run(
+        "<?php $m = array(\"a\" => 1, \"b\" => 2); echo $m[\"a\"] + $m[\"b\"];",
+    );
+    assert_eq!(out, "3");
+}
+
+/// Verifies that a runtime-valued key works in a long-form `array($k => v)` literal.
+#[test]
+fn test_long_array_dynamic_key() {
+    let out = compile_and_run("<?php $k = \"dyn\"; $kv = array($k => 42); echo $kv[\"dyn\"];");
+    assert_eq!(out, "42");
+}
+
+/// Verifies that long-form arrays nest like the short form.
+#[test]
+fn test_long_array_nested() {
+    let out = compile_and_run(
+        "<?php $n = array(\"x\" => array(1, 2), \"y\" => 3); echo count($n[\"x\"]) . \":\" . $n[\"y\"];",
+    );
+    assert_eq!(out, "2:3");
+}
+
+/// Verifies mixed positional and keyed entries in a long-form array (positional elements keep
+/// their auto-incremented integer keys around the explicit string key, as in PHP).
+#[test]
+fn test_long_array_mixed_positional_and_keyed() {
+    let out = compile_and_run(
+        "<?php $m = array(10, \"k\" => 20, 30); echo $m[0] . \":\" . $m[\"k\"] . \":\" . $m[1];",
+    );
+    assert_eq!(out, "10:20:30");
+}
+
+/// Verifies that spread (`...`) works inside a long-form array literal.
+#[test]
+fn test_long_array_spread() {
+    let out = compile_and_run("<?php $s = array(...array(1, 2), 3); echo count($s);");
+    assert_eq!(out, "3");
+}
+
+/// Verifies that the long-form keyword is case-insensitive (`ARRAY(...)`), matching PHP.
+#[test]
+fn test_long_array_case_insensitive() {
+    let out = compile_and_run("<?php $a = ARRAY(1, 2); echo count($a);");
+    assert_eq!(out, "2");
+}
+
+/// Verifies that the short `[...]` and long `array(...)` forms interoperate: a long-form array
+/// passed to a builtin (`array_merge`) combines with a short-form array as expected.
+#[test]
+fn test_long_array_interops_with_short_form() {
+    let out = compile_and_run(
+        "<?php $a = array(1, 2); $b = [3, 4]; $c = array_merge($a, $b); echo count($c) . \":\" . $c[0] . \":\" . $c[3];",
+    );
+    assert_eq!(out, "4:1:4");
+}
+
+// --- References into array elements (#80, M2/M3) ---
+
+/// Smallest end-to-end reference-into-array-element case: `$a['x'] =& $v` aliases a scalar local
+/// into a Mixed associative-array element, so a later write to the source local is observed through
+/// the element. The element and the source share one reference cell. Matches `php -r` output `5`.
+#[test]
+fn test_reference_into_assoc_element_shares_source_writes() {
+    let out = compile_and_run(
+        "<?php $a = ['k' => 's', 'n' => 1]; $v = 1; $a['x'] =& $v; $v = 5; echo $a['x'];",
+    );
+    assert_eq!(out, "5");
+}
+
+/// Verifies the aliased source local and the shared element stay in sync: after `$a['x'] =& $v`,
+/// reading either `$a['x']` or `$v` reflects the latest write through the shared reference cell.
+#[test]
+fn test_reference_into_assoc_element_source_and_element_in_sync() {
+    let out = compile_and_run(
+        "<?php $a = ['k' => 's', 'n' => 1]; $v = 10; $a['x'] =& $v; $v = 7; echo $a['x'], '|', $v;",
+    );
+    assert_eq!(out, "7|7");
+}
+
+/// Verifies M3 base promotion: a reference may target an element of an initially **empty** array.
+/// The base is promoted to a Mixed associative array on the reference assignment, so `$a['x']`
+/// observes later writes to the aliased source. Matches `php -r` output `5`.
+#[test]
+fn test_reference_into_empty_array_promotes_base() {
+    let out = compile_and_run("<?php $a = []; $v = 1; $a['x'] =& $v; $v = 5; echo $a['x'];");
+    assert_eq!(out, "5");
+}
+
+/// Verifies M3 base promotion from an **indexed** array: the existing integer-keyed elements survive
+/// the indexed→hash promotion while the new reference element tracks the aliased source. Matches
+/// `php -r` output `7|10`.
+#[test]
+fn test_reference_into_indexed_array_promotes_and_preserves_elements() {
+    let out = compile_and_run(
+        "<?php $a = [10, 20]; $v = 1; $a['x'] =& $v; $v = 7; echo $a['x'], '|', $a[0];",
+    );
+    assert_eq!(out, "7|10");
+}
+
+/// Verifies M3 two-level nested reference into an **existing** inner array: `$a['k']['x'] =& $v`
+/// shares the aliased source, and a later write to the source is observed when reading the nested
+/// element back through the Mixed hash path. Matches `php -r` output `7`.
+#[test]
+fn test_reference_into_nested_existing_inner_shares_source() {
+    let out = compile_and_run(
+        "<?php $a = ['k' => [1, 2], 'n' => 0]; $v = 9; $a['k']['x'] =& $v; $v = 7; echo $a['k']['x'];",
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies M3 two-level nested reference with an **absent** outer key: the inner array is
+/// auto-vivified at the reference assignment, so `$scoped['scope']['name'] =& $v` works on an
+/// initially empty base. Matches `php -r` output `8`.
+#[test]
+fn test_reference_into_nested_autovivified_inner_shares_source() {
+    let out = compile_and_run(
+        "<?php $scoped = []; $v = 5; $scoped['scope']['name'] =& $v; $v = 8; echo $scoped['scope']['name'];",
+    );
+    assert_eq!(out, "8");
+}
+
+/// Verifies the DeepClone accumulation pattern: two reference entries under the same outer key
+/// (`$scoped['cls']['x']` and `$scoped['cls']['y']`) coexist and each tracks its own aliased source.
+/// This is the shape `symfony/polyfill-deepclone` builds. Matches `php -r` output `10|20`.
+#[test]
+fn test_reference_into_nested_accumulates_under_same_outer_key() {
+    let out = compile_and_run(
+        "<?php $scoped = []; $a = 1; $b = 2; $scoped['cls']['x'] =& $a; $scoped['cls']['y'] =& $b; $a = 10; $b = 20; echo $scoped['cls']['x'], '|', $scoped['cls']['y'];",
+    );
+    assert_eq!(out, "10|20");
+}
+
+/// Verifies M3 reference write-through: assigning a plain value to a reference element updates the
+/// shared cell in place rather than replacing the entry, so the aliased source observes the new
+/// value. `$a['x'] =& $v; $a['x'] = 9;` makes `$v` read back as 9. Matches `php -r` output `9|9`.
+#[test]
+fn test_write_through_reference_element_updates_source() {
+    let out = compile_and_run(
+        "<?php $a = []; $v = 1; $a['x'] =& $v; $a['x'] = 9; echo $v, '|', $a['x'];",
+    );
+    assert_eq!(out, "9|9");
+}
+
+/// Verifies a Mixed-typed reference source: a value read out of a heterogeneous (Mixed-valued)
+/// array is a boxed Mixed, and aliasing it into another element shares the value. Writing through
+/// the alias is observed when reading the element back. Matches `php -r` output `99`.
+#[test]
+fn test_reference_source_mixed_write_through_alias() {
+    let out = compile_and_run(
+        "<?php $src = ['k' => 1, 'n' => 's']; $m = $src['k']; $b = []; $b['x'] =& $m; $m = 99; echo $b['x'];",
+    );
+    assert_eq!(out, "99");
+}
+
+/// Verifies a Mixed reference source is read back correctly straight after aliasing, with no
+/// write-through in between: the reference cell holds the unboxed value and reconstructs it on
+/// read. `$m` comes from a Mixed-valued array, so its static type is Mixed. Matches `php -r` `7`.
+#[test]
+fn test_reference_source_mixed_direct_element_read() {
+    let out = compile_and_run(
+        "<?php $src = ['k' => 7, 'n' => 's']; $m = $src['k']; $b = []; $b['x'] =& $m; echo $b['x'];",
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies that writing a plain value through a reference element updates a Mixed-typed aliased
+/// source: `$arr['x'] =& $m; $arr['x'] = 42;` makes the Mixed `$m` read back as 42. Exercises the
+/// Mixed alias-read path (the dereferenced triple is re-boxed). Matches `php -r` output `42`.
+#[test]
+fn test_reference_element_write_through_updates_mixed_alias() {
+    let out = compile_and_run(
+        "<?php $src = ['a' => 7, 'b' => 's']; $m = $src['a']; $arr = []; $arr['x'] =& $m; $arr['x'] = 42; echo $m;",
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies the reverse-direction reference assignment `$r =& $a[0]`: the variable aliases the
+/// array element, so writing through the element is observed when reading the variable. This is the
+/// M3 milestone shape. Matches `php -r` output `9`.
+#[test]
+fn test_reference_reverse_direction_aliases_element() {
+    let out = compile_and_run("<?php $a = [1, 2]; $r =& $a[0]; $a[0] = 9; echo $r;");
+    assert_eq!(out, "9");
+}
+
+/// Verifies the reverse-direction reference also shares in the other direction: writing through the
+/// aliasing variable `$r` updates the array element it was bound to. Matches `php -r` output `7|7`.
+#[test]
+fn test_reference_reverse_direction_write_through_variable() {
+    let out = compile_and_run("<?php $a = [10, 20]; $r =& $a[0]; $r = 7; echo $a[0], '|', $r;");
+    assert_eq!(out, "7|7");
+}
+
+/// Verifies a foreach-by-reference value used as a reference source (the DeepClone pattern): each
+/// `$scoped[$k] =& $value` promotes the original array entry into a shared reference cell, so the
+/// source array and the target array alias the same value. Writing through the target propagates
+/// back to the source array, and untouched keys stay shared. The source array is heterogeneous
+/// (Mixed-valued) so reads dereference the reference entries. Matches `php -r` output `99|99|x|x`.
+#[test]
+fn test_reference_source_foreach_by_ref_shares_with_origin() {
+    let out = compile_and_run(
+        "<?php $vars = ['a' => 1, 'b' => 'x']; $scoped = []; \
+         foreach ($vars as $name => &$value) { $scoped[$name] =& $value; } unset($value); \
+         $scoped['a'] = 99; echo $vars['a'], '|', $scoped['a'], '|', $vars['b'], '|', $scoped['b'];",
+    );
+    assert_eq!(out, "99|99|x|x");
+}
+
+/// M5: `$obj->prop =& $v` aliases a stdClass dynamic property to a scalar local through the
+/// object's property hash. Writing the source variable is observed when reading the property back
+/// (the read dereferences the tag-11 reference entry via `__rt_stdclass_get`). Matches `php -r` `5`.
+#[test]
+fn test_reference_into_object_property_shares_source() {
+    let out = compile_and_run(
+        "<?php $o = new stdClass(); $v = 1; $o->p =& $v; $v = 5; echo $o->p;",
+    );
+    assert_eq!(out, "5");
+}
+
+/// M5: writing the aliased property `$obj->prop = 9` propagates back to the source variable, because
+/// the property write overwrites a tag-11 reference entry and `__rt_hash_set` writes through the
+/// shared reference cell (the boxed value is unboxed by `__rt_refcell_store`). Matches `php -r` `9`.
+#[test]
+fn test_reference_into_object_property_write_through_variable() {
+    let out = compile_and_run(
+        "<?php $o = new stdClass(); $v = 1; $o->p =& $v; $o->p = 9; echo $v;",
+    );
+    assert_eq!(out, "9");
+}
+
+/// M5: two distinct properties aliasing two distinct source variables stay independent — each
+/// reference entry shares only its own cell. Writing both sources is observed through both
+/// properties. Matches `php -r` output `10|20`.
+#[test]
+fn test_reference_into_two_object_properties_independent() {
+    let out = compile_and_run(
+        "<?php $o = new stdClass(); $a = 1; $b = 2; $o->x =& $a; $o->y =& $b; \
+         $a = 10; $b = 20; echo $o->x, '|', $o->y;",
+    );
+    assert_eq!(out, "10|20");
+}
+
+/// Regression: reading a reference-aliased source variable after writing through the array element
+/// on the other side must observe the fresh value. Constant propagation must not substitute the
+/// source's last directly-assigned constant once it is reference-escaped. Matches `php -r` `9`.
+#[test]
+fn test_reference_source_read_is_fresh_after_element_write_through() {
+    let out = compile_and_run(
+        "<?php $a = ['x' => 0, 'n' => 's']; $v = 1; $a['x'] =& $v; $v = 5; $a['x'] = 9; echo $v;",
+    );
+    assert_eq!(out, "9");
+}
+
+/// Regression: a local reference (`$a =& $b`) aliases both names to one storage, so reading either
+/// after writing the other must observe the fresh value — neither may be constant-propagated.
+/// Matches `php -r` `9`.
+#[test]
+fn test_local_reference_read_is_fresh_after_cross_write() {
+    let out = compile_and_run("<?php $b = 10; $a =& $b; $a = 5; $b = 9; echo $a;");
+    assert_eq!(out, "9");
+}
+
+/// Regression: a `foreach (... as &$value)` binding persists after the loop and aliases the last
+/// element, so reading `$value` after writing through the array must observe the fresh value rather
+/// than a propagated constant. Matches `php -r` `9`.
+#[test]
+fn test_foreach_by_ref_value_read_is_fresh_after_cross_write() {
+    let out = compile_and_run(
+        "<?php $a = [1, 2, 3]; foreach ($a as &$v) {} $v = 5; $a[2] = 9; echo $v;",
+    );
+    assert_eq!(out, "9");
+}
+
+/// Regression: reading a referenced object property into another variable takes a value snapshot,
+/// not a live alias to the shared reference cell — `__rt_stdclass_get` dereferences a tag-11 entry
+/// and boxes a fresh Mixed. A later write through the reference must not change the snapshot.
+/// Matches `php -r` `1`.
+#[test]
+fn test_reference_object_property_read_is_a_snapshot() {
+    let out = compile_and_run(
+        "<?php $o = new stdClass(); $v = 1; $o->p =& $v; $first = $o->p; $v = 9; echo $first;",
+    );
+    assert_eq!(out, "1");
+}
+
+/// Regression: a nested element write through a literal heterogeneous base
+/// (`$m = ['a' => ['x' => 1], 'b' => 2]; $m['a']['x'] = 99;`) must reach the shared inner container,
+/// not a detached snapshot. The inner array is boxed into a Mixed cell at store time (the tag-7
+/// representation `json_decode()` produces), and the write lowers through `__rt_mixed_array_set` on
+/// the parent so it mutates the shared hash in place. Matches `php -r` `{"a":{"x":99},"b":2}`.
+#[test]
+fn test_nested_write_through_literal_mixed_base_reaches_storage() {
+    let out = compile_and_run(
+        "<?php $m = ['a' => ['x' => 1], 'b' => 2]; $m['a']['x'] = 99; echo json_encode($m);",
+    );
+    assert_eq!(out, "{\"a\":{\"x\":99},\"b\":2}");
+}
+
+/// Regression: the same literal base read without a nested write is unchanged — boxing the inner
+/// container at store time must not alter the observable value. Matches `php -r` `{"a":{"x":1},"b":2}`.
+#[test]
+fn test_literal_mixed_base_read_only_is_unchanged() {
+    let out = compile_and_run(
+        "<?php $m = ['a' => ['x' => 1], 'b' => 2]; echo json_encode($m);",
+    );
+    assert_eq!(out, "{\"a\":{\"x\":1},\"b\":2}");
 }

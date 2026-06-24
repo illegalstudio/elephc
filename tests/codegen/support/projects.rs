@@ -281,7 +281,7 @@ pub(crate) fn compile_and_run_files_with_defines(
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let resolved = elephc::autoload::run(resolved, base_dir, &autoload_registry)
+    let (resolved, _autoload_warnings) = elephc::autoload::run(resolved, base_dir, &autoload_registry)
         .expect("autoload failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =

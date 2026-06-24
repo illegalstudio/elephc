@@ -892,7 +892,7 @@ fn closure_signature_from_ast(
         return signature;
     }
     if return_type.is_none() {
-        if let Some(return_ty) = direct_closure_return_type(body, captures) {
+        if let Some(return_ty) = direct_closure_return_type(body, captures, &signature.params) {
             signature.return_type = return_ty;
         } else if !body_contains_value_return(body) {
             signature.return_type = PhpType::Void;
@@ -905,6 +905,7 @@ fn closure_signature_from_ast(
 fn direct_closure_return_type(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
 ) -> Option<PhpType> {
     let [stmt] = body else {
         return None;
@@ -912,15 +913,22 @@ fn direct_closure_return_type(
     let StmtKind::Return(Some(expr)) = &stmt.kind else {
         return None;
     };
-    Some(direct_closure_return_expr_type(expr, captures))
+    Some(direct_closure_return_expr_type(expr, captures, params))
 }
 
-/// Returns a direct closure return expression type, consulting capture metadata first.
+/// Returns a direct closure return expression type, consulting capture and parameter
+/// metadata first. A bare `return $x` where `$x` is a parameter must adopt the parameter's
+/// declared type (e.g. `mixed`) rather than falling back to the syntactic integer default,
+/// which would otherwise coerce a boxed Mixed argument to an integer on return.
 fn direct_closure_return_expr_type(
     expr: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
 ) -> PhpType {
     if let ExprKind::Variable(name) = &expr.kind {
+        if let Some((_, php_type)) = params.iter().find(|(param_name, _)| param_name == name) {
+            return php_type.clone();
+        }
         if let Some((_, php_type, _)) = captures
             .iter()
             .find(|(capture_name, _, _)| capture_name == name)

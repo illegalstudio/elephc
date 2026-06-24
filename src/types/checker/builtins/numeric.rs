@@ -268,6 +268,16 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Str))
         }
+        "get_debug_type" => {
+            if args.len() != 1 {
+                return Err(CompileError::new(
+                    span,
+                    "get_debug_type() takes exactly 1 argument",
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            Ok(Some(PhpType::Str))
+        }
         "empty" => {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "empty() takes exactly 1 argument"));
@@ -280,6 +290,15 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(span, "unset() takes at least 1 argument"));
             }
             for arg in args {
+                // `unset($obj->prop)` on an undeclared property dispatches to
+                // `__unset`; the helper infers the receiver but skips the bare
+                // property access that would otherwise reject the property.
+                if checker
+                    .isset_unset_property_magic_class(arg, "__unset", env)?
+                    .is_some()
+                {
+                    continue;
+                }
                 checker.infer_type(arg, env)?;
             }
             Ok(Some(PhpType::Void))

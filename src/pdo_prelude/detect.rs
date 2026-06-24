@@ -187,12 +187,14 @@ fn expr_refs_pdo(expr: &Expr) -> bool {
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::YieldFrom(inner) => expr_refs_pdo(inner),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
             expr_refs_pdo(value) || expr_refs_pdo(default)
         }
         ExprKind::Pipe { value, callable } => expr_refs_pdo(value) || expr_refs_pdo(callable),
+        ExprKind::ListUnpack { value, .. } => expr_refs_pdo(value),
         ExprKind::Assignment {
             target,
             value,
@@ -300,6 +302,8 @@ fn stmt_refs_pdo(stmt: &Stmt) -> bool {
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
@@ -361,6 +365,7 @@ fn stmt_refs_pdo(stmt: &Stmt) -> bool {
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_pdo(target) || expr_refs_pdo(value)
         }
+        StmtKind::RefAssignTarget { target, .. } => expr_refs_pdo(target),
         StmtKind::ArrayPush { value, .. } => expr_refs_pdo(value),
         StmtKind::TypedAssign {
             type_expr, value, ..

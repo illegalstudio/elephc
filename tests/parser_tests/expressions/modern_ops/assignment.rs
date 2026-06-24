@@ -296,3 +296,81 @@ fn test_null_coalesce_assignment_expression_stabilizes_computed_mutated_index() 
         other => panic!("expected Echo, got {:?}", other),
     }
 }
+
+/// Verifies that `false !== $x = 3` binds the `=` to the adjacent lvalue, parsing as
+/// `false !== ($x = 3)` — the assignment is the right operand of the `!==` comparison, not the
+/// comparison being assigned to. This is the PHP idiom `if (false !== $pos = strrpos(...))`.
+#[test]
+fn test_assignment_binds_to_lvalue_inside_comparison() {
+    let stmts = parse_source("<?php $r = false !== $x = 3;");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::BinaryOp { op, right, .. } => {
+                assert_eq!(op, &BinOp::StrictNotEq);
+                assert!(matches!(right.kind, ExprKind::Assignment { .. }));
+            }
+            other => panic!("expected BinaryOp(StrictNotEq), got {:?}", other),
+        },
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
+/// Verifies that `1 + $b = 5` parses as `1 + ($b = 5)` — the assignment binds to the adjacent
+/// lvalue even under the higher-precedence `+`, matching PHP.
+#[test]
+fn test_assignment_binds_to_lvalue_inside_arithmetic() {
+    let stmts = parse_source("<?php $r = 1 + $b = 5;");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::BinaryOp { op, right, .. } => {
+                assert_eq!(op, &BinOp::Add);
+                assert!(matches!(right.kind, ExprKind::Assignment { .. }));
+            }
+            other => panic!("expected BinaryOp(Add), got {:?}", other),
+        },
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
+/// Verifies that `!$b = 7` parses as `!($b = 7)` — the prefix `!` wraps the whole assignment,
+/// since `=` binds to the adjacent lvalue rather than to `!$b`.
+#[test]
+fn test_assignment_binds_to_lvalue_under_prefix_not() {
+    let stmts = parse_source("<?php $x = !$b = 7;");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::Not(inner) => {
+                assert!(matches!(inner.kind, ExprKind::Assignment { .. }));
+            }
+            other => panic!("expected Not wrapping an assignment, got {:?}", other),
+        },
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
+/// Verifies that `[$a, $b] = $pairs` in expression position parses to an `ExprKind::ListUnpack`
+/// carrying the positional target names — the expression-position twin of the statement form.
+#[test]
+fn test_list_unpack_expression_parses() {
+    let stmts = parse_source("<?php $r = ([$a, $b] = $pairs);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::ListUnpack { vars, .. } => assert_eq!(vars, &["a".to_string(), "b".to_string()]),
+            other => panic!("expected ListUnpack, got {:?}", other),
+        },
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
+/// Verifies that a list-destructuring assignment used directly as an `if` condition parses to a
+/// `ListUnpack` condition (the DeepClone.php:492 idiom `if ([$a, $b] = $x ?? null)`).
+#[test]
+fn test_list_unpack_as_if_condition_parses() {
+    let stmts = parse_source("<?php if ([$a, $b] = $pairs) { echo 1; }");
+    match &stmts[0].kind {
+        StmtKind::If { condition, .. } => {
+            assert!(matches!(condition.kind, ExprKind::ListUnpack { .. }));
+        }
+        other => panic!("expected If with ListUnpack condition, got {:?}", other),
+    }
+}

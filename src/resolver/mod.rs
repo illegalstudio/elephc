@@ -19,8 +19,10 @@ mod engine_includes;
 mod exprs;
 mod files;
 mod function_variants;
+mod hoist_includes;
 mod include_once;
 mod include_path;
+pub(crate) mod path_eval;
 mod state;
 mod stmt_exprs;
 
@@ -51,14 +53,41 @@ use state::ResolveState;
 /// including discovered function variants). The `discovery` phase performs
 /// filesystem I/O to locate included files before any AST rewriting occurs.
 pub fn resolve(program: Program, base_dir: &Path) -> Result<Program, CompileError> {
+    resolve_inner(program, base_dir, false)
+}
+
+/// Like [`resolve`], but lowers an unresolvable runtime-dynamic include/require path into a
+/// diverging runtime-fatal stub instead of failing compilation. Used by the autoloader when
+/// splicing transitively-referenced library code (`crate::autoload`): such files may contain
+/// lazy dynamic includes (e.g. a polyfill that `require`s a data table by a computed path) that
+/// never execute for the program being built, so they must not block the closed-world compile.
+/// The main program keeps the strict [`resolve`] behavior.
+pub fn resolve_lenient_includes(
+    program: Program,
+    base_dir: &Path,
+) -> Result<Program, CompileError> {
+    resolve_inner(program, base_dir, true)
+}
+
+/// Shared implementation of [`resolve`] and [`resolve_lenient_includes`]. `lenient_includes`
+/// selects whether an unresolvable runtime-dynamic include path becomes a runtime-fatal stub
+/// (`true`) or a hard compile error (`false`).
+fn resolve_inner(
+    program: Program,
+    base_dir: &Path,
+    lenient_includes: bool,
+) -> Result<Program, CompileError> {
     if !has_includes(&program) {
         return Ok(program);
     }
 
-    let discovery = discover_include_declarations(&program, base_dir)?;
+    let discovery = discover_include_declarations(&program, base_dir, lenient_includes)?;
     let mut declared_once: HashSet<PathBuf> = HashSet::new();
     let mut include_chain: Vec<PathBuf> = Vec::new();
-    let mut state = ResolveState::default();
+    let mut state = ResolveState {
+        lenient_dynamic_includes: lenient_includes,
+        ..ResolveState::default()
+    };
     let resolved = resolve_stmts(
         program,
         base_dir,

@@ -272,6 +272,15 @@ fn test_error_generator_cannot_be_redeclared() {
     );
 }
 
+/// Verifies the error diagnostic for the built-in SPL `WeakMap` class cannot be redeclared.
+#[test]
+fn test_error_weakmap_cannot_be_redeclared() {
+    expect_error(
+        "<?php class WeakMap { public function count(): int { return 0; } }",
+        "Cannot redeclare built-in SPL class: WeakMap",
+    );
+}
+
 /// Verifies the error diagnostic for yield outside function.
 #[test]
 fn test_error_yield_outside_function() {

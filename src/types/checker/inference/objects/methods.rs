@@ -85,6 +85,27 @@ impl Checker {
             // diagnostic.
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?;
         }
+        // Closure rebinding methods on a callable receiver. `bindTo` rebinds
+        // `$this` and returns a new closure; `call` binds `$this` and invokes the
+        // closure in one step, returning its result. `$scope` is accepted and
+        // ignored (visibility is resolved at compile time).
+        if matches!(obj_ty, PhpType::Callable) {
+            match php_symbol_key(method).as_str() {
+                "bindto" => {
+                    for arg in args {
+                        self.infer_type(arg, env)?;
+                    }
+                    return Ok(PhpType::Callable);
+                }
+                "call" => {
+                    for arg in args {
+                        self.infer_type(arg, env)?;
+                    }
+                    return Ok(PhpType::Mixed);
+                }
+                _ => {}
+            }
+        }
         Ok(PhpType::Int)
     }
 
@@ -415,6 +436,34 @@ impl Checker {
         args: &[Expr],
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
+        self.specialize_magic_dispatch_signature(class_name, "__call", false, args, env)
+    }
+
+    /// Refines a `__callStatic($name, $args)` signature's array parameter from
+    /// the actual static-call arguments, the static counterpart of
+    /// `specialize_magic_call_signature`.
+    fn specialize_magic_callstatic_signature(
+        &mut self,
+        class_name: &str,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        self.specialize_magic_dispatch_signature(class_name, "__callstatic", true, args, env)
+    }
+
+    /// Shared body for `__call`/`__callStatic` argument-array specialization.
+    ///
+    /// Merges all argument types into an element type, then updates the magic
+    /// method signature's params[1] (the array parameter) on its implementing
+    /// class, selecting the instance or static method tables via `is_static`.
+    fn specialize_magic_dispatch_signature(
+        &mut self,
+        class_name: &str,
+        method_key: &str,
+        is_static: bool,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
         let mut elem_ty = PhpType::Never;
         for arg in args {
             let arg_ty = self.infer_type(arg, env)?;
@@ -424,19 +473,28 @@ impl Checker {
         let impl_class_name = self
             .classes
             .get(class_name)
-            .and_then(|class_info| class_info.method_impl_classes.get("__call"))
+            .and_then(|class_info| {
+                if is_static {
+                    class_info.static_method_impl_classes.get(method_key)
+                } else {
+                    class_info.method_impl_classes.get(method_key)
+                }
+            })
             .cloned()
             .unwrap_or_else(|| class_name.to_string());
         let declared_flags = self
             .classes
             .get(&impl_class_name)
-            .map(|class_info| Self::declared_method_param_flags(class_info, "__call", false))
+            .map(|class_info| Self::declared_method_param_flags(class_info, method_key, is_static))
             .unwrap_or_default();
-        if let Some(sig) = self
-            .classes
-            .get_mut(&impl_class_name)
-            .and_then(|class_info| class_info.methods.get_mut("__call"))
-        {
+        let sig_slot = self.classes.get_mut(&impl_class_name).and_then(|class_info| {
+            if is_static {
+                class_info.static_methods.get_mut(method_key)
+            } else {
+                class_info.methods.get_mut(method_key)
+            }
+        });
+        if let Some(sig) = sig_slot {
             if !sig.params.is_empty() {
                 sig.params[0].1 = PhpType::Str;
             }
@@ -560,6 +618,15 @@ impl Checker {
             }
         };
         let class_name = resolved_class_name.as_str();
+        // `Closure::bind($closure, $newThis [, $scope])` is the static form of
+        // `$closure->bindTo(...)`: it returns a new closure with `$this` rebound.
+        // `$scope` is accepted and ignored (closed-world visibility).
+        if class_name.trim_start_matches('\\') == "Closure" && php_symbol_key(method) == "bind" {
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+            return Ok(PhpType::Callable);
+        }
         if let Some(enum_info) = self.enums.get(class_name).cloned() {
             return self
                 .check_enum_static_call(&enum_info, class_name, method, args, env, expr.span);
@@ -699,6 +766,22 @@ impl Checker {
                         ),
                     )?;
                 }
+            } else if let Some(callstatic_sig) =
+                class_info.static_methods.get("__callstatic").cloned()
+            {
+                // Forward `Foo::missing(...)` to `Foo::__callStatic("missing", [...])`.
+                let magic_args = Self::magic_call_args(method, args, expr.span);
+                let mut validation_sig = callstatic_sig.clone();
+                Self::relax_magic_call_validation_sig(&mut validation_sig);
+                self.check_known_callable_call(
+                    &validation_sig,
+                    &magic_args,
+                    expr.span,
+                    env,
+                    &format!("Static method {}::__callStatic", class_name),
+                )?;
+                self.specialize_magic_callstatic_signature(class_name, args, env)?;
+                return Ok(callstatic_sig.return_type.clone());
             } else if class_info.methods.contains_key(method) {
                 return Err(CompileError::new(
                     expr.span,

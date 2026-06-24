@@ -19,7 +19,7 @@ use super::stmts::discover_stmts;
 use super::super::declarations::extract_discoverable_declarations;
 use super::super::engine::resolve_stmts;
 use super::super::files::{parse_file, resolve_path};
-use super::super::include_path::fold_include_path;
+use super::super::include_path::{fold_include_path, runtime_dynamic_include_path_detail};
 use super::super::state::ResolveState;
 
 /// Processes a statically resolvable `include`/`require` statement.
@@ -54,7 +54,21 @@ pub(super) fn discover_include(
     state: &mut ResolveState,
     output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
-    let path_str = fold_include_path(path, state).map_err(|msg| CompileError::new(span, &msg))?;
+    let path_str = match fold_include_path(path, state) {
+        Ok(s) => s,
+        Err(msg) => {
+            // Under lenient include lowering (autoloader-spliced library code), an unresolvable
+            // runtime-dynamic include exposes no statically-discoverable declarations and is
+            // lowered to a runtime-fatal stub during expansion, so discovery skips it rather
+            // than failing the compile. Statically-invalid shapes still hard-error.
+            if state.lenient_dynamic_includes
+                && runtime_dynamic_include_path_detail(path).is_some()
+            {
+                return Ok(());
+            }
+            return Err(CompileError::new(span, &msg));
+        }
+    };
     let resolved = resolve_path(&path_str, base_dir);
     let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
 

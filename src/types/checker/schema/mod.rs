@@ -9,10 +9,12 @@
 //! - Schema checks run before expression inference so all declarations are available for recursive references.
 
 pub(crate) mod validation;
+mod attribute_refs;
 mod interfaces;
 mod classes;
 mod enums;
 
+pub(crate) use attribute_refs::drop_unresolvable_attribute_arg_refs;
 pub(crate) use interfaces::*;
 pub(crate) use classes::*;
 pub(crate) use enums::*;

@@ -46,8 +46,12 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::IntLiteral(value) => ExprKind::IntLiteral(value),
         ExprKind::FloatLiteral(value) => ExprKind::FloatLiteral(value),
         ExprKind::Variable(name) => match env.get(&name) {
-            Some(value) => value.clone().into_expr_kind(),
-            None => ExprKind::Variable(name),
+            // A reference-escaped variable may have been mutated through one of its aliases since the
+            // recorded constant, so never substitute it — always re-read the live value.
+            Some(value) if !crate::optimize::is_ref_escaped_var(&name) => {
+                value.clone().into_expr_kind()
+            }
+            _ => ExprKind::Variable(name),
         },
         ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
             left: Box::new(propagate_expr(*left, env)),
@@ -68,6 +72,9 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             ExprKind::ErrorSuppress(Box::new(propagate_expr(*inner, env)))
         }
         ExprKind::Print(inner) => ExprKind::Print(Box::new(propagate_expr(*inner, env))),
+        // `clone` reads its operand (an object) and is impure, so constant propagation only
+        // descends into the operand; the clone node itself is preserved verbatim.
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(propagate_expr(*inner, env))),
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
             value: Box::new(propagate_expr(*value, env)),
             default: Box::new(propagate_expr(*default, env)),
@@ -75,6 +82,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::Pipe { value, callable } => ExprKind::Pipe {
             value: Box::new(propagate_expr(*value, env)),
             callable: Box::new(propagate_expr(*callable, env)),
+        },
+        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
+            vars,
+            value: Box::new(propagate_expr(*value, env)),
         },
         ExprKind::Assignment {
             target,

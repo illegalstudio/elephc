@@ -22,6 +22,12 @@ pub(super) struct ResolveState {
     pub(super) namespace: Option<String>,
     /// `use const X as Y` imports. Maps alias to canonical constant name.
     pub(super) const_imports: HashMap<String, String>,
+    /// When true, an unresolvable runtime-dynamic include/require path is lowered to a
+    /// diverging runtime-fatal stub instead of a hard compile error. Set only for files
+    /// pulled transitively by the autoloader (vendor/library code), never for the main
+    /// program, so the closed-world compile is not blocked by lazy dynamic includes that
+    /// may never execute. See `resolve_lenient_includes`.
+    pub(super) lenient_dynamic_includes: bool,
 }
 
 /// Looks up a constant reference by name, applying PHP's namespace and import rules.

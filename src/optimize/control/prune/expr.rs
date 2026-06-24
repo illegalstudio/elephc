@@ -44,6 +44,9 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(prune_expr(*inner))),
         ExprKind::ErrorSuppress(inner) => ExprKind::ErrorSuppress(Box::new(prune_expr(*inner))),
         ExprKind::Print(inner) => ExprKind::Print(Box::new(prune_expr(*inner))),
+        // `clone` allocates and may dispatch `__clone()`, so it has side effects and is
+        // never pruned by DCE; the operand is still recursively pruned for its sub-effects.
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(prune_expr(*inner))),
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
             value: Box::new(prune_expr(*value)),
             default: Box::new(prune_expr(*default)),
@@ -51,6 +54,10 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         ExprKind::Pipe { value, callable } => ExprKind::Pipe {
             value: Box::new(prune_expr(*value)),
             callable: Box::new(prune_expr(*callable)),
+        },
+        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
+            vars,
+            value: Box::new(prune_expr(*value)),
         },
         ExprKind::Assignment {
             target,

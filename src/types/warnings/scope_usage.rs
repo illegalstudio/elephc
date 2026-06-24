@@ -133,6 +133,10 @@ pub(super) fn collect_scope_reads(
                 scope.read(source);
                 scope.declare(target, stmt.span);
             }
+            StmtKind::RefAssignTarget { target, source } => {
+                collect_expr_reads(target, scope, warnings);
+                scope.read(source);
+            }
             StmtKind::TypedAssign { name, value, .. } => {
                 collect_expr_reads(value, scope, warnings);
                 scope.declare(name, stmt.span);
@@ -155,7 +159,11 @@ pub(super) fn collect_scope_reads(
             | StmtKind::ExprStmt(expr)
             | StmtKind::ConstDecl { value: expr, .. } => collect_expr_reads(expr, scope, warnings),
             StmtKind::Return(Some(expr)) => collect_expr_reads(expr, scope, warnings),
-            StmtKind::Return(None) | StmtKind::Break(_) | StmtKind::Continue(_) => {}
+            StmtKind::Return(None)
+            | StmtKind::Break(_)
+            | StmtKind::Continue(_)
+            | StmtKind::Goto(_)
+            | StmtKind::Label(_) => {}
             StmtKind::If {
                 condition,
                 then_body,

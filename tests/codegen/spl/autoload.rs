@@ -9,6 +9,11 @@
 
 use crate::support::*;
 
+use std::collections::HashSet;
+
+use elephc::errors::{CompileError, CompileWarning};
+use elephc::parser::ast::Program;
+
 /// Verifies PSR-4 single namespace autoload.
 #[test]
 fn test_psr4_single_namespace_autoload() {
@@ -1662,4 +1667,335 @@ fn test_spl_autoload_call_with_literal_loads_class() {
         "main.php",
     );
     assert_eq!(out, "forced");
+}
+
+// --- tolerant autoload.files skip (A-P0.4) ---
+
+/// Runs the frontend pipeline (lexer through name resolver) plus the autoload pass
+/// directly, returning the `autoload::run` result without running type checking or
+/// codegen. Used by the tolerant-skip unit tests to inspect the returned
+/// `CompileWarning`s and to assert that a referenced class still hard-fails. Each
+/// call writes its fixtures to an isolated temp directory (mirroring the codegen
+/// harness) and cleans it up afterwards.
+fn autoload_run_result(
+    files: &[(&str, &str)],
+    main_file: &str,
+) -> Result<(Program, Vec<CompileWarning>), CompileError> {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+    for (path, content) in files {
+        let full_path = dir.join(path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&full_path, content).unwrap();
+    }
+    let php_path = dir.join(main_file);
+    let source = fs::read_to_string(&php_path).unwrap();
+    let base_dir = php_path.parent().unwrap();
+    let result = (|| -> Result<(Program, Vec<CompileWarning>), CompileError> {
+        let tokens = elephc::lexer::tokenize(&source)?;
+        let ast = elephc::parser::parse(&tokens)?;
+        let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
+        let define_set: HashSet<String> = HashSet::new();
+        let ast = elephc::conditional::apply(ast, &define_set);
+        let (autoload_registry, ast) = elephc::autoload::Registry::build(base_dir, ast);
+        let resolved = elephc::resolver::resolve(ast, base_dir)?;
+        let resolved = elephc::autoload::collect_aliases(resolved);
+        let resolved = elephc::name_resolver::resolve(resolved)?;
+        elephc::autoload::run(resolved, base_dir, &autoload_registry)
+    })();
+    let _ = fs::remove_dir_all(&dir);
+    result
+}
+
+/// Verifies an unresolvable `autoload.files` helper is skipped with a warning
+/// rather than aborting the build, when the app does not reference it. The
+/// `src/broken.php` helper uses a dynamic `require $x;` that the closed-world
+/// resolver cannot fold; since `main.php` only calls `shout()` from
+/// `src/helpers.php`, the build still succeeds and emits `HI`.
+#[test]
+fn test_autoload_files_tolerant_skip_unresolvable_unreferenced_helper() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"files":["src/helpers.php","src/broken.php"]}}"#,
+            ),
+            (
+                "src/helpers.php",
+                "<?php\nfunction shout(string $s): string { return strtoupper($s); }\n",
+            ),
+            (
+                "src/broken.php",
+                "<?php\n// Dynamic include: the closed-world resolver cannot fold `require $x;`, so this helper is unloadable and is skipped.\n$x = __DIR__;\nrequire $x;\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho shout(\"hi\");\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "HI");
+}
+
+/// Verifies the tolerant skip does not suppress a failure to load a class the
+/// program actually references. `src/Foo.php` (the PSR-4 target for `App\Foo`)
+/// is unparseable, and `main.php` references `App\Foo`, so the class-triggered
+/// load must still return `Err` rather than being tolerated away like an
+/// unreferenced `autoload.files` helper.
+#[test]
+fn test_autoload_tolerant_skip_does_not_suppress_referenced_class_failure() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Foo.php",
+                "<?php\nnamespace App;\n$x = \"unterminated;\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$f = new App\\Foo();\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert!(result.is_err(), "referenced broken class must hard-fail, got Ok");
+}
+
+/// Verifies that a provided-function polyfill guard is pruned before the autoload
+/// reference graph is collected, so the class its wrapper body delegates to is
+/// never pulled into the compile. The `deepclone_to_array` wrapper references
+/// `App\HeavyDelegate`, whose PSR-4 target `src/HeavyDelegate.php` is unparseable;
+/// because elephc provides `deepclone_to_array`, the whole guard is removed and the
+/// broken class is never loaded, so autoload succeeds.
+#[test]
+fn test_provided_function_polyfill_guard_is_pruned_before_class_load() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+            ),
+            (
+                "bootstrap.php",
+                "<?php\nif (!function_exists('deepclone_to_array')) {\n    function deepclone_to_array() { return \\App\\HeavyDelegate::run(); }\n}\n",
+            ),
+            (
+                "src/HeavyDelegate.php",
+                "<?php\nnamespace App;\n$x = \"unterminated;\n",
+            ),
+            ("main.php", "<?php\necho \"ok\";\n"),
+        ],
+        "main.php",
+    );
+    assert!(
+        result.is_ok(),
+        "provided-function guard should be pruned so the broken delegate class is never loaded, got {:?}",
+        result.err(),
+    );
+}
+
+/// Control for the prune: a guard for a function elephc does NOT provide is left
+/// intact, so its wrapper body still references `App\HeavyDelegate` and the
+/// unparseable `src/HeavyDelegate.php` is loaded and hard-fails. This confirms the
+/// prune is specific to the provided allowlist rather than dropping every
+/// `function_exists` guard.
+#[test]
+fn test_unprovided_function_polyfill_guard_still_loads_referenced_class() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+            ),
+            (
+                "bootstrap.php",
+                "<?php\nif (!function_exists('some_app_helper')) {\n    function some_app_helper() { return \\App\\HeavyDelegate::run(); }\n}\n",
+            ),
+            (
+                "src/HeavyDelegate.php",
+                "<?php\nnamespace App;\n$x = \"unterminated;\n",
+            ),
+            ("main.php", "<?php\necho \"ok\";\n"),
+        ],
+        "main.php",
+    );
+    assert!(
+        result.is_err(),
+        "an unprovided-function guard must keep its class reference and fail to load the broken class",
+    );
+}
+
+/// Verifies the tolerant skip returns a `CompileWarning` naming the skipped
+/// helper. The unresolvable `src/broken.php` helper produces exactly one warning
+/// whose message contains the file path and the word "skipped"; the loadable
+/// `src/helpers.php` is still spliced into the program.
+#[test]
+fn test_autoload_tolerant_skip_returns_warning_naming_helper() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"files":["src/helpers.php","src/broken.php"]}}"#,
+            ),
+            (
+                "src/helpers.php",
+                "<?php\nfunction shout(string $s): string { return strtoupper($s); }\n",
+            ),
+            (
+                "src/broken.php",
+                "<?php\n$x = __DIR__;\nrequire $x;\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho shout(\"hi\");\n",
+            ),
+        ],
+        "main.php",
+    );
+    let (program, warnings) =
+        result.expect("unreferenced broken helper must not fail the build");
+    assert!(
+        program.len() >= 1,
+        "helpers.php statements must be spliced into the program"
+    );
+    assert_eq!(warnings.len(), 1, "exactly one skip warning expected");
+    let msg = &warnings[0].message;
+    assert!(
+        msg.contains("broken.php"),
+        "warning must name the helper, got: {msg}"
+    );
+    assert!(
+        msg.contains("skipped"),
+        "warning must say 'skipped', got: {msg}"
+    );
+}
+
+/// Verifies that a lazily-referenced autoloaded class whose method contains an unresolvable
+/// runtime-dynamic `require` still compiles: the dynamic include is degraded to a runtime-fatal
+/// stub, and because the method is never called the program runs normally. This is the
+/// intl-normalizer `getData()` shape — a polyfill that `require`s a data table by a computed path.
+#[test]
+fn test_autoload_class_dynamic_include_degrades_and_runs_when_unreached() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Lazy.php",
+                "<?php\nnamespace App;\nclass Lazy {\n    public static function load(string $name) {\n        $file = __DIR__ . '/' . $name . '.php';\n        return require $file;\n    }\n    public static function greet(): string { return \"ok\"; }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho \\App\\Lazy::greet();\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies the resolver's lenient include lowering directly: a value-position
+/// `return require $f;` whose path is runtime-dynamic is a hard error under the strict `resolve`
+/// (main program and eager `autoload.files` helpers) but is degraded to a diverging runtime-fatal
+/// stub under `resolve_lenient_includes` (lazily-referenced classes), so the closed-world compile
+/// is not blocked by a lazy include that may never run.
+#[test]
+fn test_resolve_lenient_includes_degrades_dynamic_require_to_fatal_stub() {
+    let src = "<?php function load($f) { return require $f; }";
+    let base = std::path::Path::new(".");
+
+    let tokens = elephc::lexer::tokenize(src).unwrap();
+    let strict_program = elephc::parser::parse(&tokens).unwrap();
+    assert!(
+        elephc::resolver::resolve(strict_program, base).is_err(),
+        "strict resolve must reject a runtime-dynamic include"
+    );
+
+    let tokens = elephc::lexer::tokenize(src).unwrap();
+    let lenient_program = elephc::parser::parse(&tokens).unwrap();
+    let resolved = elephc::resolver::resolve_lenient_includes(lenient_program, base)
+        .expect("lenient resolve must accept a runtime-dynamic include");
+    let rendered = format!("{resolved:?}");
+    assert!(
+        rendered.contains("could not resolve dynamic include/require path at compile time"),
+        "lenient resolve must inject the runtime-fatal stub message, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("exit"),
+        "the stub must diverge via an exit() call, got: {rendered}"
+    );
+}
+
+/// Verifies an unused optional helper (`dump`) defined in an `autoload.files` bootstrap is pruned
+/// before class-reference collection, so the heavy class its body constructs is never pulled.
+/// `dump()`'s body references `\App\HeavyDelegate` (whose PSR-4 target is unparseable); because
+/// `main.php` never calls `dump`, the guard is dropped and the broken class is never loaded, so
+/// autoload succeeds. This is the Symfony `u()`/`b()`/`dump()` pattern that drags in
+/// `UnicodeString`/`ByteString`/`VarDumper` on a render path that never calls them.
+#[test]
+fn test_unused_optional_helper_guard_is_pruned_before_class_load() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+            ),
+            (
+                "bootstrap.php",
+                "<?php\nif (!function_exists('dump')) {\n    function dump($v) { return \\App\\HeavyDelegate::run(); }\n}\n",
+            ),
+            (
+                "src/HeavyDelegate.php",
+                "<?php\nnamespace App;\n$x = \"unterminated;\n",
+            ),
+            ("main.php", "<?php\necho \"ok\";\n"),
+        ],
+        "main.php",
+    );
+    assert!(
+        result.is_ok(),
+        "unused optional helper should be pruned so the heavy class is never loaded, got {:?}",
+        result.err(),
+    );
+}
+
+/// Control for the unused-helper prune: when the program DOES call the optional helper, its guard
+/// is kept, its body still references `\App\HeavyDelegate`, and the unparseable PSR-4 target is
+/// loaded and hard-fails. Confirms the prune is conditional on the helper being uncalled, not an
+/// unconditional removal of allowlisted helpers.
+#[test]
+fn test_called_optional_helper_guard_is_kept_and_loads_referenced_class() {
+    let result = autoload_run_result(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["bootstrap.php"]}}"#,
+            ),
+            (
+                "bootstrap.php",
+                "<?php\nif (!function_exists('dump')) {\n    function dump($v) { return \\App\\HeavyDelegate::run(); }\n}\n",
+            ),
+            (
+                "src/HeavyDelegate.php",
+                "<?php\nnamespace App;\n$x = \"unterminated;\n",
+            ),
+            ("main.php", "<?php\ndump(1);\necho \"ok\";\n"),
+        ],
+        "main.php",
+    );
+    assert!(
+        result.is_err(),
+        "a called optional helper must keep its class reference and fail to load the broken class",
+    );
 }

@@ -37,9 +37,12 @@ pub(super) fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>, guards: &GuardStat
             elseif_clauses,
             else_body,
         } => {
+            // Declarations are hoisted and must not be duplicated into each branch; only the
+            // non-declaration tail sinks, declarations are kept once after the rewritten `if`.
+            let (sinkable, decls) = partition_tail_declarations(tail);
             let reachability = analyze_if_tail_paths(&then_body, &elseif_clauses, &else_body);
             let then_body = if reachability.then_sinks_tail {
-                append_tail_to_fallthrough_path(then_body, tail.clone())
+                append_tail_to_fallthrough_path(then_body, sinkable.clone())
             } else {
                 then_body
             };
@@ -48,7 +51,7 @@ pub(super) fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>, guards: &GuardStat
                 .zip(reachability.elseif_sinks_tail)
                 .map(|((condition, body), sinks_tail)| {
                     let body = if sinks_tail {
-                        append_tail_to_fallthrough_path(body, tail.clone())
+                        append_tail_to_fallthrough_path(body, sinkable.clone())
                     } else {
                         body
                     };
@@ -56,49 +59,64 @@ pub(super) fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>, guards: &GuardStat
                 })
                 .collect();
             let else_body = match else_body {
-                Some(body) if reachability.else_sinks_tail => Some(append_tail_to_fallthrough_path(body, tail)),
+                Some(body) if reachability.else_sinks_tail => Some(append_tail_to_fallthrough_path(body, sinkable)),
                 Some(body) => Some(body),
-                None if reachability.implicit_else_sinks_tail => Some(tail),
+                None if reachability.implicit_else_sinks_tail => Some(sinkable),
                 None => None,
             };
-            dce_if_stmt(condition, then_body, elseif_clauses, else_body, span, guards)
+            let mut out = dce_if_stmt(condition, then_body, elseif_clauses, else_body, span, guards);
+            out.extend(dce_block_with_guards(decls, guards.clone()));
+            out
         }
         StmtKind::IfDef {
             symbol,
             then_body,
             else_body,
         } => {
+            let (sinkable, decls) = partition_tail_declarations(tail);
             let reachability = analyze_ifdef_tail_paths(&then_body, &else_body);
             let then_body = if reachability.then_sinks_tail {
-                append_tail_to_fallthrough_path(then_body, tail.clone())
+                append_tail_to_fallthrough_path(then_body, sinkable.clone())
             } else {
                 then_body
             };
             let else_body = match else_body {
-                Some(body) if reachability.else_sinks_tail => Some(append_tail_to_fallthrough_path(body, tail)),
+                Some(body) if reachability.else_sinks_tail => Some(append_tail_to_fallthrough_path(body, sinkable)),
                 Some(body) => Some(body),
-                None if reachability.implicit_else_sinks_tail => Some(tail),
+                None if reachability.implicit_else_sinks_tail => Some(sinkable),
                 None => None,
             };
-            dce_stmt_with_guards(Stmt::new(
+            let mut out = dce_stmt_with_guards(Stmt::new(
                 StmtKind::IfDef {
                     symbol,
                     then_body,
                     else_body,
                 },
                 span,
-            ), guards)
+            ), guards);
+            out.extend(dce_block_with_guards(decls, guards.clone()));
+            out
         }
         StmtKind::Switch {
             subject,
             cases,
             default,
-        } => dce_switch_stmt_with_tail(subject, cases, default, tail, span, guards),
+        } => {
+            let (sinkable, decls) = partition_tail_declarations(tail);
+            let mut out = dce_switch_stmt_with_tail(subject, cases, default, sinkable, span, guards);
+            out.extend(dce_block_with_guards(decls, guards.clone()));
+            out
+        }
         StmtKind::Try {
             try_body,
             catches,
             finally_body,
-        } => dce_try_stmt_with_tail(try_body, catches, finally_body, tail, span, guards),
+        } => {
+            let (sinkable, decls) = partition_tail_declarations(tail);
+            let mut out = dce_try_stmt_with_tail(try_body, catches, finally_body, sinkable, span, guards);
+            out.extend(dce_block_with_guards(decls, guards.clone()));
+            out
+        }
         _ => {
             let mut stmts = dce_stmt_with_guards(stmt, guards);
             if stmts
@@ -110,6 +128,58 @@ pub(super) fn dce_stmt_with_tail(stmt: Stmt, tail: Vec<Stmt>, guards: &GuardStat
             stmts
         }
     }
+}
+
+/// Partitions tail statements into `(sinkable, declarations)`.
+///
+/// Pure symbol declarations (`function`, `class`, `enum`, `interface`, `trait`, `const`,
+/// `extern`, ...) are hoisted by lowering and carry no runtime guard, so sinking them into the
+/// multiple branches of an `if`/`switch`/`try` would only duplicate their symbols and produce
+/// duplicate-definition link errors. They are kept out of the sunk tail and emitted once at the
+/// outer level (DCE'd in place) after the rewritten control-flow statement instead.
+///
+/// Statements with runtime or ordering semantics (`include_once` guards, injected `Synthetic`
+/// blocks, namespace blocks that may carry runtime code, `use` aliases, ...) stay in `sinkable`
+/// and continue to sink with the tail, preserving their position relative to surrounding control
+/// flow.
+///
+/// `sinkable` preserves the relative order of the non-declaration statements so runtime effects
+/// remain in source order; `declarations` preserves the relative order of the declarations.
+fn partition_tail_declarations(tail: Vec<Stmt>) -> (Vec<Stmt>, Vec<Stmt>) {
+    let mut sinkable = Vec::with_capacity(tail.len());
+    let mut declarations = Vec::new();
+    for stmt in tail {
+        if is_hoistable_declaration(&stmt) {
+            declarations.push(stmt);
+        } else {
+            sinkable.push(stmt);
+        }
+    }
+    (sinkable, declarations)
+}
+
+/// Returns true for statements that declare a named, purely-hoisted program-level symbol and so
+/// must not be duplicated by tail-sinking into multiple control-flow branches.
+///
+/// Limited to declarations whose symbol is hoisted by lowering (so it exists exactly once
+/// regardless of textual position) and which carry no runtime guard or ordering side effect.
+/// Statements such as `IncludeOnceGuard` and `Synthetic` are intentionally excluded: they wrap
+/// runtime-gated or effectful code whose position relative to the surrounding control flow is
+/// observable, so they must continue to sink with the tail instead of being hoisted out.
+fn is_hoistable_declaration(stmt: &Stmt) -> bool {
+    matches!(
+        stmt.kind,
+        StmtKind::FunctionDecl { .. }
+            | StmtKind::ClassDecl { .. }
+            | StmtKind::EnumDecl { .. }
+            | StmtKind::PackedClassDecl { .. }
+            | StmtKind::InterfaceDecl { .. }
+            | StmtKind::TraitDecl { .. }
+            | StmtKind::ConstDecl { .. }
+            | StmtKind::ExternFunctionDecl { .. }
+            | StmtKind::ExternClassDecl { .. }
+            | StmtKind::ExternGlobalDecl { .. }
+    )
 }
 
 /// Returns true when `body`'s terminal effect matches `target`: FallsThrough to FallsThrough,

@@ -288,6 +288,7 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         | ExprKind::ErrorSuppress(expr)
         | ExprKind::Print(expr)
         | ExprKind::Spread(expr)
+        | ExprKind::Clone(expr)
         | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. } => collect_required_class_names_in_expr(expr, names),
         ExprKind::NullCoalesce { value, default } => {
@@ -297,6 +298,9 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         ExprKind::Pipe { value, callable } => {
             collect_required_class_names_in_expr(value, names);
             collect_required_class_names_in_expr(callable, names);
+        }
+        ExprKind::ListUnpack { value, .. } => {
+            collect_required_class_names_in_expr(value, names);
         }
         ExprKind::Assignment {
             target,

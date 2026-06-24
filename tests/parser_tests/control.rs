@@ -69,6 +69,18 @@ fn test_for_parses() {
     assert!(matches!(&stmts[0].kind, StmtKind::For { .. }));
 }
 
+/// Verifies a `for` with comma-separated init and update clauses parses, wrapping each multi-statement
+/// clause in a `Synthetic` block (the init holds both assignments, the update holds both increments).
+#[test]
+fn test_for_comma_clauses_parse_to_synthetic() {
+    let stmts = parse_source("<?php for ($i = 0, $j = 10; $i < 5; $i++, $j--) {}");
+    let StmtKind::For { init, update, .. } = &stmts[0].kind else {
+        panic!("expected For");
+    };
+    assert!(matches!(init.as_deref().map(|s| &s.kind), Some(StmtKind::Synthetic(stmts)) if stmts.len() == 2));
+    assert!(matches!(update.as_deref().map(|s| &s.kind), Some(StmtKind::Synthetic(stmts)) if stmts.len() == 2));
+}
+
 /// Verifies that `<?php while (1) { break; }` parses with the `Break(1)` statement nested
 /// inside `While`. The argument 1 means break one level.
 #[test]
@@ -216,4 +228,129 @@ fn test_parse_foreach_key_value_by_ref() {
     } else {
         panic!("expected Foreach");
     }
+}
+
+/// Verifies `foreach ($a as [$x, $y]) {}` desugars to a `Foreach` whose synthetic
+/// `value_var` is bound and whose body starts with a `ListUnpack` of `[$x, $y]`.
+#[test]
+fn test_parse_foreach_destructure_positional() {
+    let stmts = parse_source("<?php foreach ($a as [$x, $y]) {}");
+    assert_eq!(stmts.len(), 1);
+    let StmtKind::Foreach {
+        key_var,
+        value_var,
+        value_by_ref,
+        body,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("expected Foreach");
+    };
+    assert_eq!(key_var, &None);
+    assert!(value_var.starts_with("__elephc_foreach_destructure_"));
+    assert!(!value_by_ref);
+    assert!(matches!(
+        body.first().map(|s| &s.kind),
+        Some(StmtKind::ListUnpack { vars, .. }) if vars.len() == 2
+    ));
+}
+
+/// Verifies `foreach ($a as $k => [$x, $y]) {}` keeps the key and desugars the value
+/// pattern into a leading `ListUnpack`.
+#[test]
+fn test_parse_foreach_destructure_key_value() {
+    let stmts = parse_source("<?php foreach ($a as $k => [$x, $y]) {}");
+    assert_eq!(stmts.len(), 1);
+    let StmtKind::Foreach {
+        key_var,
+        value_var,
+        body,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("expected Foreach");
+    };
+    assert_eq!(key_var, &Some("k".to_string()));
+    assert!(value_var.starts_with("__elephc_foreach_destructure_"));
+    assert!(matches!(
+        body.first().map(|s| &s.kind),
+        Some(StmtKind::ListUnpack { vars, .. }) if vars.len() == 2
+    ));
+}
+
+/// Verifies a keyed foreach destructure pattern lowers to a `Synthetic` body prefix
+/// (keyed entries cannot use the simple `ListUnpack` form).
+#[test]
+fn test_parse_foreach_destructure_keyed_pattern() {
+    let stmts = parse_source("<?php foreach ($a as [\"id\" => $id]) {}");
+    assert_eq!(stmts.len(), 1);
+    let StmtKind::Foreach { body, .. } = &stmts[0].kind else {
+        panic!("expected Foreach");
+    };
+    assert!(matches!(
+        body.first().map(|s| &s.kind),
+        Some(StmtKind::Synthetic(stmts)) if !stmts.is_empty()
+    ));
+}
+
+/// Verifies `goto target;` parses to a `Goto` statement carrying the label name.
+#[test]
+fn test_goto_parses() {
+    let stmts = parse_source("<?php goto target;");
+    assert!(matches!(&stmts[0].kind, StmtKind::Goto(name) if name == "target"));
+}
+
+/// Verifies a bare `name:` at statement position parses to a `Label` statement, distinct from a
+/// constant-expression statement or a static `::` reference.
+#[test]
+fn test_label_parses() {
+    let stmts = parse_source("<?php target: echo 1;");
+    assert!(matches!(&stmts[0].kind, StmtKind::Label(name) if name == "target"));
+    assert!(matches!(&stmts[1].kind, StmtKind::Echo(_)));
+}
+
+/// Verifies an `Identifier ::` reference is not misparsed as a label: `Foo::BAR;` stays an
+/// expression statement because `::` lexes as one `DoubleColon` token, not `Identifier` + `Colon`.
+#[test]
+fn test_static_ref_is_not_label() {
+    let stmts = parse_source("<?php Foo::BAR;");
+    assert!(!matches!(&stmts[0].kind, StmtKind::Label(_)));
+}
+
+/// Verifies a `static $x;` with no initializer parses to a `StaticVar` whose init defaults to null.
+#[test]
+fn test_static_var_no_initializer_parses() {
+    let stmts = parse_source("<?php static $x;");
+    let StmtKind::StaticVar { name, init } = &stmts[0].kind else {
+        panic!("expected StaticVar");
+    };
+    assert_eq!(name, "x");
+    assert!(matches!(init.kind, ExprKind::Null));
+}
+
+/// Verifies a comma-separated `static $a = 1, $b;` declaration parses to a `Synthetic` block holding
+/// one `StaticVar` per variable, preserving each initializer (the second defaults to null).
+#[test]
+fn test_static_var_comma_list_parses() {
+    let stmts = parse_source("<?php static $a = 1, $b;");
+    let StmtKind::Synthetic(decls) = &stmts[0].kind else {
+        panic!("expected Synthetic block for multiple static vars");
+    };
+    assert_eq!(decls.len(), 2);
+    assert!(matches!(&decls[0].kind, StmtKind::StaticVar { name, init }
+        if name == "a" && matches!(init.kind, ExprKind::IntLiteral(1))));
+    assert!(matches!(&decls[1].kind, StmtKind::StaticVar { name, init }
+        if name == "b" && matches!(init.kind, ExprKind::Null)));
+}
+
+/// Verifies the dynamic first-class-callable form `$cb(...)` parses to the variable's value: in
+/// elephc's closed world a callable-typed variable already is a callable, so the closure-creation
+/// form is the variable itself rather than a `ClosureCall`.
+#[test]
+fn test_dynamic_first_class_callable_parses_to_variable() {
+    let stmts = parse_source("<?php $x = $cb(...);");
+    let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+        panic!("expected assignment");
+    };
+    assert!(matches!(&value.kind, ExprKind::Variable(name) if name == "cb"));
 }

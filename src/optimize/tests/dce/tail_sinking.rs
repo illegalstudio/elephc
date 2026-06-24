@@ -288,3 +288,68 @@ fn test_eliminate_dead_code_reduces_empty_if_to_effectful_condition_eval() {
         Stmt::new(StmtKind::ExprStmt(touch), Span::dummy()),
     );
 }
+
+/// Regression: a declaration in the tail following an `if/else` (both branches fall through) must
+/// not be sunk into each branch, which previously duplicated the named symbol and caused a
+/// duplicate-definition link error. Only the non-declaration tail (`echo 3`) sinks into both
+/// branches; the `FunctionDecl` is kept once after the rewritten `if`.
+#[test]
+fn test_eliminate_dead_code_keeps_tail_declaration_once_not_duplicated() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::If {
+                condition: Expr::var("flag"),
+                then_body: vec![Stmt::echo(Expr::int_lit(1))],
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(2))]),
+            },
+            Span::dummy(),
+        ),
+        Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "helper".into(),
+                params: Vec::new(),
+                variadic: None,
+                variadic_type: None,
+                return_type: None,
+                body: vec![Stmt::echo(Expr::int_lit(9))],
+            },
+            Span::dummy(),
+        ),
+        Stmt::echo(Expr::int_lit(3)),
+    ];
+
+    let eliminated = eliminate_dead_code(program);
+
+    assert_eq!(eliminated.len(), 2, "expected the if plus the single declaration");
+
+    let StmtKind::If {
+        then_body,
+        else_body,
+        ..
+    } = &eliminated[0].kind else {
+        panic!("expected an if statement, got {:?}", eliminated[0].kind);
+    };
+    // The non-declaration tail (`echo 3`) sinks into both fallthrough branches.
+    assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(1)), Stmt::echo(Expr::int_lit(3))]);
+    assert_eq!(
+        else_body.as_ref().expect("expected an else branch"),
+        &vec![Stmt::echo(Expr::int_lit(2)), Stmt::echo(Expr::int_lit(3))]
+    );
+
+    // The declaration is emitted exactly once, after the if — never inside a branch.
+    assert!(
+        matches!(&eliminated[1].kind, StmtKind::FunctionDecl { name, .. } if name == "helper"),
+        "expected the helper declaration once after the if, got {:?}",
+        eliminated[1].kind,
+    );
+    assert!(
+        !then_body.iter().any(|s| matches!(s.kind, StmtKind::FunctionDecl { .. }))
+            && !else_body
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .any(|s| matches!(s.kind, StmtKind::FunctionDecl { .. })),
+        "declaration must not be duplicated into the if branches",
+    );
+}

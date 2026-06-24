@@ -17,6 +17,7 @@ use crate::parser::ast::{CatchClause, ClassMethod, ExprKind, Stmt, StmtKind};
 
 use super::discovery::FunctionVariantRegistry;
 use super::engine_includes::{expand_value_include, resolve_include_stmt, IncludeValueCapture};
+use super::hoist_includes::hoist_value_includes_stmt;
 use super::include_path::fold_include_path;
 use super::state::{
     is_define_call_name, namespace_string, normalize_defined_constant_name,
@@ -102,6 +103,22 @@ pub(super) fn resolve_stmts(
             result.extend(expanded);
             continue;
         }
+
+        // Deep-hoist expression-position includes that appear anywhere inside this statement's
+        // current-scope expressions (e.g. `if (true === (require_once X) || false)`,
+        // `f(require X)`, `echo require X;`). Each `IncludeValue` is inlined into the caller's
+        // scope ahead of the rewritten statement and replaced by a hidden temporary. Includes in
+        // conditionally evaluated contexts (short-circuit operands, ternary branches, loop
+        // controls) are reported as errors instead of eagerly miscompiled.
+        let (hoisted, stmt) = hoist_value_includes_stmt(
+            stmt,
+            base_dir,
+            declared_once,
+            include_chain,
+            state,
+            function_variants,
+        )?;
+        result.extend(hoisted);
 
         let stmt = resolve_stmt_exprs(
             stmt,

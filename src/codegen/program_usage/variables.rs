@@ -29,8 +29,15 @@ fn stmt_uses_variable(stmt: &Stmt, needle: &str) -> bool {
         | StmtKind::ExprStmt(value)
         | StmtKind::ConstDecl { value, .. } => expr_uses_variable(value, needle),
         StmtKind::RefAssign { target, source } => target == needle || source == needle,
+        StmtKind::RefAssignTarget { target, source } => {
+            expr_uses_variable(target, needle) || source == needle
+        }
         StmtKind::Return(Some(value)) => expr_uses_variable(value, needle),
-        StmtKind::Return(None) | StmtKind::Break(_) | StmtKind::Continue(_) => false,
+        StmtKind::Return(None)
+        | StmtKind::Break(_)
+        | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_) => false,
         StmtKind::ArrayAssign { array, index, value } => {
             array == needle
                 || expr_uses_variable(index, needle)
@@ -203,12 +210,16 @@ fn expr_uses_variable(expr: &Expr, needle: &str) -> bool {
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::PtrCast { expr: inner, .. } => expr_uses_variable(inner, needle),
         ExprKind::NullCoalesce { value, default } => {
             expr_uses_variable(value, needle) || expr_uses_variable(default, needle)
         }
         ExprKind::Pipe { value, callable } => {
             expr_uses_variable(value, needle) || expr_uses_variable(callable, needle)
+        }
+        ExprKind::ListUnpack { vars, value } => {
+            vars.iter().any(|var| var == needle) || expr_uses_variable(value, needle)
         }
         ExprKind::Assignment {
             target,

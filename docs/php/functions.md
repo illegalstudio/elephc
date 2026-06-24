@@ -118,6 +118,161 @@ $values = array_map(function(int $x) use ($factor): int {
 echo $values[2]; // 9
 ```
 
+A closure parameter typed `mixed` (or left untyped, which is `mixed`) accepts any value,
+and a closure whose body is `return $param;` infers a `mixed` return type. This lets
+`array_map()` and the other callback built-ins run over heterogeneous arrays whose elements
+have different types:
+
+```php
+<?php
+$mixed = [1, "two", 3.5, true];
+$same = array_map(function(mixed $x) { return $x; }, $mixed);
+echo $same[1];                 // two — the string element is preserved, not coerced
+$types = array_map(fn($x) => gettype($x), $mixed);
+echo $types[0] . " " . $types[2]; // integer double
+```
+
+## Binding `$this` in closures
+
+A non-static closure or arrow function defined inside an instance method
+automatically binds `$this` — no `use ($this)` is needed (and, as in PHP,
+`use ($this)` is not allowed). The closure sees the live object, so reads,
+writes, and method calls through `$this` all work and persist on the instance:
+
+```php
+<?php
+class Counter {
+    private int $count = 0;
+
+    public function incrementer(): callable {
+        return function (): int {
+            $this->count += 1;       // mutates the live object
+            return $this->count;
+        };
+    }
+
+    public function labelled(string $suffix): callable {
+        return fn (): string => $this->count . $suffix;  // arrow binds $this too
+    }
+}
+
+$c = new Counter();
+$next = $c->incrementer();
+echo $next(), $next();           // 12
+echo ($c->labelled("!"))();      // 2!
+```
+
+`$this` also flows into nested closures: an inner closure defined inside an
+outer one captures `$this` transitively from the enclosing scope.
+
+### Rebinding `$this` with `Closure::bind` / `bindTo`
+
+A closure's bound `$this` can be swapped for another object, producing a new
+closure. Both the instance method `$closure->bindTo($newThis)` and the static
+`Closure::bind($closure, $newThis)` are supported; the original closure is left
+unchanged:
+
+```php
+<?php
+class Box {
+    public int $value;
+    public function __construct(int $value) { $this->value = $value; }
+    public function reader(): callable {
+        return function (): int { return $this->value; };
+    }
+}
+
+$a = new Box(7);
+$b = new Box(99);
+$read = $a->reader();
+echo $read();              // 7
+
+$rebound = $read->bindTo($b);
+echo $rebound();           // 99  (rebound to $b)
+
+$static = Closure::bind($read, $b);
+echo $static();            // 99  (static spelling)
+
+echo $read();              // 7   (original is unchanged)
+```
+
+An optional third `$scope` argument is accepted for source compatibility and
+ignored (member visibility is resolved at compile time).
+
+`$closure->call($newThis, ...$args)` binds `$this` and invokes the closure in a
+single step, returning its result:
+
+```php
+<?php
+$add = $a->reader();              // reusing Box from above (returns $this->value)
+echo $add->call($b);              // 99 — bound to $b for this one call
+```
+
+A closure defined outside any class may also reference `$this` and be bound
+later — the canonical "scope-stealing" accessor:
+
+```php
+<?php
+class Account {
+    private int $balance = 250;
+}
+
+$peek = function() { return $this->balance; };
+$read = Closure::bind($peek, new Account(), Account::class);
+echo $read();   // 250 — bound access reaches the private property
+```
+
+Rebinding supports closures that capture `$this` and nothing else (the typical
+accessor closure, whether created inside a method or standalone). Binding a
+closure that also has `use(...)` captures aborts with a fatal error rather than
+producing an incorrectly bound closure.
+
+## Untyped closure parameters
+
+A closure parameter without a type hint accepts any value, and the same closure
+may be called with arguments of different types at different call sites:
+
+```php
+<?php
+$describe = function ($value) {
+    if (is_string($value)) {
+        return "string \"" . $value . "\"";
+    }
+    if (is_int($value)) {
+        return "int " . $value;
+    }
+    return "other";
+};
+
+echo $describe("hello"), "\n"; // string "hello"
+echo $describe(42), "\n";      // int 42
+```
+
+A pass-through closure returns its argument unchanged, regardless of type, and
+that result is not coerced when returned from an enclosing function:
+
+```php
+<?php
+$identity = function ($x) { return $x; };
+
+function first(array $items, callable $fn) {
+    return $fn($items[0]);
+}
+
+echo $identity("text"), "\n";          // text
+echo first(["alpha", "beta"], $identity), "\n"; // alpha
+```
+
+Untyped parameters also work through `call_user_func` and
+`call_user_func_array`:
+
+```php
+<?php
+$identity = function ($x) { return $x; };
+echo call_user_func($identity, "world"), "\n";      // world
+echo call_user_func_array($identity, [128]), "\n";  // 128
+```
+
 ## Static closures
 
 A closure prefixed with `static` does not capture `$this` from its enclosing
@@ -184,6 +339,27 @@ $hello = $greeter->hello(...);
 echo $hello("Ada"); // Hello Ada
 ```
 
+The dynamic form `$callable(...)`, where `$callable` is a variable holding a callable (a closure,
+another first-class callable, or a callable value), creates a callable from that value. Because a
+callable-typed variable already holds a callable, the result can be stored and invoked like any
+other callable:
+
+```php
+<?php
+$f = strlen(...);
+$g = $f(...);   // re-wrap the callable held in $f
+echo $g("hello"); // 5
+```
+
+The result of a function or method call can be invoked directly by following it with another
+argument list, so a method that returns a closure can be called in one expression:
+
+```php
+<?php
+$result = $object->makeAdder(1)(41); // calls the closure returned by makeAdder
+echo Box::factory()();               // also works on static-method results
+```
+
 Captured first-class callable targets (`static::method(...)` and `$obj->method(...)`) can be called directly through a local callable variable or as an immediate callable expression such as `($obj->method(...))("Ada")`. Branch-shaped immediate calls and equivalent `call_user_func()` / `call_user_func_array()` calls that select captured callable descriptors at runtime, such as `($ok ? $a->method(...) : $b->method(...))($value)`, `($ok ? $a->method(...) : $b->method(...))(...$args, suffix: "!")`, `call_user_func($ok ? $a->method(...) : $b->method(...), $value)`, or `call_user_func_array($ok ? $a->method(...) : $b->method(...), [$value])`, route through descriptor invokers for positional arguments, named arguments, spread prefixes, defaults, and variadics. Method first-class callable variables also invoke through the stored descriptor environment, so `$fn = $obj->method(...); $obj = $other; $fn()` still uses the receiver captured when `$fn` was created while descriptor metadata applies names, defaults, variadics, and by-reference flags. A callable variable or array element whose descriptor was selected earlier at runtime also invokes through the descriptor metadata, including by-reference parameter decisions that are only known from the stored descriptor. `callable` parameters with no local signature metadata follow the same descriptor path for named arguments and positional prefixes before indexed spreads, including source-variable mutation for runtime by-reference parameters. Direct captured callable values can also be passed to callback paths that forward captured callable environments, including `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`, `preg_replace_callback()`, `call_user_func()`, and `call_user_func_array()`. When a captured callable is stored in a local variable or received through a `callable` parameter, these callback runtimes retain the descriptor itself rather than rebuilding captures from current source locals. Branch-shaped runtime selection of captured callable descriptors is supported for `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`, `preg_replace_callback()`, `iterator_apply()`, `CallbackFilterIterator`, and `RecursiveCallbackFilterIterator`. Callable descriptors carry signature defaults, by-reference flags, variadic metadata, receiver/capture environments, and the invocation shape for function, builtin, extern, closure, first-class, static-method, instance-method, callable-array, and invokable-object forms. For by-reference callback parameters, `call_user_func()` preserves source-variable mutation even when the visible callback signature is known only through the runtime descriptor. `call_user_func_array()` passes original variable slots from literal argument arrays such as `call_user_func_array($cb, [$value])`; dynamic argument arrays are accepted through temporary reference cells, so callback writes do not mutate the source array or source variable. PHP disallows nullsafe first-class callable syntax (`$obj?->method(...)`), and elephc reports the same error.
 
 `call_user_func()` and `call_user_func_array()` also accept PHP callable arrays (`[$object, "method"]`, `[ClassName::class, "method"]`) and invokable objects. Dynamic string callback dispatch resolves user functions, declared extern functions, supported builtin wrappers such as `STRLEN`, and public static method strings such as `"Formatter::wrap"`; the matched descriptor's generated invoker receives a boxed argument container, branches on whether it holds an indexed array or associative hash, applies the resolved descriptor signature, and returns a boxed `mixed`. String variables can also be invoked directly as PHP variable functions, for example `$callback = "STRLEN"; echo $callback("hello");`, and they use the same descriptor invoker path for names, defaults, variadics, and by-reference parameter metadata. Callable-array variables and literals can also be invoked directly, for example `$callback = [$object, "wrap"]; echo $callback(value: "ok");` or `([$object, "wrap"])(value: "ok")`, and direct instance-method callable arrays read the receiver stored in the callable array before invoking the descriptor. Objects with public `__invoke()` can also be called directly through descriptor metadata, so `$runner(suffix: "?")` and `(new Runner())(suffix: "?")` apply defaults, named arguments, variadics, and by-reference flags through the same invoker path. Direct callable-array variables and literals may resolve the method or static receiver from runtime strings, so `$method = "wrap"; $callback = [$object, $method]; $callback(...)`, `([$object, $method])(...)`, `$callback = [$class, $method]; ($callback)(...)`, and `([$class, $method])(...)` select the matching public method descriptor at the call site. Public static-method callable arrays use the same descriptor invoker path for direct variable and literal calls, `call_user_func()`, and `call_user_func_array()`, including associative argument containers and positional prefixes before indexed spreads. Public instance-method callable arrays and invokable objects use descriptor invokers for direct `call_user_func()` calls, including single-spread forwarding such as `call_user_func([$object, "method"], ...$args)` and positional prefixes followed by indexed spreads such as `call_user_func([$object, "method"], "head", ...$args)`. They use the same descriptor path for `call_user_func_array()` calls with literal indexed, literal associative, dynamic indexed, dynamic associative, or runtime-opaque `mixed`/union argument containers. Receiver-bound runtime-opaque containers are unboxed at runtime, dispatch by indexed-array versus associative-hash tag, and prepend the receiver as descriptor slot zero before invoking the descriptor adapter. For `call_user_func_array()`, descriptor invokers operate on a cloned Mixed argument container so the caller's `$args` array keeps its original layout after invocation.
@@ -201,6 +377,10 @@ function test() {
 
 ## Static variables
 
+A `static` variable keeps its value between calls to the function. Several variables may be declared
+in one `static` statement, separated by commas, and an initializer may be omitted (it defaults to
+`null`, exactly like `static $x = null;`).
+
 ```php
 <?php
 function counter() {
@@ -210,6 +390,15 @@ function counter() {
 }
 counter(); // 1
 counter(); // 2
+
+function totals() {
+    static $hits = 0, $misses = 0; // one persistent slot each
+    // ...
+}
+
+function once() {
+    static $cache; // no initializer — defaults to null on the first call
+}
 ```
 
 ## Pass by reference

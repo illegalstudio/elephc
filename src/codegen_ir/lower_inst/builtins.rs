@@ -74,6 +74,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "phpversion" => lower_phpversion(ctx, inst),
         "strlen" => lower_strlen(ctx, inst),
         "count" => lower_count(ctx, inst),
+        "closure_bind" => lower_closure_bind(ctx, inst),
         "buffer_len" => buffers::lower_buffer_len(ctx, inst),
         "buffer_free" => buffers::lower_buffer_free(ctx, inst),
         "ptr" => pointers::lower_ptr(ctx, inst),
@@ -147,6 +148,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "unset" => types::lower_unset_builtin(ctx, inst),
         "isset" => isset::lower_isset(ctx, inst),
         "gettype" => lower_gettype(ctx, inst),
+        "get_debug_type" => lower_get_debug_type(ctx, inst),
         "define" => lower_define(ctx, inst),
         "defined" => lower_defined(ctx, inst),
         "file_get_contents" => io::lower_file_get_contents(ctx, inst),
@@ -327,6 +329,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "json_last_error_msg" => json::lower_json_last_error_msg(ctx, inst),
         "json_validate" => json::lower_json_validate(ctx, inst),
         "function_exists" => lower_function_exists(ctx, inst),
+        "extension_loaded" => lower_extension_loaded(ctx, inst),
         "class_exists" | "interface_exists" | "trait_exists" | "enum_exists" => {
             lower_class_like_exists(ctx, inst, key.as_str())
         }
@@ -717,6 +720,111 @@ fn emit_type_name_result(ctx: &mut FunctionContext<'_>, type_name: &[u8]) {
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
 }
 
+/// Lowers `get_debug_type(value)` — PHP 8's type-name helper. Like `gettype()` but with the short
+/// scalar spellings (`int`/`float`/`string`/`bool`/`null`) and an object's class name in place of
+/// the literal "object".
+fn lower_get_debug_type(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "get_debug_type", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let ty = ctx.raw_value_php_type(value)?;
+    if matches!(ty, PhpType::TaggedScalar) {
+        emit_tagged_scalar_get_debug_type(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        emit_mixed_get_debug_type(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
+    if matches!(ty, PhpType::Object(_)) {
+        // Objects report their runtime class name, exactly like get_class().
+        ctx.load_value_to_result(value)?;
+        types::emit_dynamic_object_class_name(ctx, "get_class");
+        return store_if_result(ctx, inst);
+    }
+    let Some(type_name) = static_get_debug_type_name(&ty) else {
+        return Err(CodegenIrError::unsupported(format!(
+            "get_debug_type for PHP type {:?}",
+            ty
+        )));
+    };
+    emit_type_name_result(ctx, type_name);
+    store_if_result(ctx, inst)
+}
+
+/// Emits `get_debug_type()` for an inline tagged scalar (`int` or `null`).
+fn emit_tagged_scalar_get_debug_type(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let null_case = ctx.next_label("debugtype_tagged_null");
+    let done = ctx.next_label("debugtype_tagged_done");
+    ctx.load_value_to_result(value)?;
+    crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &null_case);
+    emit_type_name_result(ctx, b"int");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&null_case);
+    emit_type_name_result(ctx, b"null");
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Emits `get_debug_type()` for a boxed Mixed/Union payload by dispatching on the runtime tag,
+/// reading the runtime class name for objects.
+fn emit_mixed_get_debug_type(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let integer_case = ctx.next_label("debugtype_mixed_int");
+    let double_case = ctx.next_label("debugtype_mixed_float");
+    let string_case = ctx.next_label("debugtype_mixed_string");
+    let boolean_case = ctx.next_label("debugtype_mixed_bool");
+    let null_case = ctx.next_label("debugtype_mixed_null");
+    let array_case = ctx.next_label("debugtype_mixed_array");
+    let object_case = ctx.next_label("debugtype_mixed_object");
+    let resource_case = ctx.next_label("debugtype_mixed_resource");
+    let done = ctx.next_label("debugtype_mixed_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_on_gettype_mixed_tag(ctx, 0, &integer_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 1, &string_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 2, &double_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 3, &boolean_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 4, &array_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 5, &array_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 6, &object_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_case);
+    abi::emit_jump(ctx.emitter, &null_case);
+
+    emit_mixed_gettype_case(ctx, &integer_case, b"int", &done);
+    emit_mixed_gettype_case(ctx, &double_case, b"float", &done);
+    emit_mixed_gettype_case(ctx, &string_case, b"string", &done);
+    emit_mixed_gettype_case(ctx, &boolean_case, b"bool", &done);
+    emit_mixed_gettype_case(ctx, &null_case, b"null", &done);
+    emit_mixed_gettype_case(ctx, &array_case, b"array", &done);
+    emit_mixed_gettype_case(ctx, &resource_case, b"resource", &done);
+
+    // Object payload: report the runtime class name.
+    ctx.emitter.label(&object_case);
+    types::emit_mixed_object_class_name(ctx, value, "get_class")?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Returns PHP's `get_debug_type()` spelling for concrete statically known non-object types.
+fn static_get_debug_type_name(ty: &PhpType) -> Option<&'static [u8]> {
+    match ty {
+        PhpType::Int => Some(b"int".as_slice()),
+        PhpType::Float => Some(b"float".as_slice()),
+        PhpType::Str => Some(b"string".as_slice()),
+        PhpType::Bool => Some(b"bool".as_slice()),
+        PhpType::Void | PhpType::Never => Some(b"null".as_slice()),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            Some(b"array".as_slice())
+        }
+        PhpType::Resource(_) => Some(b"resource".as_slice()),
+        _ => None,
+    }
+}
+
 /// Lowers `phpversion()` as the compiler package version string.
 fn lower_phpversion(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "phpversion", 0)?;
@@ -756,6 +864,40 @@ fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
             || crate::name_resolver::is_date_procedural_alias(&function_name);
         emit_static_bool(ctx, exists);
     }
+    store_if_result(ctx, inst)
+}
+
+/// Extension names elephc reports as loaded for `extension_loaded()`.
+///
+/// elephc is a closed-world AOT compiler with no dynamically loaded PHP
+/// extensions, so this set is conservatively empty: every query resolves to
+/// `false`. PHP polyfills guarded by `if (!extension_loaded('x'))` therefore
+/// keep their userland fallback, while elephc-provided functions are surfaced
+/// through `function_exists()` and the builtin catalog instead. Extend this set
+/// only when elephc genuinely emulates a named extension's full surface.
+const LOADED_EXTENSIONS: &[&str] = &[];
+
+/// Returns whether elephc reports the named PHP extension as loaded.
+///
+/// The comparison is case-insensitive to match PHP, which treats extension
+/// names case-insensitively in `extension_loaded()`.
+fn extension_is_loaded(name: &str) -> bool {
+    let key = name.trim_start_matches('\\').to_ascii_lowercase();
+    LOADED_EXTENSIONS
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(&key))
+}
+
+/// Lowers `extension_loaded("name")` to a compile-time constant boolean.
+///
+/// In the closed-world AOT model the loaded-extension set is fixed at compile
+/// time, so the result is materialized as a static `0`/`1` rather than a
+/// runtime query.
+fn lower_extension_loaded(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "extension_loaded", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let extension_name = const_string_operand(ctx, value)?;
+    emit_static_bool(ctx, extension_is_loaded(&extension_name));
     store_if_result(ctx, inst)
 }
 
@@ -931,6 +1073,27 @@ fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> 
             other
         ))),
     }
+}
+
+/// Lowers the synthetic `closure_bind` call: rebinds a closure's captured
+/// `$this` to a new receiver via `__rt_closure_bind(descriptor, new_this)`,
+/// returning the rebound closure descriptor.
+fn lower_closure_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "closure_bind", 2)?;
+    let descriptor = expect_operand(inst, 0)?;
+    let new_this = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(descriptor, "x0")?;
+            ctx.load_value_to_reg(new_this, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(descriptor, "rdi")?;
+            ctx.load_value_to_reg(new_this, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_closure_bind");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `strlen()` by coercing string-like values and returning the byte length.

@@ -211,6 +211,16 @@ impl Checker {
             &format!("Constructor '{}::__construct'", class_name),
         )?;
 
+        if class_name == "ReflectionFunction" {
+            let function_name = self.reflection_string_literal_arg(
+                class_name,
+                "function name",
+                normalized_args.first(),
+                env,
+            )?;
+            return self.validate_reflection_function_target(&function_name, expr);
+        }
+
         let reflected_class =
             self.reflection_class_literal_arg(class_name, &normalized_args[0], env)?;
         match class_name {
@@ -318,6 +328,33 @@ impl Checker {
                     reflection_type, label
                 ),
             )),
+        }
+    }
+
+    /// Validates that `new ReflectionFunction($name)` targets a known
+    /// user-defined function (matched case-insensitively, as PHP function names
+    /// are). Builtin functions are not yet reflectable.
+    fn validate_reflection_function_target(
+        &self,
+        function_name: &str,
+        expr: &Expr,
+    ) -> Result<(), CompileError> {
+        let key = crate::names::php_symbol_key(function_name.trim_start_matches('\\'));
+        let exists = self
+            .fn_decls
+            .keys()
+            .chain(self.functions.keys())
+            .any(|name| crate::names::php_symbol_key(name.trim_start_matches('\\')) == key);
+        if exists {
+            Ok(())
+        } else {
+            Err(CompileError::new(
+                expr.span,
+                &format!(
+                    "ReflectionFunction::__construct(): undefined function '{}'",
+                    function_name
+                ),
+            ))
         }
     }
 
@@ -878,7 +915,10 @@ fn fiber_callable_array_parts(expr: &Expr) -> Option<(&Expr, &str)> {
 fn is_reflection_owner_class(class_name: &str) -> bool {
     matches!(
         class_name,
-        "ReflectionClass" | "ReflectionMethod" | "ReflectionProperty"
+        "ReflectionClass"
+            | "ReflectionMethod"
+            | "ReflectionProperty"
+            | "ReflectionFunction"
     )
 }
 
@@ -891,7 +931,7 @@ fn is_phar_archive_class(class_name: &str) -> bool {
 /// arg is `None` (indicating unsupported metadata).
 fn attributes_have_unsupported_args(
     names: &[String],
-    args: &[Option<Vec<crate::types::AttrArgValue>>],
+    args: &[Option<Vec<crate::types::AttrArgEntry>>],
 ) -> bool {
     names.len() != args.len() || args.iter().any(Option::is_none)
 }

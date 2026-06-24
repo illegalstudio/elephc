@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
+use crate::resolver::path_eval::fold_dirname;
 
 use super::rule::AutoloadRule;
 
@@ -400,24 +401,6 @@ fn fold_sprintf(format: &str, substitutions: &[String]) -> Option<String> {
         }
     }
     Some(out)
-}
-
-/// `dirname(path, levels)` — strip `levels` trailing path components.
-/// Levels is clamped at 1 when the input is missing or invalid (PHP
-/// default).
-fn fold_dirname(path: &str, levels: i64) -> Option<String> {
-    let mut current = path.to_string();
-    for _ in 0..levels {
-        let parent = Path::new(&current).parent()?;
-        let parent_str = parent.to_string_lossy().into_owned();
-        if parent_str.is_empty() {
-            // PHP returns "." for empty parents.
-            current = ".".to_string();
-        } else {
-            current = parent_str;
-        }
-    }
-    Some(current)
 }
 
 /// Check if a path is readable (file or directory).

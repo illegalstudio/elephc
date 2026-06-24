@@ -118,6 +118,57 @@ counter();
     assert_eq!(out, "123");
 }
 
+/// Verifies a comma-separated `static` declaration creates one persistent slot per variable, each
+/// with its own initializer. `static $a = 1, $b = 2, $c = 3;` reads back as `123`.
+#[test]
+fn test_static_multiple_declaration_initializers() {
+    let out = compile_and_run(
+        r#"<?php
+function c() {
+    static $a = 1, $b = 2, $c = 3;
+    return $a * 100 + $b * 10 + $c;
+}
+echo c();
+"#,
+    );
+    assert_eq!(out, "123");
+}
+
+/// Verifies comma-separated static variables persist and mutate independently across calls:
+/// `$a` counts up from 0 while `$b` counts down from 100.
+#[test]
+fn test_static_multiple_declaration_persist_independently() {
+    let out = compile_and_run(
+        r#"<?php
+function c() {
+    static $a = 0, $b = 100;
+    $a = $a + 1;
+    $b = $b - 1;
+    return $a . ":" . $b;
+}
+echo c(), " ", c(), " ", c();
+"#,
+    );
+    assert_eq!(out, "1:99 2:98 3:97");
+}
+
+/// Verifies a `static` variable with no explicit initializer parses and defaults to null, matching
+/// PHP's `static $x;` (equivalent to `static $x = null;`). Here the unused declaration compiles and
+/// the function returns normally.
+#[test]
+fn test_static_no_initializer_defaults_null() {
+    let out = compile_and_run(
+        r#"<?php
+function c() {
+    static $x;
+    return 7;
+}
+echo c();
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
 /// Verifies that a static variable inside a closure links and persists across calls.
 #[test]
 fn test_closure_static_local_preserves_value_across_calls() {

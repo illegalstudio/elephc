@@ -16,6 +16,49 @@ fn test_error_missing_open_tag() {
     expect_error("echo \"hi\";", "<?php");
 }
 
+/// Verifies a token that cannot begin an expression (`=>`) is still rejected at statement
+/// position. The bare-expression-statement fallback only fires for prefix-expression starters,
+/// so genuinely invalid leading tokens keep the "statement position" diagnostic.
+#[test]
+fn test_error_non_expression_token_at_statement_position() {
+    expect_error("<?php => 5;", "statement position");
+}
+
+/// Verifies a value-led bare expression statement still requires its terminating semicolon:
+/// `0 > $x` with no `;` is reported, not silently accepted.
+#[test]
+fn test_error_value_led_statement_missing_semicolon() {
+    expect_error("<?php 0 > $x", "Expected ';'");
+}
+
+/// Verifies that binding `=` to the adjacent lvalue inside an expression does not silently accept
+/// a genuinely invalid target: `cond ?: f() = 5;` (a call result is not assignable) is still
+/// reported as an invalid assignment target rather than parsed.
+#[test]
+fn test_error_short_ternary_else_invalid_assignment_target() {
+    expect_error("<?php false ?: bar() = 5;", "Invalid assignment target");
+}
+
+/// Verifies that `goto` with no following label name is a parse error rather than a silent accept.
+#[test]
+fn test_error_goto_without_label() {
+    expect_error("<?php goto;", "expected a label name after `goto`");
+}
+
+/// Verifies that a `goto` to a label that is never defined in the same scope is reported, instead
+/// of failing an internal EIR block-terminator check.
+#[test]
+fn test_error_goto_undefined_label() {
+    expect_error("<?php echo 1; goto nowhere;", "undefined label 'nowhere'");
+}
+
+/// Verifies that defining the same label twice in one scope is rejected, since it would make any
+/// `goto` to that name an ambiguous jump target.
+#[test]
+fn test_error_duplicate_label() {
+    expect_error("<?php dup: echo 1; dup: echo 2;", "label 'dup' already defined");
+}
+
 /// Verifies the error diagnostic for unterminated string.
 #[test]
 fn test_error_unterminated_string() {
@@ -79,6 +122,34 @@ fn test_error_unexpected_character() {
     expect_error("<?php `", "Unexpected character");
 }
 
+/// Verifies that a malformed prefix increment target reports a clean diagnostic.
+/// `++$o->;` enters the complex-l-value prefix-incdec path and fails parsing the
+/// property name after `->` rather than producing a confusing fallback error.
+#[test]
+fn test_error_prefix_increment_malformed_property_target() {
+    expect_error(
+        "<?php $o = 1; ++$o->;",
+        "Expected property or method name after '->'",
+    );
+}
+
+/// Verifies that prefix-incrementing a non-l-value in expression position is rejected.
+/// `$x = ++5;` cannot increment an integer literal, matching PHP's parse-time rejection.
+#[test]
+fn test_error_prefix_increment_non_lvalue_in_expression() {
+    expect_error("<?php $x = ++5;", "Expected variable after '++'");
+}
+
+/// Verifies that incrementing a method-call result (not an l-value) is rejected, rather
+/// than silently miscompiling the complex-l-value increment desugar.
+#[test]
+fn test_error_increment_method_call_result() {
+    expect_error(
+        "<?php class C { function m() { return 1; } } $o = new C(); $x = ++$o->m();",
+        "Expected variable after '++'",
+    );
+}
+
 /// Verifies the error diagnostic for empty list destructuring pattern.
 #[test]
 fn test_error_empty_list_destructuring_pattern() {
@@ -108,6 +179,30 @@ fn test_error_list_destructuring_mixes_keyed_and_unkeyed_entries() {
 fn test_error_list_destructuring_requires_writable_target() {
     // The list pattern left-hand side must be writable; an expression like `1 + 2` is invalid.
     expect_error("<?php [1 + 2] = [3];", "Invalid list destructuring target");
+}
+
+// --- foreach array destructuring errors ---
+
+/// Verifies an empty foreach destructure pattern (`foreach ($a as [])`) is rejected.
+#[test]
+fn test_error_foreach_destructure_empty_pattern() {
+    expect_error("<?php foreach ($a as []) {}", "Cannot use empty list");
+}
+
+/// Verifies a foreach destructure pattern that mixes keyed and unkeyed entries is rejected,
+/// matching standalone list destructuring.
+#[test]
+fn test_error_foreach_destructure_mixes_keyed_and_unkeyed() {
+    expect_error(
+        "<?php foreach ($a as [$x, \"k\" => $y]) {}",
+        "Cannot mix keyed and unkeyed list entries",
+    );
+}
+
+/// Verifies a foreach destructure pattern with a non-writable target is rejected.
+#[test]
+fn test_error_foreach_destructure_invalid_target() {
+    expect_error("<?php foreach ($a as [1 + 2]) {}", "Invalid list destructuring target");
 }
 
 // --- Attribute syntax errors ---
@@ -398,11 +493,13 @@ fn test_error_unexpected_token_in_expr() {
     expect_error("<?php echo ;", "Unexpected token");
 }
 
-/// Verifies the error diagnostic for unexpected token in stmt.
+/// Verifies the error diagnostic for an unexpected token in statement position. A leading
+/// binary operator like `*` cannot begin an expression, so it is rejected. (A bare value
+/// expression such as `42;` is valid PHP and now parses as an expression statement, so it is
+/// no longer an error case.)
 #[test]
 fn test_error_unexpected_token_in_stmt() {
-    // A bare expression statement (e.g., `42;`) in statement position produces "Unexpected token".
-    expect_error("<?php 42;", "Unexpected token");
+    expect_error("<?php * 5;", "Unexpected token");
 }
 
 /// Verifies the error diagnostic for missing function name.
@@ -510,5 +607,65 @@ fn test_error_extern_missing_function() {
     expect_error(
         "<?php extern badkw;",
         "Expected 'function', string literal, 'class', or 'global' after 'extern'",
+    );
+}
+
+// --- Dynamic `new` with complex class-name expression errors ---
+
+/// Verifies that a dynamic-`new` class-name dereference chain without a constructor
+/// argument list (`new $arr['k']` with no following `(`) is rejected, since the `()` is
+/// required to distinguish object construction from a bare class-name expression.
+#[test]
+fn test_error_new_dynamic_array_access_missing_parens() {
+    expect_error(
+        "<?php $arr = []; $o = new $arr['k'];",
+        "Expected '(' after class-name expression in 'new'",
+    );
+}
+
+/// Verifies that the PHP 8.0 parenthesized `new (expr)` form without a constructor argument
+/// list (`new (pick())` with no following `(`) is rejected.
+#[test]
+fn test_error_new_dynamic_parenthesized_missing_ctor_parens() {
+    expect_error(
+        "<?php function pick(): string { return 'P'; } $o = new (pick());",
+        "Expected '(' after class-name expression in 'new'",
+    );
+}
+
+// --- Long-form `array(...)` literal errors ---
+
+/// Verifies that a long-form `array(...)` literal missing a comma between elements is reported as
+/// an array-element error, confirming `array(` is parsed as the array-literal construct rather
+/// than a function call (which would instead complain about arguments).
+#[test]
+fn test_error_long_array_missing_comma() {
+    expect_error(
+        "<?php $x = array(1 2);",
+        "Expected ',' between array elements",
+    );
+}
+
+// --- Assignment-in-expression target errors ---
+
+/// Verifies that the lvalue-binding rule for `=` does not weaken target checking: assigning to a
+/// non-lvalue such as `($a + $b)` still produces "Invalid assignment target". The rule only lets
+/// `=` bind to an adjacent *lvalue* (e.g. `false !== $x = 3`), never to an arithmetic result.
+#[test]
+fn test_error_assignment_to_non_lvalue() {
+    expect_error(
+        "<?php $a = 1; $b = 2; ($a + $b) = 5;",
+        "Invalid assignment target",
+    );
+}
+
+/// Verifies that a keyed list target used in expression position is rejected: only simple
+/// positional `[$a, $b]` list-destructuring is supported as an expression, so the keyed form
+/// `["k" => $v] = $x` (valid only as a statement) reports "Invalid assignment target".
+#[test]
+fn test_error_keyed_list_unpack_in_expression() {
+    expect_error(
+        "<?php $x = []; $r = ([\"k\" => $v] = $x);",
+        "Invalid assignment target",
     );
 }

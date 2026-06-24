@@ -22,12 +22,14 @@ use crate::names::{Name, NameKind};
 use crate::parser::ast::{AttributeGroup, ExprKind, Stmt, StmtKind};
 use crate::parser::control;
 use crate::parser::expr::parse_expr;
+use crate::parser::expr::token_starts_prefix_expression;
 use crate::span::Span;
 
 pub use ffi::parse_extern_stmts;
 pub(crate) use oop::parse_anonymous_class;
 pub(crate) use params::{looks_like_typed_param, parse_type_expr};
 pub(crate) use assign::can_replay_assignment_target;
+pub(crate) use assign::parse_and_lower_foreach_destructure;
 
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.
 pub fn parse_stmt(tokens: &[(Token, Span)], pos: &mut usize) -> Result<Stmt, CompileError> {
@@ -102,7 +104,12 @@ fn parse_stmt_dispatch(
         Token::At => simple::parse_error_suppressed_stmt(tokens, pos, span),
         Token::Variable(_) => assign::parse_variable_stmt(tokens, pos, span),
         Token::This => simple::parse_this_stmt(tokens, pos, span),
-        Token::PlusPlus | Token::MinusMinus => assign::parse_incdec_stmt(tokens, pos, span),
+        Token::PlusPlus | Token::MinusMinus => {
+            match assign::try_parse_prefix_incdec(tokens, pos, span)? {
+                Some(stmt) => Ok(stmt),
+                None => assign::parse_incdec_stmt(tokens, pos, span),
+            }
+        }
         Token::Class => oop::parse_class_decl(tokens, pos, span, false, false, false),
         Token::Enum => oop::parse_enum_decl(tokens, pos, span),
         Token::ReadOnly => oop::parse_readonly_decl(tokens, pos, span),
@@ -142,6 +149,16 @@ fn parse_stmt_dispatch(
             }
         }
         Token::LBracket => assign::parse_list_unpack(tokens, pos, span),
+        // Label declaration `name:` (a `goto` target). A bare identifier immediately followed by a
+        // single `:` is a PHP label. `::` lexes as one `DoubleColon` token, so this never collides
+        // with a static reference (`Name::x`), and a constant-expression statement is `NAME;`.
+        Token::Identifier(name)
+            if matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::Colon)) =>
+        {
+            let name = name.clone();
+            *pos += 2; // consume the label identifier and its trailing colon
+            Ok(Stmt::new(StmtKind::Label(name), span))
+        }
         Token::Identifier(_)
         | Token::Self_
         | Token::Parent
@@ -192,6 +209,20 @@ fn parse_stmt_dispatch(
             expect_semicolon(tokens, pos)?;
             Ok(Stmt::new(StmtKind::Continue(levels), span))
         }
+        Token::Goto => {
+            *pos += 1; // consume `goto`
+            let label = parse_goto_label(tokens, pos, span)?;
+            expect_semicolon(tokens, pos)?;
+            Ok(Stmt::new(StmtKind::Goto(label), span))
+        }
+        // Bare expression statement led by a value or unary operator (e.g.
+        // `0 > $T && $T += 0x40;`, `!$ok && fail();`, `new Foo();`). PHP allows any
+        // expression as a statement; the keyword/variable/identifier forms are routed by
+        // the arms above, so anything reaching here that can start a prefix expression is
+        // parsed as `expr ;`. Tokens that cannot begin an expression still error below.
+        other if token_starts_prefix_expression(other) => {
+            simple::parse_expr_stmt(tokens, pos, span)
+        }
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token at statement position: {:?}", other),
@@ -228,6 +259,29 @@ fn parse_loop_exit_level(
         _ => Err(CompileError::new(
             expr.span,
             &format!("{} operator requires an integer literal level", keyword),
+        )),
+    }
+}
+
+/// Parses the target label name that follows a `goto` keyword.
+///
+/// PHP labels are plain identifiers, so the next token must be an `Identifier`; anything else
+/// (reserved keyword, operator, end of input) is rejected with a diagnostic pointing at the
+/// `goto` statement. Advances `pos` past the consumed identifier on success.
+fn parse_goto_label(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<String, CompileError> {
+    match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::Identifier(name)) => {
+            let name = name.clone();
+            *pos += 1; // consume the label identifier
+            Ok(name)
+        }
+        _ => Err(CompileError::new(
+            span,
+            "expected a label name after `goto`",
         )),
     }
 }

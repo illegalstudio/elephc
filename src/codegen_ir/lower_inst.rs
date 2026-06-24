@@ -81,6 +81,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
         Op::AliasLocalRefCell => lower_alias_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
+        Op::RefAssignElement => hashes::lower_ref_assign_element(ctx, &inst),
+        Op::RefAssignProperty => hashes::lower_ref_assign_property(ctx, &inst),
+        Op::MixedToOwnedHash => hashes::lower_mixed_to_owned_hash(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::StoreGlobal => lower_store_global(ctx, &inst),
         Op::ExternGlobalLoad => lower_extern_global_load(ctx, &inst),
@@ -144,6 +147,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashLen => hashes::lower_hash_len(ctx, &inst),
         Op::HashGet => hashes::lower_hash_get(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
+        Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
         Op::HashUnion => hashes::lower_hash_union(ctx, &inst),
         Op::HashArrayUnion => hashes::lower_hash_array_union(ctx, &inst),
         Op::IterStart => iterators::lower_iter_start(ctx, &inst),
@@ -157,6 +161,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::BufferGet => buffers::lower_buffer_get(ctx, &inst),
         Op::BufferSet => buffers::lower_buffer_set(ctx, &inst),
         Op::ObjectNew => objects::lower_object_new(ctx, &inst),
+        Op::ObjectClone => objects::lower_object_clone(ctx, &inst),
         Op::DynamicObjectNew => objects::lower_dynamic_object_new(ctx, &inst),
         Op::DynamicObjectNewMixed => objects::lower_dynamic_object_new_mixed(ctx, &inst),
         Op::PropGet => objects::lower_prop_get(ctx, &inst),
@@ -5435,6 +5440,9 @@ fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
 /// Lowers an explicit local ref-cell load into the result register and SSA slot.
 fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
+    if ctx.is_boxed_refcell_slot(slot) {
+        return hashes::lower_load_boxed_refcell(ctx, inst);
+    }
     let result = inst.result.ok_or_else(|| {
         CodegenIrError::invalid_module("load_ref_cell missing result value")
     })?;
@@ -5622,6 +5630,9 @@ fn instruction_for_value<'a>(
 /// Lowers an explicit local ref-cell store through the pointer held in the slot.
 fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
+    if ctx.is_boxed_refcell_slot(slot) {
+        return hashes::lower_store_boxed_refcell(ctx, inst);
+    }
     let value = expect_operand(inst, 0)?;
     store_value_to_ref_cell_as(ctx, slot, value, &inst.result_php_type)
 }

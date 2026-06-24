@@ -158,6 +158,7 @@ fn expr_refs_listid(expr: &Expr) -> bool {
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::YieldFrom(inner) => expr_refs_listid(inner),
         ExprKind::NullCoalesce { value, default }
         | ExprKind::ShortTernary { value, default } => {
@@ -166,6 +167,7 @@ fn expr_refs_listid(expr: &Expr) -> bool {
         ExprKind::Pipe { value, callable } => {
             expr_refs_listid(value) || expr_refs_listid(callable)
         }
+        ExprKind::ListUnpack { value, .. } => expr_refs_listid(value),
         ExprKind::Assignment {
             target,
             value,
@@ -249,6 +251,8 @@ fn stmt_refs_listid(stmt: &Stmt) -> bool {
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
@@ -307,6 +311,7 @@ fn stmt_refs_listid(stmt: &Stmt) -> bool {
         StmtKind::NestedArrayAssign { target, value } => {
             expr_refs_listid(target) || expr_refs_listid(value)
         }
+        StmtKind::RefAssignTarget { target, .. } => expr_refs_listid(target),
         StmtKind::ArrayPush { value, .. } => expr_refs_listid(value),
         StmtKind::TypedAssign { value, .. } => expr_refs_listid(value),
         StmtKind::Foreach { array, body, .. } => {

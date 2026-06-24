@@ -41,6 +41,62 @@ fn test_post_decrement() {
     assert_eq!(out, "4 5");
 }
 
+/// Verifies prefix `++` on an object property statement (`++$o->count;`).
+/// In statement position the result is discarded, so it lowers like `$o->count += 1`.
+/// Fixture: a class with `int $count = 0`, expects the property to read back as 1.
+#[test]
+fn test_pre_increment_property() {
+    let out = compile_and_run(
+        "<?php class C { public int $count = 0; } $o = new C(); ++$o->count; echo $o->count;",
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies prefix `--` on an object property statement (`--$o->count;`).
+/// Fixture: a class with `int $count = 3`, expects the property to read back as 2.
+#[test]
+fn test_pre_decrement_property() {
+    let out = compile_and_run(
+        "<?php class C { public int $count = 3; } $o = new C(); --$o->count; echo $o->count;",
+    );
+    assert_eq!(out, "2");
+}
+
+/// Verifies prefix `++` on a string-keyed array element statement (`++$a["k"];`).
+/// Fixture: `["k" => 5]`, expects the element to read back as 6.
+#[test]
+fn test_pre_increment_array_element() {
+    let out = compile_and_run("<?php $a = [\"k\" => 5]; ++$a[\"k\"]; echo $a[\"k\"];");
+    assert_eq!(out, "6");
+}
+
+/// Verifies prefix `--` on a string-keyed array element statement (`--$a["k"];`).
+/// Fixture: `["k" => 5]`, expects the element to read back as 4.
+#[test]
+fn test_pre_decrement_array_element() {
+    let out = compile_and_run("<?php $a = [\"k\" => 5]; --$a[\"k\"]; echo $a[\"k\"];");
+    assert_eq!(out, "4");
+}
+
+/// Verifies prefix `++` on an integer-indexed array element statement (`++$a[1];`).
+/// Fixture: `[10, 20]`, expects index 1 to read back as 21.
+#[test]
+fn test_pre_increment_indexed_array_element() {
+    let out = compile_and_run("<?php $a = [10, 20]; ++$a[1]; echo $a[1];");
+    assert_eq!(out, "21");
+}
+
+/// Verifies repeated prefix `++` on a property inside a loop accumulates correctly.
+/// Mirrors the Symfony DeepClone `++$value->count;` pattern that motivated the fix.
+/// Fixture: increments `$o->count` three times, expects 3.
+#[test]
+fn test_pre_increment_property_in_loop() {
+    let out = compile_and_run(
+        "<?php class C { public int $count = 0; } $o = new C(); foreach ([1, 2, 3] as $x) { ++$o->count; } echo $o->count;",
+    );
+    assert_eq!(out, "3");
+}
+
 /// Verifies `+=` compound addition on integer locals.
 /// Fixture: `$x = 10; $x += 5;` expects output "15".
 #[test]
@@ -441,4 +497,278 @@ echo C::init();
 "#,
     );
     assert_eq!(out, "84");
+}
+
+/// Verifies that `=` binds to the immediately-preceding lvalue inside a comparison:
+/// `false !== $pos = strrpos(...)` parses as `false !== ($pos = strrpos(...))`, so the
+/// assignment runs and `$pos` holds the result. This is the pervasive PHP/Composer idiom.
+/// Output cross-checked with `php -r`.
+#[test]
+fn test_assignment_in_comparison_binds_to_lvalue() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "Foo\\Bar\\Baz";
+if (false !== $pos = strrpos($s, "\\")) {
+    echo "pos=" . $pos;
+}
+"#,
+    );
+    assert_eq!(out, "pos=7");
+}
+
+/// Verifies that `=` binds to the adjacent lvalue under arithmetic: `1 + $b = 5` evaluates as
+/// `1 + ($b = 5)`, yielding 6 and storing 5 in `$b`. Output cross-checked with `php -r`.
+#[test]
+fn test_assignment_under_arithmetic_binds_to_lvalue() {
+    let out = compile_and_run("<?php $b = 0; $r = 1 + $b = 5; echo $r . \":\" . $b;");
+    assert_eq!(out, "6:5");
+}
+
+/// Verifies that `=` binds to the adjacent lvalue under the prefix `!`: `!$b = 7` evaluates as
+/// `!($b = 7)`, yielding false and storing 7 in `$b`. Output cross-checked with `php -r`.
+#[test]
+fn test_assignment_under_prefix_not_binds_to_lvalue() {
+    let out = compile_and_run("<?php $b = 0; $x = !$b = 7; echo ($x ? \"T\" : \"F\") . \":\" . $b;");
+    assert_eq!(out, "F:7");
+}
+
+/// Verifies that the lvalue-binding rule preserves right-associative chained assignment:
+/// `$a = $b = 9` still assigns 9 to both. Regression guard for the precedence change.
+#[test]
+fn test_chained_assignment_still_right_associative() {
+    let out = compile_and_run("<?php $a = 0; $b = 0; $a = $b = 9; echo $a . \":\" . $b;");
+    assert_eq!(out, "9:9");
+}
+
+/// Verifies that an assignment RHS still captures a trailing ternary: `$b = 1 ? 10 : 20`
+/// parses as `$b = (1 ? 10 : 20)`, storing 10. Regression guard that the low assignment
+/// right-binding-power is unchanged by the lvalue-binding rule. Cross-checked with `php -r`.
+#[test]
+fn test_assignment_rhs_still_captures_ternary() {
+    let out = compile_and_run("<?php $b = 0; $r = $b = 1 ? 10 : 20; echo $r . \":\" . $b;");
+    assert_eq!(out, "10:10");
+}
+
+/// Verifies list-destructuring assignment used as an `if` condition: `if ([$a, $b] = $pairs)`
+/// assigns the elements (visible in the body) and tests the truthiness of the array. This is
+/// the Composer/Symfony idiom. Output cross-checked with `php -r`.
+#[test]
+fn test_list_unpack_expression_as_if_condition() {
+    let out = compile_and_run(
+        r#"<?php
+$pairs = [4, 9];
+if ([$a, $b] = $pairs) {
+    echo "sum:" . ($a + $b);
+}
+"#,
+    );
+    assert_eq!(out, "sum:13");
+}
+
+/// Verifies that a list-destructuring assignment used as an expression yields its right-hand
+/// side (the whole array), as in PHP. Cross-checked with `php -r`.
+#[test]
+fn test_list_unpack_expression_yields_rhs() {
+    let out = compile_and_run(
+        r#"<?php
+$src = [10, 20];
+$r = [$x, $y] = $src;
+echo $r[0] . "," . $r[1] . "|" . $x . "," . $y;
+"#,
+    );
+    assert_eq!(out, "10,20|10,20");
+}
+
+/// Verifies that a list-destructuring assignment over a `null` source is falsy and does not
+/// crash (PHP assigns `null` to each target and the expression is `null`). Cross-checked with
+/// `php -r`.
+#[test]
+fn test_list_unpack_expression_null_source_is_falsy() {
+    let out = compile_and_run(
+        r#"<?php
+function maybe(): ?array { return null; }
+$v = maybe();
+if ([$a, $b] = $v) {
+    echo "truthy";
+} else {
+    echo "falsy";
+}
+"#,
+    );
+    assert_eq!(out, "falsy");
+}
+
+/// Verifies prefix `++` on an object property in EXPRESSION position yields the new value.
+/// `$y = ++$o->n` stores `n+1` and evaluates to it.
+#[test]
+fn test_pre_increment_property_expression_yields_new() {
+    let out = compile_and_run(
+        "<?php class C { public int $n = 4; } $o = new C(); $y = ++$o->n; echo $y . '/' . $o->n;",
+    );
+    assert_eq!(out, "5/5");
+}
+
+/// Verifies postfix `++` on an object property in EXPRESSION position yields the old value
+/// while still storing the incremented value (`$x = $o->n++`).
+#[test]
+fn test_post_increment_property_expression_yields_old() {
+    let out = compile_and_run(
+        "<?php class C { public int $n = 4; } $o = new C(); $x = $o->n++; echo $x . '/' . $o->n;",
+    );
+    assert_eq!(out, "4/5");
+}
+
+/// Verifies prefix `--` on an array element in expression position yields the new value.
+#[test]
+fn test_pre_decrement_array_element_expression_yields_new() {
+    let out = compile_and_run("<?php $a = [10]; $y = --$a[0]; echo $y . '/' . $a[0];");
+    assert_eq!(out, "9/9");
+}
+
+/// Verifies postfix `--` on an array element in expression position yields the old value.
+#[test]
+fn test_post_decrement_array_element_expression_yields_old() {
+    let out = compile_and_run("<?php $a = [10]; $x = $a[0]--; echo $x . '/' . $a[0];");
+    assert_eq!(out, "10/9");
+}
+
+/// Verifies prefix `++` on `$this->prop` in a statement (the Symfony `++$this->size;`
+/// pattern) works now that `$this` is recognized as a complex-l-value head.
+#[test]
+fn test_pre_increment_this_property_statement() {
+    let out = compile_and_run(
+        r#"<?php
+class K {
+    public int $size = 0;
+    function enter() { ++$this->size; }
+    function get() { return $this->size; }
+}
+$k = new K();
+$k->enter();
+$k->enter();
+echo $k->get();
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Verifies postfix `++` on `$this->prop` in expression position yields the old value.
+#[test]
+fn test_post_increment_this_property_expression() {
+    let out = compile_and_run(
+        r#"<?php
+class K {
+    public int $n = 7;
+    function bump() { return $this->n++; }
+}
+$k = new K();
+$old = $k->bump();
+echo $old . '/' . $k->n;
+"#,
+    );
+    assert_eq!(out, "7/8");
+}
+
+/// Verifies that a side-effecting index is evaluated exactly once for a complex-l-value
+/// increment (`$a[idx()]++`), matching PHP. A naive `$a[idx()] = $a[idx()] + 1` desugar
+/// would call `idx()` twice.
+#[test]
+fn test_increment_complex_lvalue_evaluates_index_once() {
+    let out = compile_and_run(
+        r#"<?php
+$calls = 0;
+function idx() { global $calls; $calls++; return 0; }
+$a = [10];
+$old = $a[idx()]++;
+echo $old . '/' . $a[0] . '/' . $calls;
+"#,
+    );
+    assert_eq!(out, "10/11/1");
+}
+
+/// Verifies prefix increment on a nested property-array element in expression position.
+#[test]
+fn test_pre_increment_nested_property_array_element() {
+    let out = compile_and_run(
+        "<?php class N { public array $t = [5, 6]; } $n = new N(); $v = ++$n->t[1]; echo $v . '/' . $n->t[1];",
+    );
+    assert_eq!(out, "7/7");
+}
+
+/// Verifies a complex-l-value postfix increment used directly inside another expression
+/// (here as an array index): `$this->t[$this->n++]` reads the old `n`, then increments.
+#[test]
+fn test_post_increment_as_array_index() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $n = 0;
+    public array $t = [10, 20, 30];
+    function step() { return $this->t[$this->n++]; }
+}
+$c = new C();
+echo $c->step();
+echo $c->step();
+echo '/' . $c->n;
+"#,
+    );
+    assert_eq!(out, "1020/2");
+}
+
+/// Verifies that a bare-variable increment still works unchanged in expression position,
+/// confirming the complex-l-value desugar did not regress the fast path.
+#[test]
+fn test_bare_variable_increment_unchanged() {
+    let out = compile_and_run("<?php $i = 1; $a = ++$i; $b = $i++; echo $a . '/' . $b . '/' . $i;");
+    assert_eq!(out, "2/2/3");
+}
+
+/// Verifies the short-ternary else-branch binds `=` to an adjacent property lvalue: PHP parses
+/// `cond ?: $o->p = B` as `cond ?: ($o->p = B)`. With a false condition the assignment runs.
+/// This is the Symfony `UnicodeString::join()` shape `normalizer_is_normalized(..) ?: $s->v = ..`.
+#[test]
+fn test_short_ternary_else_assigns_property() {
+    let out = compile_and_run(
+        "<?php class B { public string $s = 'old'; } $b = new B(); false ?: $b->s = 'new'; echo $b->s;",
+    );
+    assert_eq!(out, "new");
+}
+
+/// Verifies a true short-ternary condition skips the else-branch assignment, leaving the property
+/// unchanged — confirming the bound assignment is genuinely the conditional else, not eager.
+#[test]
+fn test_short_ternary_true_skips_else_assignment() {
+    let out = compile_and_run(
+        "<?php class B { public string $s = 'old'; } $b = new B(); true ?: $b->s = 'new'; echo $b->s;",
+    );
+    assert_eq!(out, "old");
+}
+
+/// Verifies the short-ternary else-branch binds `=` to an adjacent array-element lvalue:
+/// `cond ?: $arr[$k] = B` runs the element assignment when the condition is false.
+#[test]
+fn test_short_ternary_else_assigns_array_element() {
+    let out = compile_and_run("<?php $a = [1, 2]; false ?: $a[0] = 99; echo $a[0];");
+    assert_eq!(out, "99");
+}
+
+/// Verifies a logical `&&` binds `=` to an adjacent property lvalue on its right operand:
+/// PHP parses `cond && $o->n = B` as `cond && ($o->n = B)`, so the assignment runs when the
+/// condition is true.
+#[test]
+fn test_logical_and_rhs_assigns_property() {
+    let out = compile_and_run(
+        "<?php class B { public int $n = 0; } $b = new B(); true && $b->n = 7; echo $b->n;",
+    );
+    assert_eq!(out, "7");
+}
+
+/// Regression guard: an ordinary complex assignment statement (`$o->p = B`, `$a[$i] = B`,
+/// `$a[] = B`) is unaffected by the short-ternary bail and still parses as a direct assignment.
+#[test]
+fn test_plain_complex_assignment_statements_unaffected() {
+    let out = compile_and_run(
+        "<?php class B { public string $s = 'x'; } $b = new B(); $b->s = 'set'; $a = [1]; $a[0] = 9; $a[] = 5; echo $b->s . '/' . $a[0] . '/' . $a[1];",
+    );
+    assert_eq!(out, "set/9/5");
 }

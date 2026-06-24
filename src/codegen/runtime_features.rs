@@ -217,6 +217,7 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         StmtKind::NestedArrayAssign { target, value } => {
             expr_has_regex_call(target) || expr_has_regex_call(value)
         }
+        StmtKind::RefAssignTarget { target, .. } => expr_has_regex_call(target),
         StmtKind::If {
             condition,
             then_body,
@@ -288,6 +289,8 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         | StmtKind::RefAssign { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
@@ -334,6 +337,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         | ExprKind::ErrorSuppress(expr)
         | ExprKind::Print(expr)
         | ExprKind::Spread(expr)
+        | ExprKind::Clone(expr)
         | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. }
         | ExprKind::YieldFrom(expr) => expr_has_regex_call(expr),
@@ -343,6 +347,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
             value,
             callable: default,
         } => expr_has_regex_call(value) || expr_has_regex_call(default),
+        ExprKind::ListUnpack { value, .. } => expr_has_regex_call(value),
         ExprKind::Assignment {
             target,
             value,
@@ -526,6 +531,7 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
         StmtKind::NestedArrayAssign { target, value } => {
             expr_needs_descriptor_invoker(target) || expr_needs_descriptor_invoker(value)
         }
+        StmtKind::RefAssignTarget { target, .. } => expr_needs_descriptor_invoker(target),
         StmtKind::If {
             condition,
             then_body,
@@ -602,6 +608,8 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
         | StmtKind::RefAssign { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
@@ -644,6 +652,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         | ExprKind::ErrorSuppress(expr)
         | ExprKind::Print(expr)
         | ExprKind::Spread(expr)
+        | ExprKind::Clone(expr)
         | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. }
         | ExprKind::YieldFrom(expr) => expr_needs_descriptor_invoker(expr),
@@ -653,6 +662,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
             value,
             callable: default,
         } => expr_needs_descriptor_invoker(value) || expr_needs_descriptor_invoker(default),
+        ExprKind::ListUnpack { value, .. } => expr_needs_descriptor_invoker(value),
         ExprKind::Assignment {
             target,
             value,

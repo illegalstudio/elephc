@@ -235,6 +235,7 @@ Current dead-code-elimination coverage includes:
 - trailing block tails sunk into `if` and `ifdef` fallthrough branches, so later statements are only retained on paths that can still reach them
 - trailing block tails sunk into `switch` suffixes when later code is reached deterministically either by falling off the final reachable path or by exiting a case via `break`
 - trailing block tails sunk into `try` / `catch` fallthrough paths, and into `finally` only in the conservative case where every pre-finally path must still fall through
+- declaration statements (`function`, `class`, `const`, `use`, `interface`, `trait`, `enum`, `extern`, namespace blocks, ...) excluded from tail-sinking: they introduce hoistable named symbols, so sinking them into multiple branches would duplicate those symbols and cause duplicate-definition link errors. They are kept once at the outer level (DCE'd in place) instead of being moved into branches
 - trailing empty `switch` labels dropped when they no longer lead to reachable work
 - pure expression statements whose result is unused
 - pure expression statements that become exposed by earlier normalization

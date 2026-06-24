@@ -1,0 +1,9 @@
+{
+    "name": "elephc/lenient-dynamic-include-example",
+    "description": "A vendor class with a lazy dynamic require still compiles; the dynamic include is degraded to a runtime fatal that only fires if reached.",
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    }
+}

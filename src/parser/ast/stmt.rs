@@ -82,6 +82,10 @@ pub enum StmtKind {
         target: String,
         source: String,
     },
+    RefAssignTarget {
+        target: Expr,
+        source: String,
+    },
     If {
         condition: Expr,
         then_body: Vec<Stmt>,
@@ -158,6 +162,8 @@ pub enum StmtKind {
     },
     Break(usize),
     Continue(usize),
+    Goto(String),
+    Label(String),
     ExprStmt(Expr),
     NamespaceDecl {
         name: Option<Name>,

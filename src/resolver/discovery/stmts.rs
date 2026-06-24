@@ -346,6 +346,9 @@ fn discover_stmt(
             discover_expr(target, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
         }
+        StmtKind::RefAssignTarget { target, .. } => {
+            discover_expr(target, base_dir, loaded_paths, include_chain, state, output)?;
+        }
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
@@ -359,6 +362,8 @@ fn discover_stmt(
         | StmtKind::IfDef { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::Global { .. }
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }

@@ -10,6 +10,7 @@
 
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 
+use super::path_eval::{fold_dirname, is_dirname_call};
 use super::state::{resolve_constant_ref, ResolveState};
 
 /// Fold a path expression to a compile-time string. Handles string literals,
@@ -36,6 +37,35 @@ pub(super) fn fold_include_path(expr: &Expr, state: &ResolveState) -> Result<Str
                 name.as_str()
             )
         }),
+        ExprKind::FunctionCall { name, args } if is_dirname_call(name) => {
+            // `dirname()` of a compile-time string is foldable so the common
+            // `require dirname(__DIR__) . '/vendor/autoload.php';` entry-point pattern resolves.
+            if args.len() < 1 || args.len() > 2 {
+                return Err(format!(
+                    "include path calls `dirname()` with {} arguments; \
+                     dirname() takes 1 or 2 arguments in include paths",
+                    args.len()
+                ));
+            }
+            let path = fold_include_path(&args[0], state)?;
+            let levels: i64 = match args.get(1) {
+                None => 1,
+                Some(arg) => match &arg.kind {
+                    ExprKind::IntLiteral(n) if *n >= 1 => *n,
+                    _ => {
+                        return Err(format!(
+                            "include path calls `dirname()` with a `levels` argument that is \
+                             not an integer literal >= 1; the levels argument must be a literal \
+                             to fold at compile time"
+                        ));
+                    }
+                },
+            };
+            match fold_dirname(&path, levels) {
+                Some(folded) => Ok(folded),
+                None => Err(include_path_error_message(expr)),
+            }
+        }
         _ => Err(include_path_error_message(expr)),
     }
 }
@@ -66,7 +96,11 @@ fn include_path_error_message(expr: &Expr) -> String {
 /// Returns `Some(description)` for expressions that resolve at runtime (variables,
 /// calls, ternaries, property access), `None` for expressions that could theoretically
 /// be foldable but are expressed in a dynamic way.
-fn runtime_dynamic_include_path_detail(expr: &Expr) -> Option<String> {
+///
+/// Also consulted by lenient include lowering (`crate::resolver::engine_includes`): a `Some`
+/// classification is what makes an unresolvable path eligible for a runtime-fatal stub, while
+/// statically-invalid shapes (`None`) always remain hard errors.
+pub(super) fn runtime_dynamic_include_path_detail(expr: &Expr) -> Option<String> {
     match &expr.kind {
         ExprKind::Variable(name) => {
             Some(format!("variable `${}` is resolved at runtime", name))

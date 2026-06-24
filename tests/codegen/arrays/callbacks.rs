@@ -843,6 +843,88 @@ foreach ($uasorted as $value) {
     assert_eq!(out, "34:23:11,12,:321:321:321");
 }
 
+// --- array_map over heterogeneous (Mixed-element) input arrays ---
+
+/// Verifies the reported repro: array_map with an untyped closure over a heterogeneous
+/// array preserves each element (the string element must not coerce to integer 0).
+#[test]
+fn test_array_map_untyped_closure_over_mixed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$items = [1, "two", 3];
+$out = array_map(function ($x) { return $x; }, $items);
+foreach ($out as $v) { echo $v . " "; }
+"#,
+    );
+    assert_eq!(out, "1 two 3 ");
+}
+
+/// Verifies array_map with an explicit `mixed`-typed closure parameter over a heterogeneous
+/// array preserves the runtime type tags of every element.
+#[test]
+fn test_array_map_mixed_param_closure_preserves_tags() {
+    let out = compile_and_run(
+        r#"<?php
+$out = array_map(function (mixed $x) { return gettype($x); }, [1, "two", 3.5, true, null]);
+echo implode(",", $out);
+"#,
+    );
+    assert_eq!(out, "integer,string,double,boolean,NULL");
+}
+
+/// Verifies array_map over a heterogeneous array dispatched to a named function with a
+/// `mixed` parameter, which routes through the descriptor-backed callback wrapper.
+#[test]
+fn test_array_map_named_mixed_callback_over_mixed_array() {
+    let out = compile_and_run(
+        r#"<?php
+function passthrough(mixed $x) { return $x; }
+$out = array_map("passthrough", [1, "two", 3]);
+foreach ($out as $v) { echo $v . " "; }
+"#,
+    );
+    assert_eq!(out, "1 two 3 ");
+}
+
+/// Verifies a transforming closure over a heterogeneous array: the boxed Mixed element is
+/// usable in string concatenation and the mapped results are correct per PHP semantics.
+#[test]
+fn test_array_map_mixed_array_string_transform() {
+    let out = compile_and_run(
+        r#"<?php
+$out = array_map(function (mixed $x) { return "<" . $x . ">"; }, [1, "two", 3]);
+foreach ($out as $v) { echo $v . " "; }
+"#,
+    );
+    assert_eq!(out, "<1> <two> <3> ");
+}
+
+/// Root-cause unit test: a closure with a `mixed` parameter that returns the parameter must
+/// infer a `mixed` return type, so a string argument survives instead of coercing to int 0.
+#[test]
+fn test_mixed_param_closure_return_preserves_string() {
+    let out = compile_and_run(
+        r#"<?php
+$c = function (mixed $x) { return $x; };
+echo $c("two") . ":" . $c(1);
+"#,
+    );
+    assert_eq!(out, "two:1");
+}
+
+/// Verifies the same passthrough closure invoked through the descriptor invoker
+/// (`call_user_func`) also preserves a string argument.
+#[test]
+fn test_mixed_param_closure_via_call_user_func_preserves_string() {
+    let out = compile_and_run(
+        r#"<?php
+$c = function (mixed $x) { return $x; };
+echo call_user_func($c, "two") . ":" . call_user_func($c, 1);
+"#,
+    );
+    assert_eq!(out, "two:1");
+}
+
 /// Verifies runtime-selected static callable arrays route fixed-return callbacks through descriptors.
 /// Verifies `usort` over an array of objects with an explicitly typed comparator:
 /// the comparator reads an integer property from each object handle and the array

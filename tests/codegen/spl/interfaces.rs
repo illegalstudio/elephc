@@ -301,7 +301,9 @@ unset($b["k"]);
 echo isset($b["k"]);
 "#,
     );
-    assert_eq!(out, "SGvE1UE0");
+    // Final `isset` is false (offsetExists returns false after unset); a bool
+    // false echoes as "" in PHP (not "0"), so the trace ends "…UE", not "…UE0".
+    assert_eq!(out, "SGvE1UE");
 }
 
 /// Verifies the checked-in ArrayAccess exception-order stress example preserves key
@@ -337,7 +339,8 @@ function use_box_slot(ArrayAccess $box): void {
 use_box_slot(new Box());
 "#,
     );
-    assert_eq!(out, "v10");
+    // Final `isset` is false → bool false echoes as "" in PHP (not "0"): "v1".
+    assert_eq!(out, "v1");
 }
 
 /// Verifies subscript operations work on `ArrayAccess` through property (`$obj->prop[key]`)

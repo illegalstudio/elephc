@@ -104,6 +104,36 @@ impl Checker {
         ))
     }
 
+    /// Returns the class whose `magic` method (`__isset` or `__unset`) should
+    /// handle `isset($obj->prop)` / `unset($obj->prop)`: that is, when `$obj` is
+    /// an object whose class declares `magic` and `prop` is not a declared
+    /// property. Infers (and type-checks) the receiver object as a side effect,
+    /// so callers can skip inferring the bare property access — which would
+    /// otherwise reject the undeclared property before the magic call is reached.
+    pub(crate) fn isset_unset_property_magic_class(
+        &mut self,
+        arg: &Expr,
+        magic: &str,
+        env: &TypeEnv,
+    ) -> Result<Option<String>, CompileError> {
+        let (object, property) = match &arg.kind {
+            ExprKind::PropertyAccess { object, property }
+            | ExprKind::NullsafePropertyAccess { object, property } => (object.as_ref(), property),
+            _ => return Ok(None),
+        };
+        let PhpType::Object(class_name) = self.infer_type(object, env)? else {
+            return Ok(None);
+        };
+        let normalized = class_name.trim_start_matches('\\').to_string();
+        let Some(class_info) = self.classes.get(&normalized) else {
+            return Ok(None);
+        };
+        if class_info.properties.iter().any(|(name, _)| name == property) {
+            return Ok(None);
+        }
+        Ok(class_info.methods.contains_key(magic).then_some(normalized))
+    }
+
     /// Infers the type of a nullsafe property access expression (`$obj?->prop`).
     ///
     /// For `Mixed` receivers returns `Mixed`. For valid nullable object unions,
@@ -455,6 +485,12 @@ impl Checker {
         }
         if let Some(class_name) = &self.current_class {
             Ok(PhpType::Object(class_name.clone()))
+        } else if self.closure_depth > 0 {
+            // A non-static closure defined outside a class method may still use
+            // `$this` when it is later bound to an object via `Closure::bind` /
+            // `bindTo`. The bound class is unknown here, so `$this` is a
+            // runtime-dispatched receiver (`Mixed`).
+            Ok(PhpType::Mixed)
         } else {
             Err(CompileError::new(
                 expr.span,

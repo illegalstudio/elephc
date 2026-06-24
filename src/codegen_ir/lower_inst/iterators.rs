@@ -566,6 +566,9 @@ fn bind_hash_current_value_ref(
     offset: usize,
     slot: LocalSlotId,
 ) -> Result<()> {
+    // The slot now holds an interior pointer to the entry's `[lo@0][hi@8][tag@16]` value triple, so
+    // a reference assignment can promote it in place via `__rt_promote_entry_to_refcell`.
+    ctx.mark_foreach_hash_ref_slot(slot);
     let local_offset = ctx.local_offset(slot)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

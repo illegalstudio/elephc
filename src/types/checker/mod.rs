@@ -22,6 +22,8 @@ mod builtin_user_filter;
 mod callables;
 /// yield_validation
 pub(crate) mod yield_validation;
+/// goto_validation
+pub(crate) mod goto_validation;
 mod driver;
 mod extern_decl;
 mod functions;
@@ -44,6 +46,7 @@ use crate::types::{
 };
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
+pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 use builtin_types::validate_magic_method_contracts;
 use schema::propagate_abstract_return_types;
@@ -108,6 +111,10 @@ pub(crate) struct Checker {
     pub current_method: Option<String>,
     /// Whether the current method being type-checked is static.
     pub current_method_is_static: bool,
+    /// Nesting depth of closure bodies currently being type-checked. A non-zero
+    /// depth means `$this` is allowed even outside a class method: such a
+    /// closure can be bound to an object later via `Closure::bind` / `bindTo`.
+    pub closure_depth: usize,
     /// Extern function declarations (e.g. `extern "C" { function foo(): void; }`).
     pub extern_functions: HashMap<String, ExternFunctionSig>,
     /// Extern class (C struct) declarations keyed by canonical name.

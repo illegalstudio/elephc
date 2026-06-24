@@ -93,9 +93,36 @@ pub(super) fn parse_assign(
 
 /// Parses direct variable reference assignment after the leading `$target =` tokens.
 ///
-/// PHP spells reference aliasing as `$target =& $source;`. This parser accepts
-/// direct variable sources and leaves broader lvalue reference targets for
-/// future storage-specific lowering.
+/// Returns whether an lvalue reference source is free of evaluation side effects.
+///
+/// `$var =& $a[0]` is lowered by re-evaluating the source lvalue twice (once to copy the value into
+/// the target variable, once as the write target of the reverse reference assignment). That is only
+/// sound when re-evaluating the lvalue has no observable side effects, so this allows variables,
+/// scalar literal subscripts, and chains of array/property access over those, and rejects anything
+/// that could run user code (calls, increments, nested assignments) on the second evaluation.
+fn ref_source_lvalue_is_side_effect_free(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::Null => true,
+        ExprKind::ArrayAccess { array, index } => {
+            ref_source_lvalue_is_side_effect_free(array)
+                && ref_source_lvalue_is_side_effect_free(index)
+        }
+        ExprKind::PropertyAccess { object, .. } => ref_source_lvalue_is_side_effect_free(object),
+        _ => false,
+    }
+}
+
+/// PHP spells reference aliasing as `$target =& $source;`. This parser accepts a bare variable
+/// source (`$a =& $b`, lowered to `RefAssign`) and a side-effect-free array/property element source
+/// (`$r =& $a[0]`, the reverse direction of `$a[0] =& $r`).
+///
+/// The element-source form is lowered to a synthetic pair `$target = $source; $source =& $target;`,
+/// which copies the element value into the target and then aliases the element to the target's
+/// reference cell, so both observe subsequent writes. The lowering re-evaluates the source lvalue,
+/// so a source with side effects is rejected rather than miscompiled.
 fn parse_ref_assign(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -103,18 +130,60 @@ fn parse_ref_assign(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     *pos += 1;
-    let source = match tokens.get(*pos).map(|(token, _)| token) {
-        Some(Token::Variable(source)) => source.clone(),
-        _ => {
-            return Err(CompileError::new(
-                span,
-                "Reference assignment source must be a variable",
-            ));
-        }
-    };
-    *pos += 1;
+    // A bare variable source (no trailing `[`/`->`) keeps the local-to-local reference form.
+    let bare_variable = matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Variable(_)))
+        && !matches!(
+            tokens.get(*pos + 1).map(|(t, _)| t),
+            Some(Token::LBracket | Token::Arrow)
+        );
+    if bare_variable {
+        let Some((Token::Variable(source), _)) = tokens.get(*pos) else {
+            unreachable!("bare variable source was just confirmed");
+        };
+        let source = source.clone();
+        *pos += 1;
+        expect_semicolon(tokens, pos)?;
+        return Ok(Stmt::new(StmtKind::RefAssign { target, source }, span));
+    }
+
+    if !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Variable(_))) {
+        return Err(CompileError::new(
+            span,
+            "Reference assignment source must be a variable or array/property element",
+        ));
+    }
+    let source_expr = parse_expr(tokens, pos)?;
+    if !matches!(
+        source_expr.kind,
+        ExprKind::ArrayAccess { .. } | ExprKind::PropertyAccess { .. }
+    ) {
+        return Err(CompileError::new(
+            span,
+            "Reference assignment source must be a variable or array/property element",
+        ));
+    }
+    if !ref_source_lvalue_is_side_effect_free(&source_expr) {
+        return Err(CompileError::new(
+            span,
+            "Reference assignment from an array or property element with side effects is not yet supported",
+        ));
+    }
     expect_semicolon(tokens, pos)?;
-    Ok(Stmt::new(StmtKind::RefAssign { target, source }, span))
+    let copy = Stmt::new(
+        StmtKind::Assign {
+            name: target.clone(),
+            value: source_expr.clone(),
+        },
+        span,
+    );
+    let alias = Stmt::new(
+        StmtKind::RefAssignTarget {
+            target: source_expr,
+            source: target,
+        },
+        span,
+    );
+    Ok(Stmt::new(StmtKind::Synthetic(vec![copy, alias]), span))
 }
 
 /// Converts a lexer `Token` into an `AssignmentOperator` variant.

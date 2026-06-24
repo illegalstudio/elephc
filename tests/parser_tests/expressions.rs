@@ -57,3 +57,19 @@ fn test_dynamic_static_call_desugars_to_call_user_func() {
         other => panic!("Expected call_user_func FunctionCall, got {:?}", other),
     }
 }
+
+/// Verifies a fully-qualified reference to a predefined global constant (`\PHP_INT_MAX`) parses
+/// to the same lowered literal as the unqualified form: the leading `\` (global namespace) is
+/// skipped because these constants are lexed as dedicated tokens, not identifiers.
+#[test]
+fn test_fq_predefined_constant_parses_as_literal() {
+    let stmts = parse_source("<?php echo \\PHP_INT_MAX;");
+    assert_eq!(echoed_expr(&stmts), &ExprKind::IntLiteral(i64::MAX));
+}
+
+/// Verifies the leading-backslash skip is scoped to predefined constants: `\` before a token that
+/// is neither an identifier nor a global constant (here an integer literal) is still a name error.
+#[test]
+fn test_backslash_before_non_name_still_fails() {
+    assert!(parse_fails("<?php echo \\123;"));
+}

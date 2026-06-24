@@ -852,6 +852,30 @@ run();
     );
 }
 
+/// Regression test for the x86_64 Mixed-property string-read aliasing bug.
+///
+/// Reading a string-typed property off an object retrieved from a Mixed-valued
+/// hash (`$arr['a']->v`) goes through `emit_property_load`'s two-word string
+/// path. On x86_64 the string-pointer result register is `rax`, which also
+/// serves as the object base register in the Mixed-property dispatch, so loading
+/// the pointer word first clobbered the base; the length word was then read from
+/// the string payload instead of the object. That garbage length drove
+/// `__rt_str_persist` to copy an enormous span and exhaust the heap. The fix
+/// reads the length word first when the pointer register aliases the base. ARM64
+/// was always correct (its result registers never alias the base). A plain
+/// object (not an enum) reproduces it, so this guards the general lowering.
+#[test]
+fn test_regression_mixed_hash_object_string_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public string $v = 'hi'; }
+$arr = ['a' => new Box(), 'b' => 1];
+echo $arr['a']->v;
+"#,
+    );
+    assert_eq!(out, "hi");
+}
+
 /// Regression test for the array-to-string echo fix: echoing an owned temporary array
 /// stringifies to "Array" and releases the temporary, keeping GC allocs and frees balanced
 /// (no leak from the discarded array, no premature/double free).
@@ -868,4 +892,30 @@ fn test_echo_owned_temp_array_balances_gc_stats() {
         "expected the temporary array to allocate at least once"
     );
     assert_eq!(allocs - baseline_allocs, frees - baseline_frees);
+}
+
+/// Regression test for the substr self-reassign fix: `$s = substr($s, 0, $n)` now persists an
+/// owned copy instead of returning a slice into the source buffer, so reassigning a string to a
+/// substring of itself under loop churn neither corrupts the string nor leaks/double-frees. Each
+/// iteration allocates one persisted copy and frees the previous value, so allocs and frees stay
+/// balanced.
+#[test]
+fn test_substr_self_reassign_loop_balances_gc_stats() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$s = "aaaa.bbbb.cccc.dddd.eeee.ffff.gggg.hhhh";
+$count = 0;
+$p = strrpos($s, ".");
+while (false !== $p) {
+    $s = substr($s, 0, $p);
+    $count = $count + strlen($s);
+    $p = strrpos($s, ".");
+}
+echo $count;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "133");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "substr self-reassign loop leaked or double-freed");
 }

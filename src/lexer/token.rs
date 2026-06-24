@@ -38,6 +38,7 @@ pub enum Token {
     For,
     Break,
     Continue,
+    Goto,
     Function,
     Return,
     True,
@@ -106,6 +107,7 @@ pub enum Token {
     Class,          // class
     Enum,           // enum
     New,            // new
+    Clone,          // clone
     Public,         // public
     Protected,      // protected
     Private,        // private

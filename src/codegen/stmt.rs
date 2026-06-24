@@ -153,6 +153,9 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
         StmtKind::RefAssign { target, source } => {
             assignments::emit_ref_assign_stmt(target, source, emitter, ctx);
         }
+        // Frozen legacy backend: reference-into-element assignment is an EIR-only feature and is
+        // gated in the type checker until the REFCELL runtime lands, so this is never reached here.
+        StmtKind::RefAssignTarget { .. } => {}
         StmtKind::TypedAssign {
             type_expr,
             name,
@@ -260,6 +263,10 @@ pub fn emit_stmt(stmt: &Stmt, emitter: &mut Emitter, ctx: &mut Context, data: &m
         StmtKind::Continue(levels) => {
             control_flow::emit_continue_stmt(*levels, emitter, ctx);
         }
+        // `goto`/label are implemented only in the active EIR backend; this frozen legacy direct
+        // AST backend does not lower unstructured jumps. Emitting nothing keeps the freeze intact
+        // (the EIR path is the default and the only one exercising goto).
+        StmtKind::Goto(_) | StmtKind::Label(_) => {}
         StmtKind::Switch {
             subject,
             cases,

@@ -124,12 +124,21 @@ pub fn emit_expr(
         ExprKind::Print(inner) => {
             emit_print_expr(inner, emitter, ctx, data)
         }
+        // `clone` is an EIR-only construct; the frozen direct AST backend never lowers it.
+        ExprKind::Clone(_) => {
+            unreachable!("clone expressions are only lowered by the EIR backend")
+        }
         ExprKind::NullCoalesce { value, default } => {
             compare::emit_null_coalesce(value, default, emitter, ctx, data)
         }
         ExprKind::Pipe { value, callable } => {
             calls::emit_pipe(value, callable, expr.span, emitter, ctx, data)
         }
+        // List-destructuring assignment in expression position is an EIR-only feature; the frozen
+        // direct AST backend does not emit it.
+        ExprKind::ListUnpack { .. } => unreachable!(
+            "ExprKind::ListUnpack is lowered only by the EIR backend; the frozen AST backend never receives it"
+        ),
         ExprKind::Assignment {
             target,
             value,

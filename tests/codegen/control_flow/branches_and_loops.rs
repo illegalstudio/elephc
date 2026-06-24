@@ -171,6 +171,16 @@ fn test_for_loop() {
     assert_eq!(out, "01234");
 }
 
+/// Verifies a `for` loop with comma-separated init and update clauses: two counters advance
+/// together (`$i` up, `$j` down), matching PHP's `for ($i = 0, $j = 10; ...; $i++, $j--)`.
+#[test]
+fn test_for_comma_separated_init_and_update() {
+    let out = compile_and_run(
+        "<?php $s = \"\"; for ($i = 0, $j = 10; $i < 5; $i++, $j--) { $s .= $i . \":\" . $j . \" \"; } echo $s;",
+    );
+    assert_eq!(out, "0:10 1:9 2:8 3:7 4:6 ");
+}
+
 /// Verifies break exits the for loop when $i reaches 3, producing 012.
 #[test]
 fn test_for_break() {

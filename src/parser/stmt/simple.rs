@@ -11,7 +11,7 @@
 use crate::errors::CompileError;
 use crate::lexer::Token;
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
-use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
+use crate::parser::expr::{parse_assignment_value_expr, parse_include_value_expr, parse_expr};
 use crate::span::Span;
 
 use super::assign::try_parse_postfix_assignment;
@@ -62,44 +62,16 @@ pub(super) fn parse_include(
 /// consuming a trailing semicolon. Returns `Ok(None)` when the next token is not an include
 /// keyword.
 ///
-/// PHP allows `include`/`require` in expression position (e.g. `return require X;` or
-/// `$x = require X;`) and the expression evaluates to the included file's `return` value, or `1`
-/// when the file has no explicit `return`. The included file runs in the *calling* scope, so it
-/// can read and write the caller's variables. elephc represents this with a transient
-/// `ExprKind::IncludeValue` marker that the resolver expands by inlining the included file's
-/// statements into the caller's statement list (sharing scope) and capturing its top-level
-/// `return` into a hidden temporary.
+/// This is a thin wrapper over the shared expression-position include parser
+/// ([`crate::parser::expr::parse_include_value_expr`]); see that helper for the full semantics
+/// (`return require X;`, `$x = require X;`, and general expression-position includes all flow
+/// through it). Kept as a `crate::parser::stmt`-visible entry point for `parse_return` and the
+/// compound-assignment parser.
 pub(in crate::parser::stmt) fn try_parse_value_include(
     tokens: &[(Token, Span)],
     pos: &mut usize,
 ) -> Result<Option<Expr>, CompileError> {
-    let (once, required) = match tokens.get(*pos).map(|(token, _)| token) {
-        Some(Token::Include) => (false, false),
-        Some(Token::IncludeOnce) => (true, false),
-        Some(Token::Require) => (false, true),
-        Some(Token::RequireOnce) => (true, true),
-        _ => return Ok(None),
-    };
-    let span = tokens[*pos].1;
-    *pos += 1; // consume the include/require keyword
-
-    let has_parens = *pos < tokens.len() && tokens[*pos].0 == Token::LParen;
-    if has_parens {
-        *pos += 1;
-    }
-    let path = parse_expr(tokens, pos)?;
-    if has_parens {
-        expect_token(tokens, pos, &Token::RParen, "Expected ')' after include path")?;
-    }
-
-    Ok(Some(Expr::new(
-        ExprKind::IncludeValue {
-            path: Box::new(path),
-            once,
-            required,
-        },
-        span,
-    )))
+    parse_include_value_expr(tokens, pos)
 }
 
 /// Parses `echo` statements with one or more comma-separated expressions.

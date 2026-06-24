@@ -17,7 +17,7 @@ use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
-use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
+use super::{expect_local_slot, expect_operand, load_value_to_first_int_arg, store_if_result};
 use crate::codegen_ir::{CodegenIrError, Result};
 
 /// Lowers associative-array allocation through the shared runtime constructor.
@@ -70,6 +70,64 @@ pub(super) fn lower_hash_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruct
     store_if_result(ctx, inst)
 }
 
+/// Lowers `MixedToOwnedHash`: materialize an independently-owned associative hash from a boxed Mixed.
+///
+/// Used by nested reference-assignment lowering to obtain a mutable inner hash table from an outer
+/// Mixed-valued entry. A boxed Mixed holding a hash (inner tag 5) is shallow-cloned so the result is
+/// owned and copy-on-write safe; a null Mixed or any non-hash payload auto-vivifies to a fresh empty
+/// hash. The result stores boxed Mixed entry values, matching the inner hash representation.
+pub(super) fn lower_mixed_to_owned_hash(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expects exactly one operand",
+            inst.op.name()
+        )));
+    }
+    let mixed = expect_operand(inst, 0)?;
+    let mixed_tag = crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let fresh = ctx.next_label("mixed_to_owned_hash_fresh");
+            let done = ctx.next_label("mixed_to_owned_hash_done");
+            ctx.load_value_to_reg(mixed, "x0")?;
+            ctx.emitter.instruction(&format!("cbz x0, {}", fresh));             // a null Mixed auto-vivifies to a fresh empty hash
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the boxed Mixed inner value tag
+            ctx.emitter.instruction("cmp x9, #5");                              // is the boxed payload an associative-array hash?
+            ctx.emitter.instruction(&format!("b.ne {}", fresh));                // non-hash payloads auto-vivify to a fresh empty hash
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                        // load the inner hash table pointer from the Mixed payload
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");       // own an independent shallow copy so writes are copy-on-write safe
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the empty-hash fallback after cloning the existing inner hash
+            ctx.emitter.label(&fresh);
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 16);                // fresh associative hash initial capacity
+            abi::emit_load_int_immediate(ctx.emitter, "x1", mixed_tag);         // fresh hash stores boxed Mixed entry values
+            abi::emit_call_label(ctx.emitter, "__rt_hash_new");                 // allocate the fresh empty associative hash
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            let fresh = ctx.next_label("mixed_to_owned_hash_fresh");
+            let done = ctx.next_label("mixed_to_owned_hash_done");
+            ctx.load_value_to_reg(mixed, "rax")?;
+            ctx.emitter.instruction("test rax, rax");                           // a null Mixed auto-vivifies to a fresh empty hash
+            ctx.emitter.instruction(&format!("jz {}", fresh));                  // null payloads skip straight to the empty-hash fallback
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                // load the boxed Mixed inner value tag
+            ctx.emitter.instruction("cmp r10, 5");                              // is the boxed payload an associative-array hash?
+            ctx.emitter.instruction(&format!("jne {}", fresh));                 // non-hash payloads auto-vivify to a fresh empty hash
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rax + 8]");            // load the inner hash table pointer from the Mixed payload
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");       // own an independent shallow copy so writes are copy-on-write safe
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the empty-hash fallback after cloning the existing inner hash
+            ctx.emitter.label(&fresh);
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", 16);               // fresh associative hash initial capacity
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", mixed_tag);        // fresh hash stores boxed Mixed entry values
+            abi::emit_call_label(ctx.emitter, "__rt_hash_new");                 // allocate the fresh empty associative hash
+            ctx.emitter.label(&done);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers an associative-array lookup with PHP null-sentinel fallback on misses.
 pub(super) fn lower_hash_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let hash = expect_operand(inst, 0)?;
@@ -96,6 +154,384 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_hash_set_aarch64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
         Arch::X86_64 => lower_hash_set_x86_64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
+    }
+    ctx.store_result_value(hash)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, hash)?;
+    }
+    Ok(())
+}
+
+/// Returns the REFCELL inner value tag for a reference source/value, rejecting unsupported shapes.
+///
+/// Supports the inline scalars (int/bool/float) plus `Mixed` (a boxed-Mixed pointer carried in the
+/// `value_lo` word, runtime tag 7). String/array/object reference sources stay gated in the type
+/// checker and are lowered in a later milestone.
+fn scalar_refcell_tag(ty: &PhpType, role: &str) -> Result<i64> {
+    match ty {
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Mixed => {
+            Ok(crate::codegen::runtime_value_tag(ty) as i64)
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "reference assignment into an array element with a {:?} {} is not yet supported",
+            other, role
+        ))),
+    }
+}
+
+/// Returns whether a REFCELL source of `ty` is a boxed Mixed that must be unboxed before it is
+/// stored into a reference cell.
+///
+/// A `Mixed` local holds a boxed-Mixed pointer, but a reference cell stores the *unboxed* value
+/// triple (so reads reconstruct the value directly). The promotion unboxes the source, allocates the
+/// cell from the unboxed triple, and frees the original box (a move that balances the cell's retain
+/// of any heap inner). Inline scalars are stored directly.
+fn refcell_source_is_boxed_mixed(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Mixed)
+}
+
+/// Lowers `$hash[$key] =& $source` for an associative-array target with a scalar local source.
+///
+/// Promotes the source local into a shared boxed REFCELL (heap kind 6), retains the cell for the
+/// new hash-slot owner, and stores it into the entry with per-entry `value_tag` 11. The hash table
+/// pointer (possibly reallocated by growth) is written back to the target local exactly like
+/// `lower_hash_set`.
+pub(super) fn lower_ref_assign_element(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let source_slot = expect_local_slot(inst)?;
+    let hash_ty = ctx.value_php_type(hash)?;
+    require_hash(hash_ty.clone(), inst)?;
+    let source_local = source_load_local_slot(ctx, hash)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_ref_assign_element_aarch64(ctx, hash, key, source_slot)?,
+        Arch::X86_64 => lower_ref_assign_element_x86_64(ctx, hash, key, source_slot)?,
+    }
+    ctx.store_result_value(hash)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, hash)?;
+    }
+    Ok(())
+}
+
+/// Lowers `$object->property =& $source` for a dynamic-property object target (`stdClass`) with a
+/// scalar local source.
+///
+/// Promotes the source local into a shared boxed REFCELL, then stores the cell into the object's
+/// dynamic-property hash under the property name with per-entry value_tag 11 via
+/// `__rt_stdclass_set_ref` (which lazily allocates the hash, inserts the reference entry, and writes
+/// the possibly-grown table back to `obj+8`). The source local is marked a by-reference alias by the
+/// promotion helper, so its subsequent reads/writes dereference the cell; property reads dereference
+/// the reference through the existing `__rt_stdclass_get` → `__rt_hash_get` tag-11 path. The object
+/// pointer itself is stable across the call, so no local write-back is required.
+pub(super) fn lower_ref_assign_property(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let propname = expect_operand(inst, 1)?;
+    let source_slot = expect_local_slot(inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_ref_assign_property_aarch64(ctx, object, propname, source_slot),
+        Arch::X86_64 => lower_ref_assign_property_x86_64(ctx, object, propname, source_slot),
+    }
+}
+
+/// AArch64 body of `lower_ref_assign_property`.
+fn lower_ref_assign_property_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    propname: ValueId,
+    source_slot: LocalSlotId,
+) -> Result<()> {
+    if ctx.is_foreach_hash_ref_slot(source_slot) {
+        promote_foreach_entry_source_aarch64(ctx, source_slot)?;
+    } else {
+        promote_source_to_boxed_refcell_aarch64(ctx, source_slot)?;
+    }
+    abi::emit_push_reg(ctx.emitter, "x0");                                      // save the new reference cell pointer across name + object materialization
+    materialize_hash_key_aarch64(ctx, propname)?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                          // preserve the property name (ptr, len) across the object load
+    ctx.load_value_to_reg(object, "x0")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                           // restore name_ptr and name_len
+    abi::emit_pop_reg(ctx.emitter, "x3");                                      // x3 = the reference cell pointer (the property hash slot becomes an owner)
+    abi::emit_call_label(ctx.emitter, "__rt_stdclass_set_ref");               // store (tag 11, cell) into the dynamic-property hash under the name
+    Ok(())
+}
+
+/// x86_64 body of `lower_ref_assign_property`.
+fn lower_ref_assign_property_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    propname: ValueId,
+    source_slot: LocalSlotId,
+) -> Result<()> {
+    if ctx.is_foreach_hash_ref_slot(source_slot) {
+        promote_foreach_entry_source_x86_64(ctx, source_slot)?;
+    } else {
+        promote_source_to_boxed_refcell_x86_64(ctx, source_slot)?;
+    }
+    abi::emit_push_reg(ctx.emitter, "rax");                                     // save the new reference cell pointer across name + object materialization
+    materialize_hash_key_x86_64(ctx, propname)?;
+    abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");                        // preserve the property name (ptr, len) across the object load
+    ctx.load_value_to_reg(object, "rdi")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");                         // restore name_ptr and name_len
+    abi::emit_pop_reg(ctx.emitter, "rcx");                                     // rcx = the reference cell pointer (the property hash slot becomes an owner)
+    abi::emit_call_label(ctx.emitter, "__rt_stdclass_set_ref");               // store (tag 11, cell) into the dynamic-property hash under the name
+    Ok(())
+}
+
+/// AArch64 body of `lower_ref_assign_element`.
+fn lower_ref_assign_element_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    source_slot: LocalSlotId,
+) -> Result<()> {
+    if ctx.is_foreach_hash_ref_slot(source_slot) {
+        promote_foreach_entry_source_aarch64(ctx, source_slot)?;
+    } else {
+        promote_source_to_boxed_refcell_aarch64(ctx, source_slot)?;
+    }
+    abi::emit_push_reg(ctx.emitter, "x0");                                      // save the new reference cell pointer across key materialization
+    materialize_hash_key_aarch64(ctx, key)?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                          // preserve the materialized key across the table load
+    ctx.load_value_to_reg(hash, "x0")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                           // restore key_lo and key_hi
+    abi::emit_pop_reg(ctx.emitter, "x3");                                      // x3 = value_lo = the reference cell pointer (the hash becomes its sole owner)
+    ctx.emitter.instruction("mov x4, xzr");                                     // x4 = value_hi = 0 for a reference entry
+    abi::emit_load_int_immediate(ctx.emitter, "x5", 11);                      // x5 = per-entry value_tag 11 = reference
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");                       // store (tag 11, cell) into the entry; x0 = table
+    Ok(())
+}
+
+/// x86_64 body of `lower_ref_assign_element`.
+fn lower_ref_assign_element_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    source_slot: LocalSlotId,
+) -> Result<()> {
+    if ctx.is_foreach_hash_ref_slot(source_slot) {
+        promote_foreach_entry_source_x86_64(ctx, source_slot)?;
+    } else {
+        promote_source_to_boxed_refcell_x86_64(ctx, source_slot)?;
+    }
+    abi::emit_push_reg(ctx.emitter, "rax");                                     // save the new reference cell pointer across key materialization
+    materialize_hash_key_x86_64(ctx, key)?;
+    abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");                        // preserve the materialized key across the table load
+    ctx.load_value_to_reg(hash, "rdi")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");                         // restore key_lo and key_hi
+    abi::emit_pop_reg(ctx.emitter, "rcx");                                     // rcx = value_lo = the reference cell pointer (the hash becomes its sole owner)
+    ctx.emitter.instruction("xor r8d, r8d");                                    // r8 = value_hi = 0 for a reference entry
+    abi::emit_load_int_immediate(ctx.emitter, "r9", 11);                      // r9 = per-entry value_tag 11 = reference
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");                       // store (tag 11, cell) into the entry; rax = table
+    Ok(())
+}
+
+/// Promotes a scalar source local into a boxed REFCELL on AArch64, leaving the cell pointer in x0.
+///
+/// Reads the local's current scalar value, allocates a reference cell holding it, writes the cell
+/// pointer back into the local slot, and marks the slot as a boxed reference alias so subsequent
+/// loads/stores of the variable dereference through `__rt_refcell_load`/`__rt_refcell_store`.
+fn promote_source_to_boxed_refcell_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    let ty = ctx.local_php_type(slot)?.codegen_repr();
+    let tag = scalar_refcell_tag(&ty, "source")?;
+    let offset = ctx.local_offset(slot)?;
+    if refcell_source_is_boxed_mixed(&ty) {
+        // The source local holds a boxed Mixed: unbox it into a raw value triple and allocate the
+        // cell directly from that triple (refcell_alloc retains/persists any heap inner). The cell's
+        // inner is the unboxed value, so reads through the reference reconstruct it correctly.
+        //
+        // The original box is intentionally left alive (not freed) here: releasing it — whether with
+        // mixed_free_deep or a refcount-aware decref — corrupts the freshly-allocated reference cell,
+        // because the box may be shared with the array entry the value came from and the cell is not
+        // yet heap-rooted. The bounded box leak (one per Mixed-source reference assignment) is
+        // reclaimed under M6, which owns all reference-cell lifetime accounting.
+        abi::load_at_offset(ctx.emitter, "x0", offset);                       // x0 = the boxed Mixed pointer held by the source local
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");               // x0=tag, x1=value_lo, x2=value_hi of the boxed value
+        abi::emit_call_label(ctx.emitter, "__rt_refcell_alloc");             // x0 = new reference cell holding the unboxed value (refcount 1)
+    } else {
+        abi::load_at_offset(ctx.emitter, "x1", offset);                       // x1 = value_lo = the current scalar value of the source local
+        abi::emit_load_int_immediate(ctx.emitter, "x0", tag);                 // x0 = inner value tag for refcell_alloc
+        ctx.emitter.instruction("mov x2, xzr");                                 // x2 = value_hi = 0 for a scalar payload
+        abi::emit_call_label(ctx.emitter, "__rt_refcell_alloc");             // x0 = new reference cell (refcount 1)
+    }
+    abi::store_at_offset_scratch(ctx.emitter, "x0", offset, "x9");            // overwrite the source slot with the cell pointer
+    ctx.mark_boxed_refcell_slot(slot);
+    Ok(())
+}
+
+/// Promotes a scalar source local into a boxed REFCELL on x86_64, leaving the cell pointer in rax.
+fn promote_source_to_boxed_refcell_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    let ty = ctx.local_php_type(slot)?.codegen_repr();
+    let tag = scalar_refcell_tag(&ty, "source")?;
+    let offset = ctx.local_offset(slot)?;
+    if refcell_source_is_boxed_mixed(&ty) {
+        // The source local holds a boxed Mixed: unbox it into a raw value triple and allocate the
+        // cell directly from that triple (refcell_alloc retains/persists any heap inner). The cell's
+        // inner is the unboxed value, so reads through the reference reconstruct it correctly.
+        //
+        // The original box is intentionally left alive (not freed) here: releasing it — whether with
+        // mixed_free_deep or a refcount-aware decref — corrupts the freshly-allocated reference cell,
+        // because the box may be shared with the array entry the value came from and the cell is not
+        // yet heap-rooted. The bounded box leak (one per Mixed-source reference assignment) is
+        // reclaimed under M6, which owns all reference-cell lifetime accounting.
+        abi::load_at_offset(ctx.emitter, "rax", offset);                      // rax = the boxed Mixed pointer held by the source local
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");               // rax=tag, rdi=value_lo, rdx=value_hi of the boxed value
+        ctx.emitter.instruction("mov rsi, rdx");                                // refcell_alloc takes value_hi in rsi
+        abi::emit_call_label(ctx.emitter, "__rt_refcell_alloc");             // rax = new reference cell holding the unboxed value (refcount 1)
+    } else {
+        abi::load_at_offset(ctx.emitter, "rdi", offset);                      // rdi = value_lo = the current scalar value of the source local
+        abi::emit_load_int_immediate(ctx.emitter, "rax", tag);                // rax = inner value tag for refcell_alloc
+        ctx.emitter.instruction("xor esi, esi");                                // rsi = value_hi = 0 for a scalar payload
+        abi::emit_call_label(ctx.emitter, "__rt_refcell_alloc");             // rax = new reference cell (refcount 1)
+    }
+    abi::store_at_offset_scratch(ctx.emitter, "rax", offset, "r10");          // overwrite the source slot with the cell pointer
+    ctx.mark_boxed_refcell_slot(slot);
+    Ok(())
+}
+
+/// Promotes a foreach-by-reference source (an interior pointer into a hash entry) into a shared
+/// reference cell on AArch64, leaving the cell pointer in `x0`.
+///
+/// Unlike the value-source promotion, the entry the source aliases is promoted in place: its value
+/// triple moves into a fresh reference cell and the entry slot becomes a tag-11 reference to that
+/// cell, so the original container and the assignment target share the same cell. The cell is then
+/// increffed for the new target owner (the cell is co-owned by the origin entry and the target).
+fn promote_foreach_entry_source_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    let offset = ctx.local_offset(slot)?;
+    abi::load_at_offset(ctx.emitter, "x0", offset);                           // x0 = the foreach interior pointer to the entry value triple
+    abi::emit_call_label(ctx.emitter, "__rt_promote_entry_to_refcell");       // x0 = the shared reference cell (entry is now a tag-11 reference)
+    abi::emit_call_label(ctx.emitter, "__rt_incref");                         // retain the cell for the new target owner (origin entry keeps its own owner)
+    Ok(())
+}
+
+/// Promotes a foreach-by-reference source (an interior pointer into a hash entry) into a shared
+/// reference cell on x86_64, leaving the cell pointer in `rax`.
+///
+/// The mirror of `promote_foreach_entry_source_aarch64`: it promotes the aliased entry in place and
+/// increfs the resulting cell for the new target owner.
+fn promote_foreach_entry_source_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    let offset = ctx.local_offset(slot)?;
+    abi::load_at_offset(ctx.emitter, "rax", offset);                          // rax = the foreach interior pointer to the entry value triple
+    abi::emit_call_label(ctx.emitter, "__rt_promote_entry_to_refcell");       // rax = the shared reference cell (entry is now a tag-11 reference)
+    abi::emit_call_label(ctx.emitter, "__rt_incref");                         // retain the cell for the new target owner (origin entry keeps its own owner)
+    Ok(())
+}
+
+/// Loads a scalar value through a boxed REFCELL alias slot (the `Op::LoadRefCell` boxed path).
+pub(super) fn lower_load_boxed_refcell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("load_ref_cell missing result value"))?;
+    let result_ty = ctx.value_php_type(result)?.codegen_repr();
+    scalar_refcell_tag(&result_ty, "loaded value")?;
+    // A `Mixed`-typed alias must reconstruct a boxed Mixed from the dereferenced triple; a scalar
+    // alias takes the referenced value_lo word directly.
+    let box_as_mixed = matches!(result_ty, PhpType::Mixed);
+    let offset = ctx.local_offset(slot)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(ctx.emitter, "x0", offset);                    // x0 = the boxed reference cell pointer
+            abi::emit_call_label(ctx.emitter, "__rt_refcell_load");           // dereference: x0=tag, x1=lo, x2=hi
+            if box_as_mixed {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");   // box the dereferenced triple back into a Mixed cell
+            } else {
+                ctx.emitter.instruction("mov x0, x1");                          // the scalar result is the referenced value_lo
+            }
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(ctx.emitter, "rax", offset);                   // rax = the boxed reference cell pointer
+            abi::emit_call_label(ctx.emitter, "__rt_refcell_load");           // dereference: rax=tag, rdi=lo, rdx=hi
+            if box_as_mixed {
+                ctx.emitter.instruction("mov rsi, rdx");                        // mixed_from_value takes value_hi in rsi
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");   // box the dereferenced triple back into a Mixed cell
+            } else {
+                ctx.emitter.instruction("mov rax, rdi");                        // the scalar result is the referenced value_lo
+            }
+        }
+    }
+    ctx.store_result_value(result)
+}
+
+/// Stores a scalar value through a boxed REFCELL alias slot (the `Op::StoreRefCell` boxed path).
+pub(super) fn lower_store_boxed_refcell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    let value = expect_operand(inst, 0)?;
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    let tag = scalar_refcell_tag(&value_ty, "stored value")?;
+    let offset = ctx.local_offset(slot)?;
+    ctx.load_value_to_result(value)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x2, x0");                              // x2 = value_lo = the new scalar value
+            abi::emit_load_int_immediate(ctx.emitter, "x1", tag);             // x1 = the new value tag
+            ctx.emitter.instruction("mov x3, xzr");                             // x3 = value_hi = 0 for a scalar payload
+            abi::load_at_offset(ctx.emitter, "x0", offset);                    // x0 = the boxed reference cell pointer
+            abi::emit_call_label(ctx.emitter, "__rt_refcell_store");          // write the new value through the shared cell
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdx, rax");                            // rdx = value_lo = the new scalar value
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", tag);            // rsi = the new value tag
+            ctx.emitter.instruction("xor ecx, ecx");                            // rcx = value_hi = 0 for a scalar payload
+            abi::load_at_offset(ctx.emitter, "rdi", offset);                   // rdi = the boxed reference cell pointer
+            abi::emit_call_label(ctx.emitter, "__rt_refcell_store");          // write the new value through the shared cell
+        }
+    }
+    Ok(())
+}
+
+/// Lowers `unset($hash[$key])` for associative arrays through the shared hash-unset helper.
+///
+/// Materializes the key into the hash ABI key registers, then calls `__rt_hash_unset`, which
+/// copy-on-write splits the table, removes the matching entry (releasing its owned key/value
+/// payloads), and returns the unique (possibly cloned) table pointer. That pointer is written
+/// back to the source SSA slot and array local, mirroring `lower_hash_set`. A missing key is a
+/// runtime no-op.
+pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let hash_ty = ctx.value_php_type(hash)?;
+    require_hash(hash_ty.clone(), inst)?;
+    let source_local = source_load_local_slot(ctx, hash)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            materialize_hash_key_aarch64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(hash, "x0")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
+        }
+        Arch::X86_64 => {
+            materialize_hash_key_x86_64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(hash, "rdi")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
+        }
     }
     ctx.store_result_value(hash)?;
     if let Some(slot) = source_local {
@@ -708,6 +1144,12 @@ fn materialize_hash_mixed_value_aarch64(
         ctx.emitter.instruction("mov x4, xzr");                                 // boxed tagged-scalar Mixed cells do not use the high payload word
         return Ok(());
     }
+    if mixed_storage_boxes_container(value_ty, storage_value_ty) {
+        box_hash_value_for_mixed_storage(ctx, value, value_ty)?;
+        ctx.emitter.instruction("mov x3, x0");                                  // pass the boxed container Mixed cell as the hash value low word
+        ctx.emitter.instruction("mov x4, xzr");                                 // boxed container Mixed cells do not use the high payload word
+        return Ok(());
+    }
     materialize_hash_concrete_value_aarch64(ctx, value, value_ty)
 }
 
@@ -739,6 +1181,12 @@ fn materialize_hash_mixed_value_x86_64(
         ctx.emitter.instruction("xor r8, r8");                                  // boxed tagged-scalar Mixed cells do not use the high payload word
         return Ok(());
     }
+    if mixed_storage_boxes_container(value_ty, storage_value_ty) {
+        box_hash_value_for_mixed_storage(ctx, value, value_ty)?;
+        ctx.emitter.instruction("mov rcx, rax");                                // pass the boxed container Mixed cell as the hash value low word
+        ctx.emitter.instruction("xor r8, r8");                                  // boxed container Mixed cells do not use the high payload word
+        return Ok(());
+    }
     materialize_hash_concrete_value_x86_64(ctx, value, value_ty)
 }
 
@@ -760,13 +1208,33 @@ fn box_hash_value_for_mixed_storage(
 /// Returns the runtime value tag to store for one hash-set payload.
 fn hash_set_value_tag(value_ty: &PhpType, storage_value_ty: &PhpType) -> i64 {
     if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable) {
-        if value_ty.codegen_repr() == PhpType::TaggedScalar {
+        if value_ty.codegen_repr() == PhpType::TaggedScalar
+            || mixed_storage_boxes_container(value_ty, storage_value_ty)
+        {
             return crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64;
         }
         crate::codegen::runtime_value_tag(&value_ty.codegen_repr()) as i64
     } else {
         crate::codegen::runtime_value_tag(storage_value_ty) as i64
     }
+}
+
+/// Returns whether a heap container value (`Array`/`AssocArray`/`Object`) stored into a Mixed-valued
+/// hash entry must be boxed into a Mixed cell (per-entry tag 7) instead of stored with its natural
+/// heap tag (4/5/6).
+///
+/// Boxing wraps the inner container in a Mixed cell that owns it (container refcount 1), matching the
+/// representation `json_decode()` produces. A raw container stored under a Mixed type is incref'd when
+/// read back into a transient box, which raises its refcount above one and makes a later in-place
+/// `__rt_hash_set` copy-on-write into a detached clone — silently losing nested writes such as
+/// `$m['a']['x'] = 99` on a literal base. Boxing the container at store time keeps the inner container
+/// uniquely owned by the cell, so the nested write reaches the shared storage.
+fn mixed_storage_boxes_container(value_ty: &PhpType, storage_value_ty: &PhpType) -> bool {
+    storage_value_ty.codegen_repr() == PhpType::Mixed
+        && matches!(
+            value_ty.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+        )
 }
 
 /// Materializes a concrete payload for a Mixed-capable AArch64 hash entry.
@@ -914,12 +1382,20 @@ fn emit_hash_get_success_x86_64(
 
 /// Materializes a successful AArch64 Mixed hash lookup as a boxed Mixed result.
 fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>) {
+    let ref_label = ctx.next_label("hash_get_ref");
     let box_label = ctx.next_label("hash_get_mixed_box");
     let done_label = ctx.next_label("hash_get_mixed_done");
+    ctx.emitter.instruction("cmp x3, #11");                                     // does the entry hold a shared reference cell?
+    ctx.emitter.instruction(&format!("b.eq {}", ref_label));                    // dereference reference cells before boxing the result
     ctx.emitter.instruction("cmp x3, #7");                                      // check whether the entry already stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("b.ne {}", box_label));                    // box concrete per-entry payloads before returning them as Mixed
     ctx.emitter.instruction("mov x0, x1");                                      // return the boxed Mixed pointer stored in the hash entry
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip on-demand boxing for already boxed entries
+    ctx.emitter.label(&ref_label);
+    ctx.emitter.instruction("mov x0, x1");                                      // x0 = the referenced cell pointer stored in the entry
+    abi::emit_call_label(ctx.emitter, "__rt_refcell_load");                     // dereference the cell: x0=tag, x1=lo, x2=hi
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");                 // box the dereferenced value (registers already in ABI order)
+    ctx.emitter.instruction(&format!("b {}", done_label));                      // the dereferenced value is now a boxed Mixed result
     ctx.emitter.label(&box_label);
     ctx.emitter.instruction("mov x0, x3");                                      // pass the concrete entry tag to the Mixed boxing helper
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
@@ -928,12 +1404,21 @@ fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>) {
 
 /// Materializes a successful x86_64 Mixed hash lookup as a boxed Mixed result.
 fn emit_hash_get_mixed_success_x86_64(ctx: &mut FunctionContext<'_>) {
+    let ref_label = ctx.next_label("hash_get_ref");
     let box_label = ctx.next_label("hash_get_mixed_box");
     let done_label = ctx.next_label("hash_get_mixed_done");
+    ctx.emitter.instruction("cmp rcx, 11");                                     // does the entry hold a shared reference cell?
+    ctx.emitter.instruction(&format!("je {}", ref_label));                      // dereference reference cells before boxing the result
     ctx.emitter.instruction("cmp rcx, 7");                                      // check whether the entry already stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("jne {}", box_label));                     // box concrete per-entry payloads before returning them as Mixed
     ctx.emitter.instruction("mov rax, rdi");                                    // return the boxed Mixed pointer stored in the hash entry
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip on-demand boxing for already boxed entries
+    ctx.emitter.label(&ref_label);
+    ctx.emitter.instruction("mov rax, rdi");                                    // rax = the referenced cell pointer stored in the entry
+    abi::emit_call_label(ctx.emitter, "__rt_refcell_load");                     // dereference the cell: rax=tag, rdi=lo, rdx=hi
+    ctx.emitter.instruction("mov rsi, rdx");                                    // mixed_from_value expects value_hi in rsi, not rdx
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");                 // box the dereferenced value as a Mixed result
+    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // the dereferenced value is now a boxed Mixed result
     ctx.emitter.label(&box_label);
     ctx.emitter.instruction("mov rax, rcx");                                    // pass the concrete entry tag to the Mixed boxing helper
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");

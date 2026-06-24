@@ -60,6 +60,40 @@ PHP source
   are injected only when referenced, and namespace/`use` rules rewrite
   references to fully-qualified names. Autoloading is wired in around these
   steps.
+- **autoload-run** — Composer autoload mappings are interpreted at compile time:
+  `autoload.files` helpers are prefixed, and classes the program references are
+  located through the classmap/PSR-4 index, parsed, and spliced in on demand.
+  Before the reference graph is collected, elephc prunes PHP polyfill
+  redefinition guards (`if (!function_exists('X')) { function X(...) { ... } }`)
+  for functions it provides — currently the PHP 8.5 `deepclone` surface
+  (`deepclone_to_array`, `deepclone_from_array`, `deepclone_hydrate`). The wrapper
+  bodies are never materialized, so the classes they delegate to (such as the
+  large `symfony/polyfill-deepclone` `DeepClone` class) stay out of the
+  closed-world compile when nothing calls those functions. The same prune also
+  drops definition guards for a set of *optional* `autoload.files` helper
+  functions — Symfony's `u()`/`b()`/`s()` (which construct `UnicodeString` /
+  `ByteString`) and `dump()`/`dd()` (which construct `VarDumper`) — but only when
+  the program never calls them. Because those helpers are defined eagerly yet
+  reference heavy classes, pruning the unused ones keeps the whole `symfony/string`
+  and `var-dumper` branches out of a render path that never uses them. The prune is
+  conservative: a helper is removed only if no call names it anywhere in the
+  program assembled so far, so a genuine call keeps the helper (and its classes).
+  The companion
+  [`extension_loaded()`](../php/system-and-io.md#system-functions) builtin reports
+  no loaded extensions, so a polyfill's `extension_loaded` guard selects its
+  userland fallback path consistently.
+- **lenient dynamic includes in library code** — elephc is closed-world, so an
+  `include`/`require` whose path is only known at run time (e.g. `require $file;`)
+  is rejected in your own program. Inside a *class file pulled in by the
+  autoloader*, however, such a path is usually a lazy data-table load buried in a
+  method that the program never calls. Rather than failing the whole build, elephc
+  degrades that unresolvable dynamic include into a runtime-fatal stub: the class
+  compiles normally, and only if that exact branch is reached at run time does the
+  program print `could not resolve dynamic include/require path at compile time:
+  <path>` to stderr and exit non-zero. Eagerly-executed `autoload.files` helpers
+  keep the strict behavior (an unresolvable include there is skipped with a
+  warning, since its top-level code runs at startup), and your program's own
+  includes are never silently degraded.
 - **typecheck** — the [Type Checker](../internals/the-type-checker.md) infers and
   validates types and emits warnings.
 

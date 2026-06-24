@@ -167,6 +167,71 @@ echo "|" . $o->x;
     assert_eq!(out, "NULL|9");
 }
 
+/// Verifies `new $arr['k'](args)` — a `new` whose class name is held in an array element —
+/// constructs the named class and forwards constructor arguments. This is the form Symfony's
+/// runtime bootstrap uses (`new $_SERVER['APP_RUNTIME'](...)`).
+#[test]
+fn test_class_dynamic_instantiation_array_access_class_name() {
+    let out = compile_and_run(
+        r#"<?php
+class Roadster { public int $seats; public function __construct(int $s) { $this->seats = $s; } }
+class Coupe { public int $seats; public function __construct(int $s) { $this->seats = $s; } }
+$registry = ["fast" => "Roadster", "big" => "Coupe"];
+$a = new $registry["fast"](2);
+$b = new $registry["big"](4);
+echo gettype($a) . ":" . $a->seats . "|" . gettype($b) . ":" . $b->seats;
+"#,
+    );
+    assert_eq!(out, "object:2|object:4");
+}
+
+/// Verifies `new $obj->prop(args)` — a `new` whose class name is read from an object property —
+/// constructs the named class. The trailing `(4)` is the constructor argument list, not a
+/// method call on the property.
+#[test]
+fn test_class_dynamic_instantiation_property_class_name() {
+    let out = compile_and_run(
+        r#"<?php
+class Coupe { public int $seats; public function __construct(int $s) { $this->seats = $s; } }
+class Factory { public string $kind = "Coupe"; }
+$f = new Factory();
+$o = new $f->kind(4);
+echo gettype($o) . ":" . $o->seats;
+"#,
+    );
+    assert_eq!(out, "object:4");
+}
+
+/// Verifies the PHP 8.0 `new (expr)(args)` form: an arbitrary parenthesized expression naming
+/// the class, here a function returning a class-string.
+#[test]
+fn test_class_dynamic_instantiation_parenthesized_expr() {
+    let out = compile_and_run(
+        r#"<?php
+class Roadster { public int $seats; public function __construct(int $s) { $this->seats = $s; } }
+function pick(): string { return "Roadster"; }
+$o = new (pick())(7);
+echo gettype($o) . ":" . $o->seats;
+"#,
+    );
+    assert_eq!(out, "object:7");
+}
+
+/// Verifies a nested array-access class-name expression (`new $cfg['a']['b'](args)`) resolves
+/// through the full dereference chain before construction.
+#[test]
+fn test_class_dynamic_instantiation_nested_array_access() {
+    let out = compile_and_run(
+        r#"<?php
+class Coupe { public int $seats; public function __construct(int $s) { $this->seats = $s; } }
+$cfg = ["cars" => ["sport" => "Coupe"]];
+$o = new $cfg["cars"]["sport"](9);
+echo gettype($o) . ":" . $o->seats;
+"#,
+    );
+    assert_eq!(out, "object:9");
+}
+
 /// Verifies compiled PHP output for class object aliasing.
 #[test]
 fn test_class_object_aliasing() {
@@ -479,4 +544,49 @@ echo $u->id();
 "#,
     );
     assert_eq!(out, "7");
+}
+
+/// Regression: `get_class()` on a Mixed value holding an object (here the result of a dynamic
+/// `new $class()`, which is typed Mixed) used to fail with an EIR "unsupported feature" error.
+/// It now unboxes the Mixed and reads the class name. Output cross-checked with `php -r`.
+#[test]
+fn test_get_class_on_dynamic_new_mixed_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Roadster {}
+$c = "Roadster";
+$o = new $c();
+echo get_class($o);
+"#,
+    );
+    assert_eq!(out, "Roadster");
+}
+
+/// Regression: `get_class()` / `get_parent_class()` on a Mixed object resolves the runtime class
+/// and its parent.
+#[test]
+fn test_get_class_and_parent_on_mixed_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {}
+class Derived extends Base {}
+$c = "Derived";
+$o = new $c();
+echo get_class($o) . "|" . get_parent_class($o);
+"#,
+    );
+    assert_eq!(out, "Derived|Base");
+}
+
+/// Regression: `get_class()` on a heterogeneous (Mixed-element) array entry holding an object.
+#[test]
+fn test_get_class_on_mixed_array_element_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Widget {}
+$registry = ["w" => new Widget()];
+echo get_class($registry["w"]);
+"#,
+    );
+    assert_eq!(out, "Widget");
 }

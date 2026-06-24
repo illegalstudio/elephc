@@ -292,3 +292,44 @@ fn test_multiarg_string_builtins_of_mixed_argument() {
     );
     assert_eq!(out, "hell0 w0rld|6|hello,world");
 }
+
+/// Regression: `$s = substr($s, 0, $n)` reassigning a string to a substring of ITSELF inside a
+/// loop, where `$s` is re-read afterward (here by `strrpos`), used to corrupt `$s` — its first
+/// bytes became garbage because `substr` returned a slice into the source buffer that the store
+/// then freed. Persisting the slice to an owned copy fixes it. This is the Composer ClassLoader
+/// namespace-walking idiom. Output cross-checked with `php -r`.
+#[test]
+fn test_substr_self_reassign_in_loop_does_not_corrupt() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "aaaa.bbbb.cccc.dddd.eeee";
+$p = strrpos($s, ".");
+while (false !== $p) {
+    echo $p . ":" . $s . "\n";
+    $s = substr($s, 0, $p);
+    $p = strrpos($s, ".");
+}
+echo "root:" . $s . "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "19:aaaa.bbbb.cccc.dddd.eeee\n14:aaaa.bbbb.cccc.dddd\n9:aaaa.bbbb.cccc\n4:aaaa.bbbb\nroot:aaaa\n"
+    );
+}
+
+/// Regression: a plain `$s = substr($s, ...)` self-reassign without any later read of `$s` must
+/// keep producing the right value (guards the persisted-copy path for the simple case).
+#[test]
+fn test_substr_self_reassign_repeated() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "ABCDEFGHIJ";
+$s = substr($s, 0, 8);
+$s = substr($s, 0, 6);
+$s = substr($s, 2);
+echo $s;
+"#,
+    );
+    assert_eq!(out, "CDEF");
+}

@@ -194,6 +194,9 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
             visit_expr(target, st);
             visit_expr(value, st);
         }
+        StmtKind::RefAssignTarget { target, .. } => {
+            visit_expr(target, st);
+        }
         StmtKind::ArrayPush { value, .. } => visit_expr(value, st),
         StmtKind::Return(opt) => {
             if let Some(e) = opt {
@@ -223,6 +226,8 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
         // Statements that don't carry expressions or sub-bodies for yield checks.
         StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::RefAssign { .. }
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
@@ -286,6 +291,7 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         | ExprKind::Throw(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. } => visit_expr(inner, st),
         ExprKind::NullCoalesce { value, default } => {
@@ -295,6 +301,9 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         ExprKind::Pipe { value, callable } => {
             visit_expr(value, st);
             visit_expr(callable, st);
+        }
+        ExprKind::ListUnpack { value, .. } => {
+            visit_expr(value, st);
         }
         ExprKind::FunctionCall { args, .. }
         | ExprKind::ClosureCall { args, .. }

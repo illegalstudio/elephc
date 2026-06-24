@@ -500,6 +500,24 @@ For named receivers, elephc preserves PHP's written/imported spelling for the
 operations such as `new`, `instanceof`, static method calls, and static property
 access.
 
+`$expr::class` (PHP 8.0) resolves the class name of the value held by an expression
+receiver at runtime — `$obj::class`, `$v[$i]::class`, `($foo)::class`. Unlike the
+named-receiver forms above (which are compile-time constants), this is a runtime
+lookup: it desugars to `get_class($expr)`, so the receiver must be an object and the
+result is the object's actual (possibly subclass) class, matching PHP.
+
+```php
+<?php
+class Box {}
+class Derived extends Box {}
+$b = new Derived();
+echo $b::class;                      // "Derived" — runtime class, not the declared type
+
+enum Suit { case Hearts; case Spades; }
+$c = Suit::Spades;
+echo $c::class;                      // "Suit" — an enum case is an object
+```
+
 ## Late static binding constructors (`new self()`, `new static()`, `new parent()`)
 
 The `new self()`, `new static()`, and `new parent()` factory patterns are supported inside class methods:
@@ -584,6 +602,21 @@ echo gettype($bad);                      // "NULL"
 
 elephc resolves the class name case-insensitively against compile-time class metadata, matching PHP class lookup. A match dispatches through the same allocation path as `new ClassName()`, including constructor calls, declared property defaults, and supported built-in/SPL runtime storage initialization. An unknown name currently yields PHP `null`; the missing-class fatal path is not yet tightened.
 
+The class name does not have to be a bare variable. As in PHP, it can be any of the following expressions, with the trailing `(...)` always taken as the constructor argument list (never as a call on the expression itself):
+
+```php
+<?php
+$registry = ['json' => 'JsonRenderer', 'csv' => 'CsvRenderer'];
+$a = new $registry['json']('out');       // array element holds the class name
+
+$config = new RendererConfig();
+$b = new $config->default('fallback');   // object property holds the class name
+
+$c = new ($registry['json'])('chosen');  // PHP 8.0 parenthesized expression
+```
+
+Array offsets (`$arr['k']`) and property reads (`$obj->prop`) may be chained (`new $cfg['a']['b'](...)`). This is the pattern frameworks use to bootstrap from configuration — for example Symfony's runtime entry point does `new $_SERVER['APP_RUNTIME'](...)`. The resulting object is typed `mixed` at compile time (the class is only known at runtime), so it supports property and method access but not constructs that require a statically known class.
+
 ## Dynamic method and static calls
 
 A method or static method can be called by a name held in a variable:
@@ -606,7 +639,7 @@ $static = "version";
 echo $class::$static();           // 1.0 — both class and method dynamic
 ```
 
-`$obj->$name(...)` and `$class::$name(...)` are equivalent to `call_user_func([$obj, $name], ...)` / `call_user_func([$class, $name], ...)`. A dynamic method name on a literal class also works (`ClassName::$name(...)`). Arguments are forwarded positionally. A nullsafe dynamic method call (`$obj?->$name()`) is not yet supported, and **named arguments are rejected** in dynamic calls because the target method — and therefore its parameter names — is not known at compile time.
+`$obj->$name(...)` and `$class::$name(...)` are equivalent to `call_user_func([$obj, $name], ...)` / `call_user_func([$class, $name], ...)`. A dynamic method name on a literal class also works (`ClassName::$name(...)`), as do the `self::$name(...)`, `static::$name(...)`, and `parent::$name(...)` forms — `static::$name(...)` resolves to the runtime class, preserving late static binding. Arguments are forwarded positionally. A nullsafe dynamic method call (`$obj?->$name()`) is not yet supported, and **named arguments are rejected** in dynamic calls because the target method — and therefore its parameter names — is not known at compile time.
 
 ## Anonymous classes (`new class {}`)
 
@@ -750,10 +783,81 @@ echo sqlSortKeyword(SortDirection::Descending); // DESC
 - `__construct(...)` — runs at instantiation
 - `__destruct()` — runs when the object is released (see below)
 - `__toString()` — string coercion
-- `__get($name)` — reading undefined property
-- `__set($name, $value)` — writing undefined property
+- `__get($name)` — reading an undeclared property
+- `__set($name, $value)` — writing an undeclared property
+- `__isset($name)` — `isset()`/`empty()` on an undeclared property
+- `__unset($name)` — `unset()` of an undeclared property
 - `__invoke(...$args)` — calling an object directly
 - `__call($name, $args)` — intercepting missing instance methods
+- `__callStatic($name, $args)` — intercepting missing static methods
+
+## Property interception (`__get`, `__set`, `__isset`, `__unset`)
+
+When code reads, writes, tests, or removes a property that the class does not
+declare, the matching magic method is invoked. This lets a class expose virtual
+properties backed by any internal representation:
+
+```php
+<?php
+class Config
+{
+    private bool $debugEnabled = true;
+
+    public function __get(string $name): bool
+    {
+        return $name === "debug" && $this->debugEnabled;
+    }
+
+    public function __isset(string $name): bool
+    {
+        return $name === "debug" && $this->debugEnabled;
+    }
+
+    public function __unset(string $name): void
+    {
+        if ($name === "debug") {
+            $this->debugEnabled = false;
+        }
+    }
+}
+
+$config = new Config();
+echo isset($config->debug) ? "on" : "off";  // on  → __isset
+unset($config->debug);                        //     → __unset
+echo isset($config->debug) ? "on" : "off";  // off → __isset
+```
+
+`isset($obj->prop)` returns the boolean result of `__isset`; `unset($obj->prop)`
+runs `__unset` for its side effects. Both fire only for properties the class does
+not declare — accessing a declared property uses it directly.
+
+Contract: `__isset` and `__unset` must be non-static and public, and each takes
+exactly one argument (the property name). `__isset` returns `bool`.
+
+## Static call interception (`__callStatic`)
+
+`__callStatic` is the static counterpart of `__call`: a static call to a method
+the class does not define is forwarded to `__callStatic`, which receives the
+called method name and an array of the arguments. Subclasses inherit it.
+
+```php
+<?php
+abstract class Query
+{
+    public static function __callStatic(string $method, array $args): string
+    {
+        return $method . "(" . implode(", ", $args) . ")";
+    }
+}
+
+class User extends Query {}
+
+echo User::where("active", "1");  // where(active, 1)  → __callStatic
+echo User::orderBy("name");        // orderBy(name)      → __callStatic
+```
+
+Contract: `__callStatic` must be declared `public static` and takes exactly two
+arguments — the method name (`string`) and the argument list (`array`).
 
 ## Destructors (`__destruct`)
 
@@ -807,6 +911,52 @@ Rules and notes:
   outlives the destructor (so the object would survive) does not keep it alive —
   the object is still freed once the destructor returns. Avoid retaining `$this`
   past the end of `__destruct`.
+
+## Cloning objects (`clone`, `__clone`)
+
+The `clone` expression produces a shallow copy of an object: a fresh instance
+of the same class whose properties start out equal to the original's. Scalar
+and string properties are independent on the copy; object and array properties
+are shared by reference (the canonical PHP shallow-clone contract).
+
+```php
+<?php
+class Car {
+    public string $model;
+    public Engine $engine;   // object property: shared by the shallow clone
+    public function __clone() {
+        // Deep-copy the engine so the clone owns an independent part.
+        $this->engine = clone $this->engine;
+    }
+}
+$original = new Car("Roadster", new Engine(200));
+$copy = clone $original;     // shallow copy, then __clone() runs on $copy
+```
+
+After the shallow copy, PHP invokes `__clone()` on the **new** object (not the
+original) if the class — or an ancestor — declares it. This is where a class
+deep-copies properties that must not be shared (nested objects, in particular).
+A class without `__clone` (and with none inherited) simply gets the shallow
+copy.
+
+Rules and notes:
+
+- `__clone` must be non-static and take no arguments. Any visibility is
+  allowed (PHP invokes it on the freshly copied instance regardless), so it may
+  be `public`, `protected`, or `private`.
+- A subclass without its own `__clone` inherits its parent's.
+- `clone` is a prefix expression. It binds tighter than `**` and looser than
+  postfix `->`/`[]`/`()`, so `clone $a ** 2` is `(clone $a) ** 2`,
+  `clone $a->x` is `clone ($a->x)`, and `clone new Foo()` is `clone (new Foo())`.
+- Cloning a statically-known non-object (e.g. `clone 42`) is a compile error,
+  matching PHP's runtime `TypeError`. `clone` of a `mixed`/union/nullable
+  operand is allowed and deferred to the runtime helper, which clones an object
+  payload, returns `null` for a non-object payload, and unboxes/reboxes a
+  boxed `Mixed` cell — this is the shape used when cloning objects read out of
+  untyped arrays (`clone $prototypes[$class]`).
+- Dynamic properties (`#[\AllowDynamicProperties]`) are cloned into an
+  independent container, so reassigning one on the copy does not touch the
+  original.
 
 ## Attributes
 
@@ -871,7 +1021,7 @@ echo $b->name;            // "elephc"
 echo $b->missing;         // empty (Mixed null)
 ```
 
-User-defined attributes (e.g. `#[Author]`, `#[Pure]`, `#[Memoized]`) parse and persist in the AST. They have no compile-time semantics, but their **names** and positional **literal arguments** are reachable at runtime through lightweight helper builtins and the supported Reflection API:
+User-defined attributes (e.g. `#[Author]`, `#[Pure]`, `#[Memoized]`) parse and persist in the AST. They have no compile-time semantics, but their **names** and **literal arguments** (positional and named) are reachable at runtime through lightweight helper builtins and the supported Reflection API:
 
 ```php
 <?php
@@ -974,11 +1124,64 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionProperty::getAttributes()` | `new ReflectionProperty($class_name, $property_name)` | Return `ReflectionAttribute` objects for property attributes |
 | `ReflectionAttribute::newInstance()` | Internal only | Instantiate the attribute class from captured literal args |
 
+Functions and their parameters can also be reflected. `ReflectionFunction` reads
+a named function's signature, and `getParameters()` returns one
+`ReflectionParameter` per declared parameter, in order:
+
+```php
+<?php
+class Mailer {}
+
+function send(string $to, Mailer $mailer, int $retries = 3, ?string $subject = null): void {}
+
+$fn = new ReflectionFunction('send');
+echo $fn->getNumberOfParameters();         // 4
+echo $fn->getNumberOfRequiredParameters(); // 2
+
+foreach ($fn->getParameters() as $param) {
+    echo $param->getName();                // to, mailer, retries, subject
+    echo $param->getPosition();            // 0, 1, 2, 3
+    echo $param->isOptional() ? "?" : "!"; // retries and subject are optional
+
+    if ($param->hasType()) {
+        $type = $param->getType();         // ReflectionNamedType
+        echo $type->getName();             // string, Mailer, int, string
+        echo $type->isBuiltin() ? "b" : "c";
+        echo $type->allowsNull() ? "n" : "-"; // subject (?string) allows null
+    }
+}
+```
+
+A parameter with no type hint reports `hasType()` as `false`, and `getType()`
+returns `null`. A nullable hint such as `?string` reports `getName()` as
+`string` with `allowsNull()` true. Class-typed parameters report the bare class
+name with `isBuiltin()` false.
+
+| Reflection method | Returns | Description |
+|---|---|---|
+| `ReflectionFunction::getName()` | `string` | The reflected function's name |
+| `ReflectionFunction::getShortName()` | `string` | The name without its namespace prefix |
+| `ReflectionFunction::getNumberOfParameters()` | `int` | Total declared parameters |
+| `ReflectionFunction::getNumberOfRequiredParameters()` | `int` | Parameters without a default and before the first optional |
+| `ReflectionFunction::getParameters()` | `ReflectionParameter[]` | One object per declared parameter, in order |
+| `ReflectionParameter::getName()` | `string` | The parameter name (without `$`) |
+| `ReflectionParameter::getPosition()` | `int` | Zero-based parameter index |
+| `ReflectionParameter::isOptional()` | `bool` | True for a parameter with a default or variadic, and any after it |
+| `ReflectionParameter::isVariadic()` | `bool` | True for the `...$rest` parameter |
+| `ReflectionParameter::hasType()` | `bool` | True when the parameter declares a type |
+| `ReflectionParameter::getType()` | `?ReflectionNamedType` | The declared type, or `null` when untyped |
+| `ReflectionNamedType::getName()` | `string` | The type name (`int`, `string`, a class name, …) |
+| `ReflectionNamedType::isBuiltin()` | `bool` | True for builtin types, false for class types |
+| `ReflectionNamedType::allowsNull()` | `bool` | True when the declared type is nullable |
+
 Limitations today:
 - All arguments to `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and `new ReflectionClass/Method/Property(...)` must be compile-time class/member strings. `ClassName::class` is accepted for the class-name argument of `new ReflectionClass/Method/Property(...)`, and normal named-argument / static associative-spread normalization runs before the literal-string check. Dynamic class, method, property, or attribute names require a runtime name→id lookup table that is not yet implemented.
-- Only **literal** positional arguments are materialized by reflection helpers today (string, int, bool, null, plus `-N` for negative ints). Other legal PHP attribute arguments can still be parsed and compiled, and `class_attribute_names()` can still list the attribute name, but `class_attribute_args()`, `class_get_attributes()`, and Reflection `getAttributes()` report an error if they would need unsupported argument metadata.
+- Attribute arguments materialized by reflection today include: string, int, float, bool, null, negation (`-N`) of a numeric literal, arrays (positional and associative, nested, with heterogeneous element types), **named arguments**, and **symbolic references** — a global constant (`#[A(SOME_CONST)]`), a class/interface constant (`#[A(C::BAR)]`), or an enum case (`#[A(E::Case)]`). `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()` → `getArguments()` returns named arguments under their string keys and positional arguments under their integer keys, matching PHP. A constant reference resolves to its value and an enum-case reference resolves to the case object (so reading its `->value`/`->name` works just like PHP), and `newInstance()` constructs the attribute with those arguments.
+- A symbolic reference that elephc cannot resolve — for example a built-in class constant such as `Attribute::TARGET_CLASS`, which is not registered — is treated as unsupported metadata: the attribute still parses and compiles and `class_attribute_names()` still lists it, but its arguments are not reflectable through `getAttributes()`/`class_get_attributes()`/`class_attribute_args()`.
+- The flat `class_attribute_args()` helper returns a positional array of scalars only; it rejects attributes whose arguments are keyed (named arguments or associative arrays, at any depth) or contain a symbolic reference. Use `ReflectionClass::getAttributes()->getArguments()` for those.
 - When several attributes share a name on the same class, `class_attribute_args()` returns the args of the first match; `class_get_attributes()` does expose every occurrence as a separate `ReflectionAttribute` in source order.
 - `ReflectionClass` supports `getName()` and `getAttributes()`. `ReflectionMethod` and `ReflectionProperty` currently support `getAttributes()` only; broader APIs such as `getProperties()`, `getMethods()`, and object construction through `ReflectionClass::newInstance()` are not yet available.
+- `ReflectionFunction`/`ReflectionParameter` reflect named functions only (the constructor argument must be a compile-time function-name string). `ReflectionParameter::getType()` resolves a single named type (including a nullable `?T`); union and intersection parameter types, default-value reflection (`getDefaultValue()`), and per-parameter attribute reflection are not yet available. An explicit `mixed` hint is reported as untyped.
 
 ### Class constants
 
@@ -1007,4 +1210,4 @@ Class constants (PHP 7.1+ visibility, PHP 8.1+ `final`) live on classes, interfa
 - Backed property hooks may read and write their own backing slot, but the short `set => expr;` form is not supported; use a block `set { ... }`.
 - Shadowing a private parent property with a same-named child property is not yet supported (PHP gives them separate slots; elephc uses one slot per name)
 - Class constants must be literal-or-foldable expressions; cyclic constant references are not supported.
-- Class attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()` APIs; parameter reflection is not yet available. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to parameters (refactor of param representation and stack-trace infrastructure pending).
+- Class attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty::getAttributes()` APIs. Function and parameter signatures are exposed through `ReflectionFunction` and `ReflectionParameter` (including `getType()`); per-parameter attribute reflection is not yet available. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to parameters (refactor of param representation and stack-trace infrastructure pending).

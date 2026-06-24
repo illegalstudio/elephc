@@ -324,6 +324,71 @@ fn test_list_unpack_static_property_targets() {
     assert_eq!(out, "7 8");
 }
 
+// --- foreach array destructuring (PHP 7.1+) ---
+
+/// Verifies `foreach ($arr as [$a, $b])` binds each positional element pair.
+#[test]
+fn test_foreach_destructure_positional() {
+    let out = compile_and_run(
+        "<?php\n$out = \"\";\nforeach ([[\"a\",\"b\"], [\"c\",\"d\"]] as [$x, $y]) {\n $out .= $x . $y . \"|\";\n}\necho $out;\n",
+    );
+    assert_eq!(out, "ab|cd|");
+}
+
+/// Verifies `foreach ($arr as $k => [$a, $b])` binds the key and the element pair.
+#[test]
+fn test_foreach_destructure_key_value_pair() {
+    let out = compile_and_run(
+        "<?php\nforeach ([\"k1\" => [1, 2], \"k2\" => [3, 4]] as $k => [$m, $n]) {\n echo $k . \":\" . $m . \",\" . $n . \"\\n\";\n}\n",
+    );
+    assert_eq!(out, "k1:1,2\nk2:3,4\n");
+}
+
+/// Verifies keyed destructuring directly as the foreach value pattern.
+#[test]
+fn test_foreach_destructure_keyed_pattern() {
+    let out = compile_and_run(
+        "<?php\nforeach ([[\"id\"=>1,\"name\"=>\"Alice\"], [\"id\"=>2,\"name\"=>\"Bob\"]] as [\"id\" => $id, \"name\" => $name]) {\n echo $id . \":\" . $name . \"\\n\";\n}\n",
+    );
+    assert_eq!(out, "1:Alice\n2:Bob\n");
+}
+
+/// Verifies nested patterns inside a foreach value pattern bind correctly.
+#[test]
+fn test_foreach_destructure_nested_pattern() {
+    let out = compile_and_run(
+        "<?php\nforeach ([[1, [2, 3]], [4, [5, 6]]] as [$a, [$b, $c]]) {\n echo $a . $b . $c;\n}\n",
+    );
+    assert_eq!(out, "123456");
+}
+
+/// Verifies holes (skipped slots) advance the positional index without binding.
+#[test]
+fn test_foreach_destructure_holes() {
+    let out = compile_and_run(
+        "<?php\nforeach ([[10, 20, 30], [40, 50, 60]] as [, $mid,]) {\n echo $mid . \"\\n\";\n}\n",
+    );
+    assert_eq!(out, "20\n50\n");
+}
+
+/// Verifies foreach destructuring over a real typed-element local variable array.
+#[test]
+fn test_foreach_destructure_over_variable_array() {
+    let out = compile_and_run(
+        "<?php\n$rows = [[\"p\", \"q\"], [\"r\", \"s\"]];\nforeach ($rows as [$u, $v]) {\n echo $u . $v;\n}\n",
+    );
+    assert_eq!(out, "pqrs");
+}
+
+/// Verifies foreach destructuring works inside a function (local slot + element binding).
+#[test]
+fn test_foreach_destructure_inside_function() {
+    let out = compile_and_run(
+        "<?php\nfunction pair(array $rows): string {\n $out = \"\";\n foreach ($rows as [$a, $b]) { $out .= $a . $b; }\n return $out;\n}\necho pair([[\"x\",\"y\"], [\"z\",\"w\"]]);\n",
+    );
+    assert_eq!(out, "xyzw");
+}
+
 // --- call_user_func_array ---
 
 // Tests basic `call_user_func_array("add", [3, 4])` where `add($a, $b) { return $a + $b; }`
@@ -2390,4 +2455,50 @@ fn test_system() {
 fn test_passthru() {
     let out = compile_and_run("<?php passthru(\"echo bye\");");
     assert_eq!(out, "bye\n");
+}
+
+/// Verifies `extension_loaded()` reports unknown extensions as not loaded, matching
+/// the closed-world AOT model where no dynamic PHP extensions are present.
+#[test]
+fn test_extension_loaded_reports_false() {
+    let out = compile_and_run(
+        "<?php echo extension_loaded('deepclone') ? '1' : '0'; echo extension_loaded('mbstring') ? '1' : '0';",
+    );
+    assert_eq!(out, "00");
+}
+
+/// Verifies `extension_loaded()` returns a real boolean usable as an `if` condition,
+/// so polyfill `if (!extension_loaded('x'))` guards take their userland branch.
+#[test]
+fn test_extension_loaded_drives_polyfill_guard() {
+    let out = compile_and_run(
+        "<?php if (!extension_loaded('json')) { echo 'fallback'; } else { echo 'native'; }",
+    );
+    assert_eq!(out, "fallback");
+}
+
+/// Verifies `extension_loaded()` matches extension names case-insensitively, as PHP does.
+#[test]
+fn test_extension_loaded_is_case_insensitive() {
+    let out = compile_and_run("<?php var_dump(extension_loaded('DeepClone'));");
+    assert_eq!(out, "bool(false)\n");
+}
+
+/// Regression: `extension_loaded` must not be a first-class-callable builtin. Because the
+/// dynamic-callable dispatch table emits a wrapper for every FCC-eligible builtin, listing
+/// `extension_loaded` there made every program that uses a dynamic string callback reference
+/// a non-existent `_fn_extension_loaded` symbol (it is inlined, not a runtime function), so
+/// linking failed. This program both calls `extension_loaded` and invokes a user function
+/// through a dynamic string callback; it must compile and run.
+#[test]
+fn test_extension_loaded_does_not_break_dynamic_string_callback() {
+    let out = compile_and_run(
+        r#"<?php
+function inc($x) { return $x + 1; }
+$loaded = extension_loaded('deepclone') ? '1' : '0';
+$mapped = array_map("inc", [10]);
+echo $loaded . $mapped[0];
+"#,
+    );
+    assert_eq!(out, "011");
 }

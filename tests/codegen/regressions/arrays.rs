@@ -798,3 +798,60 @@ echo "|", count($ok), ":", $ok[0], $ok[2];
     );
     assert_eq!(out, "arr:0|3:abab");
 }
+
+/// Regression: `$arr[$missing] ?? $default` on an associative array whose values are arrays used
+/// to SIGSEGV — the eager element read returned a garbage descriptor for the absent key, which the
+/// null-coalesce then dereferenced. `??` now uses isset semantics (existence-guarded read), so a
+/// missing key yields the default without reading. Output cross-checked with `php -r`.
+#[test]
+fn test_null_coalesce_missing_array_valued_key_takes_default() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["k" => [1, 2]];
+echo ($a["miss"] ?? "DEF") . "|";
+$present = $a["k"] ?? null;
+echo count($present);
+"#,
+    );
+    assert_eq!(out, "DEF|2");
+}
+
+/// Regression: `$arr[$missing] ?? null` (array-valued assoc) must be `null`, not a crash.
+#[test]
+fn test_null_coalesce_missing_array_valued_key_null_default() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["k" => [1, 2]];
+$v = $a["miss"] ?? null;
+var_dump($v);
+"#,
+    );
+    assert_eq!(out, "NULL\n");
+}
+
+/// Regression: `$arr[$missing] ?? null` on a string-valued assoc must be `null`, not `""` — the
+/// null-coalesce previously checked the read value for null instead of key existence, so a missing
+/// string element (which reads as `""`) wrongly survived. Cross-checked with `php -r`.
+#[test]
+fn test_null_coalesce_missing_string_valued_key_is_null() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["k" => "s"];
+var_dump($a["miss"] ?? null);
+"#,
+    );
+    assert_eq!(out, "NULL\n");
+}
+
+/// Regression: nested `$arr[$present][$missingInner] ?? $default` resolves through the inner
+/// existence check rather than reading a missing inner element.
+#[test]
+fn test_null_coalesce_missing_nested_inner_key() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => ["y" => 5]];
+echo ($a["x"]["z"] ?? "DEF") . "|" . ($a["x"]["y"] ?? "DEF");
+"#,
+    );
+    assert_eq!(out, "DEF|5");
+}

@@ -81,6 +81,7 @@ mod decref_array;
 mod decref_hash;
 mod decref_mixed;
 mod decref_object;
+mod decref_refcell;
 mod gc_collect_cycles;
 mod gc_collect_cycles_x86_64;
 mod gc_mark_reachable;
@@ -104,6 +105,7 @@ mod hash_new;
 mod hash_set;
 mod hash_to_mixed;
 mod hash_union;
+mod hash_unset;
 mod heap_alloc;
 mod heap_debug_check_live;
 mod heap_debug_fail;
@@ -132,6 +134,11 @@ mod mixed_numeric_binops;
 mod mixed_strict_eq;
 mod mixed_unbox;
 mod mixed_write_stdout;
+mod promote_entry_to_refcell;
+mod refcell_alloc;
+mod refcell_free_deep;
+mod refcell_load;
+mod refcell_store;
 mod refcount;
 mod shuffle;
 mod sort_int;
@@ -278,6 +285,18 @@ pub use decref_any::emit_decref_any;
 /// Emit generic reference decrement helper.
 pub use decref_mixed::emit_decref_mixed;
 /// Emit Mixed reference decrement helper.
+pub use decref_refcell::emit_decref_refcell;
+/// Emit hash-entry reference-cell promotion helper.
+pub use promote_entry_to_refcell::emit_promote_entry_to_refcell;
+/// Emit reference-cell decrement helper.
+pub use refcell_alloc::emit_refcell_alloc;
+/// Emit reference-cell allocation helper.
+pub use refcell_free_deep::emit_refcell_free_deep;
+/// Emit reference-cell deep-free helper.
+pub use refcell_load::emit_refcell_load;
+/// Emit reference-cell dereference helper.
+pub use refcell_store::emit_refcell_store;
+/// Emit reference-cell write-through helper.
 pub use hash_count::emit_hash_count;
 /// Emit hash count helper.
 pub use hash_append::emit_hash_append;
@@ -322,6 +341,8 @@ pub use hash_to_mixed::emit_hash_to_mixed;
 /// Emit hash-to-Mixed conversion helper.
 pub use hash_union::emit_hash_union;
 /// Emit hash union helper.
+pub use hash_unset::emit_hash_unset;
+/// Emit hash unset (single-key removal) helper.
 pub use heap_alloc::emit_heap_alloc;
 /// Emit heap allocation helper.
 pub use heap_debug_check_live::emit_heap_debug_check_live;

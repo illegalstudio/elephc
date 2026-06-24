@@ -35,6 +35,8 @@ pub(super) struct FunctionContext<'a> {
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
     local_offsets: HashMap<LocalSlotId, usize>,
     promoted_ref_cells: HashSet<LocalSlotId>,
+    boxed_refcell_slots: HashSet<LocalSlotId>,
+    foreach_hash_ref_slots: HashSet<LocalSlotId>,
     try_handler_offsets: HashMap<i64, usize>,
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
@@ -69,6 +71,8 @@ impl<'a> FunctionContext<'a> {
             callee_saved_offsets: layout.callee_saved_offsets,
             local_offsets: layout.local_offsets,
             promoted_ref_cells: HashSet::new(),
+            boxed_refcell_slots: HashSet::new(),
+            foreach_hash_ref_slots: HashSet::new(),
             try_handler_offsets: layout.try_handler_offsets,
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
@@ -199,9 +203,37 @@ impl<'a> FunctionContext<'a> {
         self.promoted_ref_cells.contains(&slot)
     }
 
+    /// Marks a local slot as storing a boxed REFCELL (heap kind 6) pointer. Unlike a raw
+    /// promoted ref cell, a boxed slot is dereferenced through `__rt_refcell_load`/`_store`
+    /// because its payload lives at `[cell+8]` behind a runtime tag, not at `[cell+0]`.
+    pub(super) fn mark_boxed_refcell_slot(&mut self, slot: LocalSlotId) {
+        self.boxed_refcell_slots.insert(slot);
+    }
+
+    /// Returns true when a local slot stores a boxed REFCELL pointer (heap kind 6).
+    pub(super) fn is_boxed_refcell_slot(&self, slot: LocalSlotId) -> bool {
+        self.boxed_refcell_slots.contains(&slot)
+    }
+
+    /// Marks a local slot as a foreach-by-reference interior pointer into a hash entry value triple.
+    ///
+    /// Only the associative/hash iterator binding sets this: the slot holds a pointer to an entry's
+    /// `[lo@0][hi@8][tag@16]` value triple, which `__rt_promote_entry_to_refcell` can promote in
+    /// place. Indexed iterators bind a raw element pointer with no tag word, so they are not marked.
+    pub(super) fn mark_foreach_hash_ref_slot(&mut self, slot: LocalSlotId) {
+        self.foreach_hash_ref_slots.insert(slot);
+    }
+
+    /// Returns true when a local slot holds a foreach-by-reference hash-entry interior pointer.
+    pub(super) fn is_foreach_hash_ref_slot(&self, slot: LocalSlotId) -> bool {
+        self.foreach_hash_ref_slots.contains(&slot)
+    }
+
     /// Returns true when a local slot stores a heap reference-cell pointer.
     pub(super) fn local_stores_ref_cell_pointer(&self, slot: LocalSlotId) -> bool {
-        self.is_by_ref_param_slot(slot) || self.is_promoted_ref_cell(slot)
+        self.is_by_ref_param_slot(slot)
+            || self.is_promoted_ref_cell(slot)
+            || self.is_boxed_refcell_slot(slot)
     }
 
     /// Returns true when the local slot is the storage slot for a by-reference parameter.

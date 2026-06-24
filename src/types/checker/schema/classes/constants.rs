@@ -62,6 +62,9 @@ fn rewrite_expr(
         ExprKind::BitNot(inner) => {
             ExprKind::BitNot(Box::new(rewrite_expr(inner, class_name, parent_name)?))
         }
+        ExprKind::Clone(inner) => {
+            ExprKind::Clone(Box::new(rewrite_expr(inner, class_name, parent_name)?))
+        }
         ExprKind::Throw(inner) => {
             ExprKind::Throw(Box::new(rewrite_expr(inner, class_name, parent_name)?))
         }
@@ -80,6 +83,10 @@ fn rewrite_expr(
         ExprKind::Pipe { value, callable } => ExprKind::Pipe {
             value: Box::new(rewrite_expr(value, class_name, parent_name)?),
             callable: Box::new(rewrite_expr(callable, class_name, parent_name)?),
+        },
+        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
+            vars: vars.clone(),
+            value: Box::new(rewrite_expr(value, class_name, parent_name)?),
         },
         ExprKind::Assignment {
             target,

@@ -67,6 +67,14 @@ foreach ($slice as $value) {
 }
 echo "\n";
 
+// unset() removes a key without renumbering: the array keeps its other keys (a hole)
+unset($squares[1]);
+echo "After unset(squares[1]): ";
+foreach ($squares as $k => $v) {
+    echo "$k=>$v ";
+}
+echo "\n";
+
 $reversed = array_reverse($numbers);
 echo "Reversed: ";
 foreach ($reversed as $value) {

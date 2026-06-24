@@ -55,6 +55,42 @@ fn test_parse_reference_assignment() {
     }
 }
 
+/// Verifies that a reference assignment into an array element parses as a `RefAssignTarget`
+/// whose `target` is the array-access lvalue and whose `source` is the aliased variable.
+#[test]
+fn test_parse_reference_assignment_into_array_element() {
+    let stmts = parse_source("<?php $a[\"x\"] =& $v;");
+    match &stmts[0].kind {
+        StmtKind::RefAssignTarget { target, source } => {
+            assert!(
+                matches!(target.kind, ExprKind::ArrayAccess { .. }),
+                "expected ArrayAccess target, got {:?}",
+                target.kind
+            );
+            assert_eq!(source, "v");
+        }
+        other => panic!("expected RefAssignTarget, got {:?}", other),
+    }
+}
+
+/// Verifies that a reference assignment into an object property parses as a `RefAssignTarget`
+/// whose `target` is the property-access lvalue.
+#[test]
+fn test_parse_reference_assignment_into_property() {
+    let stmts = parse_source("<?php $o->p =& $v;");
+    match &stmts[0].kind {
+        StmtKind::RefAssignTarget { target, source } => {
+            assert!(
+                matches!(target.kind, ExprKind::PropertyAccess { .. }),
+                "expected PropertyAccess target, got {:?}",
+                target.kind
+            );
+            assert_eq!(source, "v");
+        }
+        other => panic!("expected RefAssignTarget, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php $items[0] += 3;` parses to an `ArrayAssign` (not a generic `Assign`).
 /// Compound assignment on an array element must produce the correct AST shape.
 #[test]
@@ -115,6 +151,72 @@ fn test_parse_array_element_post_increment_assignment() {
             }
         }
         other => panic!("Expected ArrayAssign, got {:?}", other),
+    }
+}
+
+/// Verifies that array-element prefix `++` lowers to the same `ArrayAssign`
+/// read-modify-write as the postfix form (the result is discarded in statement
+/// position, so prefix and postfix are observably identical).
+#[test]
+fn test_parse_array_element_pre_increment_assignment() {
+    let stmts = parse_source("<?php ++$items[0];");
+    match &stmts[0].kind {
+        StmtKind::ArrayAssign {
+            array,
+            index,
+            value,
+        } => {
+            assert_eq!(array, "items");
+            assert!(matches!(index.kind, ExprKind::IntLiteral(0)));
+            match &value.kind {
+                ExprKind::BinaryOp { left, op, right } => {
+                    assert_eq!(op, &BinOp::Add);
+                    assert!(matches!(right.kind, ExprKind::IntLiteral(1)));
+                    assert!(matches!(left.kind, ExprKind::ArrayAccess { .. }));
+                }
+                other => panic!("Expected BinaryOp value, got {:?}", other),
+            }
+        }
+        other => panic!("Expected ArrayAssign, got {:?}", other),
+    }
+}
+
+/// Verifies that property prefix `++` lowers to a `PropertyAssign` read-modify-write
+/// (`++$o->count;` behaves like `$o->count += 1;` in statement position).
+#[test]
+fn test_parse_property_pre_increment_assignment() {
+    let stmts = parse_source("<?php ++$o->count;");
+    match &stmts[0].kind {
+        StmtKind::PropertyAssign {
+            object,
+            property,
+            value,
+        } => {
+            assert!(matches!(object.kind, ExprKind::Variable(ref name) if name == "o"));
+            assert_eq!(property, "count");
+            match &value.kind {
+                ExprKind::BinaryOp { left, op, right } => {
+                    assert_eq!(op, &BinOp::Add);
+                    assert!(matches!(right.kind, ExprKind::IntLiteral(1)));
+                    assert!(matches!(left.kind, ExprKind::PropertyAccess { .. }));
+                }
+                other => panic!("Expected BinaryOp value, got {:?}", other),
+            }
+        }
+        other => panic!("Expected PropertyAssign, got {:?}", other),
+    }
+}
+
+/// Verifies that a bare-variable prefix `++` keeps its `PreIncrement` AST node
+/// (it must not be rerouted through the complex-l-value statement lowering).
+#[test]
+fn test_parse_bare_variable_pre_increment_keeps_node() {
+    let stmts = parse_source("<?php ++$x;");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => {
+            assert!(matches!(expr.kind, ExprKind::PreIncrement(ref name) if name == "x"));
+        }
+        other => panic!("Expected ExprStmt(PreIncrement), got {:?}", other),
     }
 }
 
@@ -235,4 +337,99 @@ fn test_parse_union_typed_assign() {
         }
         other => panic!("Expected typed assign, got {:?}", other),
     }
+}
+
+/// Verifies that a postfix `++` on a complex l-value in expression position desugars to
+/// `(L += 1) - 1`: the assignment statement's value is a `BinaryOp` subtracting `1` from a
+/// compound-assignment expression, so the expression yields the OLD value like PHP.
+#[test]
+fn test_parse_property_post_increment_expression_desugar() {
+    let stmts = parse_source("<?php $x = $o->n++;");
+    let StmtKind::Assign { name, value } = &stmts[0].kind else {
+        panic!("Expected Assign, got {:?}", stmts[0].kind);
+    };
+    assert_eq!(name, "x");
+    match &value.kind {
+        ExprKind::BinaryOp { left, op, right } => {
+            assert_eq!(op, &BinOp::Sub);
+            assert!(matches!(right.kind, ExprKind::IntLiteral(1)));
+            assert!(
+                matches!(left.kind, ExprKind::Assignment { .. }),
+                "postfix increment left operand should be the compound assignment, got {:?}",
+                left.kind
+            );
+        }
+        other => panic!("Expected BinaryOp desugar, got {:?}", other),
+    }
+}
+
+/// Verifies that a prefix `++` on a complex l-value in expression position desugars to the
+/// compound assignment `(L += 1)` directly, so the expression yields the NEW value.
+#[test]
+fn test_parse_property_pre_increment_expression_desugar() {
+    let stmts = parse_source("<?php $x = ++$o->n;");
+    let StmtKind::Assign { name, value } = &stmts[0].kind else {
+        panic!("Expected Assign, got {:?}", stmts[0].kind);
+    };
+    assert_eq!(name, "x");
+    assert!(
+        matches!(value.kind, ExprKind::Assignment { .. }),
+        "prefix increment should desugar to a compound assignment, got {:?}",
+        value.kind
+    );
+}
+
+/// Verifies that bare-variable increment in expression position keeps its dedicated
+/// `PreIncrement`/`PostIncrement` nodes (the complex-l-value desugar must not regress it).
+#[test]
+fn test_parse_bare_variable_increment_expression_keeps_nodes() {
+    let pre = parse_source("<?php $x = ++$i;");
+    let StmtKind::Assign { value, .. } = &pre[0].kind else {
+        panic!("Expected Assign, got {:?}", pre[0].kind);
+    };
+    assert!(matches!(value.kind, ExprKind::PreIncrement(ref n) if n == "i"));
+
+    let post = parse_source("<?php $x = $i++;");
+    let StmtKind::Assign { value, .. } = &post[0].kind else {
+        panic!("Expected Assign, got {:?}", post[0].kind);
+    };
+    assert!(matches!(value.kind, ExprKind::PostIncrement(ref n) if n == "i"));
+}
+
+/// Verifies the short-ternary else-branch binds `=` to its adjacent lvalue: PHP parses
+/// `cond ?: $o->p = B` as `cond ?: ($o->p = B)`, not `(cond ?: $o->p) = B`. The statement is a bare
+/// expression statement whose `ShortTernary` default is the property assignment, rather than a
+/// statement-level assignment to a non-lvalue (which would be "Invalid assignment target").
+#[test]
+fn test_short_ternary_else_binds_property_assignment() {
+    let stmts = parse_source("<?php false ?: $o->p = 5;");
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::ShortTernary { value, default } => {
+                assert!(matches!(value.kind, ExprKind::BoolLiteral(false)));
+                assert!(
+                    matches!(default.kind, ExprKind::Assignment { .. }),
+                    "short-ternary else must bind the assignment, got {:?}",
+                    default.kind
+                );
+            }
+            other => panic!("expected ShortTernary, got {:?}", other),
+        },
+        other => panic!("expected ExprStmt, got {:?}", other),
+    }
+}
+
+/// Regression guard for the bail in `try_parse_postfix_assignment`: an ordinary property
+/// assignment statement still parses as a dedicated `PropertyAssign`, not a bailed bare
+/// expression statement. The short-ternary fix must not disturb plain complex assignments.
+#[test]
+fn test_plain_property_assignment_stays_a_statement() {
+    let stmts = parse_source("<?php $o->p = 5;");
+    assert_eq!(stmts.len(), 1);
+    assert!(
+        matches!(stmts[0].kind, StmtKind::PropertyAssign { .. }),
+        "a plain property assignment must parse as PropertyAssign, got {:?}",
+        stmts[0].kind
+    );
 }

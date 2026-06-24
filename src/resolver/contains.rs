@@ -19,7 +19,7 @@ pub(super) fn has_includes(stmts: &[Stmt]) -> bool {
 
 /// Returns true if the statement contains an `Include` or `IncludeOnce` node,
 /// recursing into nested statements, functions, methods, closures, and bodies.
-fn stmt_has_includes(stmt: &Stmt) -> bool {
+pub(super) fn stmt_has_includes(stmt: &Stmt) -> bool {
     match &stmt.kind {
         StmtKind::Include { .. } => true,
         StmtKind::Synthetic(stmts) | StmtKind::IncludeOnceGuard { body: stmts, .. } => {
@@ -45,6 +45,7 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
         StmtKind::NestedArrayAssign { target, value } => {
             expr_has_includes(target) || expr_has_includes(value)
         }
+        StmtKind::RefAssignTarget { target, .. } => expr_has_includes(target),
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_has_includes(object) || expr_has_includes(value)
@@ -108,6 +109,8 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
         | StmtKind::IfDef { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
         | StmtKind::Global { .. }
@@ -130,7 +133,7 @@ fn methods_have_includes(methods: &[ClassMethod]) -> bool {
 /// Returns true if the expression recursively contains an `Include`, checking
 /// binary operands, function arguments, array literals, closures, match arms,
 /// and all other expression variants.
-fn expr_has_includes(expr: &Expr) -> bool {
+pub(super) fn expr_has_includes(expr: &Expr) -> bool {
     match &expr.kind {
         // A value-position include is itself an include.
         ExprKind::IncludeValue { .. } => true,
@@ -147,6 +150,7 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::ErrorSuppress(value)
         | ExprKind::Print(value)
         | ExprKind::Spread(value)
+        | ExprKind::Clone(value)
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::BufferNew { len: value, .. } => expr_has_includes(value),
         ExprKind::NullCoalesce { value, default }
@@ -157,6 +161,7 @@ fn expr_has_includes(expr: &Expr) -> bool {
         ExprKind::Pipe { value, callable } => {
             expr_has_includes(value) || expr_has_includes(callable)
         }
+        ExprKind::ListUnpack { value, .. } => expr_has_includes(value),
         ExprKind::Assignment {
             target,
             value,

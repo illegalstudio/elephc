@@ -14,12 +14,13 @@ use crate::names::Name;
 use crate::parser::ast::{Expr, ExprKind, MagicConstant, StaticReceiver};
 use crate::span::Span;
 
-use super::calls::{parse_scoped_static_call, peek_cast};
+use super::assignment_targets::is_non_local_assignment_target;
+use super::calls::{parse_first_class_callable_parens, parse_scoped_static_call, peek_cast};
 use super::prefix_complex::{
     parse_arrow_closure, parse_attributed_closure, parse_closure, parse_match_expr,
     parse_named_expr, parse_new_object,
 };
-use super::pratt::parse_expr_bp;
+use super::pratt::{build_incdec_value, parse_expr_bp};
 use super::{parse_args, parse_expr};
 
 /// Parses a prefix (unary or primary) PHP expression and returns the resulting AST node.
@@ -206,6 +207,29 @@ pub(super) fn parse_prefix(
         Token::Function => parse_closure(tokens, pos, span, false),
         Token::Fn => parse_arrow_closure(tokens, pos, span, false),
         Token::AttrOpen => parse_attributed_closure(tokens, pos, span),
+        // `array(...)` long-form array literal. PHP treats `array` followed by `(` as the
+        // array-literal language construct, not a function call, so intercept it here before
+        // the generic identifier/function-call path. The keyword match is case-insensitive
+        // (`Array(`, `ARRAY(`), matching PHP's case-insensitive keyword handling.
+        Token::Identifier(name)
+            if name.eq_ignore_ascii_case("array")
+                && matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::LParen)) =>
+        {
+            parse_long_array_literal(tokens, pos, span)
+        }
+        // A leading `\` before a global constant (`\PHP_INT_MAX`, `\INF`, `\DIRECTORY_SEPARATOR`,
+        // `\PHP_EOL`, `\true`, …) only denotes the global namespace. Those constants are global and
+        // are lexed as dedicated tokens rather than identifiers, so the fully-qualified-name path
+        // would reject them ("Expected name"). Consume the `\` and parse the constant token itself.
+        Token::Backslash
+            if tokens
+                .get(*pos + 1)
+                .map(|(token, _)| is_backslashable_global_constant(token))
+                .unwrap_or(false) =>
+        {
+            *pos += 1; // consume the leading `\`
+            parse_prefix(tokens, pos)
+        }
         Token::Identifier(_) | Token::Backslash => parse_named_expr(tokens, pos, span),
         Token::Self_ => {
             *pos += 1;
@@ -234,13 +258,152 @@ pub(super) fn parse_prefix(
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Parent, "parent")
         }
         Token::New => parse_new_object(tokens, pos, span),
+        // `clone <expr>` — PHP prefix operator on the `clone new` precedence tier (binds
+        // tighter than `**`, looser than postfix `->`/`[]`/()`). Operand bp 38 sits just
+        // above `**`'s lhs bp (37) so `clone $a ** 2` parses as `(clone $a) ** 2`, while the
+        // unconditional postfix loop still folds `clone $a->b` into `clone ($a->b)`.
+        Token::Clone => parse_unary(tokens, pos, span, ExprKind::Clone, 38),
         Token::This => parse_simple(tokens, pos, span, ExprKind::This),
         Token::Yield => parse_yield(tokens, pos, span),
+        // `require`/`include` (optionally `_once`) in expression position, e.g.
+        // `if (true === (require_once X) || ...)`, `f(require X)`, `echo require X;`. Statement-
+        // position includes are routed to `parse_include` before the expression parser runs, so
+        // this arm only fires in true expression context. Produces the transient `IncludeValue`
+        // marker that the resolver expands (inlining the included file into caller scope).
+        Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce => {
+            match super::parse_include_value_expr(tokens, pos)? {
+                Some(expr) => Ok(expr),
+                // Unreachable: the arm matched an include/require keyword, so the helper always
+                // returns `Some`. Kept as a safe fallback rather than a panicking expect.
+                None => Err(CompileError::new(span, "Expected include/require expression")),
+            }
+        }
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token: {:?}", other),
         )),
     }
+}
+
+/// Returns true when `token` is a global constant that is lexed as a dedicated token (rather than
+/// an identifier) and may be written with a leading `\` (`\PHP_INT_MAX`, `\INF`, `\PHP_EOL`,
+/// `\DIRECTORY_SEPARATOR`, `\true`, …). Used so a fully-qualified reference to such a constant
+/// skips the leading backslash and parses the constant directly instead of failing name parsing.
+/// Magic constants (`__LINE__`, `__DIR__`, …) are intentionally excluded: PHP does not namespace
+/// them, so `\__LINE__` is not valid.
+fn is_backslashable_global_constant(token: &Token) -> bool {
+    matches!(
+        token,
+        Token::True
+            | Token::False
+            | Token::Null
+            | Token::Inf
+            | Token::Nan
+            | Token::PhpIntMax
+            | Token::PhpIntMin
+            | Token::PhpFloatMax
+            | Token::PhpFloatMin
+            | Token::PhpFloatEpsilon
+            | Token::MPi
+            | Token::ME
+            | Token::MSqrt2
+            | Token::MPi2
+            | Token::MPi4
+            | Token::MLog2e
+            | Token::MLog10e
+            | Token::PhpEol
+            | Token::PhpOs
+            | Token::DirectorySeparator
+            | Token::Stdin
+            | Token::Stdout
+            | Token::Stderr
+    )
+}
+
+/// Returns true when `token` can begin a prefix/primary PHP expression — i.e. when
+/// [`parse_prefix`] would accept it as the first token of an expression.
+///
+/// Used by the statement dispatcher to recognise a *bare expression statement* whose leading
+/// token is a value or unary operator (e.g. `0 > $T && $T += 0x40;`, `!$ok && fail();`,
+/// `new Foo();`) rather than a keyword/variable already routed to a dedicated statement parser.
+/// PHP allows any expression as a statement, so keeping this predicate in lockstep with
+/// [`parse_prefix`] ensures such statements are parsed instead of rejected at statement position.
+/// The keyword-led prefix forms (`print`, `throw`, `yield`, `include`/`require`) are listed for
+/// completeness but never reach the predicate: the dispatcher routes them to dedicated parsers
+/// before its fallback arm consults this function.
+pub(crate) fn token_starts_prefix_expression(token: &Token) -> bool {
+    matches!(
+        token,
+        // Unary / prefix operators
+        Token::Minus
+            | Token::Bang
+            | Token::Tilde
+            | Token::At
+            | Token::Print
+            | Token::Throw
+            | Token::PlusPlus
+            | Token::MinusMinus
+            // Literals and boolean/null keywords
+            | Token::True
+            | Token::False
+            | Token::Null
+            | Token::Inf
+            | Token::Nan
+            | Token::StringLiteral(_)
+            | Token::IntLiteral(_)
+            | Token::FloatLiteral(_)
+            // PHP / math named constants lowered at parse time
+            | Token::PhpIntMax
+            | Token::PhpIntMin
+            | Token::PhpFloatMax
+            | Token::PhpFloatMin
+            | Token::PhpFloatEpsilon
+            | Token::MPi
+            | Token::ME
+            | Token::MSqrt2
+            | Token::MPi2
+            | Token::MPi4
+            | Token::MLog2e
+            | Token::MLog10e
+            | Token::Stdin
+            | Token::Stdout
+            | Token::Stderr
+            | Token::PhpEol
+            | Token::PhpOs
+            | Token::DirectorySeparator
+            // Magic constants
+            | Token::DunderLine
+            | Token::DunderDir
+            | Token::DunderFile
+            | Token::DunderFunction
+            | Token::DunderClass
+            | Token::DunderMethod
+            | Token::DunderNamespace
+            | Token::DunderTrait
+            // Variables, grouping, array / closure / match constructs
+            | Token::Variable(_)
+            | Token::LParen
+            | Token::LBracket
+            | Token::Match
+            | Token::Function
+            | Token::Fn
+            | Token::AttrOpen
+            // Names and scope receivers
+            | Token::Identifier(_)
+            | Token::Backslash
+            | Token::Self_
+            | Token::Static
+            | Token::Parent
+            // Object construction / cloning / `$this` / yield / includes
+            | Token::New
+            | Token::Clone
+            | Token::This
+            | Token::Yield
+            | Token::Include
+            | Token::IncludeOnce
+            | Token::Require
+            | Token::RequireOnce
+    )
 }
 
 /// Parses `yield` and `yield from` expressions. Consumes the `yield` token and optionally
@@ -338,8 +501,11 @@ fn parse_unary(
 }
 
 /// Parses a prefix `++` or `--` increment/decrement operator. Consumes the operator,
-/// then expects a `Variable` token next. Returns `PreIncrement` or `PreDecrement` with the
-/// variable name. Returns an error if a variable does not follow the operator.
+/// then the target. A bare variable (`++$x`) keeps the dedicated `PreIncrement`/
+/// `PreDecrement` node. A complex l-value (`++$obj->p`, `++$a[$i]`, `++$this->n`,
+/// `++Foo::$s`) is parsed at a binding power above every binary operator — so only
+/// postfix member access attaches — and desugared to compound-assignment form, which
+/// yields the new value like PHP. Returns an error if the target is not an l-value.
 fn parse_prefix_inc_dec(
     tokens: &[(Token, Span)],
     pos: &mut usize,
@@ -347,8 +513,14 @@ fn parse_prefix_inc_dec(
     increment: bool,
 ) -> Result<Expr, CompileError> {
     *pos += 1;
-    if *pos < tokens.len() {
-        if let Token::Variable(name) = &tokens[*pos].0 {
+    // Fast path: a bare variable with no complex-l-value continuation keeps its
+    // dedicated prefix node (preserving bare-variable increment semantics).
+    if let Some((Token::Variable(name), _)) = tokens.get(*pos) {
+        let continues_complex = matches!(
+            tokens.get(*pos + 1).map(|(token, _)| token),
+            Some(Token::Arrow | Token::QuestionArrow | Token::LBracket | Token::DoubleColon)
+        );
+        if !continues_complex {
             let name = name.clone();
             *pos += 1;
             return Ok(Expr::new(
@@ -359,6 +531,17 @@ fn parse_prefix_inc_dec(
                 },
                 span,
             ));
+        }
+    }
+    // Complex l-value: parse the target above every binary operator (38 > the highest
+    // infix binding power, 37), so binary operators stay with the enclosing context.
+    if matches!(
+        tokens.get(*pos).map(|(token, _)| token),
+        Some(Token::Variable(_) | Token::This)
+    ) {
+        let target = parse_expr_bp(tokens, pos, 38)?;
+        if is_non_local_assignment_target(&target) {
+            return Ok(build_incdec_value(target, increment, true, span));
         }
     }
     Err(CompileError::new(
@@ -394,6 +577,13 @@ fn parse_variable(
             }
             Token::LParen => {
                 *pos += 1;
+                if parse_first_class_callable_parens(tokens, pos)? {
+                    // `$callable(...)` is the first-class-callable form: it creates a closure from the
+                    // callable held in `$callable`. In elephc's closed world a callable-typed variable
+                    // already *is* a callable value, so the closure-creation form evaluates to that
+                    // value directly and can be stored and invoked like any other callable.
+                    return Ok(Expr::new(ExprKind::Variable(name), span));
+                }
                 let args = parse_args(tokens, pos, span)?;
                 return Ok(Expr::new(ExprKind::ClosureCall { var: name, args }, span));
             }
@@ -459,13 +649,46 @@ fn parse_array_literal(
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
-    *pos += 1;
+    *pos += 1; // consume '['
+    parse_array_entries(tokens, pos, span, &Token::RBracket, "Expected ']'")
+}
+
+/// Parses the long-form `array(...)` array-literal language construct, which is exactly
+/// equivalent to the short `[...]` form but delimited by parentheses (e.g.
+/// `array('a' => 1, $x)`). Consumes the `array` keyword identifier and the opening `(`, then
+/// shares the element-parsing body with the short form, closing on `)`. PHP treats `array(...)`
+/// as a language construct rather than a function call; this form is used pervasively by
+/// Composer's autoloader and older PHP code.
+fn parse_long_array_literal(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    *pos += 2; // consume the `array` keyword and the opening '('
+    parse_array_entries(tokens, pos, span, &Token::RParen, "Expected ')'")
+}
+
+/// Parses the comma-separated element list of an array literal up to its closing delimiter,
+/// shared by the short `[...]` and long `array(...)` forms. Assumes the opening delimiter has
+/// already been consumed and that `*pos` points at the first element (or the closing delimiter
+/// for an empty literal). Handles positional elements, `key => value` keyed entries (promoting
+/// any earlier positional elements to integer keys), and `...` spreads, exactly as PHP does for
+/// both forms. `close` is the delimiter that terminates the list (`]` or `)`) and
+/// `missing_close_msg` is the diagnostic emitted when it is absent. Returns `ArrayLiteralAssoc`
+/// when any keyed entry was seen, otherwise `ArrayLiteral`.
+fn parse_array_entries(
+    tokens: &[(Token, Span)],
+    pos: &mut usize,
+    span: Span,
+    close: &Token,
+    missing_close_msg: &str,
+) -> Result<Expr, CompileError> {
     let mut elems = Vec::new();
     let mut assoc_elems = Vec::new();
     let mut is_assoc = false;
     let mut first = true;
     let mut next_auto_key = 0i64;
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RBracket {
+    while *pos < tokens.len() && &tokens[*pos].0 != close {
         if !first {
             if tokens[*pos].0 != Token::Comma {
                 return Err(CompileError::new(
@@ -474,7 +697,7 @@ fn parse_array_literal(
                 ));
             }
             *pos += 1;
-            if *pos < tokens.len() && tokens[*pos].0 == Token::RBracket {
+            if *pos < tokens.len() && &tokens[*pos].0 == close {
                 break;
             }
         }
@@ -508,8 +731,8 @@ fn parse_array_literal(
         }
         first = false;
     }
-    if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
-        return Err(CompileError::new(span, "Expected ']'"));
+    if *pos >= tokens.len() || &tokens[*pos].0 != close {
+        return Err(CompileError::new(span, missing_close_msg));
     }
     *pos += 1;
     if is_assoc {

@@ -104,6 +104,15 @@ fn test_error_phpversion_wrong_args() {
     expect_error("<?php phpversion(1);", "phpversion() takes no arguments");
 }
 
+/// Verifies that `extension_loaded()` with no arguments yields a wrong-args diagnostic.
+#[test]
+fn test_error_extension_loaded_wrong_args() {
+    expect_error(
+        "<?php extension_loaded();",
+        "extension_loaded() takes exactly 1 argument",
+    );
+}
+
 /// Verifies that `php_uname()` with two arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_php_uname_wrong_args() {

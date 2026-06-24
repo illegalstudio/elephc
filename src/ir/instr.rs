@@ -170,6 +170,9 @@ pub enum Op {
     PromoteLocalRefCell,
     AliasLocalRefCell,
     ReleaseLocalRefCell,
+    RefAssignElement,
+    RefAssignProperty,
+    MixedToOwnedHash,
     LoadGlobal,
     StoreGlobal,
     LoadStaticLocal,
@@ -247,6 +250,7 @@ pub enum Op {
     HashGet,
     ArraySet,
     HashSet,
+    HashUnset,
     ArrayPush,
     MixedArrayAppend,
     HashAppend,
@@ -272,6 +276,7 @@ pub enum Op {
     IteratorMethodCall,
     SplRuntimeCall,
     ObjectNew,
+    ObjectClone,
     DynamicObjectNew,
     DynamicObjectNewMixed,
     PropGet,
@@ -372,6 +377,27 @@ impl Op {
             },
             AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
             ReleaseLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
+            RefAssignElement => {
+                E::READS_LOCAL
+                    | E::WRITES_LOCAL
+                    | E::READS_HEAP
+                    | E::WRITES_HEAP
+                    | E::ALLOC_HEAP
+                    | E::REFCOUNT_OP
+                    | E::MAY_FATAL
+            }
+            RefAssignProperty => {
+                E::READS_LOCAL
+                    | E::WRITES_LOCAL
+                    | E::READS_HEAP
+                    | E::WRITES_HEAP
+                    | E::ALLOC_HEAP
+                    | E::REFCOUNT_OP
+                    | E::MAY_FATAL
+            }
+            MixedToOwnedHash => {
+                E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL
+            }
             LoadGlobal | LoadStaticProperty | ScopedConstantGet | ClassAttrNames
             | ClassAttrArgs | ClassGetAttributes | CatchCurrent => E::READS_GLOBAL,
             StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal | IncludeOnceMark
@@ -386,6 +412,11 @@ impl Op {
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
                 E::ALLOC_HEAP
             }
+            // `clone` reads the operand's heap-backed properties, allocates a fresh
+            // object (and a fresh Mixed cell when the operand is boxed), retains
+            // refcounted/string property payloads, and may invoke a user `__clone()`
+            // that throws or emits output — so it is conservatively may-throw.
+            ObjectClone => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW,
             MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGet | HashGet
             | BufferGet | BufferLen | PackedFieldGet | PtrRead | PtrReadString => {
                 E::READS_HEAP | E::MAY_FATAL
@@ -393,7 +424,7 @@ impl Op {
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
             | HashCloneShallow => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             ArrayLen | HashLen | ArrayKeyExists | OffsetExists | PropGet => E::READS_HEAP,
-            ArraySet | HashSet | ArrayPush | HashAppend | OffsetUnset | PropSet
+            ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
             | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
@@ -467,6 +498,9 @@ impl Op {
             PromoteLocalRefCell => "promote_local_ref_cell",
             AliasLocalRefCell => "alias_local_ref_cell",
             ReleaseLocalRefCell => "release_local_ref_cell",
+            RefAssignElement => "ref_assign_element",
+            RefAssignProperty => "ref_assign_property",
+            MixedToOwnedHash => "mixed_to_owned_hash",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",
@@ -544,6 +578,7 @@ impl Op {
             HashGet => "hash_get",
             ArraySet => "array_set",
             HashSet => "hash_set",
+            HashUnset => "hash_unset",
             ArrayPush => "array_push",
             MixedArrayAppend => "mixed_array_append",
             HashAppend => "hash_append",
@@ -569,6 +604,7 @@ impl Op {
             IteratorMethodCall => "iterator_method_call",
             SplRuntimeCall => "spl_runtime_call",
             ObjectNew => "object_new",
+            ObjectClone => "object_clone",
             DynamicObjectNew => "dynamic_object_new",
             DynamicObjectNewMixed => "dynamic_object_new_mixed",
             PropGet => "prop_get",

@@ -238,6 +238,12 @@ fn test_keyword_continue() {
     assert_eq!(tokens("<?php continue")[1], Token::Continue);
 }
 
+/// Verifies `goto` keyword tokenizes as `Goto`.
+#[test]
+fn test_keyword_goto() {
+    assert_eq!(tokens("<?php goto")[1], Token::Goto);
+}
+
 /// Verifies `function` keyword tokenizes as `Function`.
 #[test]
 fn test_keyword_function() {

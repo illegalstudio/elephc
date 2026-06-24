@@ -82,4 +82,68 @@ fn test_parse_standalone_match_expression_statement() {
     }
 }
 
+// --- Long-form `array(...)` literal ---
+
+/// Verifies that the long-form `array(1, 2, 3)` parses to the same `ArrayLiteral` node as the
+/// short `[...]` form — it is the array-literal language construct, not a function call.
+#[test]
+fn test_parse_long_array_indexed() {
+    let stmts = parse_source("<?php $a = array(1, 2, 3);");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        match &value.kind {
+            ExprKind::ArrayLiteral(items) => assert_eq!(items.len(), 3),
+            other => panic!("expected ArrayLiteral, got {:?}", other),
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+/// Verifies that `array("a" => 1)` parses to an `ArrayLiteralAssoc`, matching the short keyed form.
+#[test]
+fn test_parse_long_array_assoc() {
+    let stmts = parse_source("<?php $m = array(\"a\" => 1, \"b\" => 2);");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        assert!(matches!(&value.kind, ExprKind::ArrayLiteralAssoc(_)));
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+/// Verifies that an empty long-form `array()` parses to an empty `ArrayLiteral`.
+#[test]
+fn test_parse_long_array_empty() {
+    let stmts = parse_source("<?php $a = array();");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        match &value.kind {
+            ExprKind::ArrayLiteral(items) => assert!(items.is_empty()),
+            other => panic!("expected empty ArrayLiteral, got {:?}", other),
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+/// Verifies that the long form nests like the short form: `array("x" => array(1, 2))` yields an
+/// `ArrayLiteralAssoc` whose value is itself an `ArrayLiteral`.
+#[test]
+fn test_parse_long_array_nested() {
+    let stmts = parse_source("<?php $a = array(\"x\" => array(1, 2));");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        match &value.kind {
+            ExprKind::ArrayLiteralAssoc(items) => {
+                assert_eq!(items.len(), 1);
+                assert!(matches!(items[0].1.kind, ExprKind::ArrayLiteral(_)));
+            }
+            other => panic!("expected ArrayLiteralAssoc, got {:?}", other),
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
 // --- Foreach with key => value ---

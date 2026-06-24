@@ -231,4 +231,102 @@ fn test_expr_call_parses() {
     }
 }
 
+// --- clone expression precedence ---
+
+/// Verifies `clone` parses as a unary prefix expression wrapping its operand.
+#[test]
+fn test_clone_parses_unary() {
+    let stmts = parse_source("<?php echo clone $a;");
+    assert_eq!(echoed_expr(&stmts), &ExprKind::Clone(Box::new(Expr::var("a"))));
+}
+
+/// Verifies `clone` binds tighter than `**` (pow), matching PHP: `clone $a ** 2`
+/// parses as `(clone $a) ** 2`, so the cloned object is the pow left operand.
+#[test]
+fn test_clone_binds_tighter_than_pow() {
+    let stmts = parse_source("<?php echo clone $a ** 2;");
+    assert!(matches!(
+        echoed_expr(&stmts),
+        ExprKind::BinaryOp { op: BinOp::Pow, left, right }
+            if matches!(left.kind, ExprKind::Clone(_))
+                && matches!(right.kind, ExprKind::IntLiteral(2))
+    ));
+}
+
+/// Verifies postfix property access binds tighter than `clone`, matching PHP:
+/// `clone $a->n` parses as `clone ($a->n)`, so the cloned value is the property.
+#[test]
+fn test_clone_operand_takes_postfix_property() {
+    let stmts = parse_source("<?php echo clone $a->n;");
+    assert!(matches!(
+        echoed_expr(&stmts),
+        ExprKind::Clone(inner) if matches!(inner.kind, ExprKind::PropertyAccess { .. })
+    ));
+}
+
+/// Verifies `clone new P()` parses as `clone (new P())` — the `new` expression is
+/// the cloned operand, matching PHP's evaluation order.
+#[test]
+fn test_clone_new_object() {
+    let stmts = parse_source("<?php echo clone new P();");
+    assert!(matches!(
+        echoed_expr(&stmts),
+        ExprKind::Clone(inner) if matches!(inner.kind, ExprKind::NewObject { .. })
+    ));
+}
+
+/// Verifies `new $arr['k']()` parses as a dynamic `new` whose class-name expression is the
+/// array access, with the trailing `()` consumed as the (empty) constructor argument list
+/// rather than as a call on the array element.
+#[test]
+fn test_new_dynamic_array_access_class_name() {
+    let stmts = parse_source("<?php echo new $arr['k']();");
+    assert!(matches!(
+        echoed_expr(&stmts),
+        ExprKind::NewDynamic { name_expr, args }
+            if args.is_empty()
+                && matches!(name_expr.kind, ExprKind::ArrayAccess { .. })
+    ));
+}
+
+/// Verifies `new $obj->kind(7)` parses as a dynamic `new` whose class-name expression is the
+/// property access, with `7` forwarded as a constructor argument — the `(7)` is the ctor
+/// argument list, not a method call on the property.
+#[test]
+fn test_new_dynamic_property_class_name() {
+    let stmts = parse_source("<?php echo new $obj->kind(7);");
+    assert!(matches!(
+        echoed_expr(&stmts),
+        ExprKind::NewDynamic { name_expr, args }
+            if args.len() == 1
+                && matches!(name_expr.kind, ExprKind::PropertyAccess { ref property, .. } if property == "kind")
+    ));
+}
+
+/// Verifies `new $cfg['cars']['sport']()` parses the full nested array-access chain as the
+/// class-name expression (an `ArrayAccess` whose `array` is itself an `ArrayAccess`).
+#[test]
+fn test_new_dynamic_nested_array_access_class_name() {
+    let stmts = parse_source("<?php echo new $cfg['cars']['sport']();");
+    assert!(matches!(
+        echoed_expr(&stmts),
+        ExprKind::NewDynamic { name_expr, .. }
+            if matches!(&name_expr.kind, ExprKind::ArrayAccess { array, .. }
+                if matches!(array.kind, ExprKind::ArrayAccess { .. }))
+    ));
+}
+
+/// Verifies the PHP 8.0 `new (expr)(args)` form parses the parenthesized expression as the
+/// class-name expression of a dynamic `new`, with the following `()` as the ctor arguments.
+#[test]
+fn test_new_dynamic_parenthesized_expr_class_name() {
+    let stmts = parse_source("<?php echo new (pick())(7);");
+    assert!(matches!(
+        echoed_expr(&stmts),
+        ExprKind::NewDynamic { name_expr, args }
+            if args.len() == 1
+                && matches!(name_expr.kind, ExprKind::FunctionCall { .. })
+    ));
+}
+
 // --- Null coalescing precedence ---

@@ -277,6 +277,30 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Per-class __clone symbol table — consulted by __rt_call_object_clone_method
+    // (invoked by __rt_object_clone after the payload is shallow-copied) to run a
+    // class's PHP __clone on the freshly allocated instance. Each entry resolves
+    // through the implementing class so an inherited __clone dispatches to the
+    // ancestor's emitted method symbol; `0` means the class and its ancestors
+    // declare no __clone, so no clone-method call is made.
+    out.push_str(".globl _class_clone_count\n_class_clone_count:\n");
+    out.push_str(&format!(
+        "    .quad {}\n",
+        max_class_id.map_or(0, |class_id| class_id + 1)
+    ));
+    out.push_str(".globl _class_clone_ptrs\n_class_clone_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        let clone_key = php_symbol_key("__clone");
+        for class_id in 0..=max_class_id {
+            let entry = class_info_by_id
+                .get(&class_id)
+                .and_then(|class_info| class_info.method_impl_classes.get(&clone_key))
+                .map(|impl_class| method_symbol(impl_class, &clone_key))
+                .unwrap_or_else(|| "0".to_string());
+            out.push_str(&format!("    .quad {}\n", entry));
+        }
+    }
+
     // _class_propinit_ptrs: dense class_id-indexed table of property-default
     // init thunks. Entry = _class_propinit_<id> when the class has any property
     // default, else 0 (null = nothing to init). __rt_new_by_name indexes this
@@ -453,8 +477,8 @@ pub(crate) fn emit_runtime_data_user(
                     // table can reference it by label, then emit the tagged
                     // (tag, lo, hi) rows in source order.
                     let mut arg_rows = Vec::with_capacity(args.len());
-                    for arg in args {
-                        match arg {
+                    for entry in args {
+                        match &entry.value {
                             crate::types::AttrArgValue::Str(value) => {
                                 let label = format!("_attr_arg_str_{}", arg_str_id);
                                 arg_str_id += 1;
@@ -469,10 +493,24 @@ pub(crate) fn emit_runtime_data_user(
                             crate::types::AttrArgValue::Int(value) => {
                                 arg_rows.push((0u64, format!("{}", *value as u64), 0u64));
                             }
+                            crate::types::AttrArgValue::Float(bits) => {
+                                arg_rows.push((2u64, format!("{}", *bits), 0u64));
+                            }
                             crate::types::AttrArgValue::Bool(value) => {
                                 arg_rows.push((3u64, format!("{}", *value as u64), 0u64));
                             }
                             crate::types::AttrArgValue::Null => {
+                                arg_rows.push((8u64, "0".to_string(), 0u64));
+                            }
+                            crate::types::AttrArgValue::Array(_)
+                            | crate::types::AttrArgValue::ConstRef(_)
+                            | crate::types::AttrArgValue::ScopedConst(..) => {
+                                // This legacy flat (tag, lo, hi) table cannot
+                                // represent a nested array or a deferred symbolic
+                                // reference (global/class constant, enum case),
+                                // and no runtime routine reads it; emit a null
+                                // placeholder. The active EIR path materializes
+                                // the real value from class metadata instead.
                                 arg_rows.push((8u64, "0".to_string(), 0u64));
                             }
                         }

@@ -47,6 +47,7 @@ pub(super) fn collect_expr_reads(
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
         | ExprKind::PtrCast { expr: inner, .. } => collect_expr_reads(inner, scope, warnings),
         ExprKind::NullCoalesce { value, default } => {
             collect_expr_reads(value, scope, warnings);
@@ -55,6 +56,10 @@ pub(super) fn collect_expr_reads(
         ExprKind::Pipe { value, callable } => {
             collect_expr_reads(value, scope, warnings);
             collect_expr_reads(callable, scope, warnings);
+        }
+        // `[$a, $b] = EXPR`: the target vars are written, not read — only EXPR is a read.
+        ExprKind::ListUnpack { value, .. } => {
+            collect_expr_reads(value, scope, warnings);
         }
         ExprKind::Assignment {
             target,
@@ -243,6 +248,10 @@ fn collect_assignment_prelude_reads(
         StmtKind::IncludeOnceMark { .. } => {}
         StmtKind::Assign { value, .. } => collect_expr_reads(value, scope, warnings),
         StmtKind::RefAssign { source, .. } => scope.read(source),
+        StmtKind::RefAssignTarget { target, source } => {
+            collect_expr_reads(target, scope, warnings);
+            scope.read(source);
+        }
         _ => {}
     }
 }
@@ -304,6 +313,11 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
             let mut scope = ScopeUsage::default();
             collect_expr_reads(target, &mut scope, warnings);
             collect_expr_reads(value, &mut scope, warnings);
+        }
+        StmtKind::RefAssignTarget { target, source } => {
+            let mut scope = ScopeUsage::default();
+            collect_expr_reads(target, &mut scope, warnings);
+            scope.read(source);
         }
         StmtKind::PropertyAssign { object, value, .. } => {
             let mut scope = ScopeUsage::default();
@@ -458,6 +472,8 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
         | StmtKind::ListUnpack { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. }

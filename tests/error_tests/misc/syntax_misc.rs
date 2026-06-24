@@ -28,6 +28,51 @@ fn test_error_reference_assignment_requires_variable_source() {
     );
 }
 
+/// Tests that a reference assignment into a *three-level* array element is gated with a clean
+/// diagnostic. Single-level (M2/M3) and two-level nested (M3) element targets are now lowered;
+/// deeper nesting remains unimplemented, so it must still fail cleanly rather than miscompile.
+#[test]
+fn test_error_reference_assignment_into_deep_nested_array_element_is_gated() {
+    expect_error(
+        "<?php $v = 1; $a = [[[1]]]; $a[0][0][0] =& $v;",
+        "Reference assignment into an array element or object property is not yet supported",
+    );
+}
+
+/// Tests that a reference assignment into a *declared* typed-class property is gated: declared
+/// properties are packed fields, not dynamic-property hash entries, so they cannot hold a reference
+/// cell. (A `stdClass` dynamic property is supported and exercised by the codegen tests.)
+#[test]
+fn test_error_reference_assignment_into_declared_property_is_gated() {
+    expect_error(
+        "<?php class C { public int $p = 0; } $v = 1; $o = new C(); $o->p =& $v;",
+        "Reference assignment into an array element or object property is not yet supported",
+    );
+}
+
+/// Tests that a reference assignment into a property of a `Mixed`-typed receiver (e.g. a
+/// `json_decode()` object result) is gated: a boxed Mixed pointer is not a raw object pointer the
+/// dynamic-property-hash codegen can dereference, so the unsupported diagnostic is emitted instead
+/// of miscompiling.
+#[test]
+fn test_error_reference_assignment_into_mixed_receiver_property_is_gated() {
+    expect_error(
+        "<?php $o = json_decode('{}'); $v = 1; $o->p =& $v;",
+        "Reference assignment into an array element or object property is not yet supported",
+    );
+}
+
+/// Tests that the reverse-direction reference source `$r =& $a[<expr>]` is gated when re-evaluating
+/// the source lvalue would run user code. The lowering evaluates the source twice, so a call in the
+/// subscript must be rejected rather than silently evaluated twice.
+#[test]
+fn test_error_reference_reverse_source_with_side_effects_is_gated() {
+    expect_error(
+        "<?php $a = [1, 2]; $r =& $a[strlen('x')];",
+        "Reference assignment from an array or property element with side effects is not yet supported",
+    );
+}
+
 /// Tests that two `use` statements with the same alias name produce a
 /// "Duplicate import alias" error.
 #[test]

@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+use crate::names::Name;
+use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 use crate::span::Span;
 
 use super::declarations::strip_discoverable_declarations;
@@ -21,7 +22,7 @@ use super::discovery::FunctionVariantRegistry;
 use super::engine::resolve_stmts;
 use super::files::{parse_file, resolve_path};
 use super::include_once::include_once_label;
-use super::include_path::fold_include_path;
+use super::include_path::{fold_include_path, runtime_dynamic_include_path_detail};
 use super::state::ResolveState;
 
 /// Process-global counter producing unique hidden temporary names for value-position includes.
@@ -58,8 +59,21 @@ pub(super) fn resolve_include_stmt(
     state: &mut ResolveState,
     function_variants: &FunctionVariantRegistry,
 ) -> Result<Option<Vec<Stmt>>, CompileError> {
-    let path_str =
-        fold_include_path(path, state).map_err(|msg| CompileError::new(stmt.span, &msg))?;
+    let path_str = match fold_include_path(path, state) {
+        Ok(s) => s,
+        Err(msg) => {
+            // Under lenient include lowering (autoloader-spliced library code), an
+            // unresolvable *runtime-dynamic* path becomes a diverging runtime-fatal stub so
+            // the closed-world compile is not blocked by a lazy include that may never run.
+            // Statically-invalid shapes (e.g. an integer path) still hard-error.
+            if state.lenient_dynamic_includes {
+                if let Some(stub) = dynamic_include_fatal_stub(path, stmt.span) {
+                    return Ok(Some(stub));
+                }
+            }
+            return Err(CompileError::new(stmt.span, &msg));
+        }
+    };
     let resolved = resolve_path(&path_str, base_dir);
     let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
 
@@ -150,28 +164,26 @@ pub(super) fn resolve_include_stmt(
     ]))
 }
 
-/// Expands an expression-position `include`/`require` (`$x = require X;` or `return require X;`)
-/// into a sequence of statements that run the included file *in the caller's scope* and deliver
-/// its value to `capture`.
+/// Core of [`expand_value_include`]: inlines the included file into the caller's scope and returns
+/// the hoisted statements plus the hidden temporary name holding the include's value, *without*
+/// appending the final capture statement (`$name = tmp` or `return tmp`).
 ///
-/// The included file's statements are inlined directly (sharing the caller's variables), and its
-/// first top-level `return E` is rewritten to assign a hidden temporary. A successful include with
-/// no top-level `return` yields `1`; a missing non-required include yields `false`, matching PHP.
-///
-/// Nested top-level returns inside control flow within the included file are not rewritten and keep
-/// the same semantics as a statement-position include (they return from the enclosing function).
-pub(super) fn expand_value_include(
+/// Returns `(out, tmp)` where `out` is the inlined include body (already resolved, run in the
+/// caller's scope) preceded by a pre-seed of the temporary, and `tmp` is the unique hidden
+/// variable name carrying the include's value. Direct-RHS callers (`$x = require X;`,
+/// `return require X;`) wrap this via [`expand_value_include`]; deep expression-position callers
+/// (e.g. `if (true === (require_once X) || false)`) use `tmp` directly as a `Variable(tmp)` node.
+pub(super) fn expand_value_include_core(
     span: Span,
     path: &Expr,
     once: bool,
     required: bool,
-    capture: IncludeValueCapture,
     base_dir: &Path,
     declared_once: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<PathBuf>,
     state: &mut ResolveState,
     function_variants: &FunctionVariantRegistry,
-) -> Result<Vec<Stmt>, CompileError> {
+) -> Result<(Vec<Stmt>, String), CompileError> {
     let tmp = format!(
         "__elephc_inc_{}",
         VALUE_INCLUDE_COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -213,15 +225,76 @@ pub(super) fn expand_value_include(
             // temporary itself: either it has no top-level `return`, or it is an `_once` include
             // whose guarded body may be skipped on a repeat include.
             if !captured_return || once {
-                out.push(assign_temp(
-                    &tmp,
-                    Expr::new(ExprKind::IntLiteral(1), span),
-                    span,
-                ));
+                // For a `_once` include that ALSO has a top-level `return`, the pre-seed `1`
+                // (int) and the returned value (e.g. string/object) have incompatible types. PHP
+                // itself yields `true` (1) on a repeat load and the file's return value on the
+                // first load, so the temporary is genuinely `mixed`; declare it as such so the
+                // return reassigns cleanly. The no-`return` case is never overwritten, so a plain
+                // `int` pre-seed keeps the existing typed behavior (and tests).
+                let pre_seed = if captured_return && once {
+                    declare_mixed_temp(&tmp, Expr::new(ExprKind::IntLiteral(1), span), span)
+                } else {
+                    assign_temp(&tmp, Expr::new(ExprKind::IntLiteral(1), span), span)
+                };
+                out.push(pre_seed);
             }
             out.extend(wrapped);
         }
     }
+
+    Ok((out, tmp))
+}
+
+/// Expands an expression-position `include`/`require` (`$x = require X;` or `return require X;`)
+/// into a sequence of statements that run the included file *in the caller's scope* and deliver
+/// its value to `capture`.
+///
+/// Delegates to [`expand_value_include_core`] for the inlining and temporary, then appends the
+/// final capture statement (`$name = tmp` for [`IncludeValueCapture::Assign`], `return tmp` for
+/// [`IncludeValueCapture::Return`]). The included file's statements are inlined directly (sharing
+/// the caller's variables), and its first top-level `return E` is rewritten to assign the hidden
+/// temporary. A successful include with no top-level `return` yields `1`; a missing non-required
+/// include yields `false`, matching PHP.
+///
+/// Nested top-level returns inside control flow within the included file are not rewritten and keep
+/// the same semantics as a statement-position include (they return from the enclosing function).
+pub(super) fn expand_value_include(
+    span: Span,
+    path: &Expr,
+    once: bool,
+    required: bool,
+    capture: IncludeValueCapture,
+    base_dir: &Path,
+    declared_once: &mut HashSet<PathBuf>,
+    include_chain: &mut Vec<PathBuf>,
+    state: &mut ResolveState,
+    function_variants: &FunctionVariantRegistry,
+) -> Result<Vec<Stmt>, CompileError> {
+    // Under lenient include lowering, a value-position `return require $dynamic;` whose path
+    // cannot be resolved becomes a diverging runtime-fatal stub. Returning it directly (rather
+    // than the usual `<tmp> = ...; return <tmp>;` scaffolding) keeps the enclosing function's
+    // declared return type satisfied: the stub's `exit` diverges, so no value is returned and
+    // the unreachable `return <tmp>` that would otherwise mismatch the return type is omitted.
+    if state.lenient_dynamic_includes
+        && matches!(capture, IncludeValueCapture::Return)
+        && fold_include_path(path, state).is_err()
+    {
+        if let Some(stub) = dynamic_include_fatal_stub(path, span) {
+            return Ok(stub);
+        }
+    }
+
+    let (mut out, tmp) = expand_value_include_core(
+        span,
+        path,
+        once,
+        required,
+        base_dir,
+        declared_once,
+        include_chain,
+        state,
+        function_variants,
+    )?;
 
     let value = Expr::new(ExprKind::Variable(tmp), span);
     match capture {
@@ -235,10 +308,99 @@ pub(super) fn expand_value_include(
     Ok(out)
 }
 
+/// Builds the diverging runtime-fatal stub that replaces an unresolvable runtime-dynamic
+/// include/require under lenient include lowering. The stub writes a descriptive message to
+/// stderr (`fwrite(STDERR, ...)`) and then calls `exit(255)` — PHP's fatal-error exit code.
+///
+/// `exit` is recognized as a function-exit guarantee by termination analysis, so a function
+/// body whose only remaining path runs this stub satisfies any declared return type without an
+/// explicit `return` (the value-position `return require $dynamic;` case). The synthetic nodes
+/// mirror exactly what the parser produces for `fwrite(STDERR, ...)` and `exit(255)`, so they
+/// flow unchanged through name resolution, type checking, and EIR lowering.
+///
+/// The message concatenates the original `path` expression so the runtime diagnostic names the
+/// actual (computed) path that could not be resolved. Re-evaluating `path` in the stub also keeps
+/// any variable it reads marked as used, so degrading `$p = ...; require $p;` does not turn the
+/// `$p` assignment into a spurious "unused variable" warning. The path is only evaluated on the
+/// fatal path, which is reached exactly when the original include would have run.
+///
+/// Returns `None` when `path` is not a runtime-dynamic expression: statically-invalid include
+/// shapes (e.g. an integer or boolean literal path) keep their hard compile error.
+fn dynamic_include_fatal_stub(path: &Expr, span: Span) -> Option<Vec<Stmt>> {
+    // Gate: only runtime-dynamic shapes degrade; statically-invalid paths keep their hard error.
+    runtime_dynamic_include_path_detail(path)?;
+
+    let prefix = Expr::new(
+        ExprKind::StringLiteral(
+            "Fatal error: could not resolve dynamic include/require path at compile time: "
+                .to_string(),
+        ),
+        span,
+    );
+    let suffix = Expr::new(
+        ExprKind::StringLiteral(" (elephc compiled it as a runtime fatal)\n".to_string()),
+        span,
+    );
+    // `prefix . <path> . suffix`
+    let message = concat(concat(prefix, path.clone(), span), suffix, span);
+
+    let write_call = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("fwrite"),
+            args: vec![
+                Expr::new(ExprKind::ConstRef(Name::unqualified("STDERR")), span),
+                message,
+            ],
+        },
+        span,
+    );
+    let exit_call = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("exit"),
+            args: vec![Expr::new(ExprKind::IntLiteral(255), span)],
+        },
+        span,
+    );
+
+    Some(vec![
+        Stmt::new(StmtKind::ExprStmt(write_call), span),
+        Stmt::new(StmtKind::ExprStmt(exit_call), span),
+    ])
+}
+
+/// Builds a `left . right` string-concatenation expression at `span`, used to assemble the
+/// runtime-fatal stub message from a static prefix/suffix and the original include path.
+fn concat(left: Expr, right: Expr, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(left),
+            op: BinOp::Concat,
+            right: Box::new(right),
+        },
+        span,
+    )
+}
+
 /// Builds a `<temp> = <value>;` assignment statement for the hidden include temporary.
 fn assign_temp(temp: &str, value: Expr, span: Span) -> Stmt {
     Stmt::new(
         StmtKind::Assign {
+            name: temp.to_string(),
+            value,
+        },
+        span,
+    )
+}
+
+/// Builds a `mixed <temp> = <value>;` declaration for the hidden include temporary.
+///
+/// Used when the temporary may be reassigned a value of a different type (a `_once` include whose
+/// first load returns a non-`int` value while a repeat load yields `1`), so the type checker
+/// accepts the reassignment as PHP does rather than rejecting an `int`-to-`string`/`object` change.
+fn declare_mixed_temp(temp: &str, value: Expr, span: Span) -> Stmt {
+    Stmt::new(
+        StmtKind::TypedAssign {
+            type_expr: TypeExpr::Named(Name::unqualified("mixed")),
             name: temp.to_string(),
             value,
         },

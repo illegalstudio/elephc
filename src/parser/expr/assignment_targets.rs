@@ -28,6 +28,28 @@ pub(super) fn is_non_local_assignment_target(expr: &Expr) -> bool {
     )
 }
 
+/// If `expr` is a simple positional list-destructuring target `[$a, $b, ...]` — an array literal
+/// whose every element is a bare `$variable` — returns the variable names in order. Returns
+/// `None` for keyed (`ArrayLiteralAssoc`), nested, spread, skipped-slot, or non-variable element
+/// forms, which remain statement-only destructuring. Used by the Pratt assignment loop to accept
+/// `[$a, $b] = EXPR` in expression position as an `ExprKind::ListUnpack`.
+pub(super) fn simple_positional_list_vars(expr: &Expr) -> Option<Vec<String>> {
+    let ExprKind::ArrayLiteral(items) = &expr.kind else {
+        return None;
+    };
+    if items.is_empty() {
+        return None;
+    }
+    let mut vars = Vec::with_capacity(items.len());
+    for item in items {
+        match &item.kind {
+            ExprKind::Variable(name) => vars.push(name.clone()),
+            _ => return None,
+        }
+    }
+    Some(vars)
+}
+
 /// Returns true if the expression can serve as the target of an assignment expression.
 /// Valid targets are variables, property accesses, static property accesses, and
 /// nested array accesses whose base is a variable/property.
@@ -338,7 +360,8 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::Cast { expr: value, .. }
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::NamedArg { value, .. }
-        | ExprKind::Spread(value) => collect_assignment_target_dependencies(value, dependencies),
+        | ExprKind::Spread(value)
+        | ExprKind::Clone(value) => collect_assignment_target_dependencies(value, dependencies),
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             collect_assignment_target_dependencies(value, dependencies);
             collect_assignment_target_dependencies(default, dependencies);
@@ -346,6 +369,9 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         ExprKind::Pipe { value, callable } => {
             collect_assignment_target_dependencies(value, dependencies);
             collect_assignment_target_dependencies(callable, dependencies);
+        }
+        ExprKind::ListUnpack { value, .. } => {
+            collect_assignment_target_dependencies(value, dependencies);
         }
         ExprKind::Ternary {
             condition,
@@ -470,7 +496,8 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         | ExprKind::Cast { expr: value, .. }
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::NamedArg { value, .. }
-        | ExprKind::Spread(value) => expr_may_write_dependency(value, dependencies),
+        | ExprKind::Spread(value)
+        | ExprKind::Clone(value) => expr_may_write_dependency(value, dependencies),
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             expr_may_write_dependency(value, dependencies)
                 || expr_may_write_dependency(default, dependencies)
@@ -478,6 +505,10 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         ExprKind::Pipe { value, callable } => {
             expr_may_write_dependency(value, dependencies)
                 || expr_may_write_dependency(callable, dependencies)
+        }
+        ExprKind::ListUnpack { vars, value } => {
+            vars.iter().any(|var| dependencies.contains(var))
+                || expr_may_write_dependency(value, dependencies)
         }
         ExprKind::Ternary {
             condition,
@@ -669,6 +700,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         | ExprKind::PtrCast { expr: value, .. }
         | ExprKind::NamedArg { value, .. }
         | ExprKind::Spread(value)
+        | ExprKind::Clone(value)
         | ExprKind::YieldFrom(value) => expr_contains_equivalent(value, needle),
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
             expr_contains_equivalent(value, needle) || expr_contains_equivalent(default, needle)
@@ -676,6 +708,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         ExprKind::Pipe { value, callable } => {
             expr_contains_equivalent(value, needle) || expr_contains_equivalent(callable, needle)
         }
+        ExprKind::ListUnpack { value, .. } => expr_contains_equivalent(value, needle),
         ExprKind::Ternary {
             condition,
             then_expr,

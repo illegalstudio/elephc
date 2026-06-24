@@ -127,6 +127,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(fold_expr(*inner))),
         ExprKind::ErrorSuppress(inner) => ExprKind::ErrorSuppress(Box::new(fold_expr(*inner))),
         ExprKind::Print(inner) => ExprKind::Print(Box::new(fold_expr(*inner))),
+        // `clone` is never a compile-time fold (object identity is a runtime property); only
+        // the operand is folded. Kept impure so DCE cannot drop an allocation/`__clone` call.
+        ExprKind::Clone(inner) => ExprKind::Clone(Box::new(fold_expr(*inner))),
         ExprKind::NullCoalesce { value, default } => {
             let value = fold_expr(*value);
             let default = fold_expr(*default);
@@ -145,6 +148,10 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                     callable: Box::new(callable),
                 })
         }
+        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
+            vars,
+            value: Box::new(fold_expr(*value)),
+        },
         ExprKind::Assignment {
             target,
             value,

@@ -44,3 +44,47 @@ fn test_php_float_max() {
     let out = compile_and_run("<?php echo is_float(PHP_FLOAT_MAX);");
     assert_eq!(out, "1");
 }
+
+/// Verifies a fully-qualified reference to a predefined constant (`\PHP_INT_MAX`) parses and
+/// resolves identically to the unqualified form. The leading `\` denotes the global namespace,
+/// which is where these constants live. Symfony hits this with `\PHP_INT_MAX`/`\INF`/etc.
+#[test]
+fn test_fq_php_int_max() {
+    let out = compile_and_run("<?php echo \\PHP_INT_MAX;");
+    assert_eq!(out, "9223372036854775807");
+}
+
+/// Verifies `\DIRECTORY_SEPARATOR` (fully-qualified) resolves to the platform path separator.
+#[test]
+fn test_fq_directory_separator() {
+    let out = compile_and_run("<?php echo \\DIRECTORY_SEPARATOR;");
+    assert_eq!(out, "/");
+}
+
+/// Verifies `\PHP_EOL` (fully-qualified) resolves to the end-of-line string.
+#[test]
+fn test_fq_php_eol() {
+    let out = compile_and_run("<?php echo \\PHP_EOL;");
+    assert_eq!(out, "\n");
+}
+
+/// Verifies `\M_PI` (fully-qualified math constant) resolves to pi.
+#[test]
+fn test_fq_math_pi() {
+    let out = compile_and_run("<?php echo \\M_PI;");
+    assert_eq!(out, "3.1415926535898");
+}
+
+/// Verifies fully-qualified `\true`/`\false`/`\null` resolve to the global boolean/null constants.
+#[test]
+fn test_fq_bool_and_null() {
+    let out = compile_and_run("<?php var_dump(\\true); var_dump(\\false); var_dump(\\null);");
+    assert_eq!(out, "bool(true)\nbool(false)\nNULL\n");
+}
+
+/// Verifies `\INF` (fully-qualified) resolves to positive infinity.
+#[test]
+fn test_fq_infinity() {
+    let out = compile_and_run("<?php $x = \\INF; echo is_infinite($x) ? \"inf\" : \"finite\";");
+    assert_eq!(out, "inf");
+}

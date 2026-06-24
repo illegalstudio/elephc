@@ -5,6 +5,34 @@ sidebar:
   order: 3
 ---
 
+## Expression statements
+
+Any expression can stand alone as a statement, followed by a semicolon — not only
+assignments and function calls. A statement may begin with a literal, a comparison, or a
+unary operator:
+
+```php
+<?php
+$total + 1;      // evaluated, result discarded
+new Logger();    // constructed for its constructor's side effect
+-$balance;       // unary expression statement
+```
+
+This enables the **short-circuit guard** idiom, where the right-hand side runs only when the
+left-hand condition allows it:
+
+```php
+<?php
+// `&&` runs the action only when the condition is true:
+0 > $t && $t += 0x40;            // add 0x40 only when $t is negative
+
+// `||` runs the action only when the condition is false:
+0 === $count || printf("%d items\n", $count);
+```
+
+Both `&&` and `||` short-circuit: the right operand is not evaluated when the left already
+decides the result, so any side effect (assignment, call) on the right is conditional.
+
 ## if / elseif / else
 
 ```php
@@ -48,6 +76,16 @@ for ($i = 0; $i < 10; $i++) {
 }
 ```
 
+The init and update sections may contain several comma-separated expressions, all evaluated in
+order (the init list once, the update list after each iteration):
+
+```php
+<?php
+for ($i = 0, $j = 10; $i < 5; $i++, $j--) {
+    echo "$i:$j ";
+}
+```
+
 ## foreach
 
 ```php
@@ -81,6 +119,28 @@ By-reference value binding is currently supported only for array sources;
 `foreach ($iterator as &$value)` over `Iterator`, `IteratorAggregate`, or
 `iterable`-typed values is rejected at compile time. Use an array source or
 iterate by value when consuming Traversable objects.
+
+The value position can also be an array-destructuring pattern (PHP 7.1+). Each
+element is unpacked into the pattern targets on every iteration:
+
+```php
+<?php
+foreach ([["a", "b"], ["c", "d"]] as [$x, $y]) {
+    echo $x . $y; // abcd
+}
+
+foreach ([["id" => 1, "name" => "Ada"]] as ["id" => $id, "name" => $name]) {
+    echo $id . ':' . $name; // 1:Ada
+}
+
+foreach (["k" => [1, 2]] as $key => [$m, $n]) {
+    echo $key . $m . $n; // k12
+}
+```
+
+Destructuring `foreach` patterns bind by value; by-reference pattern targets
+are not supported. See [Array destructuring](arrays.md#array-destructuring) for
+the full pattern grammar (positional, keyed, nested, holes).
 
 Untyped, `mixed`, and union-typed sources are dispatched at runtime. If the
 runtime value is an indexed or associative array, both by-value and by-reference
@@ -151,6 +211,56 @@ and `continue;` are equivalent to `break 1;` and `continue 1;`.
 Inside a `finally` block, `break` and `continue` may only target loops or
 switches created inside that same `finally`; jumping out of `finally` is
 rejected, matching PHP.
+
+## goto
+
+`goto` transfers control to a labelled statement. A label is an identifier
+followed by a colon (`name:`). Both the `goto` and its target label must live in
+the same function (or both at the top level); labels are scoped per function, so
+the same label name may be reused in different functions.
+
+```php
+<?php
+// Break out of nested loops in one jump.
+foreach ($grid as $row => $cells) {
+    foreach ($cells as $col => $value) {
+        if ($value === $needle) {
+            goto found;
+        }
+    }
+}
+found:
+echo "done\n";
+```
+
+A common use is jumping forward to shared recovery or cleanup code — for example
+from inside a `catch` block to a label later in the function:
+
+```php
+<?php
+function describe($thing): string {
+    if ($thing === null) {
+        try {
+            throw new InvalidArgumentException("missing value");
+        } catch (InvalidArgumentException $e) {
+            $thing = "default";
+            goto method_check;     // forward jump out of the try/catch
+        }
+    }
+
+    method_check:
+    return "describing: " . $thing;
+}
+```
+
+A backward `goto` to an earlier label forms a loop, and the code that a `goto`
+skips over is simply not executed.
+
+As in PHP, `goto` cannot jump *into* a loop or `switch` body, and the target
+label must exist in the same scope. A `goto` to an undefined label and a label
+defined twice in the same scope are both reported as compile errors. Jumping out
+of a `try` block runs that block's pending `finally`, the same as `break`,
+`continue`, and `return`.
 
 ## switch / case / default
 

@@ -181,6 +181,8 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     // -- update existing entry's value --
     emitter.label("__rt_hash_set_update");
     emitter.instruction("ldr x13, [x12, #40]");                                 // load the overwritten entry's per-entry value_tag
+    emitter.instruction("cmp x13, #11");                                        // is the overwritten entry a stored reference cell?
+    emitter.instruction("b.eq __rt_hash_set_write_through");                    // write through the cell so shared owners observe the new value
     emitter.instruction("cmp x13, #8");                                         // is the overwritten value null?
     emitter.instruction("b.eq __rt_hash_set_write_value");                      // null has no heap pointer, skip release
     emitter.instruction("cmp x13, #1");                                         // is the overwritten value a string?
@@ -223,6 +225,15 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    // -- reference write-through: the slot keeps its tag-11 cell; only the referenced value changes --
+    emitter.label("__rt_hash_set_write_through");
+    emitter.instruction("ldr x0, [x12, #24]");                                  // x0 = reference cell pointer from the entry value_lo
+    emitter.instruction("ldr x1, [sp, #40]");                                   // x1 = new value_tag
+    emitter.instruction("ldr x2, [sp, #24]");                                   // x2 = new value_lo
+    emitter.instruction("ldr x3, [sp, #32]");                                   // x3 = new value_hi
+    emitter.instruction("bl __rt_refcell_store");                               // release the old inner value and write the new one through the cell
+    emitter.instruction("b __rt_hash_set_done");                                // leave the slot's (tag 11, cell) entry untouched
 }
 
 /// Emits the x86_64 Linux implementation of `__rt_hash_set`.
@@ -361,6 +372,8 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_set_update");
     emitter.instruction("mov r13, QWORD PTR [r12 + 40]");                       // load the overwritten entry's runtime value tag before replacing it
+    emitter.instruction("cmp r13, 11");                                         // is the overwritten entry a stored reference cell?
+    emitter.instruction("je __rt_hash_set_write_through_x");                    // write through the cell so shared owners observe the new value
     emitter.instruction("cmp r13, 8");                                          // check whether the overwritten value is PHP null
     emitter.instruction("je __rt_hash_set_write_value_x");                      // null owns no heap payload and can be overwritten directly
     emitter.instruction("cmp r13, 1");                                          // check whether the overwritten value is an owned string
@@ -402,4 +415,19 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 96");                                         // release the local spill area before leaving the update path
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the insertion caller
     emitter.instruction("ret");                                                 // return to the caller with the existing hash-table pointer in rax
+
+    // -- reference write-through: the slot keeps its tag-11 cell; only the referenced value changes --
+    emitter.label("__rt_hash_set_write_through_x");
+    emitter.instruction("mov rdi, QWORD PTR [r12 + 24]");                       // rdi = reference cell pointer from the entry value_lo
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // rsi = new value_tag
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // rdx = new value_lo
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // rcx = new value_hi
+    emitter.instruction("call __rt_refcell_store");                             // release the old inner value and write the new one through the cell
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged hash-table pointer with the slot left intact
+    emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the write-through path
+    emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the write-through path
+    emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore the caller's r12 before leaving the write-through path
+    emitter.instruction("add rsp, 96");                                         // release the local spill area before leaving the write-through path
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the insertion caller
+    emitter.instruction("ret");                                                 // return to the caller with the unchanged hash-table pointer in rax
 }

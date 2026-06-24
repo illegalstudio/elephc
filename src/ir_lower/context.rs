@@ -102,6 +102,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
     pub finally_stack: Vec<FinallyFrame>,
+    /// Maps a `goto` label name to its EIR block within the current function. Blocks are created
+    /// lazily the first time a label or a `goto` referencing it is lowered, so a forward `goto`
+    /// and its later `label:` share one block regardless of which is lowered first.
+    goto_label_blocks: HashMap<String, BlockId>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
@@ -162,6 +166,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             current_class,
             loop_stack: Vec::new(),
             finally_stack: Vec::new(),
+            goto_label_blocks: HashMap::new(),
             static_callable_locals: HashMap::new(),
             fiber_start_sigs: HashMap::new(),
             ref_bound_locals: HashSet::new(),
@@ -181,6 +186,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Interns a string literal or metadata name in the module data pool.
     pub(crate) fn intern_string(&mut self, value: &str) -> DataId {
         self.data.intern_string(value)
+    }
+
+    /// Returns the EIR block that a `goto`/`label` for `name` targets, creating it on first use.
+    ///
+    /// A forward `goto` and the `label:` it jumps to share one block: whichever is lowered first
+    /// allocates the block and both subsequent references reuse it. The block is empty until the
+    /// matching `label:` positions emission at it.
+    pub(crate) fn label_block(&mut self, name: &str) -> BlockId {
+        if let Some(block) = self.goto_label_blocks.get(name) {
+            return *block;
+        }
+        let block = self.builder.create_named_block("goto.label", Vec::new());
+        self.goto_label_blocks.insert(name.to_string(), block);
+        block
     }
 
     /// Converts parsed type syntax into PHP metadata using known packed classes.
@@ -1073,6 +1092,9 @@ fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
             | "ptr_read_string"
             | "strpos"
             | "strrpos"
+            // `substr` persists its slice into an owned heap copy (see lower_substr), so its
+            // result is a fresh owning temporary like the allocating builtins above.
+            | "substr"
     )
 }
 

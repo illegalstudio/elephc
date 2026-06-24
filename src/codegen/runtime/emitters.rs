@@ -108,6 +108,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // Callable introspection runtime functions
     callables::emit_is_callable_runtime(emitter);
     callables::emit_callable_descriptor_release(emitter);
+    callables::emit_closure_bind(emitter);
 
     // System runtime functions
     system::emit_build_argv(emitter);
@@ -207,6 +208,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_hash_grow(emitter);
     arrays::emit_hash_may_have_cyclic_values(emitter);
     arrays::emit_hash_set(emitter);
+    arrays::emit_hash_unset(emitter);
     arrays::emit_hash_append(emitter);
     arrays::emit_hash_insert_owned(emitter);
     arrays::emit_hash_get(emitter);
@@ -276,6 +278,12 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_merge_into_refcounted(emitter);
     arrays::emit_decref_any(emitter);
     arrays::emit_decref_mixed(emitter);
+    arrays::emit_decref_refcell(emitter);
+    arrays::emit_refcell_alloc(emitter);
+    arrays::emit_promote_entry_to_refcell(emitter);
+    arrays::emit_refcell_free_deep(emitter);
+    arrays::emit_refcell_load(emitter);
+    arrays::emit_refcell_store(emitter);
     arrays::emit_gc_note_child_ref(emitter);
     arrays::emit_gc_mark_reachable(emitter);
     arrays::emit_gc_collect_cycles(emitter);
@@ -307,12 +315,14 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     objects::emit_stdclass_from_hash(emitter);
     objects::emit_stdclass_get(emitter);
     objects::emit_stdclass_set(emitter);
+    objects::emit_stdclass_set_ref(emitter);
     objects::emit_mixed_property_get(emitter);
     objects::emit_mixed_property_set(emitter);
     objects::emit_mixed_array_get(emitter);
     objects::emit_mixed_array_set(emitter);
     objects::emit_new_by_name(emitter);
     objects::emit_call_object_destructor(emitter);
+    objects::emit_object_clone(emitter);
     objects::emit_json_encode_stdclass(emitter);
 
     // Buffer runtime functions

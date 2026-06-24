@@ -99,6 +99,8 @@ pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
         StmtKind::Return(None)
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
         | StmtKind::FunctionDecl { .. }
@@ -118,6 +120,11 @@ pub(crate) fn stmt_local_writes(stmt: &Stmt) -> Option<HashSet<String>> {
         StmtKind::RefAssign { target, source } => {
             let mut writes = HashSet::new();
             writes.insert(target.clone());
+            writes.insert(source.clone());
+            Some(writes)
+        }
+        StmtKind::RefAssignTarget { target, source } => {
+            let mut writes = expr_local_writes(target)?;
             writes.insert(source.clone());
             Some(writes)
         }
@@ -317,7 +324,8 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
         | ExprKind::PtrCast { expr: inner, .. }
-        | ExprKind::Cast { expr: inner, .. } => expr_local_writes(inner),
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::Clone(inner) => expr_local_writes(inner),
         ExprKind::BinaryOp { left, right, .. } => merge_write_sets([
             expr_local_writes(left)?,
             expr_local_writes(right)?,
@@ -341,6 +349,13 @@ pub(crate) fn expr_local_writes(expr: &Expr) -> Option<HashSet<String>> {
             let mut writes = block_local_writes(prelude)?;
             writes.extend(expr_local_writes(value)?);
             collect_assignment_target_writes(target, &mut writes)?;
+            Some(writes)
+        }
+        ExprKind::ListUnpack { vars, value } => {
+            let mut writes = expr_local_writes(value)?;
+            for var in vars {
+                writes.insert(var.clone());
+            }
             Some(writes)
         }
         ExprKind::ArrayLiteral(items) => items.iter().try_fold(HashSet::new(), |mut acc, item| {

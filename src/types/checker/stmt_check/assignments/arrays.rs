@@ -244,3 +244,182 @@ pub(super) fn check_array_push(
     }
     Ok(())
 }
+
+/// Type-checks `$arr[$key] =& $source` (reference assignment into an array element).
+///
+/// M2/M3 scope: a single-level array-element target (`$base[$i] =& $v`) whose base local is any
+/// array, or a two-level nested target (`$base[$i][$j] =& $v`) whose outermost base is a plain
+/// `Variable` local. The source must be a scalar (`int`/`bool`) local. A reference entry is stored
+/// as a boxed reference cell read back through the Mixed hash path, so the element value type must
+/// be `Mixed`; the base is therefore promoted/widened to `AssocArray { key, Mixed }`. For nested
+/// targets the base must hold inner arrays (also stored as `Mixed`), so its key and value are both
+/// widened to `Mixed`. Anything outside this shape — three-or-more-level nesting, a non-`Variable`
+/// outermost base, a non-array single-level base, property targets, or non-scalar/undefined sources
+/// — returns the same "not yet supported" diagnostic the M0 gate produced, so unimplemented forms
+/// fail cleanly instead of miscompiling.
+pub(super) fn check_ref_assign_target(
+    checker: &mut Checker,
+    target: &Expr,
+    source: &str,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let unsupported = || {
+        CompileError::new(
+            span,
+            "Reference assignment into an array element or object property is not yet supported",
+        )
+    };
+    // The source must be a scalar local for every supported target shape (array element or object
+    // property): a reference entry stores the value through a boxed reference cell.
+    let source_ty = env
+        .get(source)
+        .cloned()
+        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", source)))?;
+    if !matches!(
+        source_ty,
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Mixed
+    ) {
+        return Err(unsupported());
+    }
+    match &target.kind {
+        ExprKind::ArrayAccess { array, index } => match &array.kind {
+            // Single-level target `$base[$index] =& $source`.
+            ExprKind::Variable(array_name) => {
+                check_single_level_ref_assign_target(checker, array_name, index, span, env)
+            }
+            // Two-level nested target `$base[$outer][$inner] =& $source` with a plain `Variable` base.
+            ExprKind::ArrayAccess {
+                array: inner_array,
+                index: outer_index,
+            } => {
+                let ExprKind::Variable(array_name) = &inner_array.kind else {
+                    return Err(unsupported());
+                };
+                check_nested_ref_assign_target(checker, array_name, outer_index, index, span, env)
+            }
+            _ => Err(unsupported()),
+        },
+        // Object dynamic-property target `$object->property =& $source` (stdClass hash path).
+        ExprKind::PropertyAccess { object, .. } => {
+            check_property_ref_assign_target(checker, object, span, env)
+        }
+        _ => Err(unsupported()),
+    }
+}
+
+/// Validates the receiver for an object-property reference target `$object->property =& $source`.
+///
+/// Only a statically-typed `stdClass` instance is supported: its dynamic properties live in a hash
+/// of boxed Mixed values that can hold a tag-11 reference entry, and the receiver is a raw object
+/// pointer the codegen reads `obj+8` from directly. Declared typed-class properties are packed
+/// fields (not hash entries), and a `Mixed` receiver is a boxed pointer the property-hash codegen
+/// cannot dereference, so both return the "not yet supported" diagnostic. The object expression is
+/// inferred for its assignment effects; no environment widening is needed because dynamic properties
+/// are already typed `mixed`.
+fn check_property_ref_assign_target(
+    checker: &mut Checker,
+    object: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let unsupported = || {
+        CompileError::new(
+            span,
+            "Reference assignment into an array element or object property is not yet supported",
+        )
+    };
+    let object_ty = checker.infer_type_with_assignment_effects(object, env)?;
+    match &object_ty {
+        PhpType::Object(class_name) if class_name.trim_start_matches('\\') == "stdClass" => Ok(()),
+        _ => Err(unsupported()),
+    }
+}
+
+/// Validates and widens the base for a single-level reference target `$base[$index] =& $source`.
+///
+/// The base local must already be an array (empty, indexed, or associative); it is widened in `env`
+/// to `AssocArray { merged_key, Mixed }`, merging the prior key type with the (normalized) index
+/// type. A non-array base returns the "not yet supported" diagnostic.
+fn check_single_level_ref_assign_target(
+    checker: &mut Checker,
+    array_name: &str,
+    index: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let unsupported = || {
+        CompileError::new(
+            span,
+            "Reference assignment into an array element or object property is not yet supported",
+        )
+    };
+    let array_ty = env
+        .get(array_name)
+        .cloned()
+        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array_name)))?;
+    let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
+    let normalized_idx = normalized_array_key_type(index, idx_ty);
+    // A reference entry always forces Mixed value storage (the cell deref yields a boxed Mixed),
+    // so widen the base to an associative array of Mixed regardless of its prior element type.
+    let merged_key = match &array_ty {
+        PhpType::Array(elem_ty) => {
+            if matches!(elem_ty.as_ref(), PhpType::Never) {
+                normalized_idx
+            } else {
+                merge_array_key_types(PhpType::Int, normalized_idx)
+            }
+        }
+        PhpType::AssocArray { key, .. } => merge_array_key_types(*key.clone(), normalized_idx),
+        _ => return Err(unsupported()),
+    };
+    env.insert(
+        array_name.to_string(),
+        PhpType::AssocArray {
+            key: Box::new(merged_key),
+            value: Box::new(PhpType::Mixed),
+        },
+    );
+    Ok(())
+}
+
+/// Validates and widens the base for a nested reference target `$base[$outer][$inner] =& $source`.
+///
+/// The base local must already be an array; because its elements now hold inner arrays (stored as
+/// boxed `Mixed`) and the inner element holds a reference cell (also `Mixed`), the base is widened
+/// to `AssocArray { Mixed, Mixed }`. Both index expressions are inferred for their assignment
+/// effects. A non-array base returns the "not yet supported" diagnostic.
+fn check_nested_ref_assign_target(
+    checker: &mut Checker,
+    array_name: &str,
+    outer_index: &Expr,
+    inner_index: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let unsupported = || {
+        CompileError::new(
+            span,
+            "Reference assignment into an array element or object property is not yet supported",
+        )
+    };
+    let array_ty = env
+        .get(array_name)
+        .cloned()
+        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array_name)))?;
+    if !matches!(array_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        return Err(unsupported());
+    }
+    // Infer both index expressions so their assignment effects are recorded, then widen the base to
+    // a fully-Mixed associative array (its values are inner arrays, themselves stored as Mixed).
+    checker.infer_type_with_assignment_effects(outer_index, env)?;
+    checker.infer_type_with_assignment_effects(inner_index, env)?;
+    env.insert(
+        array_name.to_string(),
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+    );
+    Ok(())
+}
