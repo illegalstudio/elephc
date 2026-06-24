@@ -180,6 +180,7 @@ fn constructor_param_supported(ty: &PhpType) -> bool {
             | PhpType::Float
             | PhpType::Str
             | PhpType::Mixed
+            | PhpType::Iterable
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Object(_)
@@ -339,7 +340,13 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     emitter.instruction("cmp x9, #0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("b.eq {}", success_label));                    // keep the empty Throwable defaults when no message was supplied
     emit_aarch64_load_eval_arg(module, emitter, 0);
-    emit_aarch64_cast_eval_arg(emitter, &PhpType::Str, fail_label);
+    emit_aarch64_cast_eval_arg(
+        module,
+        emitter,
+        &PhpType::Str,
+        "__elephc_eval_builtin_throwable_message",
+        fail_label,
+    );
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for message initialization
     emitter.instruction("str x1, [x9, #8]");                                    // store the message pointer in the compact Throwable payload
     emitter.instruction("str x2, [x9, #16]");                                   // store the message length in the compact Throwable payload
@@ -347,7 +354,13 @@ fn emit_aarch64_builtin_throwable_constructor_body(
     emitter.instruction("cmp x9, #1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("b.le {}", success_label));                    // keep code zero when only the message was supplied
     emit_aarch64_load_eval_arg(module, emitter, 1);
-    emit_aarch64_cast_eval_arg(emitter, &PhpType::Int, fail_label);
+    emit_aarch64_cast_eval_arg(
+        module,
+        emitter,
+        &PhpType::Int,
+        "__elephc_eval_builtin_throwable_code",
+        fail_label,
+    );
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for code initialization
     emitter.instruction("str x0, [x9, #24]");                                   // store the integer exception code
     emitter.instruction(&format!("b {}", success_label));                       // builtin Throwable construction completed
@@ -366,7 +379,13 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     emitter.instruction("cmp r11, 0");                                          // did the eval call pass a message argument?
     emitter.instruction(&format!("je {}", success_label));                      // keep the empty Throwable defaults when no message was supplied
     emit_x86_64_load_eval_arg(module, emitter, 0);
-    emit_x86_64_cast_eval_arg(emitter, &PhpType::Str, fail_label);
+    emit_x86_64_cast_eval_arg(
+        module,
+        emitter,
+        &PhpType::Str,
+        "__elephc_eval_builtin_throwable_message_x",
+        fail_label,
+    );
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for message initialization
     emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // store the message pointer in the compact Throwable payload
     emitter.instruction("mov QWORD PTR [r11 + 16], rdx");                       // store the message length in the compact Throwable payload
@@ -374,7 +393,13 @@ fn emit_x86_64_builtin_throwable_constructor_body(
     emitter.instruction("cmp r11, 1");                                          // did the eval call pass a code argument?
     emitter.instruction(&format!("jle {}", success_label));                     // keep code zero when only the message was supplied
     emit_x86_64_load_eval_arg(module, emitter, 1);
-    emit_x86_64_cast_eval_arg(emitter, &PhpType::Int, fail_label);
+    emit_x86_64_cast_eval_arg(
+        module,
+        emitter,
+        &PhpType::Int,
+        "__elephc_eval_builtin_throwable_code_x",
+        fail_label,
+    );
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for code initialization
     emitter.instruction("mov QWORD PTR [r11 + 24], rax");                       // store the integer exception code
     emitter.instruction(&format!("jmp {}", success_label));                     // builtin Throwable construction completed
@@ -554,7 +579,8 @@ fn emit_aarch64_prepare_constructor_args(
     abi::emit_push_result_value(emitter, &receiver_ty);
     for (index, param_ty) in slot.params.iter().enumerate() {
         emit_aarch64_load_eval_arg(module, emitter, index);
-        emit_aarch64_cast_eval_arg(emitter, param_ty, fail_label);
+        let label_prefix = constructor_arg_label(module, slot, index);
+        emit_aarch64_cast_eval_arg(module, emitter, param_ty, &label_prefix, fail_label);
         abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
     }
     materialize_constructor_args(module, emitter, &receiver_ty, &slot.params)
@@ -572,7 +598,8 @@ fn emit_x86_64_prepare_constructor_args(
     abi::emit_push_result_value(emitter, &receiver_ty);
     for (index, param_ty) in slot.params.iter().enumerate() {
         emit_x86_64_load_eval_arg(module, emitter, index);
-        emit_x86_64_cast_eval_arg(emitter, param_ty, fail_label);
+        let label_prefix = constructor_arg_label(module, slot, index);
+        emit_x86_64_cast_eval_arg(module, emitter, param_ty, &label_prefix, fail_label);
         abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
     }
     materialize_constructor_args(module, emitter, &receiver_ty, &slot.params)
@@ -619,7 +646,13 @@ fn emit_x86_64_load_eval_arg(module: &Module, emitter: &mut Emitter, index: usiz
 }
 
 /// Casts one boxed eval argument into ARM64 result registers for temporary staging.
-fn emit_aarch64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType, fail_label: &str) {
+fn emit_aarch64_cast_eval_arg(
+    module: &Module,
+    emitter: &mut Emitter,
+    param_ty: &PhpType,
+    label_prefix: &str,
+    fail_label: &str,
+) {
     match param_ty.codegen_repr() {
         PhpType::Int => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for integer coercion
@@ -654,6 +687,9 @@ fn emit_aarch64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType, fail_la
         PhpType::AssocArray { .. } => {
             emit_aarch64_cast_eval_array_arg(emitter, param_ty, 5, fail_label);
         }
+        PhpType::Iterable => {
+            emit_aarch64_cast_eval_iterable_arg(module, emitter, param_ty, label_prefix, fail_label);
+        }
         _ => {}
     }
 }
@@ -674,8 +710,71 @@ fn emit_aarch64_cast_eval_array_arg(
     abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
 }
 
+/// Validates and unboxes one ARM64 iterable-typed eval argument for native constructors.
+fn emit_aarch64_cast_eval_iterable_arg(
+    module: &Module,
+    emitter: &mut Emitter,
+    param_ty: &PhpType,
+    label_prefix: &str,
+    fail_label: &str,
+) {
+    let payload_ok = format!("{}_iterable_payload", label_prefix);
+    let object_case = format!("{}_iterable_object", label_prefix);
+    let object_ok = format!("{}_iterable_object_ok", label_prefix);
+    let done = format!("{}_iterable_done", label_prefix);
+    emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for iterable unboxing
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the concrete iterable payload tag and pointer
+    emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("b.eq {}", payload_ok));                       // indexed arrays satisfy iterable parameters
+    emitter.instruction("cmp x0, #5");                                          // runtime tag 5 means associative array
+    emitter.instruction(&format!("b.eq {}", payload_ok));                       // associative arrays satisfy iterable parameters
+    emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means object
+    emitter.instruction(&format!("b.eq {}", object_case));                      // object values need Traversable interface validation
+    emitter.instruction(&format!("b {}", fail_label));                          // reject scalar values for iterable parameters
+    emitter.label(&payload_ok);
+    emitter.instruction("mov x0, x1");                                          // move the array payload into the result register
+    emitter.instruction(&format!("b {}", done));                                // skip object-specific interface validation
+    emitter.label(&object_case);
+    emit_aarch64_validate_iterable_object(module, emitter, &object_ok, fail_label);
+    emitter.label(&object_ok);
+    emitter.instruction("ldr x0, [sp], #16");                                   // restore the iterable object pointer as the result
+    emitter.label(&done);
+    abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+}
+
+/// Validates the ARM64 object payload saved in `x1` against Traversable interfaces.
+fn emit_aarch64_validate_iterable_object(
+    module: &Module,
+    emitter: &mut Emitter,
+    object_ok: &str,
+    fail_label: &str,
+) {
+    let interface_ids = traversable_interface_ids(module);
+    if interface_ids.is_empty() {
+        emitter.instruction(&format!("b {}", fail_label));                      // reject objects when no Traversable interface metadata exists
+        return;
+    }
+    emitter.instruction("str x1, [sp, #-16]!");                                 // preserve the object payload across Traversable checks
+    for interface_id in interface_ids {
+        emitter.instruction("ldr x0, [sp]");                                    // reload the object pointer as matcher argument 1
+        abi::emit_load_int_immediate(emitter, "x1", interface_id as i64);
+        abi::emit_load_int_immediate(emitter, "x2", 1);
+        abi::emit_call_label(emitter, "__rt_exception_matches");
+        emitter.instruction("cmp x0, #0");                                      // test whether the object implements this Traversable interface
+        emitter.instruction(&format!("b.ne {}", object_ok));                    // matching Iterator metadata accepts the object
+    }
+    emitter.instruction("add sp, sp, #16");                                     // discard the rejected object payload
+    emitter.instruction(&format!("b {}", fail_label));                          // reject non-Traversable objects for iterable parameters
+}
+
 /// Casts one boxed eval argument into x86_64 result registers for temporary staging.
-fn emit_x86_64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType, fail_label: &str) {
+fn emit_x86_64_cast_eval_arg(
+    module: &Module,
+    emitter: &mut Emitter,
+    param_ty: &PhpType,
+    label_prefix: &str,
+    fail_label: &str,
+) {
     match param_ty.codegen_repr() {
         PhpType::Int => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for integer coercion
@@ -710,6 +809,9 @@ fn emit_x86_64_cast_eval_arg(emitter: &mut Emitter, param_ty: &PhpType, fail_lab
         PhpType::AssocArray { .. } => {
             emit_x86_64_cast_eval_array_arg(emitter, param_ty, 5, fail_label);
         }
+        PhpType::Iterable => {
+            emit_x86_64_cast_eval_iterable_arg(module, emitter, param_ty, label_prefix, fail_label);
+        }
         _ => {}
     }
 }
@@ -730,6 +832,63 @@ fn emit_x86_64_cast_eval_array_arg(
     abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
 }
 
+/// Validates and unboxes one x86_64 iterable-typed eval argument for native constructors.
+fn emit_x86_64_cast_eval_iterable_arg(
+    module: &Module,
+    emitter: &mut Emitter,
+    param_ty: &PhpType,
+    label_prefix: &str,
+    fail_label: &str,
+) {
+    let payload_ok = format!("{}_iterable_payload", label_prefix);
+    let object_case = format!("{}_iterable_object", label_prefix);
+    let object_ok = format!("{}_iterable_object_ok", label_prefix);
+    let done = format!("{}_iterable_done", label_prefix);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for iterable unboxing
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the concrete iterable payload tag and pointer
+    emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("je {}", payload_ok));                         // indexed arrays satisfy iterable parameters
+    emitter.instruction("cmp rax, 5");                                          // runtime tag 5 means associative array
+    emitter.instruction(&format!("je {}", payload_ok));                         // associative arrays satisfy iterable parameters
+    emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means object
+    emitter.instruction(&format!("je {}", object_case));                        // object values need Traversable interface validation
+    emitter.instruction(&format!("jmp {}", fail_label));                        // reject scalar values for iterable parameters
+    emitter.label(&payload_ok);
+    emitter.instruction("mov rax, rdi");                                        // move the array payload into the result register
+    emitter.instruction(&format!("jmp {}", done));                              // skip object-specific interface validation
+    emitter.label(&object_case);
+    emit_x86_64_validate_iterable_object(module, emitter, &object_ok, fail_label);
+    emitter.label(&object_ok);
+    abi::emit_pop_reg(emitter, "rax");
+    emitter.label(&done);
+    abi::emit_incref_if_refcounted(emitter, &param_ty.codegen_repr());
+}
+
+/// Validates the x86_64 object payload saved in `rdi` against Traversable interfaces.
+fn emit_x86_64_validate_iterable_object(
+    module: &Module,
+    emitter: &mut Emitter,
+    object_ok: &str,
+    fail_label: &str,
+) {
+    let interface_ids = traversable_interface_ids(module);
+    if interface_ids.is_empty() {
+        emitter.instruction(&format!("jmp {}", fail_label));                    // reject objects when no Traversable interface metadata exists
+        return;
+    }
+    abi::emit_push_reg(emitter, "rdi");
+    for interface_id in interface_ids {
+        emitter.instruction("mov rdi, QWORD PTR [rsp]");                        // reload the object pointer as matcher argument 1
+        abi::emit_load_int_immediate(emitter, "rsi", interface_id as i64);
+        abi::emit_load_int_immediate(emitter, "rdx", 1);
+        abi::emit_call_label(emitter, "__rt_exception_matches");
+        emitter.instruction("test rax, rax");                                   // test whether the object implements this Traversable interface
+        emitter.instruction(&format!("jne {}", object_ok));                     // matching Iterator metadata accepts the object
+    }
+    abi::emit_pop_reg(emitter, "r10");
+    emitter.instruction(&format!("jmp {}", fail_label));                        // reject non-Traversable objects for iterable parameters
+}
+
 /// Groups constructor slots by class id while preserving sorted class order.
 fn grouped_slots(slots: &[EvalConstructorSlot]) -> BTreeMap<u64, Vec<&EvalConstructorSlot>> {
     let mut grouped = BTreeMap::new();
@@ -740,6 +899,26 @@ fn grouped_slots(slots: &[EvalConstructorSlot]) -> BTreeMap<u64, Vec<&EvalConstr
             .push(slot);
     }
     grouped
+}
+
+/// Returns a label-safe constructor argument prefix for bridge-local branches.
+fn constructor_arg_label(module: &Module, slot: &EvalConstructorSlot, index: usize) -> String {
+    let suffix = match module.target.arch {
+        Arch::AArch64 => "",
+        Arch::X86_64 => "_x",
+    };
+    format!(
+        "__elephc_eval_constructor_{}_arg_{}{}",
+        slot.class_id, index, suffix
+    )
+}
+
+/// Returns runtime interface ids for object values accepted by PHP iterable parameters.
+fn traversable_interface_ids(module: &Module) -> Vec<u64> {
+    ["Iterator", "IteratorAggregate"]
+        .into_iter()
+        .filter_map(|name| module.interface_infos.get(name).map(|info| info.interface_id))
+        .collect()
 }
 
 /// Emits a platform-C global label for a user assembly helper.

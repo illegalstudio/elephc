@@ -74,9 +74,9 @@ repeated `*_once` includes evaluate to `true`, missing `include` returns
 | Variables and properties | Variable reads, `$this->property` reads/writes from native methods, dynamic `stdClass` properties, eval object property access including `__get()` / `__set()` fallback for missing or inaccessible eval properties, `isset()`, `empty()`, and `unset()` magic property dispatch through `__isset()` / `__unset()`, `instanceof` over static and dynamic class/interface targets, static property access, and class constant fetches through the bridge. |
 | Arrays | Indexed and associative literals, modern `[...]` and legacy `array(...)`, keyed elements, append writes (`$array[] = value`), numeric-index reads/writes, string-key reads/writes, and eval-declared or generated/AOT `ArrayAccess` object reads, writes, appends, `isset()`, `empty()`, and `unset()` through `offsetGet()`, `offsetSet()`, `offsetExists()`, and `offsetUnset()`. |
 | Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, invokable eval objects, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
-| Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; `new self()`, `new static()`, and `new parent()` inside eval-declared methods; anonymous `new class [(args)] [extends Parent] [implements Iface, ...] { ... }` expressions; `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, positional variadic tails, array-typed arguments, object-typed arguments, and registered scalar, null, empty-array, or supported object-valued default arguments for public non-by-reference scalar/Mixed/array/object constructor signatures. |
+| Object construction | `new ClassName(...)` for eval-declared classes, including constructor named arguments and unpacking; `new self()`, `new static()`, and `new parent()` inside eval-declared methods; anonymous `new class [(args)] [extends Parent] [implements Iface, ...] { ... }` expressions; `stdClass` and emitted AOT classes visible through runtime metadata support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, positional variadic tails, array-typed arguments, iterable-typed arguments, object-typed arguments, and registered scalar, null, empty-array, or supported object-valued default arguments for public non-by-reference scalar/Mixed/array/iterable/object constructor signatures. |
 | Object cloning | `clone $object` shallow-copies eval-declared objects, `stdClass` storage, and ordinary emitted/AOT object storage. Eval-declared and emitted/AOT `__clone()` hooks run after the copy and obey public/protected/private visibility. |
-| Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, variadic tails, and by-reference parameters for direct variable, array-element, and object-property arguments. Missing or inaccessible eval methods dispatch through `__call()` / `__callStatic()` when those hooks are available. Runtime/AOT object-method and static-method fallback supports the same fixed-parameter binding plus positional variadic tails except by-reference parameters, plus registered scalar, null, empty-array, or supported object-valued default arguments for public non-by-reference scalar/Mixed/array/object parameters; scalar/Mixed/array/iterable/object return values are boxed back to eval. |
+| Method calls | Eval-declared object and static method calls support positional arguments, named arguments, numeric unpacking, string-keyed named unpacking, variadic tails, and by-reference parameters for direct variable, array-element, and object-property arguments. Missing or inaccessible eval methods dispatch through `__call()` / `__callStatic()` when those hooks are available. Runtime/AOT object-method and static-method fallback supports the same fixed-parameter binding plus positional variadic tails except by-reference parameters, plus registered scalar, null, empty-array, or supported object-valued default arguments for public non-by-reference scalar/Mixed/array/iterable/object parameters; scalar/Mixed/array/iterable/object return values are boxed back to eval. |
 | Includes | `include`, `include_once`, `require`, and `require_once` are expressions. |
 | Magic constants | `__LINE__`, call-site `__FILE__` / `__DIR__`, empty eval-scope `__CLASS__` / `__TRAIT__`, namespace-aware `__NAMESPACE__`, and eval-declared-function `__FUNCTION__` / `__METHOD__`. |
 | Constants | Predefined eval-visible constants, dynamic constants from `define()`, namespaced constant fallback, and bare constant fetches are supported. |
@@ -128,7 +128,7 @@ as callable. Static method callables can use `["ClassName", "method"]` or
 `call_user_func_array()`. Eval-declared static methods also support string-keyed
 named arguments through `call_user_func_array()`; generated/AOT static method
 fallback supports the same named-argument and positional variadic-tail binding for public
-non-by-reference scalar/Mixed/array/object parameter signatures supported by the
+non-by-reference scalar/Mixed/array/iterable/object parameter signatures supported by the
 generated bridge.
 
 Post-barrier native direct calls and string-literal `call_user_func()` callbacks
@@ -512,7 +512,7 @@ constants. Direct `new EnumName()` and property writes to enum cases are
 rejected.
 
 Public declared property reads/writes through `$this->property` from native
-methods are bridged to eval. Public fixed scalar/Mixed/array/object method
+methods are bridged to eval. Public fixed scalar/Mixed/array/iterable/object method
 parameters through `$this->method(...)` are supported by the native method
 bridge, including registered named arguments and string-keyed unpacking; method
 returns may be scalar/Mixed/array/iterable/object values.
@@ -637,7 +637,7 @@ The fragment subset is broad but not the full elephc language surface. In
 particular, advanced native callable descriptors and closure callback values are
 still outside eval fragments. Runtime/AOT object-method, static-method, and
 constructor fallback from eval remain limited to generated public
-non-by-reference scalar/Mixed/array/object parameter bridge signatures, including the
+non-by-reference scalar/Mixed/array/iterable/object parameter bridge signatures, including the
 generated positional variadic array slot when present. By-reference parameters and broader
 parameter/return ABI shapes are still outside those bridge paths.
 
@@ -650,7 +650,7 @@ parameter and generated property default-value materialization beyond scalar,
 null, empty-array, and supported object-valued parameter defaults during generated/AOT invocation,
 object-valued generated defaults beyond the positional
 `new C(<up to eight supported scalar/string/null/empty-array args>)` parameter slice, and broader generated/AOT method bridge signatures beyond the current public
-non-by-reference scalar/Mixed/array/object parameter slice plus scalar/Mixed/array/iterable/object returns and visibility-checked
+non-by-reference scalar/Mixed/array/iterable/object parameter slice plus scalar/Mixed/array/iterable/object returns and visibility-checked
 `__clone()` hooks. Generated/AOT method type
 metadata, by-reference and variadic parameter flags, and generated/AOT
 method/property attributes are exposed for registered metadata slices, while

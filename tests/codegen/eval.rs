@@ -4649,6 +4649,53 @@ echo (new EvalMethodArrayArgBox())->run();
     assert_eq!(out, "3:2");
 }
 
+/// Verifies eval fragments can pass iterable arguments to AOT methods and constructors.
+#[test]
+fn test_eval_fragment_dispatches_aot_iterable_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotIterableParamIterator implements Iterator {
+    private int $i = 0;
+
+    public function rewind(): void { $this->i = 0; }
+    public function valid(): bool { return $this->i < 2; }
+    public function current(): mixed { return "I" . $this->i; }
+    public function key(): mixed { return $this->i; }
+    public function next(): void { $this->i = $this->i + 1; }
+}
+
+class EvalAotIterableParamBox {
+    public string $label;
+
+    public function __construct(iterable $items) {
+        $this->label = self::join($items);
+    }
+
+    public function describe(iterable $items): string {
+        return self::join($items);
+    }
+
+    public static function describeStatic(iterable $items): string {
+        return self::join($items);
+    }
+
+    private static function join(iterable $items): string {
+        $out = "";
+        foreach ($items as $item) {
+            $out .= $item;
+        }
+        return $out;
+    }
+}
+
+echo eval('$box = new EvalAotIterableParamBox(["C", "D"]);
+$fromIterator = new EvalAotIterableParamBox(new EvalAotIterableParamIterator());
+return $box->describe(["A", "B"]) . ":" . EvalAotIterableParamBox::describeStatic(new EvalAotIterableParamIterator()) . ":" . $box->label . ":" . $fromIterator->label;');
+"#,
+    );
+    assert_eq!(out, "AB:I0I1:CD:I0I1");
+}
+
 /// Verifies eval fragments can read iterable return values from AOT methods.
 #[test]
 fn test_eval_fragment_dispatches_aot_method_with_iterable_return() {
