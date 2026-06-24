@@ -107,6 +107,9 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::PropSet => super::objects::lower_prop_set(ctx, &inst),
         Op::MethodCall => super::methods::lower_method_call(ctx, &inst),
         Op::StaticMethodCall => super::methods::lower_static_method_call(ctx, &inst),
+        Op::NullsafeMethodCall => super::methods::lower_nullsafe_method_call(ctx, &inst),
+        Op::InstanceOf => super::classes::lower_instanceof(ctx, &inst),
+        Op::InstanceOfDynamic => super::classes::lower_instanceof_dynamic(ctx, &inst),
         other => Err(WasmError::Unsupported(format!("op {:?}", other))),
     }
 }
@@ -529,7 +532,8 @@ fn lower_load_global(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 
 /// Lowers `Op::BuiltinCall` by dispatching on the builtin's name.
 ///
-/// Only `exit`/`die` are handled so far; other builtins return `Unsupported`.
+/// Only `exit`/`die` and `get_class` are handled so far; other builtins return
+/// `Unsupported`.
 fn lower_builtin_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let data_id = data_immediate(inst)?;
     let name = ctx
@@ -541,6 +545,7 @@ fn lower_builtin_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         .ok_or_else(|| WasmError::Unsupported(format!("builtin: unknown name data {:?}", data_id)))?;
     match name.as_str() {
         "exit" | "die" => lower_exit(ctx, inst),
+        "get_class" => super::classes::lower_get_class(ctx, inst),
         other => Err(WasmError::Unsupported(format!("builtin {}", other))),
     }
 }
@@ -883,9 +888,14 @@ fn lower_mixed_box(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let ir = ctx.function.value(value).map(|v| v.ir_type);
     match repr {
         WasmRepr::I64(local) => {
-            // Int -> tag 0, Bool -> tag 3 (both i64-represented).
-            let tag = if matches!(php, Some(PhpType::Bool)) { 3 } else { 0 };
-            ctx.fb.ins(&format!("i64.const {}", tag), "mixed tag (int/bool)");
+            // Int -> tag 0, Bool -> tag 3, null (ConstNull, PhpType::Void) -> tag 8
+            // (all three are i64-represented; `lower_boxed_null` reaches this arm).
+            let tag = match php {
+                Some(PhpType::Bool) => 3,
+                Some(PhpType::Void) => 8,
+                _ => 0,
+            };
+            ctx.fb.ins(&format!("i64.const {}", tag), "mixed tag (int/bool/null)");
             ctx.fb.ins(&format!("local.get {}", local), "scalar -> lo");
             ctx.fb.ins("i64.const 0", "hi unused");
             ctx.fb

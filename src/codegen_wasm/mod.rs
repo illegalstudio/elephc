@@ -20,6 +20,7 @@
 //!   silently-wrong code. Empty `main` (the P1 gate) lowers and runs end to end.
 
 mod arrays;
+mod classes;
 mod context;
 mod float;
 mod function;
@@ -113,6 +114,13 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // property values before freeing an object at refcount zero.
     cursor = objects::emit_gc_desc_table(&mut wm, &module.class_infos, cursor);
 
+    // P6f class-metadata tables (`__class_parent_ids`, `__class_interface_ptrs`,
+    // `__class_name_entries`, `__class_name_missing`), advancing the static-data
+    // cursor. Must land immediately after `emit_gc_desc_table` and before
+    // `heap_base` is computed so the tables sit in static memory below the heap,
+    // indexed by runtime class_id. Reuses `$__gc_desc_count` as the shared bounds.
+    cursor = classes::emit_class_metadata_tables(&mut wm, module, cursor);
+
     // The heap begins 16-aligned just above the string/data region; reserve two
     // pages of initial headroom above it. The bump allocator grows beyond
     // `heap_end` with `memory.grow` when this region is exhausted.
@@ -130,6 +138,12 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // above to run `__destruct` before the property walk. One if-ladder arm per class
     // whose hierarchy declares `__destruct` (resolved via `method_impl_classes`).
     objects::emit_destructor_dispatch(&mut wm, &module.class_infos)?;
+    // P6f class runtime helpers: `__rt_instanceof`, `__rt_mixed_instanceof`,
+    // `__rt_class_name_by_cid`, `__rt_class_name_by_obj`. They reference the
+    // class-metadata globals emitted above, so they must be registered after
+    // `emit_class_metadata_tables`. They safely return false/empty when
+    // `__gc_desc_count == 0` (no classes).
+    classes::emit_class_runtime(&mut wm);
     arrays::emit_array_runtime(&mut wm);
     mixed::emit_mixed_runtime(&mut wm);
     hashes::emit_hash_runtime(&mut wm);
@@ -188,11 +202,11 @@ mod tests {
     use crate::codegen::Emit;
     use crate::ir::{
         Builder, CmpPredicate, DataId, Function, FunctionParam, Immediate, IrHeapKind, IrType,
-        LocalKind, Module, Op, Ownership, Terminator, ValueId,
+        LocalKind, LocalSlotId, Module, Op, Ownership, Terminator, ValueId,
     };
     use crate::parser::ast::{Expr, ExprKind};
     use crate::span::Span;
-    use crate::types::{ClassInfo, FunctionSig, PhpType};
+    use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
     use std::collections::{HashMap, HashSet};
 
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -4195,6 +4209,66 @@ mod tests {
         f
     }
 
+    /// Builds an instance method `Function` named `{class}::{method}` with `this` plus
+    /// `user_params` as parameters, returning the body's result. The body closure
+    /// receives the builder and the loaded values in order `[this, arg0, arg1, ...]`.
+    /// Used by P6f tests that need a method with user arguments (the plain
+    /// `instance_method_fn` only models `this`).
+    fn instance_method_fn_with_args(
+        class: &str,
+        method: &str,
+        user_params: &[(&str, IrType, PhpType)],
+        ret_ir: IrType,
+        ret_php: PhpType,
+        body: impl FnOnce(&mut Builder, &[ValueId]) -> Option<ValueId>,
+    ) -> Function {
+        let mut f = Function::new(format!("{}::{}", class, method), ret_ir, ret_php);
+        f.flags.is_method = true;
+        f.params.push(FunctionParam {
+            name: "this".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Object),
+            php_type: PhpType::Object(class.to_string()),
+            by_ref: false,
+            variadic: false,
+        });
+        let this_slot = f.add_local(
+            Some("this".to_string()),
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(class.to_string()),
+            LocalKind::PhpLocal,
+        );
+        let mut arg_slots: Vec<(LocalSlotId, IrType, PhpType)> = Vec::new();
+        for (pname, ir, php) in user_params {
+            f.params.push(FunctionParam {
+                name: pname.to_string(),
+                ir_type: *ir,
+                php_type: php.clone(),
+                by_ref: false,
+                variadic: false,
+            });
+            let slot = f.add_local(Some(pname.to_string()), *ir, php.clone(), LocalKind::PhpLocal);
+            arg_slots.push((slot, *ir, php.clone()));
+        }
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let this = b.emit_load_local(
+                this_slot,
+                IrType::Heap(IrHeapKind::Object),
+                PhpType::Object(class.to_string()),
+            );
+            let mut loaded = vec![this];
+            for (slot, ir, php) in &arg_slots {
+                loaded.push(b.emit_load_local(*slot, *ir, php.clone()));
+            }
+            let ret = body(&mut b, &loaded);
+            b.terminate(Terminator::Return { value: ret });
+        }
+        f
+    }
+
     /// Builds a static method `Function` named `{class}::{method}` with the given result
     /// type and `__elephc_called_class_id` (i64) as hidden param 0 (slot 0). The body
     /// closure receives the builder and the loaded `called_class_id` value id.
@@ -4954,6 +5028,1317 @@ mod tests {
         module.add_function(main);
         if let Some(out) = run_main(&module) {
             assert_eq!(out, "xx");
+        }
+    }
+
+    // ----- P6f: instanceof + get_class + mixed-object dispatch -----
+
+    /// Registers an interface named `name` with the given `interface_id` and no
+    /// members, so `classify_named_target` resolves it to `(interface_id, 1)` and
+    /// `emit_class_metadata_tables` can build its interface block for any class
+    /// listing it in `ClassInfo.interfaces`.
+    fn register_interface(module: &mut Module, name: &str, interface_id: u64) {
+        module.interface_infos.insert(
+            name.to_string(),
+            InterfaceInfo {
+                interface_id,
+                parents: Vec::new(),
+                properties: HashMap::new(),
+                property_order: Vec::new(),
+                methods: HashMap::new(),
+                method_declaring_interfaces: HashMap::new(),
+                method_order: Vec::new(),
+                method_slots: HashMap::new(),
+                constants: HashMap::new(),
+            },
+        );
+    }
+
+    /// Emits `value instanceof TargetClass` (Op::InstanceOf): the immediate is the
+    /// interned class-name data id, the operand is the value. Returns the Bool (I64)
+    /// result value id.
+    fn emit_instanceof(b: &mut Builder, value: ValueId, class_name_data: DataId) -> ValueId {
+        b.emit(
+            Op::InstanceOf,
+            vec![value],
+            Some(Immediate::Data(class_name_data)),
+            IrType::I64,
+            PhpType::Bool,
+            Ownership::NonHeap,
+        )
+        .expect("InstanceOf lowers")
+    }
+
+    /// Emits `value instanceof target` (Op::InstanceOfDynamic): operands are
+    /// `[value, target]`, no immediate. Returns the Bool (I64) result value id.
+    fn emit_instanceof_dynamic(b: &mut Builder, value: ValueId, target: ValueId) -> ValueId {
+        b.emit(
+            Op::InstanceOfDynamic,
+            vec![value, target],
+            None,
+            IrType::I64,
+            PhpType::Bool,
+            Ownership::NonHeap,
+        )
+        .expect("InstanceOfDynamic lowers")
+    }
+
+    /// Emits `get_class(...operands)` (Op::BuiltinCall): the immediate is the interned
+    /// `"get_class"` function-name data id; operands is the argument list (empty for
+    /// the 0-arg lexical form). Returns the Str result value id.
+    fn emit_get_class(b: &mut Builder, get_class_data: DataId, operands: Vec<ValueId>) -> ValueId {
+        b.emit(
+            Op::BuiltinCall,
+            operands,
+            Some(Immediate::Data(get_class_data)),
+            IrType::Str,
+            PhpType::Str,
+            Ownership::NonHeap,
+        )
+        .expect("get_class lowers")
+    }
+
+    /// Emits `receiver?->method(args...)` (Op::NullsafeMethodCall): operands are
+    /// `[receiver, args...]`, the immediate is the interned method-name string.
+    fn emit_nullsafe_method_call(
+        b: &mut Builder,
+        receiver: ValueId,
+        method_data: DataId,
+        args: Vec<ValueId>,
+        result_ir: IrType,
+        result_php: PhpType,
+    ) -> ValueId {
+        let mut operands = vec![receiver];
+        operands.extend(args);
+        b.emit(
+            Op::NullsafeMethodCall,
+            operands,
+            Some(Immediate::Data(method_data)),
+            result_ir,
+            result_php,
+            Ownership::Owned,
+        )
+        .expect("NullsafeMethodCall lowers")
+    }
+
+    /// Boxes `value` into a Mixed/Union cell (Op::MixedBox) with the given result PHP
+    /// type, returning the cell value id. Used to build mixed/union receivers.
+    fn box_into_mixed(b: &mut Builder, value: ValueId, result_php: PhpType) -> ValueId {
+        b.emit(
+            Op::MixedBox,
+            vec![value],
+            None,
+            IrType::Heap(IrHeapKind::Mixed),
+            result_php,
+            Ownership::Owned,
+        )
+        .expect("MixedBox lowers")
+    }
+
+    /// Echoes a Bool value between two string markers so false (which prints nothing)
+    /// is distinguishable from true ("1"): `[` + bool + `]` -> "[1]" or "[]".
+    fn echo_bool_bracketed(b: &mut Builder, open: DataId, val: ValueId, close: DataId) {
+        echo_str(b, open);
+        let _ = b.emit(
+            Op::EchoValue,
+            vec![val],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        echo_str(b, close);
+    }
+
+    /// Registers a single class `class` (id `class_id`) with one 0-arg instance method
+    /// `method` returning `ret_php`/`ret_ir`, implemented by `class` itself (direct call,
+    /// no vtable slot), and pushes the matching instance method `Function` built by
+    /// `body`. Returns the class-name and method-name data ids.
+    fn class_with_method(
+        module: &mut Module,
+        class: &str,
+        class_id: u64,
+        method: &str,
+        ret_ir: IrType,
+        ret_php: PhpType,
+        body: impl FnOnce(&mut Builder, ValueId) -> Option<ValueId>,
+    ) -> (DataId, DataId) {
+        let class_data = module.data.intern_class_name(class);
+        let method_data = module.data.intern_string(method);
+        let method_key = crate::names::php_symbol_key(method);
+        let mut ci = test_class_info(class_id, vec![], vec![], false);
+        ci.methods.insert(method_key.clone(), method_sig(&[], ret_php.clone()));
+        ci.method_impl_classes.insert(method_key, class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+        module.class_methods.push(instance_method_fn(class, method, ret_ir, ret_php, body));
+        (class_data, method_data)
+    }
+
+    /// `new P() instanceof P` -> "[1]". The runtime class id of a P instance matches
+    /// the named P target, so `__rt_instanceof` returns true on the first walk step.
+    #[test]
+    fn instanceof_self_returns_true() {
+        let class = "P6fIA";
+        let mut module = Module::new(Target::wasm());
+        let (class_data, _) = class_with_method(&mut module, class, 1, "m", IrType::I64, PhpType::Int,
+            |b, _| Some(b.emit_const_i64(0)));
+        let target_data = module.data.intern_class_name(class);
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let r = emit_instanceof(&mut b, obj, target_data);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[1]");
+        }
+    }
+
+    /// `new Q() instanceof P` (Q extends P) -> "[1]". The walk reads Q's class id (no
+    /// match), then its parent P (match), so `__rt_instanceof` returns true.
+    #[test]
+    fn instanceof_subclass_returns_true() {
+        let base = "P6fIB";
+        let der = "P6fIBd";
+        let mut module = Module::new(Target::wasm());
+        let target_data = module.data.intern_class_name(base);
+        let der_data = module.data.intern_class_name(der);
+        module.class_infos.insert(base.to_string(), test_class_info(1, vec![], vec![], false));
+        let mut der_ci = test_class_info(2, vec![], vec![], false);
+        der_ci.parent = Some(base.to_string());
+        module.class_infos.insert(der.to_string(), der_ci);
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, der, der_data);
+            let r = emit_instanceof(&mut b, obj, target_data);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[1]");
+        }
+    }
+
+    /// `new P() instanceof Q` (unrelated) -> "[]". The walk exhausts P's parent chain
+    /// (-1 root) without matching Q, so `__rt_instanceof` returns false.
+    #[test]
+    fn instanceof_unrelated_returns_false() {
+        let a = "P6fIC";
+        let b = "P6fICx";
+        let mut module = Module::new(Target::wasm());
+        let a_data = module.data.intern_class_name(a);
+        module.class_infos.insert(a.to_string(), test_class_info(1, vec![], vec![], false));
+        module.class_infos.insert(b.to_string(), test_class_info(2, vec![], vec![], false));
+        let target_data = module.data.intern_class_name(b);
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, a, a_data);
+            let r = emit_instanceof(&mut b, obj, target_data);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[]");
+        }
+    }
+
+    /// `new P() instanceof I` where P implements I -> "[1]". The interface scan finds
+    /// `iface_id == I` in P's interface block on the first walk step.
+    #[test]
+    fn instanceof_interface_returns_true() {
+        let class = "P6fID";
+        let iface = "P6fID_I";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        register_interface(&mut module, iface, 100);
+        let mut ci = test_class_info(1, vec![], vec![], false);
+        ci.interfaces = vec![iface.to_string()];
+        module.class_infos.insert(class.to_string(), ci);
+        let target_data = module.data.intern_class_name(iface);
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let r = emit_instanceof(&mut b, obj, target_data);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[1]");
+        }
+    }
+
+    /// `new Q() instanceof I` where Q extends P and P implements I -> "[1]". Q's
+    /// interface block is self-contained (transitive flatten), so the scan matches on
+    /// the first walk step even before reaching P.
+    #[test]
+    fn instanceof_inherited_interface_returns_true() {
+        let base = "P6fIE";
+        let der = "P6fIEd";
+        let iface = "P6fIE_I";
+        let mut module = Module::new(Target::wasm());
+        let der_data = module.data.intern_class_name(der);
+        register_interface(&mut module, iface, 101);
+        let mut base_ci = test_class_info(1, vec![], vec![], false);
+        base_ci.interfaces = vec![iface.to_string()];
+        module.class_infos.insert(base.to_string(), base_ci);
+        let mut der_ci = test_class_info(2, vec![], vec![], false);
+        der_ci.parent = Some(base.to_string());
+        der_ci.interfaces = vec![iface.to_string()];
+        module.class_infos.insert(der.to_string(), der_ci);
+        let target_data = module.data.intern_class_name(iface);
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, der, der_data);
+            let r = emit_instanceof(&mut b, obj, target_data);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[1]");
+        }
+    }
+
+    /// `new P() instanceof NoSuchClass` (unregistered name) -> "[]". An unknown target
+    /// name resolves to no `(target_id, kind)`, so the lowerer emits a compile-time
+    /// false (no runtime call, no trap).
+    #[test]
+    fn instanceof_unknown_target_returns_false() {
+        let class = "P6fIF";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        module.class_infos.insert(class.to_string(), test_class_info(1, vec![], vec![], false));
+        let target_data = module.data.intern_class_name("P6fIF_NoSuch");
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let r = emit_instanceof(&mut b, obj, target_data);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[]");
+        }
+    }
+
+    /// `7 instanceof P` (scalar receiver) -> "[]". A non-object/non-mixed receiver is
+    /// a compile-time false (the lowerer never calls the runtime).
+    #[test]
+    fn instanceof_scalar_receiver_returns_false() {
+        let class = "P6fIG";
+        let mut module = Module::new(Target::wasm());
+        module.class_infos.insert(class.to_string(), test_class_info(1, vec![], vec![], false));
+        let target_data = module.data.intern_class_name(class);
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let n = b.emit_const_i64(7);
+            let r = emit_instanceof(&mut b, n, target_data);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[]");
+        }
+    }
+
+    /// A mixed receiver holding a P object: `$mixed instanceof P` -> "[1]".
+    /// `__rt_mixed_instanceof` unboxes the object payload and delegates to
+    /// `__rt_instanceof`, which matches on the first walk step.
+    #[test]
+    fn instanceof_mixed_object_returns_true() {
+        let class = "P6fIH";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        module.class_infos.insert(class.to_string(), test_class_info(1, vec![], vec![], false));
+        let target_data = module.data.intern_class_name(class);
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let mixed = box_into_mixed(&mut b, obj, PhpType::Mixed);
+            let r = emit_instanceof(&mut b, mixed, target_data);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[1]");
+        }
+    }
+
+    /// A mixed receiver holding an int: `$mixed instanceof P` -> "[]". The unboxed tag
+    /// is not 6 (object), so `__rt_mixed_instanceof` returns false without delegating.
+    #[test]
+    fn instanceof_mixed_nonobject_returns_false() {
+        let class = "P6fIHx";
+        let mut module = Module::new(Target::wasm());
+        module.class_infos.insert(class.to_string(), test_class_info(1, vec![], vec![], false));
+        let target_data = module.data.intern_class_name(class);
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let n = b.emit_const_i64(9);
+            let mixed = box_into_mixed(&mut b, n, PhpType::Mixed);
+            let r = emit_instanceof(&mut b, mixed, target_data);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[]");
+        }
+    }
+
+    /// `$x instanceof $y` where both are P objects -> "[1]". The dynamic target's
+    /// class id (read from `[y+0]`) matches the value's class id on the first walk step.
+    #[test]
+    fn instanceof_dynamic_object_target_matches() {
+        let class = "P6fII";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        module.class_infos.insert(class.to_string(), test_class_info(1, vec![], vec![], false));
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let value = emit_object_new(&mut b, class, class_data);
+            let target = emit_object_new(&mut b, class, class_data);
+            let r = emit_instanceof_dynamic(&mut b, value, target);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[1]");
+        }
+    }
+
+    /// `$x instanceof $y` where the target is a mixed cell holding a P object ->
+    /// "[1]". The dynamic target unboxes to an object payload, reads its class id, and
+    /// matches the value's class id.
+    #[test]
+    fn instanceof_dynamic_mixed_target_object_matches() {
+        let class = "P6fIJ";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        module.class_infos.insert(class.to_string(), test_class_info(1, vec![], vec![], false));
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let value = emit_object_new(&mut b, class, class_data);
+            let target_obj = emit_object_new(&mut b, class, class_data);
+            let target = box_into_mixed(&mut b, target_obj, PhpType::Mixed);
+            let r = emit_instanceof_dynamic(&mut b, value, target);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[1]");
+        }
+    }
+
+    /// `$x instanceof 5` (scalar target) -> "[]". A scalar target is a compile-time
+    /// false (the lowerer emits no runtime call).
+    #[test]
+    fn instanceof_dynamic_scalar_target_returns_false() {
+        let class = "P6fIK";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        module.class_infos.insert(class.to_string(), test_class_info(1, vec![], vec![], false));
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let value = emit_object_new(&mut b, class, class_data);
+            let scalar_target = b.emit_const_i64(5);
+            let r = emit_instanceof_dynamic(&mut b, value, scalar_target);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[]");
+        }
+    }
+
+    /// `$x instanceof "P"` (string target) is rejected: a dynamic string instanceof
+    /// target needs a name->id lookup table (deferred to P6g), so `generate` returns an
+    /// `Unsupported` error before any dereference.
+    #[test]
+    fn instanceof_dynamic_string_target_rejected() {
+        let class = "P6fIL";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        module.class_infos.insert(class.to_string(), test_class_info(1, vec![], vec![], false));
+        let name = module.data.intern_string(class);
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let value = emit_object_new(&mut b, class, class_data);
+            let target = b.emit_const_str(name);
+            let _ = emit_instanceof_dynamic(&mut b, value, target);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        let err = generate(&module, Emit::Executable)
+            .expect_err("dynamic string instanceof target should be rejected");
+        assert!(
+            err.to_string().contains("string instanceof"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// `get_class(new P())` -> "P". `__rt_class_name_by_obj` reads the runtime class id
+    /// and looks up the name table row.
+    #[test]
+    fn get_class_object_returns_class_name() {
+        let class = "P6fGC";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        module.class_infos.insert(class.to_string(), test_class_info(1, vec![], vec![], false));
+        let get_class_data = module.data.intern_function_name("get_class");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let name = emit_get_class(&mut b, get_class_data, vec![obj]);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![name],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, class);
+        }
+    }
+
+    /// `get_class(new Q())` where Q extends P -> "Q" (the runtime class, not the
+    /// static one).
+    #[test]
+    fn get_class_subclass_returns_runtime_class_name() {
+        let base = "P6fGCB";
+        let der = "P6fGCBd";
+        let mut module = Module::new(Target::wasm());
+        let der_data = module.data.intern_class_name(der);
+        module.class_infos.insert(base.to_string(), test_class_info(1, vec![], vec![], false));
+        let mut der_ci = test_class_info(2, vec![], vec![], false);
+        der_ci.parent = Some(base.to_string());
+        module.class_infos.insert(der.to_string(), der_ci);
+        let get_class_data = module.data.intern_function_name("get_class");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, der, der_data);
+            let name = emit_get_class(&mut b, get_class_data, vec![obj]);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![name],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, der);
+        }
+    }
+
+    /// `get_class()` with no args inside a P method -> "P" (the lexical class). The
+    /// 0-arg form resolves the enclosing `P::who` method name to class P and looks up
+    /// its name by class id.
+    #[test]
+    fn get_class_no_arg_in_method_returns_lexical_class() {
+        let class = "P6fGCL";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let get_class_data = module.data.intern_function_name("get_class");
+        let who_key = crate::names::php_symbol_key("who");
+        let mut ci = test_class_info(1, vec![], vec![], false);
+        ci.methods.insert(who_key.clone(), method_sig(&[], PhpType::Str));
+        ci.method_impl_classes.insert(who_key, class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+        // P::who(this): return get_class() (0-arg lexical form).
+        module.class_methods.push(instance_method_fn(class, "who", IrType::Str, PhpType::Str, |b, _| {
+            Some(emit_get_class(b, get_class_data, Vec::new()))
+        }));
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let who_data = module.data.intern_string("who");
+            let r = emit_method_call(&mut b, obj, who_data, vec![], IrType::Str, PhpType::Str);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![r],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, class);
+        }
+    }
+
+    /// `get_class()` with no args at the top level (no enclosing method) -> "" (the
+    /// empty missing-name row). Outside any class context there is no lexical class.
+    #[test]
+    fn get_class_no_arg_outside_method_returns_empty() {
+        let mut module = Module::new(Target::wasm());
+        let get_class_data = module.data.intern_function_name("get_class");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let open = b.emit_const_str(module.data.intern_string("["));
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![open],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let name = emit_get_class(&mut b, get_class_data, Vec::new());
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![name],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let close = b.emit_const_str(module.data.intern_string("]"));
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![close],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[]");
+        }
+    }
+
+    /// `get_class(7)` (non-object) -> "" (the native-vs-PHP divergence: a non-object
+    /// operand yields the empty name, fixed cross-target later).
+    #[test]
+    fn get_class_non_object_returns_empty() {
+        let mut module = Module::new(Target::wasm());
+        let get_class_data = module.data.intern_function_name("get_class");
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            echo_str(&mut b, open);
+            let n = b.emit_const_i64(7);
+            let name = emit_get_class(&mut b, get_class_data, vec![n]);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![name],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            echo_str(&mut b, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[]");
+        }
+    }
+
+    /// `get_class($mixed)` (a Mixed operand) is rejected (mirrors the native
+    /// lower_class_name_lookup): a mixed/union operand is `Unsupported` rather than
+    /// miscompiling.
+    #[test]
+    fn get_class_mixed_operand_rejected() {
+        let mut module = Module::new(Target::wasm());
+        let get_class_data = module.data.intern_function_name("get_class");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let n = b.emit_const_i64(7);
+            let mixed = box_into_mixed(&mut b, n, PhpType::Mixed);
+            let _ = emit_get_class(&mut b, get_class_data, vec![mixed]);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        let err = generate(&module, Emit::Executable)
+            .expect_err("get_class on a mixed operand should be rejected");
+        assert!(
+            err.to_string().contains("get_class"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// A method call on a Mixed receiver holding a P object dispatches to P::get and
+    /// echoes "7". The class-id if-ladder unboxes the object, matches P's class id, and
+    /// takes the direct call (non-virtual method). The concrete Int result is stored
+    /// straight into the Int result slot (no boxing).
+    #[test]
+    fn mixed_method_call_dispatches_to_object() {
+        let class = "P6fMM";
+        let mut module = Module::new(Target::wasm());
+        let (class_data, get_data) = class_with_method(&mut module, class, 1, "get", IrType::I64, PhpType::Int,
+            |b, _| Some(b.emit_const_i64(7)));
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let mixed = box_into_mixed(&mut b, obj, PhpType::Mixed);
+            let r = emit_method_call(&mut b, mixed, get_data, vec![], IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![r],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "7");
+        }
+    }
+
+    /// A method call on a Union(P) receiver dispatches the same way (Union routes to
+    /// the mixed class-id ladder), echoing "7".
+    #[test]
+    fn union_method_call_dispatches_to_object() {
+        let class = "P6fMMU";
+        let mut module = Module::new(Target::wasm());
+        let (class_data, get_data) = class_with_method(&mut module, class, 1, "get", IrType::I64, PhpType::Int,
+            |b, _| Some(b.emit_const_i64(7)));
+        let union_ty = PhpType::Union(vec![PhpType::Object(class.to_string()), PhpType::Void]);
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let mixed = box_into_mixed(&mut b, obj, union_ty);
+            let r = emit_method_call(&mut b, mixed, get_data, vec![], IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![r],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "7");
+        }
+    }
+
+    /// A mixed-method call whose callee returns a string, with a Mixed result slot,
+    /// boxes the string return into a Mixed cell (tag 1, persisted copy) and echoes it.
+    /// Exercises `box_call_result_into_mixed`'s Str arm and `__rt_mixed_write_stdout`'s
+    /// tag-1 path.
+    #[test]
+    fn mixed_method_call_refcounted_string_return_boxes_and_echoes() {
+        let class = "P6fMMR";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let get_data = module.data.intern_string("get");
+        let get_key = crate::names::php_symbol_key("get");
+        let mut ci = test_class_info(1, vec![], vec![], false);
+        // Declared return is Str: the runtime mixed-cell tag is derived from the
+        // callee's declared return type (string -> tag 1), not the result slot.
+        ci.methods.insert(get_key.clone(), method_sig(&[], PhpType::Str));
+        ci.method_impl_classes.insert(get_key, class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+        // P::get(this): return an OWNED heap string (Acquire persists "hi" into a
+        // kind-1 heap block, rc 1). The lowerer boxes the Str return into a Mixed cell
+        // (from_value persists its own copy) and then releases the callee's owned
+        // source via __rt_decref_any — so the heap source is actually freed, not a
+        // no-op on a static literal. Echoing "hi" proves the release targets the
+        // source, not the cell's copy (which would echo freed memory).
+        let hi_data = module.data.intern_string("hi");
+        module.class_methods.push(instance_method_fn(class, "get", IrType::Str, PhpType::Str,
+            move |b, _| {
+                let s = b.emit_const_str(hi_data);
+                b.emit(Op::Acquire, vec![s], None, IrType::Str, PhpType::Str, Ownership::Owned)
+            }));
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let mixed = box_into_mixed(&mut b, obj, PhpType::Mixed);
+            let r = emit_method_call(&mut b, mixed, get_data, vec![], IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![r],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "hi");
+        }
+    }
+
+    /// A mixed-method call with a virtual (overridden) method dispatches through the
+    /// introducer's stub: a P6fMMDer object (Mixed-boxed) prints the override (999).
+    #[test]
+    fn mixed_method_call_dispatches_virtual_override() {
+        let base = "P6fMMDb";
+        let der = "P6fMMDd";
+        let mut module = Module::new(Target::wasm());
+        let der_data = module.data.intern_class_name(der);
+        let get_data = module.data.intern_string("get");
+        let get_key = crate::names::php_symbol_key("get");
+        // Base introduces the virtual slot (index 0); not final.
+        let mut base_ci = test_class_info(1, vec![], vec![], false);
+        base_ci.methods.insert(get_key.clone(), method_sig(&[], PhpType::Int));
+        base_ci.method_impl_classes.insert(get_key.clone(), base.to_string());
+        base_ci.vtable_slots.insert(get_key.clone(), 0);
+        module.class_infos.insert(base.to_string(), base_ci);
+        // Der inherits the slot (index 0), overrides get.
+        let mut der_ci = test_class_info(2, vec![], vec![], false);
+        der_ci.parent = Some(base.to_string());
+        der_ci.methods.insert(get_key.clone(), method_sig(&[], PhpType::Int));
+        der_ci.method_impl_classes.insert(get_key.clone(), der.to_string());
+        der_ci.vtable_slots.insert(get_key, 0);
+        module.class_infos.insert(der.to_string(), der_ci);
+        module.class_methods.push(instance_method_fn(base, "get", IrType::I64, PhpType::Int,
+            |b, _| Some(b.emit_const_i64(100))));
+        module.class_methods.push(instance_method_fn(der, "get", IrType::I64, PhpType::Int,
+            |b, _| Some(b.emit_const_i64(999))));
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, der, der_data);
+            let mixed = box_into_mixed(&mut b, obj, PhpType::Mixed);
+            let r = emit_method_call(&mut b, mixed, get_data, vec![], IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![r],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "999");
+        }
+    }
+
+    /// A nullsafe method call on a non-nullable Object receiver delegates to the plain
+    /// method-call path (the single-class `?->` call branch), echoing "7".
+    #[test]
+    fn nullsafe_on_object_receiver_dispatches() {
+        let class = "P6fNS";
+        let mut module = Module::new(Target::wasm());
+        let (class_data, get_data) = class_with_method(&mut module, class, 1, "get", IrType::I64, PhpType::Int,
+            |b, _| Some(b.emit_const_i64(7)));
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let r = emit_nullsafe_method_call(&mut b, obj, get_data, vec![], IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![r],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "7");
+        }
+    }
+
+    /// `$mixed?->get()` where the mixed cell holds a P object dispatches (tag 6) and
+    /// boxes the string return into the Mixed result slot, echoing "hi".
+    #[test]
+    fn nullsafe_on_mixed_object_dispatches() {
+        let class = "P6fNSM";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let get_data = module.data.intern_string("get");
+        let get_key = crate::names::php_symbol_key("get");
+        let mut ci = test_class_info(1, vec![], vec![], false);
+        // Declared return is Str so the box tag is 1 (string); the result slot is Mixed.
+        ci.methods.insert(get_key.clone(), method_sig(&[], PhpType::Str));
+        ci.method_impl_classes.insert(get_key, class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+        let hi_data = module.data.intern_string("hi");
+        module.class_methods.push(instance_method_fn(class, "get", IrType::Str, PhpType::Str,
+            move |b, _| Some(b.emit_const_str(hi_data))));
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let mixed = box_into_mixed(&mut b, obj, PhpType::Mixed);
+            echo_str(&mut b, open);
+            let r = emit_nullsafe_method_call(&mut b, mixed, get_data, vec![], IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![r],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            echo_str(&mut b, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[hi]");
+        }
+    }
+
+    /// `$mixed?->get()` where the mixed cell holds null returns a boxed null (tag 8),
+    /// which prints nothing, so the bracketed output is "[]". Exercises the nullsafe
+    /// null path and the null->tag-8 boxing in `__rt_mixed_from_value`.
+    #[test]
+    fn nullsafe_on_mixed_null_returns_null() {
+        let class = "P6fNSN";
+        let mut module = Module::new(Target::wasm());
+        let get_data = module.data.intern_string("get");
+        let get_key = crate::names::php_symbol_key("get");
+        let mut ci = test_class_info(1, vec![], vec![], false);
+        // Declared return Str so the (never-executed) tag==6 branch codegens a tag-1
+        // box; the null path (tag 8) is taken at runtime and returns a boxed null.
+        ci.methods.insert(get_key.clone(), method_sig(&[], PhpType::Str));
+        ci.method_impl_classes.insert(get_key, class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+        // The method body must exist even though the null path never calls it: the
+        // lowerer still resolves the candidate callee symbol for the tag==6 branch.
+        let hi_data = module.data.intern_string("hi");
+        module.class_methods.push(instance_method_fn(class, "get", IrType::Str, PhpType::Str,
+            move |b, _| Some(b.emit_const_str(hi_data))));
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            // Box a null (ConstNull -> tag 8) into a Mixed cell.
+            let null = b.emit_const_null();
+            let mixed = box_into_mixed(&mut b, null, PhpType::Mixed);
+            echo_str(&mut b, open);
+            let r = emit_nullsafe_method_call(&mut b, mixed, get_data, vec![], IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![r],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            echo_str(&mut b, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[]");
+        }
+    }
+
+    /// `$mixed?->get()` with a concrete (non-boxed) result slot is rejected: a
+    /// heterogeneous `?->` whose result cannot merge null into a concrete slot is
+    /// type-unsafe and deferred to P6g, surfacing as `Unsupported`.
+    #[test]
+    fn nullsafe_mixed_concrete_result_rejected() {
+        let class = "P6fNSX";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let get_data = module.data.intern_string("get");
+        let get_key = crate::names::php_symbol_key("get");
+        let mut ci = test_class_info(1, vec![], vec![], false);
+        ci.methods.insert(get_key.clone(), method_sig(&[], PhpType::Int));
+        ci.method_impl_classes.insert(get_key, class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let mixed = box_into_mixed(&mut b, obj, PhpType::Mixed);
+            // Concrete Int result slot on a Mixed receiver -> heterogeneous ?-> deferred.
+            let _ = emit_nullsafe_method_call(&mut b, mixed, get_data, vec![], IrType::I64, PhpType::Int);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        let err = generate(&module, Emit::Executable)
+            .expect_err("nullsafe with a concrete result slot should be rejected");
+        assert!(
+            err.to_string().contains("P6g") || err.to_string().contains("nullsafe"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// `instanceof` with the class-metadata stub (no registered classes) is a
+    /// compile-time false for a scalar receiver and validates: the empty-table globals
+    /// from `emit_class_metadata_stub` let the class runtime no-op safely.
+    #[test]
+    fn class_metadata_stub_present_validates() {
+        let class = "P6fStub";
+        let mut module = Module::new(Target::wasm());
+        module.class_infos.insert(class.to_string(), test_class_info(1, vec![], vec![], false));
+        let target_data = module.data.intern_class_name(class);
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let n = b.emit_const_i64(0);
+            // scalar receiver -> compile-time false (no runtime call); the module must
+            // still assemble and validate with the class-metadata tables emitted.
+            let _ = emit_instanceof(&mut b, n, target_data);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        // Validation only (no wasmer needed): the class-metadata tables and globals
+        // must render and assemble for a one-class module.
+        let wat = generate(&module, Emit::Executable).expect("module should lower");
+        let _ = assemble_and_validate(&wat);
+    }
+
+    // ----- P6f coverage gaps: args, float box arm, Union instanceof -----
+
+    /// A mixed-method call with one argument: `$mixed->add(35)` returns `$x + 7` =
+    /// 42, echoing "42". Exercises `emit_candidate_call`'s arity gate
+    /// (`sig.params.len() + 1 != operand_count`) and the `inst.operands.skip(1)`
+    /// argument materialization order (receiver first, then the user arg).
+    #[test]
+    fn mixed_method_call_with_args_dispatches() {
+        let class = "P6fArg";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let add_data = module.data.intern_string("add");
+        let add_key = crate::names::php_symbol_key("add");
+        let mut ci = test_class_info(1, vec![], vec![], false);
+        ci.methods.insert(add_key.clone(), method_sig(&[("x", PhpType::Int)], PhpType::Int));
+        ci.method_impl_classes.insert(add_key, class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+        // P::add(this, x): return x + 7. The body receives [this, x] as loaded values.
+        module.class_methods.push(instance_method_fn_with_args(
+            class,
+            "add",
+            &[("x", IrType::I64, PhpType::Int)],
+            IrType::I64,
+            PhpType::Int,
+            |b, p| {
+                let seven = b.emit_const_i64(7);
+                b.emit(Op::IAdd, vec![p[1], seven], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+            },
+        ));
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let mixed = box_into_mixed(&mut b, obj, PhpType::Mixed);
+            let arg = b.emit_const_i64(35);
+            let r = emit_method_call(&mut b, mixed, add_data, vec![arg], IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![r],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "42");
+        }
+    }
+
+    /// A mixed-method call whose callee returns a float, with a Mixed result slot,
+    /// boxes the f64 return into a Mixed cell (tag 2) and echoes it. Exercises
+    /// `box_call_result_into_mixed`'s F64 arm (`i64.reinterpret_f64` + push order:
+    /// tag, reinterpret lo, 0 hi) and `__rt_mixed_write_stdout`'s tag-2 path.
+    #[test]
+    fn mixed_method_call_float_return_boxes_and_echoes() {
+        let class = "P6fFlt";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let get_data = module.data.intern_string("get");
+        let get_key = crate::names::php_symbol_key("get");
+        let mut ci = test_class_info(1, vec![], vec![], false);
+        // Declared return Float: the box tag is 2 (float), derived from the callee
+        // return type; the result slot is Mixed (triggers boxing).
+        ci.methods.insert(get_key.clone(), method_sig(&[], PhpType::Float));
+        ci.method_impl_classes.insert(get_key, class.to_string());
+        module.class_infos.insert(class.to_string(), ci);
+        // P::get(this): return 1.5 (IrType::F64).
+        module.class_methods.push(instance_method_fn(class, "get", IrType::F64, PhpType::Float, |b, _| {
+            Some(b.emit_const_f64(1.5))
+        }));
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let mixed = box_into_mixed(&mut b, obj, PhpType::Mixed);
+            let r = emit_method_call(&mut b, mixed, get_data, vec![], IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![r],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "1.5");
+        }
+    }
+
+    /// `instanceof` on a Union(P) receiver holding a P object -> "[1]". Guards the
+    /// `PhpType::Union(_)` arm of `lower_instanceof`, which routes to
+    /// `__rt_mixed_instanceof` (Union is a boxed Mixed shape).
+    #[test]
+    fn instanceof_union_receiver_returns_true() {
+        let class = "P6fUI";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        module.class_infos.insert(class.to_string(), test_class_info(1, vec![], vec![], false));
+        let target_data = module.data.intern_class_name(class);
+        let union_ty = PhpType::Union(vec![PhpType::Object(class.to_string()), PhpType::Void]);
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let mixed = box_into_mixed(&mut b, obj, union_ty);
+            let r = emit_instanceof(&mut b, mixed, target_data);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[1]");
+        }
+    }
+
+    /// `null instanceof P` -> "[]". A ConstNull receiver is a compile-time false
+    /// (the `_` arm of `lower_instanceof`), matching PHP (`null instanceof P` is false).
+    #[test]
+    fn instanceof_null_receiver_returns_false() {
+        let class = "P6fNL";
+        let mut module = Module::new(Target::wasm());
+        module.class_infos.insert(class.to_string(), test_class_info(1, vec![], vec![], false));
+        let target_data = module.data.intern_class_name(class);
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let null = b.emit_const_null();
+            let r = emit_instanceof(&mut b, null, target_data);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[]");
         }
     }
 }

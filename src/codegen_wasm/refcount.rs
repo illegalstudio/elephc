@@ -125,6 +125,7 @@ mod tests {
 
     use super::emit_refcount_runtime;
     use super::super::arrays::emit_array_runtime;
+    use super::super::classes::{emit_class_metadata_stub, emit_class_runtime};
     use super::super::heap::emit_heap_runtime;
     use super::super::mixed::emit_mixed_runtime;
     use super::super::objects::{emit_destructor_dispatch_stub, emit_gc_desc_stub, emit_object_runtime};
@@ -171,6 +172,8 @@ mod tests {
         // `__rt_decref_object` also calls `__rt_call_object_destructor`; the 0-arm stub
         // resolves the call as a no-op for harness blocks that hold no destructors.
         emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
         wm.add_raw_func(driver);
         let wat = wm.render();
         let bytes = ::wat::parse_str(&wat)
@@ -324,6 +327,8 @@ mod tests {
         // `__rt_decref_object` calls `__rt_call_object_destructor`; this harness registers no
         // class with a destructor, so the 0-arm stub resolves the call as a no-op.
         emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
         // Real gc_desc for class 0: one property of tag 1 (string). The desc byte and the
         // 4-aligned pointer table sit in the free [0, 64) region below CONCAT_BASE so they
         // never collide with the concat scratch (never written here) or the heap (>= 1024).
@@ -382,5 +387,48 @@ mod tests {
             wat
         );
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "0");
+    }
+
+    // ----- P6f: box_call_result_into_mixed source-release contract -----
+
+    /// Regression guard for the P6f `box_call_result_into_mixed` ownership fix. The
+    /// wasm lowerer boxes a callee's owned string return by calling
+    /// `__rt_mixed_from_value` (which persists a fresh COPY and leaves the source
+    /// owned — it does NOT consume it) and then `__rt_decref_any` on the source (the
+    /// fix). Because the source is a WAT-stack callee return, the EIR ownership pass
+    /// cannot see it, so the lowerer must release it itself.
+    ///
+    /// This driver replays that exact sequence against the real runtime: persist a
+    /// 2-byte string into an owned heap block (rc 1), box it via `from_value` (the
+    /// cell persists its own copy; the source rc is untouched), release the source via
+    /// `__rt_decref_any` (rc 1 -> 0 -> freed), then release the cell via
+    /// `__rt_decref_any` (kind 5 -> free_deep -> frees the cell + its persisted copy),
+    /// and return `_gc_live`. With the source release the cycle is balanced -> "0";
+    /// omitting the source release (the bug) leaks the source block -> nonzero.
+    #[test]
+    fn mixed_from_value_string_then_source_release_is_balanced() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $s i32)
+  (local $cell i32)
+  i32.const 32                            ;; source address (below heap, zero-filled)
+  i64.const 2                             ;; 2-byte string
+  call $__rt_str_persist                   ;; persist -> (ptr i32, len i64)
+  drop                                     ;; discard the length
+  local.set $s                             ;; $s = owned heap string (rc 1)
+  i64.const 1                              ;; tag = string
+  local.get $s                             ;; lo = source pointer
+  i64.extend_i32_u
+  i64.const 2                             ;; hi = length
+  call $__rt_mixed_from_value              ;; cell persists its own copy; source rc unchanged
+  local.set $cell
+  local.get $s                             ;; release the callee's owned source (P6f fix)
+  call $__rt_decref_any                    ;; rc 1 -> 0 -> freed
+  local.get $cell                          ;; release the cell
+  call $__rt_decref_any                    ;; kind 5 -> free_deep -> frees cell + its copy
+  global.get $_gc_live)                    ;; balanced -> 0
+"#;
+        if let Some(o) = run_driver(driver, "t") {
+            assert_eq!(o, "0");
+        }
     }
 }
