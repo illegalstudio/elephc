@@ -262,7 +262,7 @@ fn emit_property_set_aarch64(
     emitter.instruction("ldr x9, [x1]");                                        // load the object's runtime class id
     emit_aarch64_property_dispatch(module, emitter, data, slots, "set");
     emit_aarch64_stdclass_property_set_fallback(module, emitter, fail_label, done_label);
-    emit_aarch64_set_slot_bodies(module, emitter, slots, done_label);
+    emit_aarch64_set_slot_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("mov x0, #0");                                          // report a failed eval property write to Rust
     emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after failure
@@ -298,7 +298,7 @@ fn emit_property_set_x86_64(
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
     emit_x86_64_property_dispatch(module, emitter, data, slots, "set");
     emit_x86_64_stdclass_property_set_fallback(module, emitter, fail_label, done_label);
-    emit_x86_64_set_slot_bodies(module, emitter, slots, done_label);
+    emit_x86_64_set_slot_bodies(module, emitter, data, slots, done_label, fail_label);
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // report a failed eval property write to Rust
     emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after failure
@@ -497,12 +497,14 @@ fn emit_x86_64_get_slot_bodies(
 fn emit_aarch64_set_slot_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalPropertySlot],
     done_label: &str,
+    fail_label: &str,
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "set"));
-        emit_aarch64_store_property_slot(emitter, slot);
+        emit_aarch64_store_property_slot(module, emitter, data, slot, fail_label);
         emitter.instruction("mov x0, #1");                                      // report a successful eval property write to Rust
         emitter.instruction(&format!("b {}", done_label));                      // return after storing the declared property value
     }
@@ -512,12 +514,14 @@ fn emit_aarch64_set_slot_bodies(
 fn emit_x86_64_set_slot_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slots: &[EvalPropertySlot],
     done_label: &str,
+    fail_label: &str,
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "set"));
-        emit_x86_64_store_property_slot(emitter, slot);
+        emit_x86_64_store_property_slot(module, emitter, data, slot, fail_label);
         emitter.instruction("mov rax, 1");                                      // report a successful eval property write to Rust
         emitter.instruction(&format!("jmp {}", done_label));                    // return after storing the declared property value
     }
@@ -619,7 +623,13 @@ fn emit_x86_64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot)
 }
 
 /// Stores a boxed Mixed eval value into an ARM64 object property slot.
-fn emit_aarch64_store_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot) {
+fn emit_aarch64_store_property_slot(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalPropertySlot,
+    fail_label: &str,
+) {
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "x0"),
         PhpType::Bool => emit_aarch64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_bool", "x0"),
@@ -637,6 +647,13 @@ fn emit_aarch64_store_property_slot(emitter: &mut Emitter, slot: &EvalPropertySl
             emitter.instruction(&format!("str x2, [x9, #{}]", slot.offset + 8)); // store the coerced string length into the property slot
         }
         PhpType::TaggedScalar => emit_aarch64_store_tagged_scalar_property(emitter, slot),
+        PhpType::Array(_) => emit_aarch64_store_heap_property_slot(emitter, slot, 4, fail_label),
+        PhpType::AssocArray { .. } => {
+            emit_aarch64_store_heap_property_slot(emitter, slot, 5, fail_label);
+        }
+        PhpType::Object(class_name) => {
+            emit_aarch64_store_object_property_slot(module, emitter, data, slot, &class_name, fail_label);
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("ldr x0, [sp, #24]");                           // reload the boxed eval value being assigned
             emitter.instruction("bl __rt_incref");                              // retain the Mixed cell for property ownership
@@ -649,7 +666,13 @@ fn emit_aarch64_store_property_slot(emitter: &mut Emitter, slot: &EvalPropertySl
 }
 
 /// Stores a boxed Mixed eval value into an x86_64 object property slot.
-fn emit_x86_64_store_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot) {
+fn emit_x86_64_store_property_slot(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalPropertySlot,
+    fail_label: &str,
+) {
     match slot.ty.codegen_repr() {
         PhpType::Int => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_int", "rax"),
         PhpType::Bool => emit_x86_64_store_cast_scalar(emitter, slot, "__rt_mixed_cast_bool", "rax"),
@@ -667,6 +690,13 @@ fn emit_x86_64_store_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlo
             emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)); // store the coerced string length into the property slot
         }
         PhpType::TaggedScalar => emit_x86_64_store_tagged_scalar_property(emitter, slot),
+        PhpType::Array(_) => emit_x86_64_store_heap_property_slot(emitter, slot, 4, fail_label),
+        PhpType::AssocArray { .. } => {
+            emit_x86_64_store_heap_property_slot(emitter, slot, 5, fail_label);
+        }
+        PhpType::Object(class_name) => {
+            emit_x86_64_store_object_property_slot(module, emitter, data, slot, &class_name, fail_label);
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value being assigned
             emitter.instruction("call __rt_incref");                            // retain the Mixed cell for property ownership
@@ -728,6 +758,89 @@ fn emit_x86_64_store_cast_scalar(
     emitter.instruction(&format!("call {}", helper));                           // coerce the eval value to the declared property type
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the store
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], {}", slot.offset, result_reg)); // store the coerced scalar into the property slot
+}
+
+/// Stores a boxed ARM64 eval heap value into an array-like property slot.
+fn emit_aarch64_store_heap_property_slot(
+    emitter: &mut Emitter,
+    slot: &EvalPropertySlot,
+    expected_tag: i64,
+    fail_label: &str,
+) {
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed eval value for heap payload inspection
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the assigned heap value tag and payload pointer
+    abi::emit_load_int_immediate(emitter, "x10", expected_tag);
+    emitter.instruction("cmp x0, x10");                                         // compare the assigned value tag with the property storage ABI
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject heap values with an incompatible ABI shape
+    emitter.instruction("mov x0, x1");                                          // move the unboxed heap pointer into the retained-result register
+    abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for the heap store
+    emitter.instruction(&format!("str x0, [x9, #{}]", slot.offset));            // store the retained heap pointer into the property slot
+    emitter.instruction(&format!("str xzr, [x9, #{}]", slot.offset + 8));       // clear the typed-property initialization marker
+}
+
+/// Validates and stores a boxed ARM64 eval object into an object property slot.
+fn emit_aarch64_store_object_property_slot(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalPropertySlot,
+    class_name: &str,
+    fail_label: &str,
+) {
+    if !class_name.is_empty() {
+        let (label, len) = data.add_string(class_name.as_bytes());
+        let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+        emitter.instruction("ldr x0, [sp, #24]");                               // reload the boxed eval value for object type validation
+        abi::emit_symbol_address(emitter, "x1", &label);
+        abi::emit_load_int_immediate(emitter, "x2", len as i64);
+        emitter.instruction("mov x3, xzr");                                     // allow exact class matches for object property type hints
+        abi::emit_call_label(emitter, &is_a_symbol);
+        emitter.instruction(&format!("cbz x0, {}", fail_label));                // reject values that fail the object property type hint
+    }
+    emit_aarch64_store_heap_property_slot(emitter, slot, 6, fail_label);
+}
+
+/// Stores a boxed x86_64 eval heap value into an array-like property slot.
+fn emit_x86_64_store_heap_property_slot(
+    emitter: &mut Emitter,
+    slot: &EvalPropertySlot,
+    expected_tag: i64,
+    fail_label: &str,
+) {
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed eval value for heap payload inspection
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the assigned heap value tag and payload pointer
+    abi::emit_load_int_immediate(emitter, "r10", expected_tag);
+    emitter.instruction("cmp rax, r10");                                        // compare the assigned value tag with the property storage ABI
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject heap values with an incompatible ABI shape
+    emitter.instruction("mov rax, rdi");                                        // move the unboxed heap pointer into the retained-result register
+    abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the heap store
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset)); //store the retained heap pointer into the property slot
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)); //clear the typed-property initialization marker
+}
+
+/// Validates and stores a boxed x86_64 eval object into an object property slot.
+fn emit_x86_64_store_object_property_slot(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slot: &EvalPropertySlot,
+    class_name: &str,
+    fail_label: &str,
+) {
+    if !class_name.is_empty() {
+        let (label, len) = data.add_string(class_name.as_bytes());
+        let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                   // reload the boxed eval value for object type validation
+        abi::emit_symbol_address(emitter, "rsi", &label);
+        abi::emit_load_int_immediate(emitter, "rdx", len as i64);
+        emitter.instruction("xor ecx, ecx");                                    // allow exact class matches for object property type hints
+        abi::emit_call_label(emitter, &is_a_symbol);
+        emitter.instruction("test rax, rax");                                   // check whether the value satisfied the object property type hint
+        emitter.instruction(&format!("je {}", fail_label));                     // reject values that fail the object property type hint
+    }
+    emit_x86_64_store_heap_property_slot(emitter, slot, 6, fail_label);
 }
 
 /// Stores a boxed eval value into an x86_64 nullable-int tagged-scalar property slot.
