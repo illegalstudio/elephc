@@ -312,7 +312,7 @@ cases, supported materialized property defaults, and current eval-declared
 static property values. For generated/AOT class-like symbols, the constant APIs
 also expose materializable scalar, string, null, `::class`, simple arithmetic or
 concatenation, and enum-case constant metadata through runtime hooks, and the
-static-property APIs expose bridge-supported public generated/AOT static
+static-property APIs expose bridge-supported public/protected/private generated/AOT static
 property values. Constant
 lookup is case-sensitive; single-value
 lookups return `false` when no constant or case is visible. `getConstants()`

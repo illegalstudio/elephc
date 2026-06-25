@@ -11568,6 +11568,8 @@ fn test_eval_reflection_class_static_property_values_aot() {
 class EvalAotReflectStaticPropertyTarget {
     public static string $label = "start";
     public static int $count = 2;
+    protected static string $secret = "prot";
+    private static int $hidden = 4;
     public string $instance = "plain";
 }
 echo eval('$ref = new ReflectionClass("EvalAotReflectStaticPropertyTarget");
@@ -11575,12 +11577,20 @@ $statics = $ref->getStaticProperties();
 echo count($statics) . ":";
 echo $statics["label"] . ":";
 echo $statics["count"] . ":";
+echo $statics["secret"] . ":";
+echo $statics["hidden"] . ":";
 echo $ref->getStaticPropertyValue("label") . ":";
 $ref->setStaticPropertyValue("label", "changed");
 echo EvalAotReflectStaticPropertyTarget::$label . ":";
 $ref->setStaticPropertyValue(name: "count", value: 9);
 echo $ref->getStaticPropertyValue("count") . ":";
 echo EvalAotReflectStaticPropertyTarget::$count . ":";
+echo $ref->getStaticPropertyValue("secret") . ":";
+$ref->setStaticPropertyValue("secret", "changed-prot");
+echo $ref->getStaticPropertyValue("secret") . ":";
+echo $ref->getStaticPropertyValue("hidden") . ":";
+$ref->setStaticPropertyValue("hidden", 8);
+echo $ref->getStaticPropertyValue("hidden") . ":";
 echo $ref->getStaticPropertyValue("instance", "fallback") . ":";
 try {
     $ref->setStaticPropertyValue("instance", "bad");
@@ -11595,7 +11605,10 @@ try {
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "2:start:2:start:changed:9:9:fallback:S");
+    assert_eq!(
+        out.stdout,
+        "4:start:2:prot:4:start:changed:9:9:prot:changed-prot:4:8:fallback:S"
+    );
 }
 
 /// Verifies eval ReflectionProperty value APIs bridge generated/AOT storage.
