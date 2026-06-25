@@ -402,6 +402,40 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies readonly classes reject PHP's global dynamic-property marker attribute.
+#[test]
+fn execute_program_rejects_allow_dynamic_properties_on_readonly_class() {
+    let program =
+        parse_fragment(br#"#[\AllowDynamicProperties] readonly class EvalReadonlyAllowDynamic {}"#)
+            .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("AllowDynamicProperties cannot apply to readonly classes");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies namespaced non-builtin attributes do not trigger the readonly-class marker rule.
+#[test]
+fn execute_program_allows_namespaced_allow_dynamic_properties_on_readonly_class() {
+    let program = parse_fragment(
+        br#"namespace EvalReadonlyAttrNs;
+#[AllowDynamicProperties] readonly class Box {}
+echo class_attribute_names("EvalReadonlyAttrNs\Box")[0];
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "EvalReadonlyAttrNs\\AllowDynamicProperties");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies readonly class static properties remain mutable.
 #[test]
 fn execute_program_allows_readonly_class_static_property_mutation() {

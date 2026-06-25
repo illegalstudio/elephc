@@ -7219,6 +7219,16 @@ $box->dynamic = 8;');
         "stderr did not contain eval runtime fatal diagnostic: {dynamic_err}"
     );
 
+    let attribute_err = compile_and_run_expect_failure(
+        r#"<?php
+eval('#[\AllowDynamicProperties] readonly class EvalReadonlyAllowDynamicAttrBox {}');
+"#,
+    );
+    assert!(
+        attribute_err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {attribute_err}"
+    );
+
     let magic = compile_and_run_capture(
         r#"<?php
 eval('readonly class EvalReadonlyClassMagicSetBox {

@@ -1249,6 +1249,9 @@ fn validate_eval_class_modifiers(
     if class.is_abstract() && class.is_final() {
         return Err(EvalStatus::RuntimeFatal);
     }
+    if class.is_readonly_class() && eval_class_has_allow_dynamic_properties_attribute(class) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     validate_eval_declared_constants(class.constants())?;
     for constant in class.constants() {
         validate_constant_parent_redeclaration(class, constant, context)?;
@@ -1274,6 +1277,14 @@ fn validate_eval_class_modifiers(
         validate_method_parent_override(class, method, context)?;
     }
     Ok(())
+}
+
+/// Returns whether a class carries PHP's global `#[AllowDynamicProperties]` attribute.
+fn eval_class_has_allow_dynamic_properties_attribute(class: &EvalClass) -> bool {
+    class
+        .attributes()
+        .iter()
+        .any(|attribute| attribute.name().eq_ignore_ascii_case("AllowDynamicProperties"))
 }
 
 /// Validates PHP magic-method contracts for one eval class-like method list.

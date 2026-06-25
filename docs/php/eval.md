@@ -545,6 +545,8 @@ constructor of the declaring class and later writes fail as eval runtime fatals.
 A `readonly class` makes instance properties readonly implicitly while leaving
 static properties mutable. Missing-property writes can still dispatch through
 `__set()`, but readonly classes reject actual dynamic property creation.
+PHP's global `#[AllowDynamicProperties]` marker is rejected on eval-declared
+readonly classes.
 `self::`, `parent::`, and late-bound `static::` work for supported static
 members, class constants, and class-name literals.
 
