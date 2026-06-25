@@ -2793,6 +2793,16 @@ fn builtin_reflection_owner_class(
             "__declaring_class",
         ));
     }
+    if matches!(
+        name,
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
+        methods.push(builtin_reflection_constant_false_bool_method(
+            "isDeprecated",
+        ));
+        methods.push(builtin_reflection_constant_false_bool_method("hasType"));
+        methods.push(builtin_reflection_constant_null_mixed_method("getType"));
+    }
     if matches!(name, "ReflectionFunction" | "ReflectionMethod") {
         properties.push(builtin_property(
             "__parameters",

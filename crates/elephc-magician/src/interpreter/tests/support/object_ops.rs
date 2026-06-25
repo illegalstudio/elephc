@@ -234,6 +234,10 @@ impl FakeOps {
                 Self::object_property(&properties, "__is_user_defined")
                     .map_or_else(|| self.bool_value(false), Ok)
             }
+            (FakeValue::Object(properties), "isdeprecated") if args.is_empty() => {
+                Self::object_property(&properties, "__is_deprecated")
+                    .map_or_else(|| self.bool_value(false), Ok)
+            }
             (FakeValue::Object(properties), "getparentclass") if args.is_empty() => {
                 Self::object_property(&properties, "__parent_class")
                     .map_or_else(|| self.bool_value(false), Ok)

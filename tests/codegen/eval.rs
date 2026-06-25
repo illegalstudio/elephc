@@ -11989,6 +11989,43 @@ echo $backedAttrs[0]->newInstance()->label();');
     );
 }
 
+/// Verifies eval ReflectionClassConstant/EnumCase expose PHP's untyped metadata defaults.
+#[test]
+fn test_eval_reflection_constant_type_metadata_defaults() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalConstTypeTarget {
+    public const ANSWER = 42;
+}
+enum EvalConstTypeEnum: string {
+    case Ready = "ready";
+}
+$constant = new ReflectionClassConstant("EvalConstTypeTarget", "ANSWER");
+echo $constant->isDeprecated() ? "D" : "d"; echo ":";
+echo $constant->hasType() ? "T" : "t"; echo ":";
+echo $constant->getType() === null ? "N" : "n"; echo ":";
+$case = new ReflectionClassConstant("EvalConstTypeEnum", "Ready");
+echo $case->isDeprecated() ? "D" : "d"; echo ":";
+echo $case->hasType() ? "T" : "t"; echo ":";
+echo $case->getType() === null ? "N" : "n"; echo ":";
+$unit = new ReflectionEnumUnitCase("EvalConstTypeEnum", "Ready");
+echo $unit->isDeprecated() ? "D" : "d"; echo ":";
+echo $unit->hasType() ? "T" : "t"; echo ":";
+echo $unit->getType() === null ? "N" : "n"; echo ":";
+$backed = new ReflectionEnumBackedCase("EvalConstTypeEnum", "Ready");
+echo $backed->isDeprecated() ? "D" : "d"; echo ":";
+echo $backed->hasType() ? "T" : "t"; echo ":";
+echo $backed->getType() === null ? "N" : "n";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "d:t:N:d:t:N:d:t:N:d:t:N");
+}
+
 /// Verifies eval ReflectionClassConstant exposes visibility predicates and modifiers.
 #[test]
 fn test_eval_reflection_class_constant_visibility_and_modifiers() {

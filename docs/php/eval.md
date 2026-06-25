@@ -494,6 +494,9 @@ case object, while `ReflectionEnumUnitCase::getValue()` and
 `ReflectionEnumBackedCase::getBackingValue()` returns the scalar backing value,
 and `getDeclaringClass()` returns the declaring class or enum as a
 `ReflectionClass`. `ReflectionClassConstant::isEnumCase()` reports enum cases.
+`ReflectionClassConstant`, `ReflectionEnumUnitCase`, and
+`ReflectionEnumBackedCase` expose `isDeprecated()`, `hasType()`, and
+`getType()` with PHP's current untyped defaults: `false`, `false`, and `null`.
 `ReflectionClassConstant::isPublic()`, `isProtected()`, `isPrivate()`,
 `isFinal()`, and `getModifiers()` report visibility/finality metadata with
 PHP's `ReflectionClassConstant::IS_*` bitmasks; enum cases report public,

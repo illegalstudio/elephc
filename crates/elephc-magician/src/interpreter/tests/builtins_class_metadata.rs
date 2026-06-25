@@ -2897,6 +2897,44 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClassConstant and enum case metadata expose PHP's untyped defaults.
+#[test]
+fn execute_program_reflects_eval_constant_type_metadata_defaults() {
+    let program = parse_fragment(
+        br#"class EvalConstTypeTarget {
+    public const ANSWER = 42;
+}
+enum EvalConstTypeEnum: string {
+    case Ready = "ready";
+}
+$constant = new ReflectionClassConstant("EvalConstTypeTarget", "ANSWER");
+echo $constant->isDeprecated() ? "D" : "d"; echo ":";
+echo $constant->hasType() ? "T" : "t"; echo ":";
+echo $constant->getType() === null ? "N" : "n"; echo ":";
+$case = new ReflectionClassConstant("EvalConstTypeEnum", "Ready");
+echo $case->isDeprecated() ? "D" : "d"; echo ":";
+echo $case->hasType() ? "T" : "t"; echo ":";
+echo $case->getType() === null ? "N" : "n"; echo ":";
+$unit = new ReflectionEnumUnitCase("EvalConstTypeEnum", "Ready");
+echo $unit->isDeprecated() ? "D" : "d"; echo ":";
+echo $unit->hasType() ? "T" : "t"; echo ":";
+echo $unit->getType() === null ? "N" : "n"; echo ":";
+$backed = new ReflectionEnumBackedCase("EvalConstTypeEnum", "Ready");
+echo $backed->isDeprecated() ? "D" : "d"; echo ":";
+echo $backed->hasType() ? "T" : "t"; echo ":";
+echo $backed->getType() === null ? "N" : "n";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "d:t:N:d:t:N:d:t:N:d:t:N");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies unsupported attribute argument metadata remains name-visible but not materializable.
 #[test]
 fn execute_program_rejects_unsupported_class_attribute_args_metadata() {
