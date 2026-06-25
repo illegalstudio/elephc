@@ -534,6 +534,16 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
     }
 }
 
+/// Lowers an EIR native indexed-array `isset($array[$offset])` probe.
+pub(super) fn lower_array_isset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    isset::lower_array_isset(ctx, inst)
+}
+
+/// Lowers an EIR native associative-array `isset($hash[$key])` probe.
+pub(super) fn lower_hash_isset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    isset::lower_hash_isset(ctx, inst)
+}
+
 /// Lowers `define("NAME", value)` with the legacy duplicate-name runtime guard.
 fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "define", 2)?;

@@ -40,6 +40,35 @@ pub(super) fn lower_isset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     store_if_result(ctx, inst)
 }
 
+/// Lowers an indexed-array offset probe into PHP `isset` truthiness.
+pub(super) fn lower_array_isset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    emit_isset_array_offset_missing_result(ctx, inst)?;
+    emit_present_result_from_missing_result(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers an associative-array offset probe into PHP `isset` truthiness.
+pub(super) fn lower_hash_isset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    emit_isset_hash_offset_missing_result(ctx, inst)?;
+    emit_present_result_from_missing_result(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Converts the current 0/1 missing predicate into a 0/1 present predicate.
+fn emit_present_result_from_missing_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // treat a non-missing offset as an isset-present result
+            ctx.emitter.instruction("cset x0, eq");                             // return true only when the offset was present and non-null
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 0");                              // treat a non-missing offset as an isset-present result
+            ctx.emitter.instruction("sete al");                                 // return true only when the offset was present and non-null
+            ctx.emitter.instruction("movzx rax, al");                           // widen the present predicate into the integer result register
+        }
+    }
+}
+
 /// Emits 1 when an already-evaluated `isset` operand is null or missing.
 fn emit_isset_missing_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     if let Some(inst) = source_instruction(ctx, value)? {

@@ -1718,18 +1718,145 @@ fn lower_lazy_isset_operand(
     let ExprKind::ArrayAccess { array, index } = &arg.kind else {
         return None;
     };
-    if !array_access_expr_satisfies_array_access(ctx, array) {
+    if array_access_expr_satisfies_array_access(ctx, array) {
+        let synthetic = Expr::new(
+            ExprKind::MethodCall {
+                object: array.clone(),
+                method: "offsetExists".to_string(),
+                args: vec![(**index).clone()],
+            },
+            arg.span,
+        );
+        return Some(lower_expr(ctx, &synthetic));
+    }
+    if !array_access_expr_supports_native_isset_probe(ctx, array) {
         return None;
     }
-    let synthetic = Expr::new(
-        ExprKind::MethodCall {
-            object: array.clone(),
-            method: "offsetExists".to_string(),
-            args: vec![(**index).clone()],
-        },
-        arg.span,
+    Some(lower_native_isset_offset_probe(ctx, array, index, arg))
+}
+
+/// Lowers native array/hash `isset($array[$key])` without reading the element value.
+fn lower_native_isset_offset_probe(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let array_value = lower_expr(ctx, array);
+    if value_is_nullable(ctx, array_value.value) {
+        return lower_nullable_native_isset_offset_probe(ctx, array_value, index, expr);
+    }
+    lower_native_isset_offset_probe_from_value(ctx, array_value, index, expr)
+}
+
+/// Lowers nullable native array/hash `isset` without evaluating the offset on null receivers.
+fn lower_nullable_native_isset_offset_probe(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![array_value.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
     );
-    Some(lower_expr(ctx, &synthetic))
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let null_block = ctx.builder.create_named_block("isset.native.null", Vec::new());
+    let probe_block = ctx.builder.create_named_block("isset.native.probe", Vec::new());
+    let merge = ctx.builder.create_named_block("isset.native.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: probe_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    let false_value = emit_bool_literal(ctx, false, Some(expr.span));
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, false_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(probe_block);
+    let checked = lower_native_isset_offset_probe_from_value(ctx, array_value, index, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, checked, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    ctx.load_local(&temp_name, Some(expr.span))
+}
+
+/// Lowers native array/hash `isset` once the receiver has already been evaluated.
+fn lower_native_isset_offset_probe_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    match array_value.ir_type {
+        IrType::Heap(IrHeapKind::Array) => {
+            let mut index_value = lower_expr(ctx, index);
+            index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+            ctx.emit_value(
+                Op::ArrayIsset,
+                vec![array_value.value, index_value.value],
+                None,
+                PhpType::Bool,
+                Op::ArrayIsset.default_effects(),
+                Some(expr.span),
+            )
+        }
+        IrType::Heap(IrHeapKind::Hash) => {
+            let index_value = lower_expr(ctx, index);
+            ctx.emit_value(
+                Op::HashIsset,
+                vec![array_value.value, index_value.value],
+                None,
+                PhpType::Bool,
+                Op::HashIsset.default_effects(),
+                Some(expr.span),
+            )
+        }
+        _ => {
+            let read_value = lower_array_access_from_value(ctx, array_value, index, expr);
+            let data = ctx.intern_function_name("isset");
+            ctx.emit_value(
+                Op::BuiltinCall,
+                vec![read_value.value],
+                Some(Immediate::Data(data)),
+                PhpType::Int,
+                effects_lookup::builtin_effects("isset"),
+                Some(expr.span),
+            )
+        }
+    }
+}
+
+/// Returns whether a syntactic array receiver can use a non-materializing native `isset` probe.
+fn array_access_expr_supports_native_isset_probe(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let ty = match &array.kind {
+        ExprKind::Variable(name) => ctx
+            .local_types
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| infer_expr_type_syntactic(array)),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+        }
+        ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, array),
+        ExprKind::ArrayLiteralAssoc(pairs) => assoc_array_literal_type_for_ir(ctx, pairs, array),
+        _ => infer_expr_type_syntactic(array),
+    }
+    .codegen_repr();
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
 }
 
 /// Lowers direct function/static-method first-class callable probes for `is_callable()`.

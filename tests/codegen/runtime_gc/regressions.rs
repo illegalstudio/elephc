@@ -897,6 +897,28 @@ echo "x";
     );
 }
 
+/// Regression test: `isset($hash[$missing])` on a Mixed-valued hash should probe
+/// presence/null without allocating a throwaway Mixed miss value every iteration.
+#[test]
+fn test_regression_mixed_hash_isset_miss_does_not_materialize_leaking_value() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 50; $i++) {
+    $a = ["a" => 1, "b" => "s"];
+    $x = isset($a["missing"]) ? $a["missing"] : "";
+}
+echo "x";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "x");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for the array-to-string echo fix: echoing an owned temporary array
 /// stringifies to "Array" and releases the temporary, keeping GC allocs and frees balanced
 /// (no leak from the discarded array, no premature/double free).

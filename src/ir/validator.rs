@@ -404,13 +404,15 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         HashUnion => check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)"),
         ArrayHashUnion => check_array_hash_union(function, inst_id, inst),
         HashArrayUnion => check_hash_array_union(function, inst_id, inst),
-        ArrayLen | ArrayGet | ArraySet | ArrayPush | ArrayEnsureUnique | ArrayCloneShallow
-        | ArrayToHash => check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)"),
+        ArrayLen | ArrayGet | ArrayIsset | ArraySet | ArrayPush | ArrayEnsureUnique
+        | ArrayCloneShallow | ArrayToHash => {
+            check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
+        }
         MixedArrayAppend => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Mixed), "Heap(Mixed)")
         }
-        HashLen | HashGet | HashSet | HashAppend | HashEnsureUnique | HashCloneShallow => {
+        HashLen | HashGet | HashIsset | HashSet | HashAppend | HashEnsureUnique | HashCloneShallow => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
         }
         IterCurrentValueRef => check_count(inst_id, inst, 1, "1"),

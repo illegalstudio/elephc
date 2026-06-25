@@ -245,6 +245,8 @@ pub enum Op {
     HashLen,
     ArrayGet,
     HashGet,
+    ArrayIsset,
+    HashIsset,
     ArraySet,
     HashSet,
     ArrayPush,
@@ -387,7 +389,8 @@ impl Op {
                 E::ALLOC_HEAP
             }
             MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGet | HashGet
-            | BufferGet | BufferLen | PackedFieldGet | PtrRead | PtrReadString => {
+            | ArrayIsset | HashIsset | BufferGet | BufferLen | PackedFieldGet | PtrRead
+            | PtrReadString => {
                 E::READS_HEAP | E::MAY_FATAL
             }
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
@@ -542,6 +545,8 @@ impl Op {
             HashLen => "hash_len",
             ArrayGet => "array_get",
             HashGet => "hash_get",
+            ArrayIsset => "array_isset",
+            HashIsset => "hash_isset",
             ArraySet => "array_set",
             HashSet => "hash_set",
             ArrayPush => "array_push",
