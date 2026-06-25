@@ -8122,6 +8122,77 @@ class EvalFinalConstChild extends EvalFinalConstBase {
     );
 }
 
+/// Verifies eval-declared class constants preserve PHP visibility redeclaration rules.
+#[test]
+fn test_eval_declared_class_constant_visibility_contracts() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalConstVisibilityBase {
+    protected const SEED = 2;
+}
+class EvalConstVisibilityChild extends EvalConstVisibilityBase {
+    public const SEED = 7;
+}
+interface EvalConstVisibilityIface {
+    public const TOKEN = 3;
+}
+class EvalConstVisibilityImpl implements EvalConstVisibilityIface {
+    public const TOKEN = 5;
+}
+echo EvalConstVisibilityChild::SEED . ":";
+echo EvalConstVisibilityImpl::TOKEN;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "7:5");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalConstPublicBase {
+    public const SEED = 1;
+}
+class EvalConstProtectedChild extends EvalConstPublicBase {
+    protected const SEED = 2;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalConstPublicContract {
+    public const SEED = 1;
+}
+class EvalConstProtectedImpl implements EvalConstPublicContract {
+    protected const SEED = 2;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalConstProtectedIface {
+    protected const SEED = 1;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+        "stderr did not contain eval unsupported-construct diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared final private class constants are rejected.
 #[test]
 fn test_eval_declared_final_private_class_constant_fails() {

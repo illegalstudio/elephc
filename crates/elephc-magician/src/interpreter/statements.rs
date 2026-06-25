@@ -912,6 +912,7 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
         }
     }
     validate_eval_declared_constants(interface.constants())?;
+    validate_eval_interface_constants(interface.constants())?;
     validate_interface_constant_parent_redeclarations(interface, context)?;
     if context.define_interface(interface.clone()) {
         initialize_eval_declared_constants(
@@ -1527,6 +1528,16 @@ fn validate_eval_declared_constants(constants: &[EvalClassConstant]) -> Result<(
     Ok(())
 }
 
+/// Validates declarations that are specific to PHP interface constants.
+fn validate_eval_interface_constants(constants: &[EvalClassConstant]) -> Result<(), EvalStatus> {
+    for constant in constants {
+        if constant.visibility() != EvalVisibility::Public {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
+}
+
 /// Validates interface constants against inherited parent-interface constants.
 fn validate_interface_constant_parent_redeclarations(
     interface: &EvalInterface,
@@ -1553,7 +1564,10 @@ fn validate_constant_parent_redeclaration(
 ) -> Result<(), EvalStatus> {
     if let Some(parent) = class.parent() {
         if let Some((_, parent_constant)) = context.class_constant(parent, constant.name()) {
-            if parent_constant.visibility() != EvalVisibility::Private && parent_constant.is_final()
+            if parent_constant.visibility() != EvalVisibility::Private
+                && (parent_constant.is_final()
+                    || constant_visibility_rank(constant.visibility())
+                        < constant_visibility_rank(parent_constant.visibility()))
             {
                 return Err(EvalStatus::RuntimeFatal);
             }
@@ -1563,12 +1577,24 @@ fn validate_constant_parent_redeclaration(
         if let Some((_, interface_constant)) =
             context.interface_constant(interface, constant.name())
         {
-            if interface_constant.is_final() {
+            if interface_constant.is_final()
+                || constant_visibility_rank(constant.visibility())
+                    < constant_visibility_rank(interface_constant.visibility())
+            {
                 return Err(EvalStatus::RuntimeFatal);
             }
         }
     }
     Ok(())
+}
+
+/// Returns a comparable rank where larger means less restrictive constant visibility.
+fn constant_visibility_rank(visibility: EvalVisibility) -> u8 {
+    match visibility {
+        EvalVisibility::Private => 1,
+        EvalVisibility::Protected => 2,
+        EvalVisibility::Public => 3,
+    }
 }
 
 /// Validates one method declaration against inherited eval method metadata.
