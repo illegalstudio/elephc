@@ -1261,6 +1261,26 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
             "instance __callStatic",
         ),
         (
+            br#"class EvalBadSleepReturn { public function __sleep(): string { return "x"; } }"#.as_slice(),
+            "bad __sleep return type",
+        ),
+        (
+            br#"class EvalBadSerializeStatic { public static function __serialize(): array { return []; } }"#.as_slice(),
+            "static __serialize",
+        ),
+        (
+            br#"class EvalBadWakeupArity { public function __wakeup($value): void {} }"#.as_slice(),
+            "bad __wakeup arity",
+        ),
+        (
+            br#"class EvalBadUnserializeArity { public function __unserialize(): void {} }"#.as_slice(),
+            "bad __unserialize arity",
+        ),
+        (
+            br#"class EvalBadUnserializeReturn { public function __unserialize(array $data): int { return 1; } }"#.as_slice(),
+            "bad __unserialize return type",
+        ),
+        (
             br#"class EvalBadInvoke { private function __invoke() { return 1; } }"#.as_slice(),
             "private __invoke",
         ),

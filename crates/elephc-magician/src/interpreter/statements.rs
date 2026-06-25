@@ -1465,6 +1465,21 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
             validate_magic_public(method)?;
             validate_magic_arity(method, 2)?;
         }
+        "__sleep" | "__serialize" => {
+            validate_magic_non_static(method)?;
+            validate_magic_arity(method, 0)?;
+            validate_magic_declared_return_type(method, MagicReturnType::Array)?;
+        }
+        "__wakeup" => {
+            validate_magic_non_static(method)?;
+            validate_magic_arity(method, 0)?;
+            validate_magic_declared_return_type(method, MagicReturnType::Void)?;
+        }
+        "__unserialize" => {
+            validate_magic_non_static(method)?;
+            validate_magic_arity(method, 1)?;
+            validate_magic_declared_return_type(method, MagicReturnType::Void)?;
+        }
         "__invoke" => {
             validate_magic_non_static(method)?;
             validate_magic_public(method)?;
@@ -1489,6 +1504,7 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
 /// Magic method return types that eval can validate from retained declarations.
 #[derive(Clone, Copy)]
 enum MagicReturnType {
+    Array,
     Bool,
     String,
     Void,
@@ -1561,7 +1577,8 @@ fn magic_return_type_matches(
     };
     matches!(
         (expected, variant),
-        (MagicReturnType::Bool, EvalParameterTypeVariant::Bool)
+        (MagicReturnType::Array, EvalParameterTypeVariant::Array)
+            | (MagicReturnType::Bool, EvalParameterTypeVariant::Bool)
             | (MagicReturnType::String, EvalParameterTypeVariant::String)
             | (MagicReturnType::Void, EvalParameterTypeVariant::Void)
     )

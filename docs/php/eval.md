@@ -181,8 +181,9 @@ callable `strval()` dispatch, and weak `string` parameter coercion. Classes
 with a compatible `__toString()` satisfy `Stringable` implicitly.
 Eval validates magic method staticness, visibility, arity, and relevant declared return-type contracts for
 `__toString()`, `__get()`, `__set()`, `__isset()`, `__unset()`, `__call()`,
-`__callStatic()`, `__invoke()`, `__clone()`, `__destruct()`, and `__construct()`
-when dynamic classes or traits are declared.
+`__callStatic()`, `__sleep()`, `__wakeup()`, `__serialize()`,
+`__unserialize()`, `__invoke()`, `__clone()`, `__destruct()`, and
+`__construct()` when dynamic classes or traits are declared.
 Member
 visibility is checked at runtime for eval-declared objects and
 static/class-constant accesses. Class-level attributes declared on eval classes,

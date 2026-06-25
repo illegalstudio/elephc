@@ -8284,6 +8284,19 @@ fn test_eval_rejects_invalid_magic_method_contracts() {
         return 1;
     }
 }');"#,
+        r#"eval('class EvalInvalidSleepReturn {
+    public function __sleep(): string {
+        return "x";
+    }
+}');"#,
+        r#"eval('class EvalInvalidSerializeStatic {
+    public static function __serialize(): array {
+        return [];
+    }
+}');"#,
+        r#"eval('class EvalInvalidUnserializeArity {
+    public function __unserialize(): void {}
+}');"#,
         r#"eval('class EvalInvalidCloneReturn {
     public function __clone(): int {}
 }');"#,
