@@ -179,9 +179,10 @@ interfaces, traits, and enums are visible through `class_attribute_names()`,
 `class_attribute_args()`, and `class_get_attributes()` when their arguments are
 supported literal positional values (`string`, `int`, `bool`, `null`, or negated
 integer literals). `ReflectionAttribute::newInstance()` instantiates
-eval-declared attribute classes from those materialized attributes, and
-`ReflectionAttribute::getTarget()` / `isRepeated()` report the reflected owner
-target and same-owner repetition metadata.
+eval-declared or bridge-supported generated/AOT attribute classes from those
+materialized attributes, and `ReflectionAttribute::getTarget()` /
+`isRepeated()` report the reflected owner target and same-owner repetition
+metadata.
 Attribute names remain visible when an attribute uses unsupported argument
 syntax, but requesting those arguments is a runtime fatal.
 Private parent properties shadowed by same-named child properties use separate

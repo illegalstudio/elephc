@@ -9048,6 +9048,50 @@ echo "E" . count($caseAttrs) . ":" . $caseAttrs[0]->getArguments()[0];
     );
 }
 
+/// Verifies eval ReflectionAttribute::newInstance constructs generated/AOT attribute classes.
+#[test]
+fn test_eval_reflection_attribute_new_instance_constructs_aot_attribute() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotAttributeInstance {
+    public string $name = "";
+    public int $value = 0;
+
+    public function __construct(string $name, int $value = 0) {
+        $this->name = $name;
+        $this->value = $value;
+    }
+
+    public function label(): string {
+        return $this->name . ":" . $this->value;
+    }
+}
+class EvalAotAttributeInstanceTarget {
+    #[EvalAotAttributeInstance("method", 2)]
+    public function run() {}
+
+    #[EvalAotAttributeInstance("property", 3)]
+    public int $id = 0;
+
+    #[EvalAotAttributeInstance("constant", 4)]
+    public const LIMIT = 5;
+}
+echo eval('$methodAttr = (new ReflectionMethod("EvalAotAttributeInstanceTarget", "run"))->getAttributes()[0];
+echo $methodAttr->newInstance()->label() . ":";
+$propertyAttr = (new ReflectionProperty("EvalAotAttributeInstanceTarget", "id"))->getAttributes()[0];
+echo $propertyAttr->newInstance()->label() . ":";
+$constantAttr = (new ReflectionClassConstant("EvalAotAttributeInstanceTarget", "LIMIT"))->getAttributes()[0];
+echo $constantAttr->newInstance()->label();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "method:2:property:3:constant:4");
+}
+
 /// Verifies eval can probe generated/AOT method predicate metadata through
 /// `ReflectionClass::hasMethod()`, `getMethod()`, and direct `ReflectionMethod`.
 #[test]
