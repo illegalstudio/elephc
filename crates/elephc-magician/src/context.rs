@@ -373,6 +373,8 @@ pub struct ElephcEvalContext {
     class_constants: HashMap<(String, String), RuntimeCellHandle>,
     included_files: HashSet<String>,
     dynamic_objects: HashMap<u64, String>,
+    dynamic_destructing_objects: HashSet<u64>,
+    dynamic_destructed_objects: HashSet<u64>,
     dynamic_property_aliases: HashMap<(u64, String), EvalReferenceTarget>,
     dynamic_initialized_properties: HashSet<(u64, String)>,
     eval_reflection_attributes: HashMap<u64, EvalReflectionAttributeMetadata>,
@@ -430,6 +432,8 @@ impl ElephcEvalContext {
             class_constants: HashMap::new(),
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
+            dynamic_destructing_objects: HashSet::new(),
+            dynamic_destructed_objects: HashSet::new(),
             dynamic_property_aliases: HashMap::new(),
             dynamic_initialized_properties: HashSet::new(),
             eval_reflection_attributes: HashMap::new(),
@@ -488,6 +492,8 @@ impl ElephcEvalContext {
             class_constants: HashMap::new(),
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
+            dynamic_destructing_objects: HashSet::new(),
+            dynamic_destructed_objects: HashSet::new(),
             dynamic_property_aliases: HashMap::new(),
             dynamic_initialized_properties: HashSet::new(),
             eval_reflection_attributes: HashMap::new(),
@@ -893,6 +899,8 @@ impl ElephcEvalContext {
             .unwrap_or_else(|| class_name.to_string());
         self.dynamic_objects
             .insert(identity, normalize_class_name(&class_name));
+        self.dynamic_destructing_objects.remove(&identity);
+        self.dynamic_destructed_objects.remove(&identity);
         self.dynamic_initialized_properties
             .retain(|(object, _)| *object != identity);
     }
@@ -902,6 +910,23 @@ impl ElephcEvalContext {
         self.dynamic_objects
             .get(&identity)
             .and_then(|class_key| self.classes.get(class_key))
+    }
+
+    /// Marks one dynamic object's destructor as active if it has not already run.
+    pub fn begin_dynamic_object_destructor(&mut self, identity: u64) -> bool {
+        if self.dynamic_destructed_objects.contains(&identity) {
+            return false;
+        }
+        if !self.dynamic_destructing_objects.insert(identity) {
+            return false;
+        }
+        self.dynamic_destructed_objects.insert(identity);
+        true
+    }
+
+    /// Clears the active destructor guard for one dynamic object identity.
+    pub fn finish_dynamic_object_destructor(&mut self, identity: u64) {
+        self.dynamic_destructing_objects.remove(&identity);
     }
 
     /// Returns whether one dynamic object identity was registered with a class-like name.

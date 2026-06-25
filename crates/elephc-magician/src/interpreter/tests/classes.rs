@@ -700,6 +700,31 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval-declared `__destruct()` runs for explicit unset and discarded temporaries.
+#[test]
+fn execute_program_runs_eval_destructor_on_final_release() {
+    let program = parse_fragment(
+        br#"class EvalDestructRuntimeBox {
+    public string $name;
+    public function __construct($name) { $this->name = $name; }
+    public function __destruct() { echo "drop:" . $this->name . ":"; }
+}
+$box = new EvalDestructRuntimeBox("A");
+unset($box);
+new EvalDestructRuntimeBox("B");
+echo "after";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "drop:A:drop:B:after");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies private `__clone()` is not callable through a global clone expression.
 #[test]
 fn execute_program_rejects_private_clone_hook_outside_declaring_class() {

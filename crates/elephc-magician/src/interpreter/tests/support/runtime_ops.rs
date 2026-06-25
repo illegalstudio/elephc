@@ -369,6 +369,17 @@ impl RuntimeValueOps for FakeOps {
     fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         self.runtime_object_identity(object)
     }
+    /// Returns fake object identity for releases that target object cells.
+    fn final_object_identity_for_release(
+        &mut self,
+        value: RuntimeCellHandle,
+    ) -> Result<Option<u64>, EvalStatus> {
+        if self.runtime_type_tag(value)? == EVAL_TAG_OBJECT {
+            self.runtime_object_identity(value).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
     /// Records fake releases without freeing handles needed for assertions.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
         self.runtime_release(value)

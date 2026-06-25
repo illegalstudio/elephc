@@ -704,6 +704,15 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         }
     }
 
+    /// Returns the object payload that the next release would destroy, when known.
+    fn final_object_identity_for_release(
+        &mut self,
+        value: RuntimeCellHandle,
+    ) -> Result<Option<u64>, EvalStatus> {
+        let identity = unsafe { __elephc_eval_value_final_object_identity(value.as_ptr()) };
+        Ok((identity != 0).then_some(identity))
+    }
+
     /// Releases one boxed Mixed cell through the generated runtime wrapper.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
         unsafe {

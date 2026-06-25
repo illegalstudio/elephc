@@ -192,7 +192,7 @@ pub(in crate::interpreter) fn execute_stmt(
                 value,
                 ScopeCellOwnership::Owned,
             )? {
-                values.release(replaced)?;
+                eval_release_value(context, values, replaced)?;
             }
             Ok(EvalControl::None)
         }
@@ -222,7 +222,7 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::UnsetVar { name } => {
             if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
-                values.release(replaced)?;
+                eval_release_value(context, values, replaced)?;
             }
             Ok(EvalControl::None)
         }
@@ -242,10 +242,59 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::Expr(expr) => {
-            let _ = eval_expr(expr, context, scope, values)?;
+            let result = eval_expr(expr, context, scope, values)?;
+            eval_release_value(context, values, result)?;
             Ok(EvalControl::None)
         }
     }
+}
+
+/// Releases one eval-owned value after running an eval-declared dynamic destructor if needed.
+fn eval_release_value(
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    value: RuntimeCellHandle,
+) -> Result<(), EvalStatus> {
+    if let Some(identity) = values.final_object_identity_for_release(value)? {
+        eval_dynamic_destructor_for_release(identity, value, context, values)?;
+    }
+    values.release(value)
+}
+
+/// Calls a dynamic eval `__destruct()` hook immediately before the runtime frees the object.
+fn eval_dynamic_destructor_for_release(
+    identity: u64,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(class_name) = context
+        .dynamic_object_class(identity)
+        .map(|class| class.name().to_string())
+    else {
+        return Ok(());
+    };
+    let Some((declaring_class, method)) = context.class_method(&class_name, "__destruct") else {
+        return Ok(());
+    };
+    if !context.begin_dynamic_object_destructor(identity) {
+        return Ok(());
+    }
+    let result = eval_dynamic_method_with_values(
+        &declaring_class,
+        &class_name,
+        &method,
+        object,
+        Vec::new(),
+        context,
+        values,
+    );
+    let release_result = match result {
+        Ok(result) => values.release(result),
+        Err(status) => Err(status),
+    };
+    context.finish_dynamic_object_destructor(identity);
+    release_result
 }
 
 /// Executes `unset($object[$key])` through `ArrayAccess::offsetUnset()`.
@@ -3213,7 +3262,7 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
         context.class_method(class.name(), "__construct")
     {
         validate_eval_member_access(&constructor_class, constructor.visibility(), context)?;
-        eval_dynamic_method_with_values(
+        let result = eval_dynamic_method_with_values(
             &constructor_class,
             class.name(),
             &constructor,
@@ -3222,6 +3271,7 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
             context,
             values,
         )?;
+        eval_release_value(context, values, result)?;
     } else if !evaluated_args.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -3256,7 +3306,7 @@ pub(in crate::interpreter) fn eval_object_clone_result(
         context.register_dynamic_object(clone_identity, &class_name);
         context.clone_dynamic_property_aliases(identity, clone_identity);
         if let Some((declaring_class, method)) = clone_method {
-            eval_dynamic_method_with_values(
+            let result = eval_dynamic_method_with_values(
                 &declaring_class,
                 &class_name,
                 &method,
@@ -3265,6 +3315,7 @@ pub(in crate::interpreter) fn eval_object_clone_result(
                 context,
                 values,
             )?;
+            eval_release_value(context, values, result)?;
         }
     } else if should_call_aot_clone_hook {
         let result = values.method_call(clone, "__clone", Vec::new())?;

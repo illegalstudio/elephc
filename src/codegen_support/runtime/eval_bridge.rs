@@ -47,9 +47,9 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_from_value");                             // box the bool payload and return to Rust
 
     label_c_global(emitter, "__elephc_eval_value_new_object");
-    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame across dynamic object lookup
-    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across runtime calls
-    emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
+    emitter.instruction("sub sp, sp, #32");                                     // allocate a wrapper frame with object and boxed-result slots
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across runtime calls
+    emitter.instruction("add x29, sp, #16");                                    // establish a stable wrapper frame pointer
     emitter.instruction("cmp x1, #8");                                          // stdClass has an 8-byte class name
     emitter.instruction("b.ne __elephc_eval_value_new_object_generic");         // use the generic factory for non-stdClass lengths
     emitter.instruction("ldrb w9, [x0]");                                       // load candidate byte 0 for stdClass comparison
@@ -84,10 +84,17 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_new_by_name");                                 // allocate the named AOT class object, or return null on miss
     emitter.instruction("cbz x0, __elephc_eval_value_new_object_null");         // box PHP null when no runtime class matched the eval name
     emitter.label("__elephc_eval_value_new_object_box");
+    emitter.instruction("str x0, [sp, #0]");                                    // save the raw object owner before boxing it for eval
     emitter.instruction("mov x1, x0");                                          // move the allocated object pointer into the Mixed payload
     emitter.instruction("mov x0, #6");                                          // runtime tag 6 = object
     emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
     emitter.instruction("bl __rt_mixed_from_value");                            // box the allocated object for Rust
+    emitter.instruction("str x0, [sp, #8]");                                    // save the boxed Mixed while consuming the raw object owner
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the raw object owner created by the allocator
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // load the raw object refcount after Mixed boxing retained it
+    emitter.instruction("sub w9, w9, #1");                                      // consume the allocator-owned object reference locally
+    emitter.instruction("str w9, [x0, #-12]");                                  // leave the boxed Mixed as the sole object owner
+    emitter.instruction("ldr x0, [sp, #8]");                                    // restore the boxed object Mixed as the Rust return value
     emitter.instruction("b __elephc_eval_value_new_object_done");               // skip the null boxing path after successful allocation
     emitter.label("__elephc_eval_value_new_object_null");
     emitter.instruction("mov x0, #8");                                          // runtime tag 8 = null
@@ -95,8 +102,8 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov x2, xzr");                                         // null has no high payload word
     emitter.instruction("bl __rt_mixed_from_value");                            // box null for unknown eval class names
     emitter.label("__elephc_eval_value_new_object_done");
-    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // release the dynamic-object wrapper frame
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the dynamic-object wrapper frame
     emitter.instruction("ret");                                                 // return the boxed object or null Mixed cell to Rust
 
     emit_aarch64_object_clone_shallow_wrapper(emitter);
@@ -1454,6 +1461,31 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_retain");
     emitter.instruction("b __rt_incref");                                       // retain one eval-owned boxed Mixed cell
 
+    label_c_global(emitter, "__elephc_eval_value_final_object_identity");
+    emitter.instruction("cbz x0, __elephc_eval_value_final_object_none");       // null handles cannot release an object
+    emitter.label("__elephc_eval_value_final_object_loop");
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // load the current Mixed wrapper refcount
+    emitter.instruction("cmp w9, #1");                                          // only the last Mixed owner can free the wrapped payload
+    emitter.instruction("b.ne __elephc_eval_value_final_object_none");          // non-final wrapper releases cannot run destructors yet
+    emitter.instruction("ldr x9, [x0]");                                        // load the current Mixed runtime tag
+    emitter.instruction("cmp x9, #7");                                          // tag 7 means the payload is another boxed Mixed
+    emitter.instruction("b.ne __elephc_eval_value_final_object_check_object");  // concrete payloads can be tested for object ownership
+    emitter.instruction("ldr x0, [x0, #8]");                                    // follow the nested Mixed payload pointer
+    emitter.instruction("cbnz x0, __elephc_eval_value_final_object_loop");      // continue while nested Mixed payloads are present
+    emitter.instruction("b __elephc_eval_value_final_object_none");             // null nested payloads cannot release an object
+    emitter.label("__elephc_eval_value_final_object_check_object");
+    emitter.instruction("cmp x9, #6");                                          // tag 6 means the concrete payload is a PHP object
+    emitter.instruction("b.ne __elephc_eval_value_final_object_none");          // non-object releases have no dynamic destructor
+    emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer from the Mixed cell
+    emitter.instruction("cbz x9, __elephc_eval_value_final_object_none");       // null object payloads are treated as non-final
+    emitter.instruction("ldr w10, [x9, #-12]");                                 // load the object refcount that the Mixed release will decrement
+    emitter.instruction("cmp w10, #1");                                         // only the final object owner can run the destructor
+    emitter.instruction("csel x0, x9, xzr, eq");                                // return object identity only for the final release
+    emitter.instruction("ret");                                                 // return the candidate object identity to Rust
+    emitter.label("__elephc_eval_value_final_object_none");
+    emitter.instruction("mov x0, xzr");                                         // report that no dynamic destructor should run
+    emitter.instruction("ret");                                                 // return zero to Rust
+
     label_c_global(emitter, "__elephc_eval_warning");
     emitter.instruction("mov x2, x1");                                          // move warning length into the runtime diagnostic length register
     emitter.instruction("mov x1, x0");                                          // move warning pointer into the runtime diagnostic buffer register
@@ -1483,6 +1515,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_new_object");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable dynamic-object wrapper frame
+    emitter.instruction("sub rsp, 16");                                         // reserve slots for the raw object and boxed result
     emitter.instruction("cmp rsi, 8");                                          // stdClass has an 8-byte class name
     emitter.instruction("jne __elephc_eval_value_new_object_generic_x86");      // use the generic factory for non-stdClass lengths
     emitter.instruction("cmp BYTE PTR [rdi], 115");                             // byte 0 must be 's'
@@ -1510,10 +1543,17 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did the runtime class-name lookup allocate an object?
     emitter.instruction("jz __elephc_eval_value_new_object_null_x86");          // box PHP null when no runtime class matched the eval name
     emitter.label("__elephc_eval_value_new_object_box_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the raw object owner before boxing it for eval
     emitter.instruction("mov rdi, rax");                                        // move the allocated object pointer into the Mixed payload
     emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
     emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
     emitter.instruction("call __rt_mixed_from_value");                          // box the allocated object for Rust
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the boxed Mixed while consuming the raw object owner
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the raw object owner created by the allocator
+    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the raw object refcount after Mixed boxing retained it
+    emitter.instruction("sub r10d, 1");                                         // consume the allocator-owned object reference locally
+    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // leave the boxed Mixed as the sole object owner
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // restore the boxed object Mixed as the Rust return value
     emitter.instruction("jmp __elephc_eval_value_new_object_done_x86");         // skip the null boxing path after successful allocation
     emitter.label("__elephc_eval_value_new_object_null_x86");
     emitter.instruction("mov eax, 8");                                          // runtime tag 8 = null
@@ -1521,6 +1561,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // null has no high payload word
     emitter.instruction("call __rt_mixed_from_value");                          // box null for unknown eval class names
     emitter.label("__elephc_eval_value_new_object_done_x86");
+    emitter.instruction("mov rsp, rbp");                                        // release the dynamic-object wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed object or null Mixed cell to Rust
 
@@ -2972,6 +3013,36 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_retain");
     emitter.instruction("mov rax, rdi");                                        // move the C boxed Mixed argument into the internal retain register
     emitter.instruction("jmp __rt_incref");                                     // retain one eval-owned boxed Mixed cell
+
+    label_c_global(emitter, "__elephc_eval_value_final_object_identity");
+    emitter.instruction("mov rax, rdi");                                        // inspect the C boxed Mixed argument without changing refcounts
+    emitter.instruction("test rax, rax");                                       // null handles cannot release an object
+    emitter.instruction("jz __elephc_eval_value_final_object_none_x86");        // report no final object for null handles
+    emitter.label("__elephc_eval_value_final_object_loop_x86");
+    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the current Mixed wrapper refcount
+    emitter.instruction("cmp r10d, 1");                                         // only the last Mixed owner can free the wrapped payload
+    emitter.instruction("jne __elephc_eval_value_final_object_none_x86");       // non-final wrapper releases cannot run destructors yet
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the current Mixed runtime tag
+    emitter.instruction("cmp r10, 7");                                          // tag 7 means the payload is another boxed Mixed
+    emitter.instruction("jne __elephc_eval_value_final_object_check_object_x86"); // concrete payloads can be tested for object ownership
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // follow the nested Mixed payload pointer
+    emitter.instruction("test rax, rax");                                       // null nested payloads cannot release an object
+    emitter.instruction("jnz __elephc_eval_value_final_object_loop_x86");       // continue while nested Mixed payloads are present
+    emitter.instruction("jmp __elephc_eval_value_final_object_none_x86");       // return zero for null nested payloads
+    emitter.label("__elephc_eval_value_final_object_check_object_x86");
+    emitter.instruction("cmp r10, 6");                                          // tag 6 means the concrete payload is a PHP object
+    emitter.instruction("jne __elephc_eval_value_final_object_none_x86");       // non-object releases have no dynamic destructor
+    emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the object payload pointer from the Mixed cell
+    emitter.instruction("test r10, r10");                                       // null object payloads are treated as non-final
+    emitter.instruction("jz __elephc_eval_value_final_object_none_x86");        // return zero for null object payloads
+    emitter.instruction("mov r11d, DWORD PTR [r10 - 12]");                      // load the object refcount that the Mixed release will decrement
+    emitter.instruction("cmp r11d, 1");                                         // only the final object owner can run the destructor
+    emitter.instruction("jne __elephc_eval_value_final_object_none_x86");       // defer destructor execution until object refcount is final
+    emitter.instruction("mov rax, r10");                                        // return the object identity pointer to Rust
+    emitter.instruction("ret");                                                 // finish the final-object query
+    emitter.label("__elephc_eval_value_final_object_none_x86");
+    emitter.instruction("xor eax, eax");                                        // report that no dynamic destructor should run
+    emitter.instruction("ret");                                                 // return zero to Rust
 
     label_c_global(emitter, "__elephc_eval_warning");
     emitter.instruction("jmp __rt_diag_warning");                               // emit or suppress one eval runtime warning

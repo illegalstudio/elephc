@@ -11334,6 +11334,25 @@ echo $second->name;');
     assert_eq!(out, "A:A:clone:A:B");
 }
 
+/// Verifies eval-declared `__destruct()` runs before final release of dynamic objects.
+#[test]
+fn test_eval_dynamic_object_runs_destructor_on_final_release() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalDestructRuntimeBox {
+    public string $name;
+    public function __construct($name) { $this->name = $name; }
+    public function __destruct() { echo "drop:" . $this->name . ":"; }
+}
+$box = new EvalDestructRuntimeBox("A");
+unset($box);
+new EvalDestructRuntimeBox("B");
+echo "after";');
+"#,
+    );
+    assert_eq!(out, "drop:A:drop:B:after");
+}
+
 /// Verifies eval `clone` shallow-copies ordinary emitted AOT objects.
 #[test]
 fn test_eval_clone_aot_object_expression() {
