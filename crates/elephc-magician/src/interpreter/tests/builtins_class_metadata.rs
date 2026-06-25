@@ -2935,6 +2935,44 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClassConstant and enum case objects stringify retained metadata.
+#[test]
+fn execute_program_reflects_eval_constant_to_string() {
+    let program = parse_fragment(
+        br#"class EvalConstStringTarget {
+    public const ANSWER = 42;
+    final protected const LIMIT = 7;
+    private const FLAG = true;
+    public const LABEL = "ok";
+    public const NOTHING = null;
+}
+enum EvalConstStringEnum: string {
+    case Ready = "ready";
+}
+foreach (["ANSWER", "LIMIT", "FLAG", "LABEL", "NOTHING"] as $name) {
+    echo str_replace("\n", "\\n", (new ReflectionClassConstant("EvalConstStringTarget", $name))->__toString());
+    echo "|";
+}
+echo str_replace("\n", "\\n", (new ReflectionClassConstant("EvalConstStringEnum", "Ready"))->__toString());
+echo "|";
+echo str_replace("\n", "\\n", (new ReflectionEnumUnitCase("EvalConstStringEnum", "Ready"))->__toString());
+echo "|";
+echo str_replace("\n", "\\n", (new ReflectionEnumBackedCase("EvalConstStringEnum", "Ready"))->__toString());
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Constant [ public int ANSWER ] { 42 }\\n|Constant [ final protected int LIMIT ] { 7 }\\n|Constant [ private bool FLAG ] { 1 }\\n|Constant [ public string LABEL ] { ok }\\n|Constant [ public null NOTHING ] {  }\\n|Constant [ public EvalConstStringEnum Ready ] { Object }\\n|Constant [ public EvalConstStringEnum Ready ] { Object }\\n|Constant [ public EvalConstStringEnum Ready ] { Object }\\n"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies unsupported attribute argument metadata remains name-visible but not materializable.
 #[test]
 fn execute_program_rejects_unsupported_class_attribute_args_metadata() {

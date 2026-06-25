@@ -12026,6 +12026,43 @@ echo $backed->getType() === null ? "N" : "n";');
     assert_eq!(out.stdout, "d:t:N:d:t:N:d:t:N:d:t:N");
 }
 
+/// Verifies eval ReflectionClassConstant/EnumCase stringify retained metadata.
+#[test]
+fn test_eval_reflection_constant_to_string() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalConstStringTarget {
+    public const ANSWER = 42;
+    final protected const LIMIT = 7;
+    private const FLAG = true;
+    public const LABEL = "ok";
+    public const NOTHING = null;
+}
+enum EvalConstStringEnum: string {
+    case Ready = "ready";
+}
+foreach (["ANSWER", "LIMIT", "FLAG", "LABEL", "NOTHING"] as $name) {
+    echo str_replace("\n", "\\n", (new ReflectionClassConstant("EvalConstStringTarget", $name))->__toString());
+    echo "|";
+}
+echo str_replace("\n", "\\n", (new ReflectionClassConstant("EvalConstStringEnum", "Ready"))->__toString());
+echo "|";
+echo str_replace("\n", "\\n", (new ReflectionEnumUnitCase("EvalConstStringEnum", "Ready"))->__toString());
+echo "|";
+echo str_replace("\n", "\\n", (new ReflectionEnumBackedCase("EvalConstStringEnum", "Ready"))->__toString());');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Constant [ public int ANSWER ] { 42 }\n|Constant [ final protected int LIMIT ] { 7 }\n|Constant [ private bool FLAG ] { 1 }\n|Constant [ public string LABEL ] { ok }\n|Constant [ public null NOTHING ] {  }\n|Constant [ public EvalConstStringEnum Ready ] { Object }\n|Constant [ public EvalConstStringEnum Ready ] { Object }\n|Constant [ public EvalConstStringEnum Ready ] { Object }\n"
+    );
+}
+
 /// Verifies eval ReflectionClassConstant exposes visibility predicates and modifiers.
 #[test]
 fn test_eval_reflection_class_constant_visibility_and_modifiers() {
