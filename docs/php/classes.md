@@ -1147,7 +1147,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 
 | Reflection method | Supported constructor | Description |
 |---|---|---|
-| `ReflectionObject::*` inherited class metadata and construction methods | `new ReflectionObject($object)` | Use the same reflected class metadata as `ReflectionClass`; construction helpers use the object's runtime class id, and straight-line receivers built from statically typed objects normalize named constructor arguments |
+| `ReflectionObject::*` inherited class metadata and construction methods | `new ReflectionObject($object)` | Use the same reflected class metadata as `ReflectionClass`; construction helpers use the object's runtime class id, straight-line receivers built from statically typed objects normalize named constructor arguments, and `hasProperty()` / `getProperty()` / `getProperties()` include public dynamic properties from the reflected instance |
 | `ReflectionClass::getName()` | `new ReflectionClass($class_name)` | Return the resolved class-like name |
 | `ReflectionClass::getShortName()` | `new ReflectionClass($class_name)` | Return the class-like name after the final namespace separator |
 | `ReflectionClass::getNamespaceName()` | `new ReflectionClass($class_name)` | Return the namespace portion of the reflected class-like name |

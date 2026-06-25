@@ -3287,7 +3287,11 @@ $dynamic = $ref->getProperty("dynamic");
 echo $dynamic->isDynamic() ? "D" : "d"; echo ":";
 echo $dynamic->getValue($object); echo ":";
 echo count($ref->getProperties(ReflectionProperty::IS_PUBLIC)); echo ":";
-echo count($ref->getProperties(ReflectionProperty::IS_STATIC));
+echo count($ref->getProperties(ReflectionProperty::IS_STATIC)); echo ":";
+echo $ref->hasProperty("dynamic") ? "H" : "h";
+echo $ref->hasProperty("declared") ? "D" : "d";
+echo $ref->hasProperty("missing") ? "M" : "m";
+echo (new ReflectionClass($object))->hasProperty("dynamic") ? "C" : "c";
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -3296,7 +3300,7 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "declared:d|dynamic:D|:D:value:2:0");
+    assert_eq!(values.output, "declared:d|dynamic:D|:D:value:2:0:HDmc");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
