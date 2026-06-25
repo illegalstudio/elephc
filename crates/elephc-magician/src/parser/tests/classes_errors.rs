@@ -99,15 +99,21 @@ class DynEvalReturnClass {
     );
 }
 
-/// Verifies return-only type atoms reject nullable, union, and intersection forms.
+/// Verifies type atoms are rejected in positions where PHP forbids them.
 #[test]
-fn parse_fragment_rejects_invalid_void_and_never_return_type_forms() {
+fn parse_fragment_rejects_invalid_type_atom_forms() {
     for source in [
         b"function DynEvalBadVoid(): ?void {}" as &[u8],
         b"function DynEvalBadVoidUnion(): void|null {}",
         b"function DynEvalBadNeverUnion(): never|int {}",
         b"function DynEvalBadNeverIntersection(): never&Countable {}",
         b"function DynEvalBadVoidParam(void $value) {}",
+        b"function DynEvalBadStaticParam(static $value) {}",
+        b"class DynEvalBadCallableProperty { public callable $value; }",
+        b"class DynEvalBadStaticProperty { public static static $value; }",
+        b"interface DynEvalBadCallableInterfaceProperty { public callable $value { get; } }",
+        b"class DynEvalBadCallablePromoted { public function __construct(public callable $value) {} }",
+        b"class DynEvalBadStaticPromoted { public function __construct(public static $value) {} }",
     ] {
         assert_eq!(
             parse_fragment(source),

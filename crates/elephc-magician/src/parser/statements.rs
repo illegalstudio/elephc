@@ -43,10 +43,11 @@ struct ParsedClassBody {
     trait_adaptations: Vec<EvalTraitAdaptation>,
 }
 
-/// Type-declaration position controls PHP-only atoms such as `void` and `never`.
+/// Type-declaration position controls PHP-only atoms such as `void`, `static`, and `callable`.
 #[derive(Clone, Copy)]
 enum EvalTypePosition {
     Parameter,
+    Property,
     Return,
 }
 
@@ -1657,7 +1658,13 @@ impl Parser {
     pub(super) fn parse_optional_property_type(
         &mut self,
     ) -> Result<Option<EvalParameterType>, EvalParseError> {
-        self.parse_optional_parameter_type()
+        if matches!(
+            self.current(),
+            TokenKind::DollarIdent(_) | TokenKind::Ampersand | TokenKind::Ellipsis
+        ) {
+            return Ok(None);
+        }
+        self.parse_type_decl(EvalTypePosition::Property)
     }
 
     /// Parses `function name($param, ...) { ... }` declarations.
@@ -2022,7 +2029,11 @@ impl Parser {
             if promotion.is_some() && !method_name.eq_ignore_ascii_case("__construct") {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            let param_type = self.parse_optional_parameter_type()?;
+            let param_type = if promotion.is_some() {
+                self.parse_optional_promoted_property_type()?
+            } else {
+                self.parse_optional_parameter_type()?
+            };
             let is_by_ref = self.consume(TokenKind::Ampersand);
             let is_variadic = self.consume(TokenKind::Ellipsis);
             let TokenKind::DollarIdent(name) = self.current() else {
@@ -2143,6 +2154,19 @@ impl Parser {
         }
     }
 
+    /// Parses a constructor-promoted parameter type using PHP property-type restrictions.
+    fn parse_optional_promoted_property_type(
+        &mut self,
+    ) -> Result<Option<EvalParameterType>, EvalParseError> {
+        if matches!(
+            self.current(),
+            TokenKind::DollarIdent(_) | TokenKind::Ampersand | TokenKind::Ellipsis
+        ) {
+            return Ok(None);
+        }
+        self.parse_type_decl(EvalTypePosition::Property)
+    }
+
     /// Consumes a supported method parameter type and returns retained metadata.
     fn parse_optional_parameter_type(
         &mut self,
@@ -2246,6 +2270,9 @@ impl Parser {
             let builtin = match lower.as_str() {
                 "array" => Some(EvalParameterTypeVariant::Array),
                 "bool" => Some(EvalParameterTypeVariant::Bool),
+                "callable" if matches!(position, EvalTypePosition::Property) => {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
                 "callable" => Some(EvalParameterTypeVariant::Callable),
                 "float" => Some(EvalParameterTypeVariant::Float),
                 "int" => Some(EvalParameterTypeVariant::Int),
@@ -2261,6 +2288,9 @@ impl Parser {
                     Some(EvalParameterTypeVariant::Void)
                 }
                 "void" | "never" => return Err(EvalParseError::UnsupportedConstruct),
+                "static" if !matches!(position, EvalTypePosition::Return) => {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
                 "self" | "parent" | "static" => {
                     Some(EvalParameterTypeVariant::Class(lower.to_string()))
                 }
