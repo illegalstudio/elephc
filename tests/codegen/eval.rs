@@ -5797,6 +5797,32 @@ return $value;');
     assert_eq!(out, "eval-method");
 }
 
+/// Verifies eval dispatches generated/AOT instance methods with array by-reference params.
+#[test]
+fn test_eval_fragment_dispatches_aot_instance_method_with_array_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotArrayRefMethodBox {
+    public function append(array &$items): void {
+        $items[] = 3;
+    }
+
+    public function replace(array &$items): void {
+        $items = [4, 5];
+    }
+}
+
+echo eval('$box = new EvalAotArrayRefMethodBox();
+$items = [1, 2];
+$box->append($items);
+$afterAppend = count($items) . ":" . $items[2];
+$box->replace($items);
+return $afterAppend . ":" . count($items) . ":" . $items[0] . ":" . $items[1];');
+"#,
+    );
+    assert_eq!(out, "3:3:2:4:5");
+}
+
 /// Verifies eval preserves string values passed through an untyped AOT method parameter.
 #[test]
 fn test_eval_fragment_dispatches_aot_instance_method_with_mixed_string_arg() {
@@ -5907,6 +5933,25 @@ return $value;');
 "#,
     );
     assert_eq!(out, "static-eval");
+}
+
+/// Verifies eval dispatches generated/AOT static methods with array by-reference params.
+#[test]
+fn test_eval_fragment_dispatches_aot_static_method_with_array_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotArrayRefStaticBox {
+    public static function mutate(array &$items): void {
+        $items[] = 8;
+    }
+}
+
+echo eval('$items = [6, 7];
+EvalAotArrayRefStaticBox::mutate($items);
+return count($items) . ":" . $items[2];');
+"#,
+    );
+    assert_eq!(out, "3:8");
 }
 
 /// Verifies eval binds named arguments before dispatching an AOT constructor.
@@ -12760,6 +12805,25 @@ return $value;');
 "#,
     );
     assert_eq!(out, "eval-ctor");
+}
+
+/// Verifies eval dispatches generated/AOT constructors with array by-reference params.
+#[test]
+fn test_eval_dynamic_new_runs_constructor_with_array_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewArrayRefCtor {
+    public function __construct(array &$items) {
+        $items = [9, 10];
+    }
+}
+
+echo eval('$items = [1, 2];
+$box = new EvalDynamicNewArrayRefCtor($items);
+return count($items) . ":" . $items[0] . ":" . $items[1];');
+"#,
+    );
+    assert_eq!(out, "2:9:10");
 }
 
 /// Verifies eval object construction can call private AOT constructors from the declaring scope.

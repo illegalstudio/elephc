@@ -809,7 +809,7 @@ fn emit_aarch64_constructor_ref_arg_cells(
     label_prefix: &str,
     fail_label: &str,
 ) -> Vec<EvalRefArgSlot> {
-    let ref_slots = eval_ref_arg_slots(param_types, ref_params);
+    let ref_slots = eval_ref_arg_slots(param_types, ref_params, true);
     for slot in &ref_slots {
         emit_aarch64_load_eval_arg(module, emitter, slot.param_index);
         emitter.instruction("ldr x0, [x29, #-16]");                             // reload the original eval Mixed cell for by-reference writeback
@@ -835,7 +835,7 @@ fn emit_x86_64_constructor_ref_arg_cells(
     label_prefix: &str,
     fail_label: &str,
 ) -> Vec<EvalRefArgSlot> {
-    let ref_slots = eval_ref_arg_slots(param_types, ref_params);
+    let ref_slots = eval_ref_arg_slots(param_types, ref_params, true);
     for slot in &ref_slots {
         emit_x86_64_load_eval_arg(module, emitter, slot.param_index);
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the original eval Mixed cell for by-reference writeback

@@ -10,8 +10,9 @@
 //! Key details:
 //! - The generated eval bridge writes back through the original eval `Mixed`
 //!   cells after native AOT methods mutate by-reference argument storage.
-//! - Boxed `Mixed`/union references use a pointer slot; supported typed scalar
-//!   and string references use raw ABI storage that is boxed again during writeback.
+//! - Boxed `Mixed`/union references use a pointer slot; supported typed scalar,
+//!   string, and array references use raw ABI storage that is boxed again during
+//!   writeback.
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
@@ -24,6 +25,7 @@ pub(crate) struct EvalRefArgSlot {
     pub(crate) param_ty: PhpType,
     pub(crate) raw_offset: usize,
     pub(crate) original_offset: usize,
+    pub(crate) raw_refcounted_owned: bool,
 }
 
 const EVAL_REF_ARG_BYTES: usize = 32;
@@ -37,6 +39,8 @@ pub(crate) fn eval_ref_param_supported(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
             | PhpType::TaggedScalar
     )
 }
@@ -78,6 +82,7 @@ pub(crate) fn eval_abi_param_types_for_refs(
 pub(crate) fn eval_ref_arg_slots(
     param_types: &[PhpType],
     ref_params: &[bool],
+    raw_refcounted_owned: bool,
 ) -> Vec<EvalRefArgSlot> {
     let total = ref_params.iter().filter(|is_ref| **is_ref).count();
     let mut seen = 0usize;
@@ -93,6 +98,7 @@ pub(crate) fn eval_ref_arg_slots(
             param_ty: param_types[param_index].codegen_repr(),
             raw_offset: base_offset,
             original_offset: base_offset + 16,
+            raw_refcounted_owned,
         });
         seen += 1;
     }
@@ -184,7 +190,7 @@ fn emit_aarch64_write_back_typed_ref_arg(
     emitter.instruction("mov x10, x0");                                         // keep the newly boxed ref value available for cell replacement
     abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
     emit_aarch64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "x9", "x10");
-    emit_aarch64_release_typed_ref_slot(emitter, &slot.param_ty, stack_offset + slot.raw_offset);
+    emit_aarch64_release_typed_ref_slot(emitter, slot, stack_offset, label_prefix);
 }
 
 /// Boxes one x86_64 typed scalar ref slot and replaces the original eval Mixed cell.
@@ -199,7 +205,7 @@ fn emit_x86_64_write_back_typed_ref_arg(
     emitter.instruction("mov r11, rax");                                        // keep the newly boxed ref value available for cell replacement
     abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
     emit_x86_64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "r10", "r11");
-    emit_x86_64_release_typed_ref_slot(emitter, &slot.param_ty, stack_offset + slot.raw_offset);
+    emit_x86_64_release_typed_ref_slot(emitter, slot, stack_offset, label_prefix);
 }
 
 /// Loads one ARM64 typed scalar ref slot into the canonical result registers.
@@ -217,6 +223,9 @@ fn emit_aarch64_load_typed_ref_slot(emitter: &mut Emitter, ty: &PhpType, offset:
             abi::emit_load_temporary_stack_slot(emitter, "x1", offset + 8);
         }
         PhpType::Int | PhpType::Bool => {
+            abi::emit_load_temporary_stack_slot(emitter, "x0", offset);
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_load_temporary_stack_slot(emitter, "x0", offset);
         }
         _ => {}
@@ -240,24 +249,99 @@ fn emit_x86_64_load_typed_ref_slot(emitter: &mut Emitter, ty: &PhpType, offset: 
         PhpType::Int | PhpType::Bool => {
             abi::emit_load_temporary_stack_slot(emitter, "rax", offset);
         }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            abi::emit_load_temporary_stack_slot(emitter, "rax", offset);
+        }
         _ => {}
     }
 }
 
 /// Releases any owned ARM64 payload left in one typed raw ref slot after writeback.
-fn emit_aarch64_release_typed_ref_slot(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
-    if matches!(ty.codegen_repr(), PhpType::Str) {
-        abi::emit_load_temporary_stack_slot(emitter, "x0", offset);
-        abi::emit_call_label(emitter, "__rt_heap_free_safe");
+fn emit_aarch64_release_typed_ref_slot(
+    emitter: &mut Emitter,
+    slot: &EvalRefArgSlot,
+    stack_offset: usize,
+    label_prefix: &str,
+) {
+    let raw_offset = stack_offset + slot.raw_offset;
+    match slot.param_ty.codegen_repr() {
+        PhpType::Str => {
+            abi::emit_load_temporary_stack_slot(emitter, "x0", raw_offset);
+            abi::emit_call_label(emitter, "__rt_heap_free_safe");
+        }
+        ty @ (PhpType::Array(_) | PhpType::AssocArray { .. }) => {
+            emit_aarch64_release_refcounted_raw_slot(emitter, slot, stack_offset, label_prefix, &ty);
+        }
+        _ => {}
     }
 }
 
 /// Releases any owned x86_64 payload left in one typed raw ref slot after writeback.
-fn emit_x86_64_release_typed_ref_slot(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
-    if matches!(ty.codegen_repr(), PhpType::Str) {
-        abi::emit_load_temporary_stack_slot(emitter, "rax", offset);
-        abi::emit_call_label(emitter, "__rt_heap_free_safe");
+fn emit_x86_64_release_typed_ref_slot(
+    emitter: &mut Emitter,
+    slot: &EvalRefArgSlot,
+    stack_offset: usize,
+    label_prefix: &str,
+) {
+    let raw_offset = stack_offset + slot.raw_offset;
+    match slot.param_ty.codegen_repr() {
+        PhpType::Str => {
+            abi::emit_load_temporary_stack_slot(emitter, "rax", raw_offset);
+            abi::emit_call_label(emitter, "__rt_heap_free_safe");
+        }
+        ty @ (PhpType::Array(_) | PhpType::AssocArray { .. }) => {
+            emit_x86_64_release_refcounted_raw_slot(emitter, slot, stack_offset, label_prefix, &ty);
+        }
+        _ => {}
     }
+}
+
+/// Releases an ARM64 raw refcounted slot when it owns a value not retained by the eval cell.
+fn emit_aarch64_release_refcounted_raw_slot(
+    emitter: &mut Emitter,
+    slot: &EvalRefArgSlot,
+    stack_offset: usize,
+    label_prefix: &str,
+    ty: &PhpType,
+) {
+    let release_label = format!("{}_ref_{}_release_raw", label_prefix, slot.param_index);
+    let done_label = format!("{}_ref_{}_release_raw_done", label_prefix, slot.param_index);
+    if !slot.raw_refcounted_owned {
+        abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
+        abi::emit_load_temporary_stack_slot(emitter, "x10", stack_offset + slot.raw_offset);
+        emitter.instruction("ldr x11, [x9, #8]");                               // load the original eval cell payload for borrowed-slot comparison
+        emitter.instruction("cmp x10, x11");                                    // changed raw pointers are owned by the native assignment path
+        emitter.instruction(&format!("b.ne {}", release_label));                // release only raw heap values introduced by the native call
+        emitter.instruction(&format!("b {}", done_label));                      // keep borrowed original payloads owned by the eval cell
+    }
+    emitter.label(&release_label);
+    abi::emit_load_temporary_stack_slot(emitter, "x0", stack_offset + slot.raw_offset);
+    abi::emit_decref_if_refcounted(emitter, ty);
+    emitter.label(&done_label);
+}
+
+/// Releases an x86_64 raw refcounted slot when it owns a value not retained by the eval cell.
+fn emit_x86_64_release_refcounted_raw_slot(
+    emitter: &mut Emitter,
+    slot: &EvalRefArgSlot,
+    stack_offset: usize,
+    label_prefix: &str,
+    ty: &PhpType,
+) {
+    let release_label = format!("{}_ref_{}_release_raw_x", label_prefix, slot.param_index);
+    let done_label = format!("{}_ref_{}_release_raw_done_x", label_prefix, slot.param_index);
+    if !slot.raw_refcounted_owned {
+        abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
+        abi::emit_load_temporary_stack_slot(emitter, "r11", stack_offset + slot.raw_offset);
+        emitter.instruction("mov r9, QWORD PTR [r10 + 8]");                     // load the original eval cell payload for borrowed-slot comparison
+        emitter.instruction("cmp r11, r9");                                     // changed raw pointers are owned by the native assignment path
+        emitter.instruction(&format!("jne {}", release_label));                 // release only raw heap values introduced by the native call
+        emitter.instruction(&format!("jmp {}", done_label));                    // keep borrowed original payloads owned by the eval cell
+    }
+    emitter.label(&release_label);
+    abi::emit_load_temporary_stack_slot(emitter, "rax", stack_offset + slot.raw_offset);
+    abi::emit_decref_if_refcounted(emitter, ty);
+    emitter.label(&done_label);
 }
 
 /// Copies one replacement ARM64 Mixed cell payload into an existing target cell.
