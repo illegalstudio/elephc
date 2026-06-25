@@ -716,17 +716,24 @@ fn emit_scalar_default(
 /// Reused by the Mixed-property BOX sub-case of `lower_prop_set`. A value that is already a
 /// Mixed cell (`Ptr` with `ir_type == Heap(Mixed)`) is NOT handled here — the MOVE path stores it
 /// directly. Returns `Unsupported` for Tagged/Void/non-heap pointers.
-fn emit_box_value_into_mixed(ctx: &mut FnCtx, value: ValueId) -> Result<String> {
+pub(super) fn emit_box_value_into_mixed(ctx: &mut FnCtx, value: ValueId) -> Result<String> {
     let repr = ctx.value_repr(value)?.clone();
     let php = ctx.function.value(value).map(|v| v.php_type.codegen_repr());
     let ir = ctx.function.value(value).map(|v| v.ir_type);
     match &repr {
         WasmRepr::I64(local) => {
-            let tag: i64 = if matches!(php, Some(PhpType::Bool)) { 3 } else { 0 };
-            ctx.fb.ins(&format!("i64.const {}", tag), "mixed tag (int/bool)");
-            ctx.fb.ins(&format!("local.get {}", local), "scalar value -> lo");
+            // int 0, bool 3, callable 10 (a callable is a kind-6 descriptor carried as
+            // i64; tag 10 makes `__rt_mixed_from_value` incref it so the cell shares
+            // ownership and the release arm frees it via kind-6 dispatch).
+            let tag: i64 = match php {
+                Some(PhpType::Bool) => 3,
+                Some(PhpType::Callable) => 10,
+                _ => 0,
+            };
+            ctx.fb.ins(&format!("i64.const {}", tag), "mixed tag (int/bool/callable)");
+            ctx.fb.ins(&format!("local.get {}", local), "scalar/descriptor value -> lo");
             ctx.fb.ins("i64.const 0", "hi unused");
-            ctx.fb.ins("call $__rt_mixed_from_value", "box scalar into a mixed cell");
+            ctx.fb.ins("call $__rt_mixed_from_value", "box scalar/callable into a mixed cell");
         }
         WasmRepr::F64(local) => {
             ctx.fb.ins("i64.const 2", "mixed tag (float)");

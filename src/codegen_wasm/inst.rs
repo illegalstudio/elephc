@@ -111,6 +111,9 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::NullsafePropGet => super::objects::lower_nullsafe_prop_get(ctx, &inst),
         Op::InstanceOf => super::classes::lower_instanceof(ctx, &inst),
         Op::InstanceOfDynamic => super::classes::lower_instanceof_dynamic(ctx, &inst),
+        Op::ClosureNew => super::closures::lower_closure_new(ctx, &inst),
+        Op::ClosureCall => super::closures::lower_closure_call(ctx, &inst),
+        Op::ClosureCapture => super::closures::lower_closure_capture(ctx, &inst),
         other => Err(WasmError::Unsupported(format!("op {:?}", other))),
     }
 }

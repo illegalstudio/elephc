@@ -22,6 +22,9 @@
 //!   value local and source slot, matching the native backend.
 //! - `__rt_array_free_deep` releases string/container children via
 //!   `__rt_decref_any` before freeing the struct; scalar arrays free directly.
+//!   `value_type` 7 marks a 16-byte-slot Mixed-cell array (P7a1 closure-call arg
+//!   buffer): each slot holds a kind-5 cell pointer at slot+0, and `free_deep`
+//!   releases every cell through the kind-dispatched `__rt_decref_any`.
 
 use super::wat::WatModule;
 
@@ -33,6 +36,7 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_GROW);
     wm.add_raw_func(RT_ARRAY_PUSH_INT);
     wm.add_raw_func(RT_ARRAY_PUSH_STR);
+    wm.add_raw_func(RT_ARRAY_PUSH_MIXED);
     wm.add_raw_func(RT_ARRAY_GET_INT);
     wm.add_raw_func(RT_ARRAY_GET_STR);
     wm.add_raw_func(RT_ARRAY_ENSURE_UNIQUE);
@@ -175,6 +179,36 @@ const RT_ARRAY_GET_STR: &str = r#"(func $__rt_array_get_str (param $array i32) (
   (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 16)))))  ;; slot = A+24+index*16
   (i32.wrap_i64 (i64.load (local.get $slot)))             ;; result 0: pointer (wrapped from i64)
   (i64.load (i32.add (local.get $slot) (i32.const 8))))   ;; result 1: length
+"#;
+
+/// `__rt_array_push_mixed`: appends a kind-5 Mixed-cell pointer, shaping an empty
+/// array to 16-byte slots with `value_type` 7 (mixed-cell), and growing capacity
+/// when full. The cell is stored BORROWED (no incref here): the caller — the P7a1
+/// `ClosureCall` arg-buffer builder — owns the cell it just boxed via
+/// `__rt_mixed_from_value` and transfers that ownership to the array, whose
+/// `__rt_array_free_deep` (reached through `__rt_decref_any` kind-2) releases every
+/// cell. Returns the (possibly new) array pointer.
+const RT_ARRAY_PUSH_MIXED: &str = r#"(func $__rt_array_push_mixed (param $array i32) (param $cell i32) (result i32)
+  (local $alen i64)
+  (local $cap i64)
+  (local $slot i32)
+  (if (i64.eqz (i64.load (local.get $array)))             ;; empty -> shape as a mixed-cell array (16B slots, value_type 7)
+    (then
+      (i64.store (i32.add (local.get $array) (i32.const 8))
+                 (i64.div_u (i64.mul (i64.load (i32.add (local.get $array) (i32.const 8))) (i64.load (i32.add (local.get $array) (i32.const 16)))) (i64.const 16)))  ;; rescale capacity to 16-byte slots
+      (i64.store (i32.add (local.get $array) (i32.const 16)) (i64.const 16))  ;; elem_size = 16
+      (i64.store (i32.sub (local.get $array) (i32.const 8))
+                 (i64.or (i64.and (i64.load (i32.sub (local.get $array) (i32.const 8))) (i64.const -32513)) (i64.const 1792)))))  ;; value_type = 7 (mixed cell; 7 << 8 = 1792)
+  (local.set $cap (i64.load (i32.add (local.get $array) (i32.const 8))))  ;; capacity
+  (local.set $alen (i64.load (local.get $array)))         ;; length
+  (if (i64.ge_u (local.get $alen) (local.get $cap))       ;; full -> grow
+    (then (local.set $array (call $__rt_array_grow (local.get $array)))))
+  (local.set $alen (i64.load (local.get $array)))         ;; reload length after grow
+  (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $alen) (i64.const 16)))))  ;; slot = A+24+len*16
+  (i64.store (local.get $slot) (i64.extend_i32_u (local.get $cell)))  ;; cell pointer (zero-extended) at slot+0
+  (i64.store (i32.add (local.get $slot) (i32.const 8)) (i64.const 0))  ;; slot+8 unused (0)
+  (i64.store (local.get $array) (i64.add (local.get $alen) (i64.const 1)))  ;; length++
+  (local.get $array))                                       ;; return the (possibly new) array
 "#;
 
 /// `__rt_array_ensure_unique`: the copy-on-write split point. Returns the array

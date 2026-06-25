@@ -189,10 +189,9 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // Lower every closure body (P7a0). A closure is a module-level EIR function with a
     // synthetic `__eir_closure_<owner>_<n>` name and `FunctionFlags::is_closure`; its
     // params are the visible user params ++ capture params (captures appended at the
-    // tail). `lower_function` handles the body as-is, so P7a0 only needs the bodies to
-    // compile (no `ClosureNew`/`ClosureCall` lowering yet — that is P7a1). WAT `call
-    // $<name>` resolves across the whole module regardless of definition order, so the
-    // P7a1 wrapper that calls a closure body sees it defined here.
+    // tail). `lower_function` handles the body as-is. WAT `call $<name>` resolves across
+    // the whole module regardless of definition order, so the P7a1 wrapper that calls a
+    // closure body sees it defined here.
     for func in &module.closures {
         let fb = function::lower_function(module, func, &str_literals)?;
         wm.add_func(fb);
@@ -203,6 +202,11 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // defined function. Must run after class methods are lowered (stub signatures
     // are read from the class-method `Function`s) but before `wm.render()`.
     methods::emit_method_dispatch_stubs(&mut wm, module)?;
+
+    // Emit one wrapper per closure body plus the `__rt_closure_call` if-ladder that
+    // `ClosureCall` lowering dispatches through (P7a1). Must run after closure bodies are
+    // lowered (wrappers call `fn___eir_closure_<owner>_<n>`) but before `wm.render()`.
+    closures::emit_closure_dispatch(&mut wm, module)?;
 
     Ok(wm.render())
 }
@@ -566,6 +570,402 @@ mod tests {
         module.add_function(f);
         if let Some(out) = run_main(&module) {
             assert_eq!(out, "1.9");
+        }
+    }
+
+    /// End-to-end P7a1: builds a real closure body (`__eir_closure_main_0`, one int param,
+    /// returns `x * 2`) plus a `main` that emits `ClosureNew` (resolving the body name from
+    /// the module string pool), `ClosureCall` (boxes 42 into the uniform Mixed-cell arg
+    /// buffer, dispatches through `__rt_closure_call`, unboxes the int result), and
+    /// `EchoValue`. Exercises the actual `lower_closure_new`/`lower_closure_call` Rust
+    /// paths + the `inst.rs` dispatch arms + symbol naming + the wrapper/if-ladder
+    /// emission, which the hand-written-body unit tests in `closures.rs` do not cover.
+    #[test]
+    fn closure_call_int_doubles_arg_e2e() {
+        let mut module = Module::new(Target::wasm());
+        // Intern the closure body name into the string pool so ClosureNew's Data immediate
+        // resolves to "__eir_closure_main_0" (ClosureNew uses the strings pool, not the
+        // function_names pool that Op::Call uses).
+        let name_id = module.data.intern_string("__eir_closure_main_0");
+
+        // Closure body: one visible by-value int param, returns x * 2.
+        let mut body = Function::new("__eir_closure_main_0".to_string(), IrType::I64, PhpType::Int);
+        body.flags.is_closure = true;
+        body.params.push(FunctionParam {
+            name: "p1".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_p1 = body.add_local(Some("p1".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let x = b.emit_load_local(slot_p1, IrType::I64, PhpType::Int);
+            let two = b.emit_const_i64(2);
+            let doubled = b
+                .emit(Op::IMul, vec![x, two], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(doubled) });
+        }
+        module.add_closure(body);
+
+        // main: create the closure, call it with 42, echo the int result (84).
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    Vec::new(),
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let arg = b.emit_const_i64(42);
+            let result = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable, arg],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "84");
+        }
+    }
+
+    /// End-to-end P7a1 float arm: closure body `(float) -> float` returns `x * 2.0`; main
+    /// calls it with 1.9 and echoes the result. Exercises the F64 unbox (`cast_float` +
+    /// `f64.reinterpret_i64`) and box (`f64.reinterpret_i64` + `from_value` tag 2) arms
+    /// of `unbox_arg_wat`/`box_result_wat`/`unbox_result_cell` through the real lowering.
+    #[test]
+    fn closure_call_float_doubles_arg_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = module.data.intern_string("__eir_closure_main_1");
+
+        let mut body = Function::new("__eir_closure_main_1".to_string(), IrType::F64, PhpType::Float);
+        body.flags.is_closure = true;
+        body.params.push(FunctionParam {
+            name: "p1".to_string(),
+            ir_type: IrType::F64,
+            php_type: PhpType::Float,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_p1 = body.add_local(Some("p1".to_string()), IrType::F64, PhpType::Float, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let x = b.emit_load_local(slot_p1, IrType::F64, PhpType::Float);
+            let two = b.emit_const_f64(2.0);
+            let doubled = b
+                .emit(Op::FMul, vec![x, two], None, IrType::F64, PhpType::Float, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(doubled) });
+        }
+        module.add_closure(body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    Vec::new(),
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let arg = b.emit_const_f64(1.9);
+            let result = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable, arg],
+                    None,
+                    IrType::F64,
+                    PhpType::Float,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "3.8");
+        }
+    }
+
+    /// End-to-end P7a1 multi-arg arm: closure body `(int, int) -> int` returns `a + b`;
+    /// main calls it with 3 and 4 and echoes 7. Exercises the arg-buffer loop with two
+    /// 16-byte slots and the wrapper's multi-param unbox (two `cast_int` unboxes).
+    #[test]
+    fn closure_call_int_two_args_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = module.data.intern_string("__eir_closure_main_2");
+
+        let mut body = Function::new("__eir_closure_main_2".to_string(), IrType::I64, PhpType::Int);
+        body.flags.is_closure = true;
+        body.params.push(FunctionParam {
+            name: "a".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        body.params.push(FunctionParam {
+            name: "b".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_a = body.add_local(Some("a".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        let slot_b = body.add_local(Some("b".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let a = b.emit_load_local(slot_a, IrType::I64, PhpType::Int);
+            let bb = b.emit_load_local(slot_b, IrType::I64, PhpType::Int);
+            let sum = b.emit_iadd(a, bb);
+            b.terminate(Terminator::Return { value: Some(sum) });
+        }
+        module.add_closure(body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    Vec::new(),
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let arg_a = b.emit_const_i64(3);
+            let arg_b = b.emit_const_i64(4);
+            let result = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable, arg_a, arg_b],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "7");
+        }
+    }
+
+    /// End-to-end P7a1 void arm: closure body `(int) -> void` echoes its arg and returns
+    /// void; main calls it with 7 (discarding the void result). Exercises the wrapper's
+    /// `box_result_wat` Void arm (boxes a null cell) and `lower_closure_call`'s void
+    /// result branch (releases the returned null cell instead of unboxing).
+    #[test]
+    fn closure_call_void_body_echoes_arg_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = module.data.intern_string("__eir_closure_main_3");
+
+        let mut body = Function::new("__eir_closure_main_3".to_string(), IrType::Void, PhpType::Void);
+        body.flags.is_closure = true;
+        body.params.push(FunctionParam {
+            name: "p1".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_p1 = body.add_local(Some("p1".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let x = b.emit_load_local(slot_p1, IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![x],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_closure(body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    Vec::new(),
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let arg = b.emit_const_i64(7);
+            let _ = b.emit(
+                Op::ClosureCall,
+                vec![callable, arg],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "7");
+        }
+    }
+
+    /// End-to-end P7a1 string arm: closure body `(string) -> string` returns its arg
+    /// unchanged; main calls it with "hi" and echoes the result. Exercises the Str unbox
+    /// (`cast_string` + `i64.extend_i32_u` len) and box (`from_value` tag 1 persist +
+    /// `decref_any` source) arms through the real lowering, including the owned-copy
+    /// transfer across the wrapper/body boundary.
+    #[test]
+    fn closure_call_string_identity_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = module.data.intern_string("__eir_closure_main_4");
+        let hi = module.data.intern_string("hi");
+
+        let mut body = Function::new("__eir_closure_main_4".to_string(), IrType::Str, PhpType::Str);
+        body.flags.is_closure = true;
+        body.params.push(FunctionParam {
+            name: "p1".to_string(),
+            ir_type: IrType::Str,
+            php_type: PhpType::Str,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_p1 = body.add_local(Some("p1".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let x = b.emit_load_local(slot_p1, IrType::Str, PhpType::Str);
+            b.terminate(Terminator::Return { value: Some(x) });
+        }
+        module.add_closure(body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    Vec::new(),
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let arg = b.emit_const_str(hi);
+            let result = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable, arg],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "hi");
         }
     }
 

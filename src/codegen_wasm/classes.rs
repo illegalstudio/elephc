@@ -986,6 +986,11 @@ pub(super) fn mixed_tag_for_php_type(php: &PhpType) -> Option<i64> {
         PhpType::Array(_) => Some(4),
         PhpType::AssocArray { .. } => Some(5),
         PhpType::Object(_) => Some(6),
+        // A callable is a kind-6 descriptor carried as `WasmRepr::I64`; boxing it into a
+        // Mixed cell stores the descriptor pointer under tag 10 so `__rt_mixed_from_value`
+        // increfs the descriptor (shared ownership) and the tag-10 release arm dispatches
+        // kind-6 -> `__rt_callable_descriptor_release` (P7a1 closure-call arg/result path).
+        PhpType::Callable => Some(10),
         _ => None,
     }
 }
