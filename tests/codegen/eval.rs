@@ -8313,6 +8313,12 @@ fn test_eval_rejects_invalid_magic_method_contracts() {
         r#"eval('class EvalInvalidCloneReturn {
     public function __clone(): int {}
 }');"#,
+        r#"eval('class EvalInvalidConstructReturn {
+    public function __construct(): void {}
+}');"#,
+        r#"eval('class EvalInvalidDestructReturn {
+    public function __destruct(): void {}
+}');"#,
     ];
     for source in cases {
         let err = compile_and_run_expect_failure(&format!("<?php\n{source}\n"));

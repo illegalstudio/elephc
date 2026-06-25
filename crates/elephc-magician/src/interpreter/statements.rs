@@ -1501,12 +1501,15 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
             validate_magic_arity(method, 0)?;
             if method.name().eq_ignore_ascii_case("__clone") {
                 validate_magic_declared_return_type(method, MagicReturnType::Void)?;
+            } else {
+                validate_magic_no_declared_return_type(method)?;
             }
         }
         "__construct" => {
             if method.is_static() {
                 return Err(EvalStatus::RuntimeFatal);
             }
+            validate_magic_no_declared_return_type(method)?;
         }
         _ => {}
     }
@@ -1560,6 +1563,15 @@ fn validate_magic_arity(method: &EvalClassMethod, expected: usize) -> Result<(),
         Ok(())
     } else {
         Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Rejects PHP magic methods that cannot declare any return type.
+fn validate_magic_no_declared_return_type(method: &EvalClassMethod) -> Result<(), EvalStatus> {
+    if method.return_type().is_some() {
+        Err(EvalStatus::RuntimeFatal)
+    } else {
+        Ok(())
     }
 }
 

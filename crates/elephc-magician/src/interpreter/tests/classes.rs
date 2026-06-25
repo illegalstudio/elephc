@@ -1317,6 +1317,14 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
             "static __destruct",
         ),
         (
+            br#"class EvalBadConstructReturn { public function __construct(): void {} }"#.as_slice(),
+            "bad __construct return type",
+        ),
+        (
+            br#"class EvalBadDestructReturn { public function __destruct(): void {} }"#.as_slice(),
+            "bad __destruct return type",
+        ),
+        (
             br#"trait EvalBadMagicTrait { public static function __isset($name) { return true; } }"#.as_slice(),
             "trait static __isset",
         ),
