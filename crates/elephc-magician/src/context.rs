@@ -1416,13 +1416,45 @@ impl ElephcEvalContext {
     pub fn class_interface_names(&self, class_name: &str) -> Vec<String> {
         let mut interfaces = Vec::new();
         let mut seen = HashSet::new();
+        let is_enum = self.enum_decl(class_name).is_some();
         for class in self.class_chain(class_name) {
             for interface in class.interfaces() {
                 push_unique_class_name(interface, &mut interfaces, &mut seen);
-                self.collect_interface_parent_names(interface, &mut interfaces, &mut seen);
+                self.collect_class_interface_parent_names(
+                    interface,
+                    is_enum,
+                    &mut interfaces,
+                    &mut seen,
+                );
+            }
+        }
+        if let Some(enum_decl) = self.enum_decl(class_name) {
+            push_unique_class_name("UnitEnum", &mut interfaces, &mut seen);
+            if enum_decl.backing_type().is_some() {
+                push_unique_class_name("BackedEnum", &mut interfaces, &mut seen);
             }
         }
         interfaces
+    }
+
+    /// Collects interface parents while preserving PHP enum marker interface ordering.
+    fn collect_class_interface_parent_names(
+        &self,
+        interface_name: &str,
+        skip_enum_markers: bool,
+        names: &mut Vec<String>,
+        seen: &mut HashSet<String>,
+    ) {
+        let Some(interface) = self.interface(interface_name) else {
+            return;
+        };
+        for parent in interface.parents() {
+            if skip_enum_markers && is_php_enum_marker_interface(parent) {
+                continue;
+            }
+            push_unique_class_name(parent, names, seen);
+            self.collect_class_interface_parent_names(parent, skip_enum_markers, names, seen);
+        }
     }
 
     /// Returns trait names used directly by an eval-declared class.
@@ -2772,6 +2804,12 @@ fn push_unique_class_name(name: &str, names: &mut Vec<String>, seen: &mut HashSe
 /// Returns whether two PHP class-like names resolve to the same normalized spelling.
 fn same_class_name(left: &str, right: &str) -> bool {
     normalize_class_name(left) == normalize_class_name(right)
+}
+
+/// Returns whether a class-like name is one of PHP's native enum marker interfaces.
+fn is_php_enum_marker_interface(name: &str) -> bool {
+    let name = name.trim_start_matches('\\');
+    name.eq_ignore_ascii_case("UnitEnum") || name.eq_ignore_ascii_case("BackedEnum")
 }
 
 /// Pushes a case-insensitive PHP method name once for ReflectionClass metadata.

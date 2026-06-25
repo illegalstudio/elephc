@@ -6515,10 +6515,19 @@ enum EvalDynMarkedBacked: string implements EvalDynBackedMarker {
 }
 echo is_a(EvalDynMarkedUnit::Ready, "EvalDynUnitMarker") ? "U" : "u";
 echo is_a(EvalDynMarkedBacked::Ready, "EvalDynBackedMarker") ? "B" : "b";
+$unitInterfaces = class_implements("EvalDynMarkedUnit");
+echo count($unitInterfaces) . ":" . $unitInterfaces["EvalDynUnitMarker"] . ":";
+echo $unitInterfaces["UnitEnum"] . ":";
+$backedInterfaces = (new ReflectionClass("EvalDynMarkedBacked"))->getInterfaceNames();
+echo count($backedInterfaces) . ":" . $backedInterfaces[0] . ":";
+echo $backedInterfaces[1] . ":" . $backedInterfaces[2] . ":";
 echo EvalDynMarkedBacked::Ready->value;');
 "#,
     );
-    assert_eq!(out, "UBready");
+    assert_eq!(
+        out,
+        "UB2:EvalDynUnitMarker:UnitEnum:3:EvalDynBackedMarker:UnitEnum:BackedEnum:ready"
+    );
 
     let err = compile_and_run_expect_failure(
         r#"<?php
