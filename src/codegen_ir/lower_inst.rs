@@ -5344,6 +5344,41 @@ pub(super) fn load_value_to_first_int_arg(
     Ok(ty)
 }
 
+/// Casts a Mixed source in the first integer arg into one owned string copy.
+pub(super) fn emit_mixed_string_for_persistent_store(ctx: &mut FunctionContext<'_>) {
+    let non_string = ctx.next_label("mixed_string_persist_non_string");
+    let done = ctx.next_label("mixed_string_persist_done");
+    let mixed_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_push_reg(ctx.emitter, mixed_arg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // check whether the Mixed payload already holds a string
+            ctx.emitter.instruction(&format!("b.ne {}", non_string));           // non-string casts need scratch conversion before persistence
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the generic cast path after the direct string persist
+            ctx.emitter.label(&non_string);
+            abi::emit_pop_reg(ctx.emitter, mixed_arg);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // check whether the Mixed payload already holds a string
+            ctx.emitter.instruction(&format!("jne {}", non_string));            // non-string casts need scratch conversion before persistence
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed string pointer into str_persist's input register
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the generic cast path after the direct string persist
+            ctx.emitter.label(&non_string);
+            abi::emit_pop_reg(ctx.emitter, mixed_arg);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+        }
+    }
+    ctx.emitter.label(&done);
+}
+
 /// Resolves `value` into the canonical integer result register, unboxing a boxed `Mixed`/`Union`
 /// payload through `__rt_mixed_cast_int`.
 ///

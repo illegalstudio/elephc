@@ -28,8 +28,9 @@ use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 use super::super::context::FunctionContext;
 use super::{
     callables, cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes, expect_data,
-    emit_loaded_indexed_array_to_mixed, emit_ref_arg_writebacks, expect_operand, iterators,
-    load_value_to_first_int_arg, materialize_direct_call_args_with_refs,
+    emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
+    emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
+    materialize_direct_call_args_with_refs,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
     store_call_result, store_if_result,
 };
@@ -4706,10 +4707,7 @@ fn load_property_store_value_to_result(
     if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         load_value_to_first_int_arg(ctx, value)?;
         match slot_ty.codegen_repr() {
-            PhpType::Str => {
-                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-                abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            }
+            PhpType::Str => emit_mixed_string_for_persistent_store(ctx),
             PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),

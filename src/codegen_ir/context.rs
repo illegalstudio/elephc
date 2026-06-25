@@ -506,6 +506,7 @@ impl<'a> FunctionContext<'a> {
                 | Op::NullsafeMethodCall
                 | Op::StaticMethodCall
                 | Op::ClosureCall
+                | Op::CallableDescriptorInvoke
                 | Op::ExprCall
                 | Op::PipeCall
                 | Op::IteratorMethodCall

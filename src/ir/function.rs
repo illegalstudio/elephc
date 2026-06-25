@@ -167,6 +167,7 @@ pub enum LocalKind {
     StaticLocal,
     RefCell,
     HiddenTemp,
+    OwnedTemp,
     TryHandler,
     ClosureCapture,
     NamedArgTemp,

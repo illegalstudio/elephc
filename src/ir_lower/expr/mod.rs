@@ -1110,7 +1110,7 @@ fn lower_null_coalesce(
         Some(expr.span),
     );
     let result_type = null_coalesce_result_type(ctx, value.value, default);
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let default_block = ctx.builder.create_named_block("coalesce.default", Vec::new());
     let value_block = ctx.builder.create_named_block("coalesce.value", Vec::new());
     let merge = ctx.builder.create_named_block("coalesce.merge", Vec::new());
@@ -1124,6 +1124,7 @@ fn lower_null_coalesce(
 
     ctx.builder.position_at_end(default_block);
     store_expr_into_temp(ctx, &temp_name, result_type.clone(), default, expr.span);
+    release_discarded_branch_value(ctx, value, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(value_block);
@@ -1198,7 +1199,7 @@ fn lower_short_ternary(
     let value = lower_expr(ctx, value);
     let cond = ctx.truthy(value, Some(condition_span));
     let result_type = fallback_expr_type(expr);
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let value_block = ctx.builder.create_named_block("short_ternary.value", Vec::new());
     let default_block = ctx.builder.create_named_block("short_ternary.default", Vec::new());
     let merge = ctx.builder.create_named_block("short_ternary.merge", Vec::new());
@@ -1216,10 +1217,22 @@ fn lower_short_ternary(
 
     ctx.builder.position_at_end(default_block);
     store_expr_into_temp(ctx, &temp_name, result_type, default, expr.span);
+    release_discarded_branch_value(ctx, value, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
     ctx.load_local(&temp_name, Some(expr.span))
+}
+
+/// Releases a lowered value that a lazy branch tested but did not forward.
+fn release_discarded_branch_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) {
+    if ctx.value_needs_release_after_retaining_store(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
 }
 
 /// Lowers a pipe operation.
@@ -1637,15 +1650,28 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
             Some(expr.span),
         );
     }
-    let data = ctx.intern_function_name(canonical);
-    ctx.emit_value(
+    emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span)
+}
+
+/// Emits a builtin call and releases owned temporary arguments after the call consumes them.
+fn emit_builtin_call_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    operands: Vec<crate::ir::ValueId>,
+    php_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let data = ctx.intern_function_name(name);
+    let call = ctx.emit_value(
         Op::BuiltinCall,
-        operands,
+        operands.clone(),
         Some(Immediate::Data(data)),
         php_type,
-        effects_lookup::builtin_effects(canonical),
-        Some(expr.span),
-    )
+        effects_lookup::builtin_effects(name),
+        Some(span),
+    );
+    release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), span);
+    call
 }
 
 /// Lowers `isset()` as a lazy language construct instead of an eager builtin call.
@@ -1668,19 +1694,10 @@ fn lower_lazy_isset(
     let temp_name = ctx.declare_hidden_temp(PhpType::Int);
     let false_block = ctx.builder.create_named_block("isset.lazy_false", Vec::new());
     let merge = ctx.builder.create_named_block("isset.lazy_merge", Vec::new());
-    let data = ctx.intern_function_name(name);
-
     for (idx, arg) in args.iter().enumerate() {
         let checked = lower_lazy_isset_operand(ctx, arg).unwrap_or_else(|| {
             let value = lower_expr(ctx, arg);
-            ctx.emit_value(
-                Op::BuiltinCall,
-                vec![value.value],
-                Some(Immediate::Data(data)),
-                PhpType::Int,
-                effects_lookup::builtin_effects(name),
-                Some(arg.span),
-            )
+            emit_builtin_call_value(ctx, name, vec![value.value], PhpType::Int, arg.span)
         });
         let then_target = if idx + 1 == args.len() {
             ctx.builder.create_named_block("isset.lazy_true", Vec::new())
@@ -1823,15 +1840,7 @@ fn lower_native_isset_offset_probe_from_value(
         }
         _ => {
             let read_value = lower_array_access_from_value(ctx, array_value, index, expr);
-            let data = ctx.intern_function_name("isset");
-            ctx.emit_value(
-                Op::BuiltinCall,
-                vec![read_value.value],
-                Some(Immediate::Data(data)),
-                PhpType::Int,
-                effects_lookup::builtin_effects("isset"),
-                Some(expr.span),
-            )
+            emit_builtin_call_value(ctx, "isset", vec![read_value.value], PhpType::Int, expr.span)
         }
     }
 }
@@ -2057,13 +2066,12 @@ fn lower_dynamic_call_user_func_array(
             signature.as_ref(),
         )
         .unwrap_or_else(|| lower_expr(ctx, arg_array_expr));
-    Some(ctx.emit_value(
-        Op::CallableDescriptorInvoke,
-        vec![callback.value, arg_array.value],
-        None,
+    Some(emit_callable_descriptor_invoke(
+        ctx,
+        callback,
+        arg_array,
         PhpType::Mixed,
-        Op::CallableDescriptorInvoke.default_effects(),
-        Some(expr.span),
+        expr.span,
     ))
 }
 
@@ -2183,7 +2191,7 @@ fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
             Op::ArrayPush.default_effects(),
             Some(item.span),
         );
-        release_value_after_retaining_insert(ctx, Some(&elem_ty), value, item.span);
+        super::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, item.span);
     }
     Some(array)
 }
@@ -2280,14 +2288,35 @@ fn lower_call_user_func_descriptor_invoke_from_value(
     let result_type = sig
         .map(|sig| normalize_value_php_type(sig.return_type.codegen_repr()))
         .unwrap_or(PhpType::Mixed);
-    Some(ctx.emit_value(
+    Some(emit_callable_descriptor_invoke(
+        ctx,
+        callback,
+        arg_container,
+        result_type,
+        expr.span,
+    ))
+}
+
+/// Emits a descriptor invoke and releases an owned argument container after the call.
+fn emit_callable_descriptor_invoke(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback: LoweredValue,
+    arg_container: LoweredValue,
+    result_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let result = ctx.emit_value(
         Op::CallableDescriptorInvoke,
         vec![callback.value, arg_container.value],
         None,
         result_type,
         Op::CallableDescriptorInvoke.default_effects(),
-        Some(expr.span),
-    ))
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(arg_container) {
+        crate::ir_lower::ownership::release_if_owned(ctx, arg_container, Some(span));
+    }
+    result
 }
 
 /// Returns true when the EIR backend has descriptor dispatch for this callback type.
@@ -2351,7 +2380,7 @@ fn lower_indexed_descriptor_invoker_arg_array(
             Op::ArrayPush.default_effects(),
             Some(arg.span),
         );
-        release_value_after_retaining_insert(ctx, Some(&elem_ty), value, arg.span);
+        super::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, arg.span);
         positional_index += 1;
     }
     array
@@ -2504,7 +2533,7 @@ fn lower_static_array_map(
         Op::ArrayNew,
         Vec::new(),
         Some(Immediate::Capacity(items.len() as u32)),
-        PhpType::Array(Box::new(elem_type)),
+        PhpType::Array(Box::new(elem_type.clone())),
         Op::ArrayNew.default_effects(),
         Some(expr.span),
     );
@@ -2517,6 +2546,7 @@ fn lower_static_array_map(
             Op::ArrayPush.default_effects(),
             Some(item.span),
         );
+        super::stmt::release_indexed_array_write_operand(ctx, Some(&elem_type), value, item.span);
     }
     Some(array)
 }
@@ -2545,7 +2575,7 @@ fn lower_static_array_reduce(
     }
     let callback = static_call_user_func_callback(ctx, &args[1])?;
     let result_type = fallback_expr_type(expr);
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let initial = lower_expr(ctx, &args[2]);
     store_value_into_temp(ctx, &temp_name, result_type.clone(), initial, expr.span);
     for item in items {
@@ -2662,15 +2692,7 @@ fn lower_static_callable_value_call(
         }
         StaticCallableBinding::Builtin(function_name) => {
             let php_type = call_return_type(ctx, &function_name, &operands);
-            let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
-                Op::BuiltinCall,
-                operands,
-                Some(Immediate::Data(data)),
-                php_type,
-                effects_lookup::builtin_effects(&function_name),
-                Some(expr.span),
-            ))
+            Some(emit_builtin_call_value(ctx, &function_name, operands, php_type, expr.span))
         }
         StaticCallableBinding::Closure {
             name,
@@ -2847,7 +2869,7 @@ fn lower_callable_array_literal_with_receiver(
         Op::ArrayPush.default_effects(),
         Some(expr.span),
     );
-    release_value_after_retaining_insert(ctx, elem_ty.as_ref(), receiver, expr.span);
+    super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), receiver, expr.span);
     for item in items.iter().skip(1) {
         let value = lower_expr(ctx, item);
         ctx.emit_void(
@@ -2857,7 +2879,7 @@ fn lower_callable_array_literal_with_receiver(
             Op::ArrayPush.default_effects(),
             Some(item.span),
         );
-        release_value_after_retaining_insert(ctx, elem_ty.as_ref(), value, item.span);
+        super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, item.span);
     }
     array
 }
@@ -3023,15 +3045,7 @@ fn lower_static_callable_call(
             let sig = call_signature(ctx, &function_name, callback_args);
             let operands = lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
-            let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
-                Op::BuiltinCall,
-                operands,
-                Some(Immediate::Data(data)),
-                php_type,
-                effects_lookup::builtin_effects(&function_name),
-                Some(expr.span),
-            ))
+            Some(emit_builtin_call_value(ctx, &function_name, operands, php_type, expr.span))
         }
         StaticCallableBinding::Closure {
             name,
@@ -3324,6 +3338,11 @@ fn lower_static_array_push(
         Op::ArrayPush.default_effects(),
         Some(expr.span),
     );
+    let elem_ty = super::stmt::indexed_array_write_element_type(
+        ctx,
+        array_value,
+        updated_ty.as_ref(),
+    );
     super::stmt::finish_indexed_array_local_write(
         ctx,
         array_name,
@@ -3332,6 +3351,7 @@ fn lower_static_array_push(
         needs_storeback,
         expr.span,
     );
+    super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, expr.span);
     Some(lower_null(ctx, expr))
 }
 
@@ -3490,15 +3510,7 @@ fn lower_static_settype(
     let target_ty = static_settype_target_type(&type_arg)?;
     let sig = call_signature(ctx, name, args);
     let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
-    let data = ctx.intern_function_name(name);
-    let result = ctx.emit_value(
-        Op::BuiltinCall,
-        operands,
-        Some(Immediate::Data(data)),
-        PhpType::Bool,
-        effects_lookup::builtin_effects(name),
-        Some(expr.span),
-    );
+    let result = emit_builtin_call_value(ctx, name, operands, PhpType::Bool, expr.span);
     ctx.set_local_type(local_name, target_ty);
     Some(result)
 }
@@ -4808,6 +4820,7 @@ fn lower_named_variadic_tail_array(
         Op::ArrayNew.default_effects(),
         Some(span),
     );
+    let elem_ty = indexed_array_literal_element_type(&array_ty);
     for source in tail {
         if source.param_idx().is_some() {
             continue;
@@ -4821,6 +4834,12 @@ fn lower_named_variadic_tail_array(
             None,
             Op::ArrayPush.default_effects(),
             Some(source.expr().span),
+        );
+        super::stmt::release_indexed_array_write_operand(
+            ctx,
+            elem_ty.as_ref(),
+            value,
+            source.expr().span,
         );
     }
     array
@@ -4908,6 +4927,7 @@ fn lower_variadic_tail_array(
         Op::ArrayNew.default_effects(),
         Some(span),
     );
+    let elem_ty = indexed_array_literal_element_type(&array_ty);
     for item in tail {
         let value = lower_expr(ctx, item);
         let value = coerce_variadic_tail_value(ctx, value, &array_ty, item.span);
@@ -4918,6 +4938,7 @@ fn lower_variadic_tail_array(
             Op::ArrayPush.default_effects(),
             Some(item.span),
         );
+        super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, item.span);
     }
     array
 }
@@ -5665,7 +5686,7 @@ fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Expr], expr: 
         }
         let value = lower_expr(ctx, item);
         ctx.emit_void(Op::ArrayPush, vec![array.value, value.value], None, Op::ArrayPush.default_effects(), Some(item.span));
-        release_value_after_retaining_insert(ctx, elem_ty.as_ref(), value, item.span);
+        super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, item.span);
     }
     array
 }
@@ -5730,7 +5751,7 @@ fn lower_indexed_array_spread_into_array(
         Op::ArrayPush.default_effects(),
         Some(span),
     );
-    release_value_after_retaining_insert(ctx, container_elem_ty, value, span);
+    super::stmt::release_indexed_array_write_operand(ctx, container_elem_ty, value, span);
     let one = emit_i64_at_span(ctx, 1, span);
     let next = ctx.emit_value(
         Op::IAdd,
@@ -6040,7 +6061,7 @@ fn lower_match(
 ) -> LoweredValue {
     let subject = lower_expr(ctx, subject);
     let result_type = fallback_expr_type(expr);
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let merge = ctx.builder.create_named_block("match.merge", Vec::new());
 
     for (conditions, result) in arms {
@@ -6142,7 +6163,7 @@ fn lower_nullable_array_access(
         Some(expr.span),
     );
     let result_type = PhpType::Mixed;
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let null_block = ctx.builder.create_named_block("nullable.index.null", Vec::new());
     let read_block = ctx.builder.create_named_block("nullable.index.read", Vec::new());
     let merge = ctx.builder.create_named_block("nullable.index.merge", Vec::new());
@@ -6396,7 +6417,7 @@ fn lower_ternary(
     let cond = lower_expr(ctx, condition);
     let cond = ctx.truthy(cond, Some(condition.span));
     let result_type = branch_merge_result_type(ctx, then_expr, else_expr, expr);
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let then_block = ctx.builder.create_named_block("ternary.then", Vec::new());
     let else_block = ctx.builder.create_named_block("ternary.else", Vec::new());
     let merge = ctx.builder.create_named_block("ternary.merge", Vec::new());
@@ -6617,13 +6638,12 @@ fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, args: &[Expr
     let result_type = result_type.unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
     if instance_signature.is_none() {
         if let Some(arg_container) = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span) {
-            return ctx.emit_value(
-                Op::CallableDescriptorInvoke,
-                vec![callable.value, arg_container.value],
-                None,
+            return emit_callable_descriptor_invoke(
+                ctx,
+                callable,
+                arg_container,
                 result_type,
-                Op::CallableDescriptorInvoke.default_effects(),
-                Some(expr.span),
+                expr.span,
             );
         }
     }
@@ -6691,13 +6711,12 @@ fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, args: &[Exp
     let lowered_callee = lower_expr(ctx, callee);
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
     if let Some(arg_container) = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span) {
-        return ctx.emit_value(
-            Op::CallableDescriptorInvoke,
-            vec![lowered_callee.value, arg_container.value],
-            None,
+        return emit_callable_descriptor_invoke(
+            ctx,
+            lowered_callee,
+            arg_container,
             result_type,
-            Op::CallableDescriptorInvoke.default_effects(),
-            Some(expr.span),
+            expr.span,
         );
     }
     let mut operands = vec![lowered_callee.value];
@@ -6724,13 +6743,12 @@ fn lower_literal_callable_array_expr_call(
     let lowered_callee = lower_expr(ctx, callee);
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
     let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)?;
-    Some(ctx.emit_value(
-        Op::CallableDescriptorInvoke,
-        vec![lowered_callee.value, arg_container.value],
-        None,
+    Some(emit_callable_descriptor_invoke(
+        ctx,
+        lowered_callee,
+        arg_container,
         result_type,
-        Op::CallableDescriptorInvoke.default_effects(),
-        Some(expr.span),
+        expr.span,
     ))
 }
 
@@ -6743,13 +6761,12 @@ fn lower_expr_call_from_value(
 ) -> LoweredValue {
     let result_type = dynamic_callable_result_type(ctx, callee.value, expr);
     if let Some(arg_container) = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span) {
-        return ctx.emit_value(
-            Op::CallableDescriptorInvoke,
-            vec![callee.value, arg_container.value],
-            None,
+        return emit_callable_descriptor_invoke(
+            ctx,
+            callee,
+            arg_container,
             result_type,
-            Op::CallableDescriptorInvoke.default_effects(),
-            Some(expr.span),
+            expr.span,
         );
     }
     let mut operands = vec![callee.value];
@@ -6806,7 +6823,7 @@ fn lower_untyped_descriptor_invoker_indexed_container(
             Op::ArrayPush.default_effects(),
             Some(arg.span),
         );
-        release_value_after_retaining_insert(ctx, Some(&elem_ty), value, arg.span);
+        super::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, arg.span);
     }
     array
 }
@@ -7058,13 +7075,12 @@ fn lower_first_class_callable_expr_call(
                 .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
                 .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
             let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)?;
-            Some(ctx.emit_value(
-                Op::CallableDescriptorInvoke,
-                vec![callable.value, arg_container.value],
-                None,
+            Some(emit_callable_descriptor_invoke(
+                ctx,
+                callable,
+                arg_container,
                 result_type,
-                Op::CallableDescriptorInvoke.default_effects(),
-                Some(expr.span),
+                expr.span,
             ))
         }
         _ => None,
@@ -7621,7 +7637,7 @@ fn lower_nullable_regular_method_call(
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = method_call_result_type(ctx, object.value, method, Op::MethodCall, expr);
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let fatal_block = ctx.builder.create_named_block("method.null.fatal", Vec::new());
     let call_block = ctx.builder.create_named_block("method.non_null.call", Vec::new());
     let merge = ctx.builder.create_named_block("method.nullable.merge", Vec::new());
@@ -7810,6 +7826,9 @@ fn call_result_may_alias_arg(
     let Some(result) = result else {
         return false;
     };
+    if ctx.builder.value_defining_op(arg) == Some(Op::MixedNumericBinop) {
+        return false;
+    }
     let arg_ty = ctx.builder.value_php_type(arg).codegen_repr();
     let result_ty = ctx.builder.value_php_type(result).codegen_repr();
     if !Ownership::php_type_needs_lifetime_tracking(&arg_ty)
@@ -8420,7 +8439,7 @@ fn store_value_into_temp(
     let source = value;
     let stored = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
     ctx.store_local(temp_name, stored, temp_type, Some(span));
-    if stored.value != source.value && ctx.value_is_owning_temporary(source) {
+    if stored.value != source.value && ctx.value_needs_release_after_retaining_store(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
 }

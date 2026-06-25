@@ -106,6 +106,11 @@ impl<'f> Builder<'f> {
         self.func.locals[slot.as_raw() as usize].php_type.clone()
     }
 
+    /// Returns the semantic role of a local slot.
+    pub fn local_kind(&self, slot: LocalSlotId) -> LocalKind {
+        self.func.locals[slot.as_raw() as usize].kind
+    }
+
     /// Returns the storage type for a value already emitted in this function.
     pub fn value_type(&self, value: ValueId) -> IrType {
         self.func.values[value.as_raw() as usize].ir_type

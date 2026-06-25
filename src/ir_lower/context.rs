@@ -37,6 +37,14 @@ pub(crate) struct LoweredValue {
 pub(crate) struct LoopFrame {
     pub break_block: BlockId,
     pub continue_block: BlockId,
+    pub cleanup: Option<LoopCleanup>,
+}
+
+/// Cleanup that must run when control leaves a loop without visiting its exit block.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LoopCleanup {
+    pub value: LoweredValue,
+    pub span: Span,
 }
 
 /// Active `finally` body that must run before selected control-flow exits.
@@ -388,6 +396,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         name
     }
 
+    /// Declares a one-shot hidden expression-result temporary.
+    pub(crate) fn declare_owned_hidden_temp(&mut self, php_type: PhpType) -> String {
+        let name = format!("__eir_tmp{}", self.hidden_temp_counter);
+        self.hidden_temp_counter += 1;
+        self.declare_local_with_kind(&name, php_type, LocalKind::OwnedTemp);
+        name
+    }
+
     /// Declares a parser-reserved hidden temporary slot.
     pub(crate) fn declare_hidden_temp_with_name(
         &mut self,
@@ -580,12 +596,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // and store, so cleanup loads must be typed after this store's widening.
         self.builder.widen_local_storage_type(slot, php_type.clone());
         let source = value;
-        let release_source_after_store = self.value_is_owning_temporary(value);
-        let transfer_callable_source_to_store = release_source_after_store
+        let source_is_owning_temporary = self.value_is_owning_temporary(value);
+        let release_source_after_store = self.value_needs_release_after_retaining_store(value);
+        let transfer_callable_source_to_store = source_is_owning_temporary
             && matches!(php_type.codegen_repr(), PhpType::Callable);
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| self.initialized_slots.contains(&slot))
+        {
+            self.release_stored_local_value(name, slot, span);
+        }
+        // A loop-carried slot can exist globally without being definitely initialized
+        // on this CFG path. Release the runtime occupant before overwriting it.
+        if !uses_global
+            && local_kind_uses_plain_store_cleanup(previous_kind)
+            && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
+            && !self.loop_stack.is_empty()
         {
             self.release_stored_local_value(name, slot, span);
         }
@@ -844,6 +870,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owning_builtin_temporary(value.value) {
             return true;
         }
+        if self.value_is_owned_temp_load(value.value) {
+            return true;
+        }
+        if self.value_is_owning_mixed_string_cast(value.value) {
+            return true;
+        }
+        if matches!(
+            self.builder.value_defining_op(value.value),
+            Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
+        ) && matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        {
+            return true;
+        }
         matches!(
             self.builder.value_defining_op(value.value),
             Some(
@@ -854,6 +893,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::MixedBox
                     | Op::ArrayToMixed
                     | Op::HashToMixed
+                    | Op::InvokerRefArg
+                    | Op::MixedNumericBinop
                     | Op::MixedCastString
                     | Op::StrConcat
                     | Op::StrPersist
@@ -884,6 +925,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::NullsafeMethodCall
                     | Op::StaticMethodCall
                     | Op::ClosureCall
+                    | Op::CallableDescriptorInvoke
                     | Op::ExprCall
                     | Op::PipeCall
                     | Op::IteratorMethodCall
@@ -896,6 +938,52 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::IterCurrentKey
             )
         )
+    }
+
+    /// Returns whether the value is a read from a one-shot hidden expression temp.
+    fn value_is_owned_temp_load(&self, value: ValueId) -> bool {
+        let Some(inst) = self.builder.value_defining_instruction(value) else {
+            return false;
+        };
+        if inst.op != Op::LoadLocal {
+            return false;
+        }
+        let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+            return false;
+        };
+        self.builder.local_kind(slot) == LocalKind::OwnedTemp
+    }
+
+    /// Returns whether a generic cast owns a detached string copy of a Mixed operand.
+    fn value_is_owning_mixed_string_cast(&self, value: ValueId) -> bool {
+        let Some(inst) = self.builder.value_defining_instruction(value) else {
+            return false;
+        };
+        if inst.op != Op::Cast || inst.immediate != Some(Immediate::CastTarget(IrType::Str)) {
+            return false;
+        }
+        let Some(source) = inst.operands.first().copied() else {
+            return false;
+        };
+        matches!(
+            self.builder.value_php_type(source).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+    }
+
+    /// Returns whether a retained local/global store should release its source value.
+    pub(crate) fn value_needs_release_after_retaining_store(&self, value: LoweredValue) -> bool {
+        self.value_is_owning_temporary(value) || self.value_is_maybe_owned_mixed_container_read(value)
+    }
+
+    /// Returns whether a container read may have materialized a fresh Mixed box.
+    fn value_is_maybe_owned_mixed_container_read(&self, value: LoweredValue) -> bool {
+        let php_type = self.builder.value_php_type(value.value);
+        matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            && matches!(
+                self.builder.value_defining_op(value.value),
+                Some(Op::ArrayGet | Op::HashGet)
+            )
     }
 
     /// Returns true for builtin calls whose return value is newly allocated for the caller.
@@ -1111,7 +1199,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 fn local_kind_uses_plain_store_cleanup(kind: LocalKind) -> bool {
     matches!(
         kind,
-        LocalKind::PhpLocal | LocalKind::HiddenTemp | LocalKind::NamedArgTemp
+        LocalKind::PhpLocal | LocalKind::HiddenTemp | LocalKind::OwnedTemp | LocalKind::NamedArgTemp
     )
 }
 
