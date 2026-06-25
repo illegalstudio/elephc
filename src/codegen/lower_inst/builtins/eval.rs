@@ -59,6 +59,7 @@ const NATIVE_DEFAULT_EMPTY_ARRAY: i64 = 4;
 const NATIVE_MEMBER_ATTRIBUTE_METHOD: u8 = 0;
 const NATIVE_MEMBER_ATTRIBUTE_PROPERTY: u8 = 1;
 const NATIVE_MEMBER_ATTRIBUTE_CLASS_CONSTANT: u8 = 2;
+const NATIVE_MEMBER_ATTRIBUTE_CLASS: u8 = 3;
 const NATIVE_ATTRIBUTE_ARGS_UNSUPPORTED: u8 = 0;
 const NATIVE_ATTRIBUTE_ARGS_SUPPORTED: u8 = 1;
 const NATIVE_ATTRIBUTE_ARG_NULL: u8 = 0;
@@ -610,6 +611,7 @@ fn eval_native_member_attribute_registrations(
     let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in classes {
+        collect_eval_native_class_attributes(class_name, class_info, &mut registrations);
         collect_eval_native_method_attributes(class_name, class_info, &mut registrations);
         collect_eval_native_property_attributes(class_name, class_info, &mut registrations);
         collect_eval_native_class_constant_attributes(class_name, class_info, &mut registrations);
@@ -657,6 +659,22 @@ fn register_eval_native_class_parents(ctx: &mut FunctionContext<'_>, context_off
     for (_, class_name, parent_name) in parents {
         register_eval_native_class_parent(ctx, context_offset, &class_name, &parent_name);
     }
+}
+
+/// Adds class-level attribute metadata for one class-like symbol to eval registration.
+fn collect_eval_native_class_attributes(
+    class_name: &str,
+    class_info: &ClassInfo,
+    registrations: &mut Vec<EvalNativeMemberAttributeRegistration>,
+) {
+    collect_eval_native_member_attributes(
+        NATIVE_MEMBER_ATTRIBUTE_CLASS,
+        class_name,
+        "",
+        &class_info.attribute_names,
+        &class_info.attribute_args,
+        registrations,
+    );
 }
 
 /// Adds method attribute metadata for one class to eval registration.
@@ -2108,10 +2126,12 @@ fn eval_native_member_attribute_record(
 ) -> Vec<u8> {
     let mut record = Vec::new();
     record.push(registration.owner_kind);
-    eval_native_member_attribute_push_string(
-        &mut record,
-        &format!("{}::{}", registration.class_name, registration.member_name),
-    );
+    let member_key = if registration.owner_kind == NATIVE_MEMBER_ATTRIBUTE_CLASS {
+        registration.class_name.clone()
+    } else {
+        format!("{}::{}", registration.class_name, registration.member_name)
+    };
+    eval_native_member_attribute_push_string(&mut record, &member_key);
     eval_native_member_attribute_push_string(&mut record, &registration.attribute_name);
     match &registration.attribute_args {
         Some(args) => {

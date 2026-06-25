@@ -2014,10 +2014,11 @@ fn eval_reflection_class_new(
         )?;
         let interface_names = eval_reflection_aot_class_interface_names(&reflected_name, values)?;
         let parent_class_name = eval_reflection_aot_parent_class_name(&reflected_name, values)?;
+        let attributes = context.native_class_attributes(&reflected_name);
         return eval_reflection_owner_object(
             EVAL_REFLECTION_OWNER_CLASS,
             &reflected_name,
-            &[],
+            &attributes,
             &interface_names,
             &[],
             &method_names,
@@ -3415,10 +3416,11 @@ fn eval_reflection_full_class_object_result(
         let interface_names =
             eval_reflection_aot_class_interface_names(runtime_class_name, values)?;
         let parent_class_name = eval_reflection_aot_parent_class_name(runtime_class_name, values)?;
+        let attributes = context.native_class_attributes(runtime_class_name);
         return eval_reflection_owner_object(
             EVAL_REFLECTION_OWNER_CLASS,
             runtime_class_name,
-            &[],
+            &attributes,
             &interface_names,
             &[],
             &method_names,
@@ -3469,10 +3471,11 @@ fn eval_reflection_shallow_class_object_result(
             return values.bool_value(false);
         };
         let interface_names = eval_reflection_aot_class_interface_names(class_name, values)?;
+        let attributes = context.native_class_attributes(class_name);
         return eval_reflection_owner_object_with_members(
             EVAL_REFLECTION_OWNER_CLASS,
             class_name.trim_start_matches('\\'),
-            &[],
+            &attributes,
             &interface_names,
             &[],
             &[],

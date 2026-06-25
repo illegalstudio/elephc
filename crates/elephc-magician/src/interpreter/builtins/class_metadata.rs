@@ -121,17 +121,12 @@ pub(in crate::interpreter) fn eval_class_attribute_metadata_result(
     match (name, evaluated_args) {
         ("class_attribute_names", [class_name]) => {
             let class_name = eval_class_metadata_name(*class_name, values)?;
-            let Some(attributes) = eval_class_like_attributes(context, &class_name) else {
-                return values.array_new(0);
-            };
-            eval_class_attribute_names_result(attributes, values)
+            let attributes = eval_class_like_attribute_metadata(context, &class_name);
+            eval_class_attribute_names_result(&attributes, values)
         }
         ("class_get_attributes", [class_name]) => {
             let class_name = eval_class_metadata_name(*class_name, values)?;
-            let Some(attributes) = eval_class_like_attributes(context, &class_name) else {
-                return values.array_new(0);
-            };
-            let attributes = attributes.to_vec();
+            let attributes = eval_class_like_attribute_metadata(context, &class_name);
             eval_reflection_attribute_array_result(
                 &attributes,
                 EVAL_REFLECTION_ATTRIBUTE_TARGET_CLASS,
@@ -142,9 +137,7 @@ pub(in crate::interpreter) fn eval_class_attribute_metadata_result(
         ("class_attribute_args", [class_name, attribute_name]) => {
             let class_name = eval_class_metadata_name(*class_name, values)?;
             let attribute_name = eval_class_metadata_name(*attribute_name, values)?;
-            let Some(attributes) = eval_class_like_attributes(context, &class_name) else {
-                return values.array_new(0);
-            };
+            let attributes = eval_class_like_attribute_metadata(context, &class_name);
             let Some(attribute) = attributes
                 .iter()
                 .find(|attribute| eval_attribute_name_matches(attribute.name(), &attribute_name))
@@ -175,6 +168,17 @@ fn eval_class_like_attributes<'a>(
         return Some(trait_decl.attributes());
     }
     context.enum_decl(name).map(EvalEnum::attributes)
+}
+
+/// Returns class-like attributes for eval declarations or generated AOT metadata.
+fn eval_class_like_attribute_metadata(
+    context: &ElephcEvalContext,
+    name: &str,
+) -> Vec<EvalAttribute> {
+    if let Some(attributes) = eval_class_like_attributes(context, name) {
+        return attributes.to_vec();
+    }
+    context.native_class_attributes(name)
 }
 
 /// Builds the indexed string array returned by `class_attribute_names()`.

@@ -362,6 +362,7 @@ pub struct ElephcEvalContext {
     native_static_methods: HashMap<(String, String), NativeCallableSignature>,
     native_constructors: HashMap<String, NativeCallableSignature>,
     native_class_parents: HashMap<String, String>,
+    native_class_attributes: HashMap<String, Vec<EvalAttribute>>,
     native_method_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
     native_constant_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
     native_property_types: HashMap<(String, String), EvalParameterType>,
@@ -418,6 +419,7 @@ impl ElephcEvalContext {
             native_static_methods: HashMap::new(),
             native_constructors: HashMap::new(),
             native_class_parents: HashMap::new(),
+            native_class_attributes: HashMap::new(),
             native_method_attributes: HashMap::new(),
             native_constant_attributes: HashMap::new(),
             native_property_types: HashMap::new(),
@@ -475,6 +477,7 @@ impl ElephcEvalContext {
             native_static_methods: HashMap::new(),
             native_constructors: HashMap::new(),
             native_class_parents: HashMap::new(),
+            native_class_attributes: HashMap::new(),
             native_method_attributes: HashMap::new(),
             native_constant_attributes: HashMap::new(),
             native_property_types: HashMap::new(),
@@ -2111,6 +2114,31 @@ impl ElephcEvalContext {
         self.native_class_parents
             .get(&normalize_class_name(class_name))
             .map(String::as_str)
+    }
+
+    /// Appends generated AOT class attribute metadata for eval reflection.
+    pub fn define_native_class_attribute(
+        &mut self,
+        class_name: &str,
+        attribute: EvalAttribute,
+    ) -> bool {
+        let key = normalize_class_name(class_name);
+        if key.is_empty() {
+            return false;
+        }
+        self.native_class_attributes
+            .entry(key)
+            .or_default()
+            .push(attribute);
+        true
+    }
+
+    /// Returns generated AOT class attribute metadata by PHP class name.
+    pub fn native_class_attributes(&self, class_name: &str) -> Vec<EvalAttribute> {
+        self.native_class_attributes
+            .get(&normalize_class_name(class_name))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Appends generated AOT method attribute metadata for eval reflection.
