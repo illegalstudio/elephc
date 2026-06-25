@@ -326,6 +326,25 @@ fn execute_program_constructs_named_object_with_registered_named_args() {
     assert_eq!(values.get(result), FakeValue::Int(9));
 }
 
+/// Verifies runtime/AOT constructor fallback honors by-reference parameter metadata.
+#[test]
+fn execute_program_rejects_runtime_constructor_by_ref_temporary_arg() {
+    let program = parse_fragment(br#"$box = new KnownClass(9); return $box->read_x();"#)
+        .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut signature = NativeCallableSignature::new(1);
+    assert!(signature.set_param_name(0, "value"));
+    assert!(signature.set_param_by_ref(0, true));
+    assert!(context.define_native_constructor_signature("KnownClass", signature));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect_err("literal cannot satisfy a constructor by-reference parameter");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval-declared classes create objects with properties and methods.
 #[test]
 fn execute_program_constructs_eval_declared_class_with_method() {

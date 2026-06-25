@@ -1038,7 +1038,7 @@ pub(in crate::interpreter) fn eval_reflection_class_set_static_property_value_re
             .declaring_class_name
             .as_deref()
             .unwrap_or(reflected_name.as_str());
-        let updated = eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+        let updated = eval_reflection_with_declaring_class_scope(declaring_class, context, |_| {
             values.static_property_set(&reflected_name, &property_name, args[1])
         })?;
         if updated {
@@ -1649,7 +1649,7 @@ pub(in crate::interpreter) fn eval_reflection_property_set_value_result(
                 .declaring_class_name
                 .as_deref()
                 .unwrap_or(declaring_class.as_str());
-            let updated = eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+            let updated = eval_reflection_with_declaring_class_scope(declaring_class, context, |_| {
                 values.static_property_set(declaring_class, &property_name, value)
             })?;
             if !updated {
@@ -5917,7 +5917,7 @@ fn eval_reflection_static_property_value(
         .declaring_class_name
         .as_deref()
         .unwrap_or(reflected_name);
-    eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+    eval_reflection_with_declaring_class_scope(declaring_class, context, |_| {
         values.static_property_get(reflected_name, property_name)
     })
 }
@@ -6433,13 +6433,14 @@ fn eval_reflection_aot_method_invoke_dispatch(
         return Err(EvalStatus::RuntimeFatal);
     }
     if member.is_static {
-        let args = bind_native_callable_args(
-            context.native_static_method_signature(declaring_class, method_name),
-            method_args,
-            values,
-        )?;
-        return eval_reflection_with_declaring_class_scope(declaring_class, context, || {
-            values.static_method_call(declaring_class, method_name, args)
+        return eval_reflection_with_declaring_class_scope(declaring_class, context, |context| {
+            eval_native_static_method_with_evaluated_args(
+                declaring_class,
+                method_name,
+                method_args,
+                context,
+                values,
+            )
         });
     }
     if values.is_null(object)? || values.type_tag(object)? != EVAL_TAG_OBJECT {
@@ -6455,13 +6456,15 @@ fn eval_reflection_aot_method_invoke_dispatch(
         )?;
         return Err(EvalStatus::UncaughtThrowable);
     }
-    let args = bind_native_callable_args(
-        context.native_method_signature(declaring_class, method_name),
-        method_args,
-        values,
-    )?;
-    eval_reflection_with_declaring_class_scope(declaring_class, context, || {
-        values.method_call(object, method_name, args)
+    eval_reflection_with_declaring_class_scope(declaring_class, context, |context| {
+        eval_native_method_with_evaluated_args(
+            object,
+            declaring_class,
+            method_name,
+            method_args,
+            context,
+            values,
+        )
     })
 }
 
@@ -6469,11 +6472,11 @@ fn eval_reflection_aot_method_invoke_dispatch(
 fn eval_reflection_with_declaring_class_scope<T>(
     declaring_class: &str,
     context: &mut ElephcEvalContext,
-    action: impl FnOnce() -> Result<T, EvalStatus>,
+    action: impl FnOnce(&mut ElephcEvalContext) -> Result<T, EvalStatus>,
 ) -> Result<T, EvalStatus> {
     context.push_class_scope(declaring_class.to_string());
     context.push_called_class_scope(declaring_class.to_string());
-    let result = action();
+    let result = action(context);
     context.pop_called_class_scope();
     context.pop_class_scope();
     result
@@ -6592,7 +6595,7 @@ fn eval_reflection_aot_instance_property_get_value(
         context,
         values,
     )?;
-    eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+    eval_reflection_with_declaring_class_scope(declaring_class, context, |_| {
         values.property_get(object, property_name)
     })
 }
@@ -6612,7 +6615,7 @@ fn eval_reflection_aot_instance_property_set_value(
         context,
         values,
     )?;
-    eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+    eval_reflection_with_declaring_class_scope(declaring_class, context, |_| {
         values.property_set(object, property_name, value)
     })
 }
@@ -6631,7 +6634,7 @@ fn eval_reflection_aot_instance_property_is_initialized(
         context,
         values,
     )?;
-    eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+    eval_reflection_with_declaring_class_scope(declaring_class, context, |_| {
         values.property_is_initialized(object, property_name)
     })
 }
@@ -6643,7 +6646,7 @@ fn eval_reflection_aot_static_property_is_initialized(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+    eval_reflection_with_declaring_class_scope(declaring_class, context, |_| {
         values.static_property_is_initialized(declaring_class, property_name)
     })
 }

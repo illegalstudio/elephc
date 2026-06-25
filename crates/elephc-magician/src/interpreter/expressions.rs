@@ -82,14 +82,18 @@ pub(in crate::interpreter) fn eval_expr(
             if let Some(class) = context.class(&class_name).cloned() {
                 eval_dynamic_class_new_object(&class, args, context, scope, values)
             } else {
-                let args = bind_native_callable_args(
-                    context.native_constructor_signature(&class_name),
+                let object = values.new_object(&class_name)?;
+                if let Err(err) = eval_native_constructor_with_evaluated_args(
+                    &class_name,
+                    object,
                     args,
+                    context,
                     values,
-                )?;
-                values
-                    .new_object(&class_name)
-                    .and_then(|object| values.construct_object(object, args).map(|()| object))
+                ) {
+                    let _ = values.release(object);
+                    return Err(err);
+                }
+                Ok(object)
             }
         }
         EvalExpr::NewAnonymousClass { class, args } => {

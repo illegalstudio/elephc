@@ -2930,12 +2930,13 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
         }
         return Err(EvalStatus::RuntimeFatal);
     }
-    let args = bind_native_callable_args(
-        context.native_static_method_signature(&class_name, method_name),
+    eval_native_static_method_with_evaluated_args(
+        &class_name,
+        method_name,
         evaluated_args,
+        context,
         values,
-    )?;
-    values.static_method_call(&class_name, method_name, args)
+    )
 }
 
 /// Dispatches static methods for eval's builtin `PropertyHookType` enum slice.
@@ -3811,12 +3812,14 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
                 validate_eval_member_access(&declaring_class, visibility, context)?;
             }
         }
-        let evaluated_args = bind_native_callable_args(
-            context.native_method_signature(&class_name, method_name),
+        return eval_native_method_with_evaluated_args(
+            object,
+            &class_name,
+            method_name,
             evaluated_args,
+            context,
             values,
-        )?;
-        return values.method_call(object, method_name, evaluated_args);
+        );
     };
     let called_class_name = class.name().to_string();
     if let Some((class_name, method)) =
@@ -3997,13 +4000,14 @@ fn eval_reflection_class_new_instance_result(
         .resolve_class_name(&reflected_name)
         .unwrap_or(reflected_name);
     eval_reflection_public_constructor_scope(context, values, |context, values| {
-        let args = bind_native_callable_args(
-            context.native_constructor_signature(&class_name),
+        let instance = values.new_object(&class_name)?;
+        eval_native_constructor_with_evaluated_args(
+            &class_name,
+            instance,
             constructor_args,
+            context,
             values,
         )?;
-        let instance = values.new_object(&class_name)?;
-        values.construct_object(instance, args)?;
         Ok(Some(instance))
     })
 }
@@ -4093,13 +4097,14 @@ fn eval_reflection_attribute_new_instance_result(
     if !values.class_exists(&class_name)? {
         return values.null();
     }
-    let args = bind_native_callable_args(
-        context.native_constructor_signature(&class_name),
-        positional_args(args),
-        values,
-    )?;
     let object = values.new_object(&class_name)?;
-    if let Err(err) = values.construct_object(object, args) {
+    if let Err(err) = eval_native_constructor_with_evaluated_args(
+        &class_name,
+        object,
+        positional_args(args),
+        context,
+        values,
+    ) {
         let _ = values.release(object);
         return Err(err);
     }
@@ -4675,14 +4680,14 @@ pub(in crate::interpreter) fn positional_evaluated_arg_values(
     Ok(args.into_iter().map(|arg| arg.value).collect())
 }
 
-/// Binds native AOT callable args by registered names, or falls back to positional-only args.
-pub(in crate::interpreter) fn bind_native_callable_args(
+/// Binds native AOT callable args while preserving by-reference caller targets.
+pub(in crate::interpreter) fn bind_native_callable_bound_args(
     signature: Option<NativeCallableSignature>,
     args: Vec<EvaluatedCallArg>,
     values: &mut impl RuntimeValueOps,
-) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let Some(signature) = signature else {
-        return positional_evaluated_arg_values(args);
+        return positional_evaluated_bound_args(None, args);
     };
     if !signature.bridge_supported() {
         return Err(EvalStatus::RuntimeFatal);
@@ -4690,8 +4695,58 @@ pub(in crate::interpreter) fn bind_native_callable_args(
     if signature.param_names().len() == signature.param_count() {
         bind_native_signature_args(&signature, args, values)
     } else {
-        positional_evaluated_arg_values(args)
+        positional_evaluated_bound_args(Some(&signature), args)
     }
+}
+
+/// Binds positional-only native AOT args and validates registered by-reference slots.
+fn positional_evaluated_bound_args(
+    signature: Option<&NativeCallableSignature>,
+    args: Vec<EvaluatedCallArg>,
+) -> Result<Vec<BoundMethodArg>, EvalStatus> {
+    if args.iter().any(|arg| arg.name.is_some()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    args.into_iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            let ref_target = if signature.is_some_and(|signature| signature.param_by_ref(index)) {
+                Some(arg.ref_target.ok_or(EvalStatus::RuntimeFatal)?)
+            } else {
+                None
+            };
+            Ok(BoundMethodArg {
+                value: arg.value,
+                ref_target,
+                variadic_ref_targets: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+/// Returns only runtime cell values from bound native AOT call arguments.
+pub(in crate::interpreter) fn native_bound_arg_values(
+    args: &[BoundMethodArg],
+) -> Vec<RuntimeCellHandle> {
+    args.iter().map(|arg| arg.value).collect()
+}
+
+/// Writes native AOT by-reference argument cells back to their eval caller targets.
+pub(in crate::interpreter) fn write_back_native_callable_ref_args(
+    bound_args: &[BoundMethodArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for bound_arg in bound_args {
+        if let Some(target) = bound_arg.ref_target.as_ref() {
+            write_back_method_ref_target(target, bound_arg.value, context, values)?;
+        }
+        for (key, target) in &bound_arg.variadic_ref_targets {
+            let value = values.array_get(bound_arg.value, *key)?;
+            write_back_method_ref_target(target, value, context, values)?;
+        }
+    }
+    Ok(())
 }
 
 /// Binds native AOT callable args and fills omitted scalar defaults from metadata.
@@ -4699,7 +4754,7 @@ fn bind_native_signature_args(
     signature: &NativeCallableSignature,
     args: Vec<EvaluatedCallArg>,
     values: &mut impl RuntimeValueOps,
-) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let mut bound_args = vec![None; signature.param_count()];
     let variadic_index = native_callable_variadic_index(signature);
     let mut next_positional = 0;
@@ -4707,7 +4762,11 @@ fn bind_native_signature_args(
 
     if let Some(index) = variadic_index {
         let array = values.array_new(args.len())?;
-        bound_args[index] = Some(array);
+        bound_args[index] = Some(BoundMethodArg {
+            value: array,
+            ref_target: None,
+            variadic_ref_targets: Vec::new(),
+        });
     }
 
     for arg in args {
@@ -4718,14 +4777,17 @@ fn bind_native_signature_args(
                 &mut bound_args,
                 &name,
                 arg.value,
+                arg.ref_target,
             )?;
         } else {
             bind_native_positional_signature_arg(
+                signature,
                 &mut bound_args,
                 variadic_index,
                 &mut next_positional,
                 &mut next_variadic_index,
                 arg.value,
+                arg.ref_target,
                 values,
             )?;
         }
@@ -4744,7 +4806,11 @@ fn bind_native_signature_args(
         let Some(default) = signature.param_default(position) else {
             return Err(EvalStatus::RuntimeFatal);
         };
-        *value = Some(materialize_native_callable_default(default, values)?);
+        *value = Some(BoundMethodArg {
+            value: materialize_native_callable_default(default, values)?,
+            ref_target: None,
+            variadic_ref_targets: Vec::new(),
+        });
     }
 
     bound_args
@@ -4760,11 +4826,13 @@ fn native_callable_variadic_index(signature: &NativeCallableSignature) -> Option
 
 /// Binds one positional native AOT argument to a fixed slot or variadic array.
 fn bind_native_positional_signature_arg(
-    bound_args: &mut [Option<RuntimeCellHandle>],
+    signature: &NativeCallableSignature,
+    bound_args: &mut [Option<BoundMethodArg>],
     variadic_index: Option<usize>,
     next_positional: &mut usize,
     next_variadic_index: &mut i64,
     value: RuntimeCellHandle,
+    ref_target: Option<EvalReferenceTarget>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if variadic_index.is_some_and(|index| *next_positional >= index) {
@@ -4772,27 +4840,60 @@ fn bind_native_positional_signature_arg(
         *next_variadic_index = next_variadic_index
             .checked_add(1)
             .ok_or(EvalStatus::RuntimeFatal)?;
-        return bind_native_variadic_arg(bound_args, variadic_index, key, value, values);
+        let ref_target = native_parameter_ref_target(signature, variadic_index, ref_target)?;
+        return bind_native_variadic_arg(bound_args, variadic_index, key, value, ref_target, values);
     }
-    bind_dynamic_positional_arg(bound_args, next_positional, value)
+    let param_index = *next_positional;
+    if param_index >= bound_args.len() || bound_args[param_index].is_some() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let ref_target = native_parameter_ref_target(signature, Some(param_index), ref_target)?;
+    bound_args[param_index] = Some(BoundMethodArg {
+        value,
+        ref_target,
+        variadic_ref_targets: Vec::new(),
+    });
+    *next_positional += 1;
+    Ok(())
 }
 
 /// Binds one named native AOT argument to a fixed non-variadic slot.
 fn bind_native_named_signature_arg(
     signature: &NativeCallableSignature,
     variadic_index: Option<usize>,
-    bound_args: &mut [Option<RuntimeCellHandle>],
+    bound_args: &mut [Option<BoundMethodArg>],
     name: &str,
     value: RuntimeCellHandle,
+    ref_target: Option<EvalReferenceTarget>,
 ) -> Result<(), EvalStatus> {
     if let Some(param_index) = native_regular_param_index(signature, variadic_index, name) {
         if bound_args[param_index].is_some() {
             return Err(EvalStatus::RuntimeFatal);
         }
-        bound_args[param_index] = Some(value);
+        let ref_target = native_parameter_ref_target(signature, Some(param_index), ref_target)?;
+        bound_args[param_index] = Some(BoundMethodArg {
+            value,
+            ref_target,
+            variadic_ref_targets: Vec::new(),
+        });
         return Ok(());
     }
     Err(EvalStatus::RuntimeFatal)
+}
+
+/// Returns the caller writeback target required by a native by-reference parameter.
+fn native_parameter_ref_target(
+    signature: &NativeCallableSignature,
+    param_index: Option<usize>,
+    ref_target: Option<EvalReferenceTarget>,
+) -> Result<Option<EvalReferenceTarget>, EvalStatus> {
+    let Some(param_index) = param_index else {
+        return Ok(None);
+    };
+    if !signature.param_by_ref(param_index) {
+        return Ok(None);
+    }
+    ref_target.map(Some).ok_or(EvalStatus::RuntimeFatal)
 }
 
 /// Returns the matching non-variadic native parameter index for one named arg.
@@ -4810,17 +4911,86 @@ fn native_regular_param_index(
 
 /// Appends one value into the native AOT variadic argument array.
 fn bind_native_variadic_arg(
-    bound_args: &mut [Option<RuntimeCellHandle>],
+    bound_args: &mut [Option<BoundMethodArg>],
     variadic_index: Option<usize>,
     key: RuntimeCellHandle,
     value: RuntimeCellHandle,
+    ref_target: Option<EvalReferenceTarget>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let index = variadic_index.ok_or(EvalStatus::RuntimeFatal)?;
-    let bound = bound_args[index].ok_or(EvalStatus::RuntimeFatal)?;
-    let array = values.array_set(bound, key, value)?;
-    bound_args[index] = Some(array);
+    let bound = bound_args[index].as_mut().ok_or(EvalStatus::RuntimeFatal)?;
+    let array = values.array_set(bound.value, key, value)?;
+    bound.value = array;
+    if let Some(ref_target) = ref_target {
+        bound.variadic_ref_targets.push((key, ref_target));
+    }
     Ok(())
+}
+
+/// Calls one generated/AOT instance method after native signature binding.
+pub(in crate::interpreter) fn eval_native_method_with_evaluated_args(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bound_args = bind_native_callable_bound_args(
+        context.native_method_signature(class_name, method_name),
+        evaluated_args,
+        values,
+    )?;
+    let result = values.method_call(object, method_name, native_bound_arg_values(&bound_args));
+    let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
+    match (result, writeback) {
+        (Err(status), _) | (_, Err(status)) => Err(status),
+        (Ok(result), Ok(())) => Ok(result),
+    }
+}
+
+/// Calls one generated/AOT static method after native signature binding.
+pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args(
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let bound_args = bind_native_callable_bound_args(
+        context.native_static_method_signature(class_name, method_name),
+        evaluated_args,
+        values,
+    )?;
+    let result =
+        values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args));
+    let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
+    match (result, writeback) {
+        (Err(status), _) | (_, Err(status)) => Err(status),
+        (Ok(result), Ok(())) => Ok(result),
+    }
+}
+
+/// Runs one generated/AOT constructor after native signature binding.
+pub(in crate::interpreter) fn eval_native_constructor_with_evaluated_args(
+    class_name: &str,
+    object: RuntimeCellHandle,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let bound_args = bind_native_callable_bound_args(
+        context.native_constructor_signature(class_name),
+        evaluated_args,
+        values,
+    )?;
+    let result = values.construct_object(object, native_bound_arg_values(&bound_args));
+    let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
+    match (result, writeback) {
+        (Err(status), _) | (_, Err(status)) => Err(status),
+        (Ok(()), Ok(())) => Ok(()),
+    }
 }
 
 /// Allocates a fresh runtime cell for one invocation-safe native AOT default.

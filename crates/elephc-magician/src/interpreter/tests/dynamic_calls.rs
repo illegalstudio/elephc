@@ -323,6 +323,26 @@ return call_user_func_array(["KnownClass", "join"], ["left" => "C"]);"#,
     assert_eq!(values.get(result), FakeValue::String("CB".to_string()));
 }
 
+/// Verifies runtime AOT static method fallback honors by-reference parameter metadata.
+#[test]
+fn execute_program_static_runtime_method_hook_rejects_by_ref_temporary_arg() {
+    let program = parse_fragment(br#"return KnownClass::sum(1, 2);"#)
+        .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut signature = NativeCallableSignature::new(2);
+    assert!(signature.set_param_name(0, "left"));
+    assert!(signature.set_param_name(1, "right"));
+    assert!(signature.set_param_by_ref(0, true));
+    assert!(context.define_native_static_method_signature("KnownClass", "sum", signature));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect_err("literal cannot satisfy a static by-reference method parameter");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies runtime AOT static method fallback rejects named arguments without metadata.
 #[test]
 fn execute_program_static_runtime_method_hook_rejects_unregistered_named_args() {
