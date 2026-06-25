@@ -1318,6 +1318,24 @@ pub(in crate::interpreter) fn eval_reflection_parameter_legacy_type_predicate_re
         .map(Some)
 }
 
+/// Handles eval-backed `ReflectionParameter::__toString()` calls.
+pub(in crate::interpreter) fn eval_reflection_parameter_to_string_result(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("__toString") {
+        return Ok(None);
+    }
+    if !eval_reflection_object_has_class(object, "ReflectionParameter", values)? {
+        return Ok(None);
+    }
+    eval_reflection_bind_no_args(evaluated_args)?;
+    let rendered = eval_reflection_parameter_object_to_string(object, values)?;
+    values.string(&rendered).map(Some)
+}
+
 /// Handles eval-backed `ReflectionType::__toString()` calls.
 pub(in crate::interpreter) fn eval_reflection_type_to_string_result(
     object: RuntimeCellHandle,
@@ -1328,6 +1346,143 @@ pub(in crate::interpreter) fn eval_reflection_type_to_string_result(
     if !method_name.eq_ignore_ascii_case("__toString") {
         return Ok(None);
     }
+    let Some(rendered) = eval_reflection_type_object_to_string(object, values)? else {
+        return Ok(None);
+    };
+    eval_reflection_bind_no_args(evaluated_args)?;
+    values.string(&rendered).map(Some)
+}
+
+/// Formats one ReflectionParameter object through its public metadata methods.
+fn eval_reflection_parameter_object_to_string(
+    object: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let position = eval_reflection_no_arg_int_method(object, "getPosition", values)?;
+    let name = eval_reflection_no_arg_string_method(object, "getName", values)?;
+    let is_optional = eval_reflection_no_arg_bool_method(object, "isOptional", values)?;
+    let is_passed_by_reference =
+        eval_reflection_no_arg_bool_method(object, "isPassedByReference", values)?;
+    let is_variadic = eval_reflection_no_arg_bool_method(object, "isVariadic", values)?;
+    let type_value = values.method_call(object, "getType", Vec::new())?;
+    let type_text = if values.is_null(type_value)? {
+        None
+    } else {
+        eval_reflection_type_object_to_string(type_value, values)?
+    };
+
+    let mut signature_parts = Vec::new();
+    if let Some(type_text) = type_text {
+        signature_parts.push(type_text);
+    }
+    let mut variable = String::new();
+    if is_passed_by_reference {
+        variable.push('&');
+    }
+    if is_variadic {
+        variable.push_str("...");
+    }
+    variable.push('$');
+    variable.push_str(&name);
+    signature_parts.push(variable);
+    let requiredness = if is_optional { "optional" } else { "required" };
+    let default = eval_reflection_parameter_object_default_to_string(object, values)?
+        .map(|value| format!(" = {value}"))
+        .unwrap_or_default();
+
+    Ok(format!(
+        "Parameter #{} [ <{}> {}{} ]",
+        position,
+        requiredness,
+        signature_parts.join(" "),
+        default
+    ))
+}
+
+/// Formats a ReflectionParameter default through its public metadata methods.
+fn eval_reflection_parameter_object_default_to_string(
+    object: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    if !eval_reflection_no_arg_bool_method(object, "isDefaultValueAvailable", values)? {
+        return Ok(None);
+    }
+    if eval_reflection_no_arg_bool_method(object, "isDefaultValueConstant", values)? {
+        let constant_name =
+            eval_reflection_no_arg_string_method(object, "getDefaultValueConstantName", values)?;
+        if !constant_name.is_empty() {
+            return Ok(Some(constant_name));
+        }
+    }
+    let default_value = values.method_call(object, "getDefaultValue", Vec::new())?;
+    eval_reflection_runtime_default_value_to_string(default_value, values).map(Some)
+}
+
+/// Formats one materialized scalar-ish default value for reflection string output.
+fn eval_reflection_runtime_default_value_to_string(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    Ok(match values.type_tag(value)? {
+        EVAL_TAG_NULL => String::from("NULL"),
+        EVAL_TAG_BOOL => {
+            if values.truthy(value)? {
+                String::from("true")
+            } else {
+                String::from("false")
+            }
+        }
+        EVAL_TAG_INT | EVAL_TAG_FLOAT => String::from_utf8_lossy(&values.string_bytes(value)?)
+            .into_owned(),
+        EVAL_TAG_STRING => {
+            let value = String::from_utf8_lossy(&values.string_bytes(value)?).into_owned();
+            format!("'{value}'")
+        }
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC if values.array_len(value)? == 0 => String::from("[]"),
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => String::from("Array"),
+        EVAL_TAG_OBJECT => String::from("Object"),
+        _ => String::from_utf8_lossy(&values.string_bytes(value)?).into_owned(),
+    })
+}
+
+/// Calls one no-arg Reflection method and returns its string result.
+fn eval_reflection_no_arg_string_method(
+    object: RuntimeCellHandle,
+    method: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let value = values.method_call(object, method, Vec::new())?;
+    eval_reflection_string_arg(value, values)
+}
+
+/// Calls one no-arg Reflection method and returns its bool result.
+fn eval_reflection_no_arg_bool_method(
+    object: RuntimeCellHandle,
+    method: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let value = values.method_call(object, method, Vec::new())?;
+    if values.type_tag(value)? != EVAL_TAG_BOOL {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    values.truthy(value)
+}
+
+/// Calls one no-arg Reflection method and returns its int result.
+fn eval_reflection_no_arg_int_method(
+    object: RuntimeCellHandle,
+    method: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    let value = values.method_call(object, method, Vec::new())?;
+    eval_int_value(value, values)
+}
+
+/// Formats one eval-visible ReflectionType object if the value is a retained type object.
+fn eval_reflection_type_object_to_string(
+    object: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
     let type_kind = if eval_reflection_object_has_class(object, "ReflectionNamedType", values)? {
         Some(("ReflectionNamedType", ""))
     } else if eval_reflection_object_has_class(object, "ReflectionUnionType", values)? {
@@ -1340,13 +1495,12 @@ pub(in crate::interpreter) fn eval_reflection_type_to_string_result(
     let Some((class_name, separator)) = type_kind else {
         return Ok(None);
     };
-    eval_reflection_bind_no_args(evaluated_args)?;
     let rendered = if class_name == "ReflectionNamedType" {
         eval_reflection_named_type_to_string(object, values)?
     } else {
         eval_reflection_composite_type_to_string(object, separator, values)?
     };
-    values.string(&rendered).map(Some)
+    Ok(Some(rendered))
 }
 
 /// Formats one eval-visible ReflectionNamedType object from its public methods.

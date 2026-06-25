@@ -418,7 +418,8 @@ Function, method, and parameter attributes are exposed through
 `getAttributes()` using materialized `ReflectionAttribute` objects. Parameter
 default values, optionality, nullability, variadic flags, and by-reference
 flags are retained for eval-declared functions and methods, including
-`ReflectionParameter::allowsNull()`. `ReflectionParameter::getDeclaringClass()`
+`ReflectionParameter::allowsNull()` and `ReflectionParameter::__toString()`.
+`ReflectionParameter::getDeclaringClass()`
 returns the declaring class-like symbol for eval method parameters, and
 `ReflectionParameter::getDeclaringFunction()` returns a `ReflectionFunction`
 object for eval free-function parameters or a `ReflectionMethod` object for the

@@ -3503,6 +3503,14 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     )? {
         return Ok(result);
     }
+    if let Some(result) = eval_reflection_parameter_to_string_result(
+        object,
+        method_name,
+        evaluated_args.clone(),
+        values,
+    )? {
+        return Ok(result);
+    }
     if let Some(result) =
         eval_reflection_type_to_string_result(object, method_name, evaluated_args.clone(), values)?
     {
