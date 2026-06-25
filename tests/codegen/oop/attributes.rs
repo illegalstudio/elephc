@@ -3454,6 +3454,36 @@ echo $backedAttrs[0]->newInstance()->label();
     );
 }
 
+/// Verifies `ReflectionEnum` exposes AOT enum name and backing metadata.
+#[test]
+fn test_reflection_enum_owner_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+enum ReflectPureEnum {
+    case Ready;
+    case Done;
+}
+enum ReflectBackedEnum: int {
+    case One = 1;
+    case Two = 2;
+}
+$pure = new ReflectionEnum(ReflectPureEnum::class);
+echo $pure->getName() . ":";
+echo ($pure->isBacked() ? "B" : "b") . ":";
+echo ($pure->getBackingType() === null ? "N" : "n") . ":";
+$backed = new ReflectionEnum(ReflectBackedEnum::class);
+$type = $backed->getBackingType();
+echo ($backed->isBacked() ? "B" : "b") . ":";
+echo $type->getName() . ":";
+echo ($type->isBuiltin() ? "I" : "i");
+"#,
+    );
+    assert_eq!(
+        out,
+        "ReflectPureEnum:b:N:B:int:I"
+    );
+}
+
 /// Verifies `ReflectionClassConstant` exposes visibility predicates and modifiers.
 #[test]
 fn test_reflection_class_constant_visibility_and_modifiers() {

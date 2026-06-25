@@ -630,6 +630,7 @@ fn collect_emitted_class_names(
     for builtin in [
         "ReflectionAttribute",
         "ReflectionClass",
+        "ReflectionEnum",
         "ReflectionClassConstant",
         "ReflectionEnumBackedCase",
         "ReflectionEnumUnitCase",

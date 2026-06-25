@@ -86,6 +86,32 @@ impl Checker {
         ))
     }
 
+    /// Validates enum-level attributes for `ReflectionEnum`.
+    ///
+    /// The reflected symbol must be a declared enum; enum attributes are stored
+    /// on the parallel class metadata produced for enum declarations.
+    pub(super) fn validate_reflection_enum_attrs(
+        &self,
+        enum_name: &str,
+        expr: &Expr,
+    ) -> Result<(), CompileError> {
+        if !self.enums.contains_key(enum_name) {
+            return Err(CompileError::new(
+                expr.span,
+                &format!("ReflectionEnum::__construct(): {} is not an enum", enum_name),
+            ));
+        }
+        if let Some(class_info) = self.classes.get(enum_name) {
+            return self.validate_reflection_attribute_metadata(
+                &class_info.attribute_names,
+                &class_info.attribute_args,
+                expr,
+                "ReflectionEnum::getAttributes(): enum has attribute argument metadata that is not supported yet",
+            );
+        }
+        Ok(())
+    }
+
     /// Validates method-level attributes for `ReflectionMethod`.
     ///
     /// Checks that the method exists on the reflected class before validating
