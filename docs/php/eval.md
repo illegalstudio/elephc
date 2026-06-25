@@ -199,7 +199,7 @@ class-like symbols and bridge-registered generated/AOT class-level, method,
 property, and class-constant attributes when their arguments fit the same
 literal subset, and `getName()` returns the reflected class, member, or
 parameter name
-for those owners. `ReflectionClass`, `ReflectionFunction`, `ReflectionMethod`,
+for those owners. `ReflectionClass`, `ReflectionObject`, `ReflectionFunction`, `ReflectionMethod`,
 `ReflectionProperty`, `ReflectionClassConstant`, `ReflectionEnumUnitCase`, and
 `ReflectionEnumBackedCase` expose `getDocComment()` and report `false` because
 eval does not retain docblock text. `ReflectionClass`, `ReflectionFunction`,
@@ -211,7 +211,8 @@ declarations. File names use PHP's synthetic eval file format from the current
 eval call site, and line numbers are one-based inside the evaluated fragment.
 `ReflectionClass` construction accepts class-name strings and object arguments;
 object arguments reflect the runtime class of eval-created or generated/AOT
-objects.
+objects. `ReflectionObject` construction accepts object arguments and exposes the
+same class metadata through a `ReflectionObject` instance.
 `ReflectionEnum` construction accepts enum-name strings for eval-declared
 enums. It exposes `hasCase()`, `getCase()`, `getCases()`, `isBacked()`, and
 `getBackingType()` for eval enum metadata, returning `ReflectionEnumUnitCase`,
@@ -704,7 +705,7 @@ final release through ordinary eval statement execution, such as `unset($obj)` o
 a discarded temporary expression; destructor execution from runtime cycle
 collection is still outside the bridge. The main remaining class-system gaps are
 broader reflection APIs beyond the supported
-ReflectionClass/Function/Method/Parameter/Property/NamedType/UnionType/IntersectionType
+ReflectionClass/Object/Function/Method/Parameter/Property/NamedType/UnionType/IntersectionType
 and Enum/attribute slice, Reflection type APIs beyond retained parameter, generated
 property, and function/method return metadata, broader
 parameter and generated property default-value materialization beyond scalar,

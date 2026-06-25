@@ -227,6 +227,9 @@ pub(in crate::interpreter) fn eval_reflection_owner_new_object(
         Some(EVAL_REFLECTION_OWNER_CLASS) => {
             eval_reflection_class_new(evaluated_args, context, values)
         }
+        Some(EVAL_REFLECTION_OWNER_OBJECT) => {
+            eval_reflection_object_new(evaluated_args, context, values)
+        }
         Some(EVAL_REFLECTION_OWNER_ENUM) => {
             eval_reflection_enum_new(evaluated_args, context, values)
         }
@@ -2387,27 +2390,65 @@ fn eval_reflection_class_new(
     let reflected_name = context
         .resolve_class_like_name(&class_name)
         .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
-    let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) else {
-        let Some((flags, modifiers)) = eval_reflection_aot_class_flags(&reflected_name, values)?
+    eval_reflection_class_owner_object_result(
+        EVAL_REFLECTION_OWNER_CLASS,
+        &reflected_name,
+        context,
+        values,
+    )
+}
+
+/// Builds an eval-backed `ReflectionObject` from an object instance.
+fn eval_reflection_object_new(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let args = bind_evaluated_function_args(&[String::from("object")], evaluated_args)?;
+    if values.type_tag(args[0])? != EVAL_TAG_OBJECT {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let reflected_name = eval_reflection_object_class_name(args[0], context, values)?;
+    let Some(object) = eval_reflection_class_owner_object_result(
+        EVAL_REFLECTION_OWNER_OBJECT,
+        &reflected_name,
+        context,
+        values,
+    )?
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    Ok(Some(object))
+}
+
+/// Materializes class metadata for `ReflectionClass` or `ReflectionObject`.
+fn eval_reflection_class_owner_object_result(
+    owner_kind: u64,
+    reflected_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(metadata) = eval_reflection_class_like_attributes(reflected_name, context) else {
+        let Some((flags, modifiers)) = eval_reflection_aot_class_flags(reflected_name, values)?
         else {
             return Ok(None);
         };
         let method_names = eval_reflection_aot_member_names(
             EVAL_REFLECTION_OWNER_METHOD,
-            &reflected_name,
+            reflected_name,
             values,
         )?;
         let property_names = eval_reflection_aot_member_names(
             EVAL_REFLECTION_OWNER_PROPERTY,
-            &reflected_name,
+            reflected_name,
             values,
         )?;
-        let interface_names = eval_reflection_aot_class_interface_names(&reflected_name, values)?;
-        let parent_class_name = eval_reflection_aot_parent_class_name(&reflected_name, values)?;
-        let attributes = context.native_class_attributes(&reflected_name);
+        let interface_names = eval_reflection_aot_class_interface_names(reflected_name, values)?;
+        let parent_class_name = eval_reflection_aot_parent_class_name(reflected_name, values)?;
+        let attributes = context.native_class_attributes(reflected_name);
         return eval_reflection_owner_object(
-            EVAL_REFLECTION_OWNER_CLASS,
-            &reflected_name,
+            owner_kind,
+            reflected_name,
             &attributes,
             &interface_names,
             &[],
@@ -2428,7 +2469,7 @@ fn eval_reflection_class_new(
         .map(Some);
     };
     eval_reflection_owner_object(
-        EVAL_REFLECTION_OWNER_CLASS,
+        owner_kind,
         &metadata.resolved_name,
         &metadata.attributes,
         &metadata.interface_names,
@@ -3721,9 +3762,10 @@ fn eval_reflection_owner_object_with_members(
     let trait_names_array = eval_reflection_string_array_result(trait_names, values)?;
     let method_names_array = eval_reflection_string_array_result(method_names, values)?;
     let property_names_array = eval_reflection_string_array_result(property_names, values)?;
-    let is_eval_class = owner_kind == EVAL_REFLECTION_OWNER_CLASS
+    let class_metadata_owner = eval_reflection_owner_uses_class_metadata(owner_kind);
+    let is_eval_class = class_metadata_owner
         && eval_reflection_class_like_exists(reflected_name, context);
-    let method_objects = if owner_kind == EVAL_REFLECTION_OWNER_CLASS && include_class_members {
+    let method_objects = if class_metadata_owner && include_class_members {
         if is_eval_class {
             eval_reflection_member_object_array_result(
                 EVAL_REFLECTION_OWNER_METHOD,
@@ -3756,7 +3798,7 @@ fn eval_reflection_owner_object_with_members(
     } else {
         values.array_new(0)?
     };
-    let property_objects = if owner_kind == EVAL_REFLECTION_OWNER_CLASS && include_class_members {
+    let property_objects = if class_metadata_owner && include_class_members {
         if is_eval_class {
             eval_reflection_member_object_array_result(
                 EVAL_REFLECTION_OWNER_PROPERTY,
@@ -3826,7 +3868,7 @@ fn eval_reflection_owner_object_with_members(
     )?;
     if matches!(
         owner_kind,
-        EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_ENUM
+        EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_OBJECT | EVAL_REFLECTION_OWNER_ENUM
     ) {
         let identity = values.object_identity(object)?;
         context.register_eval_reflection_class(identity, reflected_name);
@@ -3901,7 +3943,7 @@ fn eval_reflection_related_class_result(
     let Some(related_class_name) = related_class_name else {
         return values.bool_value(false);
     };
-    if owner_kind == EVAL_REFLECTION_OWNER_CLASS && include_class_members {
+    if eval_reflection_owner_uses_class_metadata(owner_kind) && include_class_members {
         return eval_reflection_full_class_object_result(related_class_name, context, values);
     }
     if matches!(
@@ -4117,7 +4159,7 @@ fn eval_reflection_class_object_map_result(
 /// Maps a synthetic reflection owner kind to PHP's `Attribute::TARGET_*` bitmask.
 fn eval_reflection_attribute_target(owner_kind: u64) -> u64 {
     match owner_kind {
-        EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_ENUM => {
+        EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_OBJECT | EVAL_REFLECTION_OWNER_ENUM => {
             EVAL_REFLECTION_ATTRIBUTE_TARGET_CLASS
         }
         EVAL_REFLECTION_OWNER_FUNCTION => EVAL_REFLECTION_ATTRIBUTE_TARGET_FUNCTION,
@@ -4128,6 +4170,14 @@ fn eval_reflection_attribute_target(owner_kind: u64) -> u64 {
         | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE => EVAL_REFLECTION_ATTRIBUTE_TARGET_CLASS_CONSTANT,
         _ => 0,
     }
+}
+
+/// Returns whether a synthetic owner stores `ReflectionClass`-style metadata.
+fn eval_reflection_owner_uses_class_metadata(owner_kind: u64) -> bool {
+    matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_OBJECT
+    )
 }
 
 /// Builds an indexed array of populated ReflectionParameter objects.
@@ -4480,7 +4530,7 @@ fn eval_reflection_constructor_object_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if owner_kind != EVAL_REFLECTION_OWNER_CLASS || !include_class_members {
+    if !eval_reflection_owner_uses_class_metadata(owner_kind) || !include_class_members {
         return values.null();
     }
     let Some(member) = eval_reflection_method_metadata(class_name, "__construct", context) else {
@@ -7696,6 +7746,7 @@ fn reflection_owner_kind(class_name: &str) -> Option<u64> {
         .as_str()
     {
         "reflectionclass" => Some(EVAL_REFLECTION_OWNER_CLASS),
+        "reflectionobject" => Some(EVAL_REFLECTION_OWNER_OBJECT),
         "reflectionenum" => Some(EVAL_REFLECTION_OWNER_ENUM),
         "reflectionfunction" => Some(EVAL_REFLECTION_OWNER_FUNCTION),
         "reflectionmethod" => Some(EVAL_REFLECTION_OWNER_METHOD),

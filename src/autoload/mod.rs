@@ -74,6 +74,7 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "RecursiveIteratorIterator",
     "ReflectionAttribute",
     "ReflectionClass",
+    "ReflectionObject",
     "ReflectionClassConstant",
     "ReflectionEnumBackedCase",
     "ReflectionEnumUnitCase",

@@ -35,6 +35,7 @@ pub(crate) fn inject_builtin_reflection(
     for builtin_name in [
         "ReflectionAttribute",
         "ReflectionClass",
+        "ReflectionObject",
         "ReflectionEnum",
         "ReflectionFunction",
         "ReflectionMethod",
@@ -120,6 +121,10 @@ pub(crate) fn inject_builtin_reflection(
         },
     );
     class_map.insert("ReflectionClass".to_string(), builtin_reflection_class());
+    class_map.insert(
+        "ReflectionObject".to_string(),
+        builtin_reflection_object_class(),
+    );
     class_map.insert("ReflectionEnum".to_string(), builtin_reflection_enum_class());
     class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
     class_map.insert(
@@ -1845,6 +1850,26 @@ fn builtin_reflection_class() -> FlattenedClass {
         used_traits: Vec::new(),
         trait_aliases: Vec::new(),
     }
+}
+
+/// Builds the synthetic `ReflectionObject` class with ReflectionClass metadata slots.
+fn builtin_reflection_object_class() -> FlattenedClass {
+    let mut class = builtin_reflection_class();
+    class.name = "ReflectionObject".to_string();
+    class.extends = Some("ReflectionClass".to_string());
+    if let Some(constructor) = class
+        .methods
+        .iter_mut()
+        .find(|method| method.name == "__construct")
+    {
+        *constructor = builtin_reflection_owner_constructor_method(vec![(
+            "object",
+            Some(object_type()),
+            None,
+            false,
+        )]);
+    }
+    class
 }
 
 /// Builds the synthetic `ReflectionEnum` class with flattened ReflectionClass members.
