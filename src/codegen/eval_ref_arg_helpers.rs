@@ -11,7 +11,7 @@
 //! - The generated eval bridge writes back through the original eval `Mixed`
 //!   cells after native AOT methods mutate by-reference argument storage.
 //! - Boxed `Mixed`/union references use a pointer slot; supported typed scalar
-//!   references use raw ABI storage that is boxed again during writeback.
+//!   and string references use raw ABI storage that is boxed again during writeback.
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
@@ -32,7 +32,12 @@ const EVAL_REF_ARG_BYTES: usize = 32;
 pub(crate) fn eval_ref_param_supported(ty: &PhpType) -> bool {
     matches!(
         ty.codegen_repr(),
-        PhpType::Mixed | PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::TaggedScalar
+        PhpType::Mixed
+            | PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::TaggedScalar
     )
 }
 
@@ -179,6 +184,7 @@ fn emit_aarch64_write_back_typed_ref_arg(
     emitter.instruction("mov x10, x0");                                         // keep the newly boxed ref value available for cell replacement
     abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
     emit_aarch64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "x9", "x10");
+    emit_aarch64_release_typed_ref_slot(emitter, &slot.param_ty, stack_offset + slot.raw_offset);
 }
 
 /// Boxes one x86_64 typed scalar ref slot and replaces the original eval Mixed cell.
@@ -193,11 +199,16 @@ fn emit_x86_64_write_back_typed_ref_arg(
     emitter.instruction("mov r11, rax");                                        // keep the newly boxed ref value available for cell replacement
     abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
     emit_x86_64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "r10", "r11");
+    emit_x86_64_release_typed_ref_slot(emitter, &slot.param_ty, stack_offset + slot.raw_offset);
 }
 
 /// Loads one ARM64 typed scalar ref slot into the canonical result registers.
 fn emit_aarch64_load_typed_ref_slot(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
+        PhpType::Str => {
+            abi::emit_load_temporary_stack_slot(emitter, "x1", offset);
+            abi::emit_load_temporary_stack_slot(emitter, "x2", offset + 8);
+        }
         PhpType::Float => {
             abi::emit_load_temporary_stack_slot(emitter, "d0", offset);
         }
@@ -215,6 +226,10 @@ fn emit_aarch64_load_typed_ref_slot(emitter: &mut Emitter, ty: &PhpType, offset:
 /// Loads one x86_64 typed scalar ref slot into the canonical result registers.
 fn emit_x86_64_load_typed_ref_slot(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
+        PhpType::Str => {
+            abi::emit_load_temporary_stack_slot(emitter, "rax", offset);
+            abi::emit_load_temporary_stack_slot(emitter, "rdx", offset + 8);
+        }
         PhpType::Float => {
             abi::emit_load_temporary_stack_slot(emitter, "xmm0", offset);
         }
@@ -226,6 +241,22 @@ fn emit_x86_64_load_typed_ref_slot(emitter: &mut Emitter, ty: &PhpType, offset: 
             abi::emit_load_temporary_stack_slot(emitter, "rax", offset);
         }
         _ => {}
+    }
+}
+
+/// Releases any owned ARM64 payload left in one typed raw ref slot after writeback.
+fn emit_aarch64_release_typed_ref_slot(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
+    if matches!(ty.codegen_repr(), PhpType::Str) {
+        abi::emit_load_temporary_stack_slot(emitter, "x0", offset);
+        abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    }
+}
+
+/// Releases any owned x86_64 payload left in one typed raw ref slot after writeback.
+fn emit_x86_64_release_typed_ref_slot(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
+    if matches!(ty.codegen_repr(), PhpType::Str) {
+        abi::emit_load_temporary_stack_slot(emitter, "rax", offset);
+        abi::emit_call_label(emitter, "__rt_heap_free_safe");
     }
 }
 
