@@ -1011,6 +1011,7 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
     {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let trait_decl = expand_eval_trait_traits(trait_decl, context)?;
     validate_eval_declared_constants(trait_decl.constants())?;
     validate_eval_magic_methods(trait_decl.methods())?;
     if context.define_trait(trait_decl.clone()) {
@@ -1024,6 +1025,146 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
+}
+
+/// Expands nested eval trait uses into the trait metadata registered by eval.
+fn expand_eval_trait_traits(
+    trait_decl: &EvalTrait,
+    context: &ElephcEvalContext,
+) -> Result<EvalTrait, EvalStatus> {
+    if trait_decl.traits().is_empty() {
+        return Ok(trait_decl.clone());
+    }
+    validate_eval_trait_decl_adaptations(trait_decl, context)?;
+    let trait_method_names = trait_method_name_set(trait_decl);
+    let mut imported_method_names = std::collections::HashSet::new();
+    let mut imported_properties = std::collections::HashMap::new();
+    let mut imported_constants = std::collections::HashMap::new();
+    let mut constants = Vec::new();
+    let mut properties = Vec::new();
+    let mut methods = Vec::new();
+    for used_trait_name in trait_decl.traits() {
+        let Some(used_trait_decl) = context.trait_decl(used_trait_name) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        append_eval_trait_constants(
+            used_trait_decl,
+            trait_decl.constants(),
+            &mut imported_constants,
+            &mut constants,
+        )?;
+        append_eval_trait_properties(
+            used_trait_decl,
+            trait_decl.properties(),
+            &mut imported_properties,
+            &mut properties,
+        )?;
+        append_eval_trait_methods(
+            used_trait_decl,
+            trait_decl.trait_adaptations(),
+            &trait_method_names,
+            &mut imported_method_names,
+            &mut methods,
+        )?;
+    }
+    constants.extend(trait_decl.constants().iter().cloned());
+    properties.extend(trait_decl.properties().iter().cloned());
+    methods.extend(trait_decl.methods().iter().cloned());
+    let mut expanded = EvalTrait::with_constants_traits_adaptations(
+        trait_decl.name().to_string(),
+        constants,
+        properties,
+        methods,
+        trait_decl.traits().to_vec(),
+        trait_decl.trait_adaptations().to_vec(),
+    )
+    .with_attributes(trait_decl.attributes().to_vec());
+    if let Some(source_location) = trait_decl.source_location() {
+        expanded = expanded.with_source_location(source_location);
+    }
+    Ok(expanded)
+}
+
+/// Validates that trait-level adaptations reference directly used traits and methods.
+fn validate_eval_trait_decl_adaptations(
+    trait_decl: &EvalTrait,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    for adaptation in trait_decl.trait_adaptations() {
+        match adaptation {
+            EvalTraitAdaptation::Alias {
+                trait_name, method, ..
+            } => validate_eval_trait_decl_adaptation_method(
+                trait_decl,
+                context,
+                trait_name.as_deref(),
+                method,
+            )?,
+            EvalTraitAdaptation::InsteadOf {
+                trait_name,
+                method,
+                instead_of,
+            } => {
+                let Some(trait_name) = trait_name.as_deref() else {
+                    return Err(EvalStatus::RuntimeFatal);
+                };
+                validate_eval_trait_decl_adaptation_method(
+                    trait_decl,
+                    context,
+                    Some(trait_name),
+                    method,
+                )?;
+                for suppressed in instead_of {
+                    if eval_trait_used_trait_decl(trait_decl, context, suppressed).is_none() {
+                        return Err(EvalStatus::RuntimeFatal);
+                    }
+                    if same_eval_class_name(suppressed, trait_name) {
+                        return Err(EvalStatus::RuntimeFatal);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates one trait-level adaptation method target.
+fn validate_eval_trait_decl_adaptation_method(
+    trait_decl: &EvalTrait,
+    context: &ElephcEvalContext,
+    trait_name: Option<&str>,
+    method: &str,
+) -> Result<(), EvalStatus> {
+    if let Some(trait_name) = trait_name {
+        let Some(used_trait_decl) = eval_trait_used_trait_decl(trait_decl, context, trait_name)
+        else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        return trait_has_method(used_trait_decl, method)
+            .then_some(())
+            .ok_or(EvalStatus::RuntimeFatal);
+    }
+    trait_decl
+        .traits()
+        .iter()
+        .filter_map(|trait_name| context.trait_decl(trait_name))
+        .any(|used_trait_decl| trait_has_method(used_trait_decl, method))
+        .then_some(())
+        .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Returns a trait declaration only when the pending trait directly uses that trait.
+fn eval_trait_used_trait_decl<'a>(
+    trait_decl: &EvalTrait,
+    context: &'a ElephcEvalContext,
+    trait_name: &str,
+) -> Option<&'a EvalTrait> {
+    trait_decl
+        .traits()
+        .iter()
+        .any(|used_trait| same_eval_class_name(used_trait, trait_name))
+        .then(|| context.trait_decl(trait_name))
+        .flatten()
 }
 
 /// Expands eval trait uses into the class metadata used by dynamic dispatch.
@@ -1168,6 +1309,15 @@ fn trait_has_method(trait_decl: &EvalTrait, method: &str) -> bool {
         .methods()
         .iter()
         .any(|trait_method| trait_method.name().eq_ignore_ascii_case(method))
+}
+
+/// Returns case-insensitive method names declared directly by a pending trait.
+fn trait_method_name_set(trait_decl: &EvalTrait) -> std::collections::HashSet<String> {
+    trait_decl
+        .methods()
+        .iter()
+        .map(|method| method.name().to_ascii_lowercase())
+        .collect()
 }
 
 /// Returns case-insensitive method names declared directly by a pending class.

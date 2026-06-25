@@ -1463,6 +1463,44 @@ impl ElephcEvalContext {
         aliases
     }
 
+    /// Returns trait names used directly by an eval-declared trait.
+    pub fn trait_trait_names(&self, trait_name: &str) -> Vec<String> {
+        self.trait_decl(trait_name).map_or_else(Vec::new, |trait_decl| {
+            let mut traits = Vec::new();
+            let mut seen = HashSet::new();
+            for used_trait in trait_decl.traits() {
+                push_unique_class_name(used_trait, &mut traits, &mut seen);
+            }
+            traits
+        })
+    }
+
+    /// Returns trait method aliases declared directly by an eval-declared trait.
+    pub fn trait_trait_aliases(&self, trait_name: &str) -> Vec<(String, String)> {
+        let Some(trait_decl) = self.trait_decl(trait_name) else {
+            return Vec::new();
+        };
+        let mut aliases = Vec::new();
+        for adaptation in trait_decl.trait_adaptations() {
+            let EvalTraitAdaptation::Alias {
+                trait_name,
+                method,
+                alias: Some(alias),
+                ..
+            } = adaptation
+            else {
+                continue;
+            };
+            let Some(source_trait) =
+                self.trait_trait_alias_source(trait_decl, trait_name.as_deref(), method)
+            else {
+                continue;
+            };
+            aliases.push((alias.clone(), format!("{source_trait}::{method}")));
+        }
+        aliases
+    }
+
     /// Resolves the trait name shown in `ReflectionClass::getTraitAliases()`.
     fn class_trait_alias_source(
         &self,
@@ -1485,6 +1523,31 @@ impl ElephcEvalContext {
                 .iter()
                 .any(|candidate| candidate.name().eq_ignore_ascii_case(method))
                 .then(|| trait_decl.name().trim_start_matches('\\').to_string())
+            })
+    }
+
+    /// Resolves the trait name shown for a trait's internal `getTraitAliases()`.
+    fn trait_trait_alias_source(
+        &self,
+        trait_decl: &EvalTrait,
+        explicit_trait: Option<&str>,
+        method: &str,
+    ) -> Option<String> {
+        if let Some(trait_name) = explicit_trait {
+            return Some(
+                self.trait_decl(trait_name)
+                    .map_or(trait_name, EvalTrait::name)
+                    .trim_start_matches('\\')
+                    .to_string(),
+            );
+        }
+        trait_decl.traits().iter().find_map(|trait_name| {
+            let used_trait_decl = self.trait_decl(trait_name)?;
+            used_trait_decl
+                .methods()
+                .iter()
+                .any(|candidate| candidate.name().eq_ignore_ascii_case(method))
+                .then(|| used_trait_decl.name().trim_start_matches('\\').to_string())
         })
     }
 
