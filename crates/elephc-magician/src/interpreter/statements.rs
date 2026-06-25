@@ -1453,6 +1453,7 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
             validate_magic_non_static(method)?;
             validate_magic_public(method)?;
             validate_magic_arity(method, 1)?;
+            validate_magic_declared_param_type(method, 0, MagicParamType::String)?;
             if method.name().eq_ignore_ascii_case("__isset") {
                 validate_magic_declared_return_type(method, MagicReturnType::Bool)?;
             } else if method.name().eq_ignore_ascii_case("__unset") {
@@ -1463,6 +1464,7 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
             validate_magic_non_static(method)?;
             validate_magic_public(method)?;
             validate_magic_arity(method, 2)?;
+            validate_magic_declared_param_type(method, 0, MagicParamType::String)?;
             if method.name().eq_ignore_ascii_case("__set") {
                 validate_magic_declared_return_type(method, MagicReturnType::Void)?;
             } else {
@@ -1473,6 +1475,7 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
             validate_magic_static(method)?;
             validate_magic_public(method)?;
             validate_magic_arity(method, 2)?;
+            validate_magic_declared_param_type(method, 0, MagicParamType::String)?;
             validate_magic_declared_param_type(method, 1, MagicParamType::Array)?;
         }
         "__sleep" | "__serialize" => {
@@ -1563,6 +1566,7 @@ enum MagicReturnType {
 #[derive(Clone, Copy)]
 enum MagicParamType {
     Array,
+    String,
 }
 
 /// Rejects static declarations for magic methods that must be instance methods.
@@ -1645,7 +1649,11 @@ fn magic_param_type_matches(
     let [variant] = parameter_type.variants() else {
         return false;
     };
-    matches!((expected, variant), (MagicParamType::Array, EvalParameterTypeVariant::Array))
+    matches!(
+        (expected, variant),
+        (MagicParamType::Array, EvalParameterTypeVariant::Array)
+            | (MagicParamType::String, EvalParameterTypeVariant::String)
+    )
 }
 
 /// Rejects PHP magic methods that cannot declare any return type.

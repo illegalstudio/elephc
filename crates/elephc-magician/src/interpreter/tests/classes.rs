@@ -1249,6 +1249,10 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
             "by-ref __get",
         ),
         (
+            br#"class EvalBadGetParamType { public function __get(int $name) { return "x"; } }"#.as_slice(),
+            "bad __get parameter type",
+        ),
+        (
             br#"class EvalBadIssetReturn { public function __isset($name): string { return "yes"; } }"#.as_slice(),
             "bad __isset return type",
         ),
@@ -1261,12 +1265,20 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
             "bad __set return type",
         ),
         (
+            br#"class EvalBadSetParamType { public function __set(int $name, $value): void {} }"#.as_slice(),
+            "bad __set parameter type",
+        ),
+        (
             br#"class EvalBadCall { public function __call($name, ...$args) { return "x"; } }"#.as_slice(),
             "variadic __call",
         ),
         (
             br#"class EvalBadCallArgsType { public function __call(string $name, string $args) {} }"#.as_slice(),
             "bad __call args type",
+        ),
+        (
+            br#"class EvalBadCallNameType { public function __call(int $name, array $args) {} }"#.as_slice(),
+            "bad __call name type",
         ),
         (
             br#"class EvalBadCallStatic { public function __callStatic($name, $args) { return "x"; } }"#.as_slice(),
