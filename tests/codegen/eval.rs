@@ -11946,6 +11946,38 @@ echo str_replace("\n", "|", (new ReflectionObject(new EvalReflectClassStringTarg
     assert_eq!(out.stdout, format!("{expected}::{expected}"));
 }
 
+/// Verifies eval ReflectionObject lists dynamic public properties from its reflected instance.
+#[test]
+fn test_eval_reflection_object_lists_dynamic_properties() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectObjectDynamicTarget {
+    public $declared = "declared";
+}
+$object = new EvalReflectObjectDynamicTarget();
+$object->dynamic = "value";
+$ref = new ReflectionObject($object);
+$properties = $ref->getProperties();
+foreach ($properties as $property) {
+    echo $property->getName() . ":";
+    echo ($property->isDynamic() ? "D" : "d") . "|";
+}
+echo ":";
+$dynamic = $ref->getProperty("dynamic");
+echo ($dynamic->isDynamic() ? "D" : "d") . ":";
+echo $dynamic->getValue($object) . ":";
+echo count($ref->getProperties(ReflectionProperty::IS_PUBLIC)) . ":";
+echo count($ref->getProperties(ReflectionProperty::IS_STATIC));');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "declared:d|dynamic:D|:D:value:2:0");
+}
+
 /// Verifies eval Reflection origin metadata APIs are present on supported owners.
 #[test]
 fn test_eval_reflection_origin_metadata_defaults() {

@@ -2300,6 +2300,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constants_res
 
 /// Handles eval-backed `ReflectionClass::getMethods()` and `getProperties()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_get_members_result(
+    object: RuntimeCellHandle,
     identity: u64,
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
@@ -2334,6 +2335,17 @@ pub(in crate::interpreter) fn eval_reflection_class_get_members_result(
             context,
             values,
         )
+        .and_then(|result| {
+            eval_reflection_object_dynamic_property_array_result(
+                object,
+                owner_kind,
+                &reflected_name,
+                filter,
+                result,
+                context,
+                values,
+            )
+        })
         .map(Some);
     }
     let names = eval_reflection_aot_member_names(owner_kind, &reflected_name, values)?;
@@ -2345,11 +2357,23 @@ pub(in crate::interpreter) fn eval_reflection_class_get_members_result(
         context,
         values,
     )
+    .and_then(|result| {
+        eval_reflection_object_dynamic_property_array_result(
+            object,
+            owner_kind,
+            &reflected_name,
+            filter,
+            result,
+            context,
+            values,
+        )
+    })
     .map(Some)
 }
 
 /// Handles eval-backed `ReflectionClass::getMethod()` and `getProperty()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
+    object: RuntimeCellHandle,
     identity: u64,
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
@@ -2411,6 +2435,29 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
                     values,
                 )
                 .map(Some);
+            }
+        }
+        if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
+            if let Some(dynamic_object) =
+                eval_reflection_object_reflected_object(object, context, values)?
+            {
+                let exists = eval_reflection_object_dynamic_property_exists(
+                    dynamic_object,
+                    &requested_name,
+                    values,
+                );
+                values.release(dynamic_object)?;
+                if exists? {
+                    let member = eval_reflection_dynamic_property_metadata(&reflected_name);
+                    return eval_reflection_member_object_result(
+                        EVAL_REFLECTION_OWNER_PROPERTY,
+                        &requested_name,
+                        &member,
+                        context,
+                        values,
+                    )
+                    .map(Some);
+                }
             }
         }
         let message_name = eval_reflection_class_like_attributes(&reflected_name, context)
@@ -2622,6 +2669,9 @@ fn eval_reflection_object_new(
     else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    eval_reflection_with_declaring_class_scope("ReflectionObject", context, |_| {
+        values.property_set(object, "__object", args[0])
+    })?;
     Ok(Some(object))
 }
 
@@ -3392,6 +3442,110 @@ fn eval_reflection_object_dynamic_property_exists(
         }
     }
     Ok(false)
+}
+
+/// Returns the object captured by a `ReflectionObject` instance, when present.
+fn eval_reflection_object_reflected_object(
+    reflection_object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !eval_reflection_object_has_class(reflection_object, "ReflectionObject", values)? {
+        return Ok(None);
+    }
+    let object = eval_reflection_with_declaring_class_scope("ReflectionObject", context, |_| {
+        values.property_get(reflection_object, "__object")
+    })?;
+    if values.type_tag(object)? == EVAL_TAG_OBJECT {
+        Ok(Some(object))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Appends dynamic public properties to `ReflectionObject::getProperties()` results.
+fn eval_reflection_object_dynamic_property_array_result(
+    reflection_object: RuntimeCellHandle,
+    owner_kind: u64,
+    reflected_name: &str,
+    filter: Option<u64>,
+    mut result: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if owner_kind != EVAL_REFLECTION_OWNER_PROPERTY {
+        return Ok(result);
+    }
+    let Some(object) = eval_reflection_object_reflected_object(reflection_object, context, values)?
+    else {
+        return Ok(result);
+    };
+    let property_names =
+        eval_reflection_object_dynamic_property_names(object, reflected_name, context, values);
+    values.release(object)?;
+    let property_names = property_names?;
+    for name in property_names {
+        let member = eval_reflection_dynamic_property_metadata(reflected_name);
+        if !eval_reflection_member_matches_filter(&member, filter) {
+            continue;
+        }
+        let member_object = eval_reflection_member_object_result(
+            EVAL_REFLECTION_OWNER_PROPERTY,
+            &name,
+            &member,
+            context,
+            values,
+        )?;
+        let next_index = values.array_len(result)? as i64;
+        let key = values.int(next_index)?;
+        result = values.array_set(result, key, member_object)?;
+    }
+    Ok(result)
+}
+
+/// Enumerates public dynamic property names on the object behind `ReflectionObject`.
+fn eval_reflection_object_dynamic_property_names(
+    object: RuntimeCellHandle,
+    reflected_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let mut names = Vec::new();
+    let property_count = values.object_property_len(object)?;
+    for position in 0..property_count {
+        let key = values.object_property_iter_key(object, position)?;
+        let key_bytes = values.string_bytes(key);
+        values.release(key)?;
+        let property_name =
+            String::from_utf8(key_bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+        if !eval_reflection_dynamic_property_name_is_visible(
+            reflected_name,
+            &property_name,
+            context,
+        ) {
+            continue;
+        }
+        if !names.iter().any(|name| name == &property_name) {
+            names.push(property_name);
+        }
+    }
+    Ok(names)
+}
+
+/// Returns true when an object-storage name represents a public dynamic property.
+fn eval_reflection_dynamic_property_name_is_visible(
+    reflected_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    !property_name.contains('\0')
+        && eval_reflection_member_name(
+            EVAL_REFLECTION_OWNER_PROPERTY,
+            reflected_name,
+            property_name,
+            context,
+        )
+        .is_none()
 }
 
 /// Builds PHP reflection metadata for a public dynamic object property.

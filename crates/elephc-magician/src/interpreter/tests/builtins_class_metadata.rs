@@ -3267,6 +3267,39 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionObject lists dynamic public properties from the reflected instance.
+#[test]
+fn execute_program_reflection_object_lists_dynamic_properties() {
+    let program = parse_fragment(
+        br#"class EvalReflectObjectDynamicTarget {
+    public $declared = "declared";
+}
+$object = new EvalReflectObjectDynamicTarget();
+$object->dynamic = "value";
+$ref = new ReflectionObject($object);
+$properties = $ref->getProperties();
+foreach ($properties as $property) {
+    echo $property->getName(); echo ":";
+    echo $property->isDynamic() ? "D" : "d"; echo "|";
+}
+echo ":";
+$dynamic = $ref->getProperty("dynamic");
+echo $dynamic->isDynamic() ? "D" : "d"; echo ":";
+echo $dynamic->getValue($object); echo ":";
+echo count($ref->getProperties(ReflectionProperty::IS_PUBLIC)); echo ":";
+echo count($ref->getProperties(ReflectionProperty::IS_STATIC));
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "declared:d|dynamic:D|:D:value:2:0");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionObject rejects non-object constructor arguments.
 #[test]
 fn execute_program_reflection_object_rejects_non_objects() {

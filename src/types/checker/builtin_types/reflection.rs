@@ -1069,6 +1069,12 @@ fn builtin_reflection_object_class() -> FlattenedClass {
     let mut class = builtin_reflection_class();
     class.name = "ReflectionObject".to_string();
     class.extends = Some("ReflectionClass".to_string());
+    class.properties.push(builtin_property(
+        "__object",
+        Visibility::Private,
+        Some(mixed_type()),
+        null_expr(),
+    ));
     if let Some(constructor) = class
         .methods
         .iter_mut()
