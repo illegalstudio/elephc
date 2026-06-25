@@ -569,6 +569,28 @@ pub(in crate::interpreter) fn eval_reflection_class_basic_metadata_result(
     }
 }
 
+/// Handles `ReflectionClass::__toString()` calls for eval-visible class metadata.
+pub(in crate::interpreter) fn eval_reflection_class_to_string_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("__toString") {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    eval_reflection_bind_no_args(evaluated_args)?;
+    let rendered = eval_reflection_class_to_string(&reflected_name, context, values)?;
+    values.string(&rendered).map(Some)
+}
+
 /// Returns one boolean ReflectionClass flag after validating a no-arg call.
 fn eval_reflection_class_flag_result(
     flags: u64,
@@ -5212,6 +5234,230 @@ fn eval_reflection_property_modifiers(
         _ => {}
     }
     modifiers
+}
+
+/// Formats one reflected class-like symbol similarly to PHP's `__toString()` output.
+fn eval_reflection_class_to_string(
+    reflected_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let metadata = eval_reflection_class_to_string_metadata(reflected_name, context, values)?
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let constant_lines =
+        eval_reflection_class_constant_string_lines(&metadata.resolved_name, context, values)?;
+    let property_lines =
+        eval_reflection_class_property_string_lines(&metadata, context, values)?;
+    let method_lines = eval_reflection_class_method_string_lines(&metadata, context, values)?;
+
+    let mut rendered = format!("{} {{\n", eval_reflection_class_to_string_header(&metadata));
+    eval_reflection_class_append_string_section(&mut rendered, "Constants", &constant_lines);
+    eval_reflection_class_append_string_section(&mut rendered, "Properties", &property_lines);
+    eval_reflection_class_append_string_section(&mut rendered, "Methods", &method_lines);
+    rendered.push_str("}\n");
+    Ok(rendered)
+}
+
+/// Returns eval or AOT class metadata for a ReflectionClass string dump.
+fn eval_reflection_class_to_string_metadata(
+    reflected_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalReflectionClassMetadata>, EvalStatus> {
+    if let Some(metadata) = eval_reflection_class_like_attributes(reflected_name, context) {
+        return Ok(Some(metadata));
+    }
+    let runtime_class_name = reflected_name.trim_start_matches('\\');
+    let Some((flags, modifiers)) = eval_reflection_aot_class_flags(runtime_class_name, values)?
+    else {
+        return Ok(None);
+    };
+    let method_names = eval_reflection_aot_member_names(
+        EVAL_REFLECTION_OWNER_METHOD,
+        runtime_class_name,
+        values,
+    )?;
+    let property_names = eval_reflection_aot_member_names(
+        EVAL_REFLECTION_OWNER_PROPERTY,
+        runtime_class_name,
+        values,
+    )?;
+    let interface_names = eval_reflection_aot_class_interface_names(runtime_class_name, values)?;
+    let parent_class_name = eval_reflection_aot_parent_class_name(runtime_class_name, values)?;
+    Ok(Some(EvalReflectionClassMetadata {
+        resolved_name: runtime_class_name.to_string(),
+        source_location: None,
+        attributes: context.native_class_attributes(runtime_class_name),
+        flags,
+        modifiers,
+        interface_names,
+        trait_names: Vec::new(),
+        method_names,
+        property_names,
+        parent_class_name,
+    }))
+}
+
+/// Returns the PHP-like header line for `ReflectionClass::__toString()`.
+fn eval_reflection_class_to_string_header(metadata: &EvalReflectionClassMetadata) -> String {
+    let origin = if metadata.flags & EVAL_REFLECTION_CLASS_FLAG_INTERNAL != 0 {
+        "<internal>"
+    } else {
+        "<user>"
+    };
+    let kind = eval_reflection_class_to_string_kind(metadata.flags);
+    let mut parts = Vec::new();
+    if metadata.flags & EVAL_REFLECTION_CLASS_FLAG_INTERFACE != 0 {
+        parts.push(String::from("interface"));
+        parts.push(metadata.resolved_name.clone());
+        if !metadata.interface_names.is_empty() {
+            parts.push(String::from("extends"));
+            parts.push(metadata.interface_names.join(", "));
+        }
+    } else if metadata.flags & EVAL_REFLECTION_CLASS_FLAG_TRAIT != 0 {
+        parts.push(String::from("trait"));
+        parts.push(metadata.resolved_name.clone());
+    } else {
+        if metadata.flags & EVAL_REFLECTION_CLASS_FLAG_ABSTRACT != 0 {
+            parts.push(String::from("abstract"));
+        }
+        if metadata.flags & EVAL_REFLECTION_CLASS_FLAG_FINAL != 0 {
+            parts.push(String::from("final"));
+        }
+        if metadata.flags & EVAL_REFLECTION_CLASS_FLAG_READONLY != 0 {
+            parts.push(String::from("readonly"));
+        }
+        parts.push(String::from("class"));
+        parts.push(metadata.resolved_name.clone());
+        if let Some(parent_class_name) = metadata.parent_class_name.as_ref() {
+            parts.push(String::from("extends"));
+            parts.push(parent_class_name.clone());
+        }
+        if !metadata.interface_names.is_empty() {
+            parts.push(String::from("implements"));
+            parts.push(metadata.interface_names.join(", "));
+        }
+    }
+    format!("{kind} [ {origin} {} ]", parts.join(" "))
+}
+
+/// Returns the ReflectionClass string header owner kind label.
+fn eval_reflection_class_to_string_kind(flags: u64) -> &'static str {
+    if flags & EVAL_REFLECTION_CLASS_FLAG_INTERFACE != 0 {
+        "Interface"
+    } else if flags & EVAL_REFLECTION_CLASS_FLAG_TRAIT != 0 {
+        "Trait"
+    } else {
+        "Class"
+    }
+}
+
+/// Formats all constants visible to `ReflectionClass::__toString()`.
+fn eval_reflection_class_constant_string_lines(
+    reflected_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let constant_names = eval_reflection_constant_names(reflected_name, context, values)?;
+    let mut lines = Vec::with_capacity(constant_names.len());
+    for constant_name in constant_names {
+        let line = eval_reflection_class_constant_to_string(
+            reflected_name,
+            &constant_name,
+            EVAL_REFLECTION_OWNER_CLASS_CONSTANT,
+            context,
+            values,
+        )?;
+        lines.push(line.trim_end_matches('\n').to_string());
+    }
+    Ok(lines)
+}
+
+/// Formats all properties visible to `ReflectionClass::__toString()`.
+fn eval_reflection_class_property_string_lines(
+    metadata: &EvalReflectionClassMetadata,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let mut lines = Vec::with_capacity(metadata.property_names.len());
+    for property_name in &metadata.property_names {
+        let Some(member) = eval_reflection_reflected_property_metadata(
+            &metadata.resolved_name,
+            property_name,
+            context,
+            values,
+        )?
+        else {
+            continue;
+        };
+        lines.push(eval_reflection_property_to_string(property_name, &member));
+    }
+    Ok(lines)
+}
+
+/// Formats all methods visible to `ReflectionClass::__toString()`.
+fn eval_reflection_class_method_string_lines(
+    metadata: &EvalReflectionClassMetadata,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let mut lines = Vec::with_capacity(metadata.method_names.len());
+    for method_name in &metadata.method_names {
+        let member =
+            if let Some(member) =
+                eval_reflection_method_metadata(&metadata.resolved_name, method_name, context)
+            {
+                Some(member)
+            } else {
+                eval_reflection_aot_method_metadata_with_signature_if_exists(
+                    &metadata.resolved_name,
+                    method_name,
+                    context,
+                    values,
+                )?
+            };
+        let Some(member) = member else {
+            continue;
+        };
+        lines.push(eval_reflection_method_summary_to_string(method_name, &member));
+    }
+    Ok(lines)
+}
+
+/// Appends one named section to a ReflectionClass string dump.
+fn eval_reflection_class_append_string_section(
+    rendered: &mut String,
+    label: &str,
+    lines: &[String],
+) {
+    rendered.push_str(&format!("  - {label} [{}] {{\n", lines.len()));
+    for line in lines {
+        rendered.push_str("    ");
+        rendered.push_str(line);
+        rendered.push('\n');
+    }
+    rendered.push_str("  }\n");
+}
+
+/// Formats one reflected method line for `ReflectionClass::__toString()`.
+fn eval_reflection_method_summary_to_string(
+    method_name: &str,
+    member: &EvalReflectionMemberMetadata,
+) -> String {
+    let mut parts = Vec::new();
+    if member.is_abstract {
+        parts.push(String::from("abstract"));
+    }
+    if member.is_final {
+        parts.push(String::from("final"));
+    }
+    if member.is_static {
+        parts.push(String::from("static"));
+    }
+    parts.push(eval_reflection_visibility_label(member.visibility).to_string());
+    parts.push(String::from("method"));
+    parts.push(method_name.to_string());
+    format!("Method [ <user> {} ]", parts.join(" "))
 }
 
 /// Formats one reflected function or method similarly to PHP's `__toString()` output.

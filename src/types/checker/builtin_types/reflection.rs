@@ -704,6 +704,12 @@ fn builtin_reflection_class() -> FlattenedClass {
                 empty_string(),
             ),
             builtin_property(
+                "__string",
+                Visibility::Private,
+                Some(TypeExpr::Str),
+                empty_string(),
+            ),
+            builtin_property(
                 "__attrs",
                 Visibility::Private,
                 Some(array_type()),
@@ -916,6 +922,7 @@ fn builtin_reflection_class() -> FlattenedClass {
                 false,
             )]),
             builtin_reflection_class_string_method("getName", "__name"),
+            builtin_reflection_class_string_method("__toString", "__string"),
             builtin_reflection_constant_false_union_method("getDocComment"),
             builtin_reflection_constant_false_union_method("getExtensionName"),
             builtin_reflection_constant_null_mixed_method("getExtension"),
@@ -1084,6 +1091,7 @@ fn reflection_enum_inherited_method_is_supported(method_name: &str) -> bool {
     matches!(
         method_name.to_ascii_lowercase().as_str(),
         "__construct"
+            | "__tostring"
             | "getname"
             | "getshortname"
             | "getnamespacename"
@@ -4669,6 +4677,14 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     .get_mut(&php_symbol_key("newInstanceWithoutConstructor"))
                 {
                     sig.return_type = PhpType::Mixed;
+                }
+            }
+            if matches!(
+                class_name,
+                "ReflectionClass" | "ReflectionObject" | "ReflectionEnum"
+            ) {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
                 }
             }
             if matches!(class_name, "ReflectionMethod" | "ReflectionProperty") {

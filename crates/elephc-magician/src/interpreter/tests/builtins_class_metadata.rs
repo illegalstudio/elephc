@@ -1751,6 +1751,31 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass stringifies retained eval class metadata.
+#[test]
+fn execute_program_reflection_class_to_string() {
+    let program = parse_fragment(
+        br#"class EvalReflectClassStringTarget {
+    public const ANSWER = 42;
+    public int $id = 7;
+    public function read(string $name = "Ada"): ?string { return $name; }
+}
+echo (new ReflectionClass("EvalReflectClassStringTarget"))->__toString();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Class [ <user> class EvalReflectClassStringTarget ] {\n  - Constants [1] {\n    Constant [ public int ANSWER ] { 42 }\n  }\n  - Properties [1] {\n    Property [ public int $id = 7 ]\n  }\n  - Methods [1] {\n    Method [ <user> public method read ]\n  }\n}\n"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionMethod exposes eval method parameter objects with names and positions.
 #[test]
 fn execute_program_reflects_eval_method_parameters() {

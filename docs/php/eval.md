@@ -337,6 +337,9 @@ string, null, empty-array, or supported array-valued default values for generate
 `ReflectionClass::getDefaultProperties()`. AOT method and
 property/class-constant reflection expose generated member attributes when
 their arguments fit the materializable literal subset.
+`ReflectionClass`, `ReflectionObject`, and `ReflectionEnum` expose a compact
+`__toString()` dump for eval-visible class-like metadata, including supported
+constants, properties, and methods.
 `ReflectionMethod::getDeclaringClass()` and
 `ReflectionProperty::getDeclaringClass()` return a materialized
 `ReflectionClass` for the symbol that declares the reflected
