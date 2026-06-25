@@ -3240,6 +3240,7 @@ fn lower_unset_locals(
             _ => {}
         }
     }
+    crate::ir_lower::ownership::collect_cycles(ctx, Some(expr.span));
     Some(null)
 }
 

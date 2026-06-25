@@ -346,6 +346,7 @@ pub enum Op {
     FunctionVariantDispatch,
     Acquire,
     Release,
+    GcCollect,
     Move,
     Borrow,
     EnsureOwned,
@@ -425,6 +426,7 @@ impl Op {
             ErrorSuppressBegin | ErrorSuppressEnd => E::READS_GLOBAL | E::WRITES_GLOBAL,
             ThrowException => E::MAY_THROW | E::WRITES_GLOBAL,
             Acquire | Release | EnsureOwned => E::REFCOUNT_OP | E::WRITES_HEAP,
+            GcCollect => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             ClassConstant => E::MAY_DEOPT,
         }
     }
@@ -646,6 +648,7 @@ impl Op {
             FunctionVariantDispatch => "function_variant_dispatch",
             Acquire => "acquire",
             Release => "release",
+            GcCollect => "gc_collect",
             Move => "move",
             Borrow => "borrow",
             EnsureOwned => "ensure_owned",

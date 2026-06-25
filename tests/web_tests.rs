@@ -267,6 +267,86 @@ fn web_superglobal_visible_in_function() {
     assert!(resp.ends_with("DELETE"), "body: {:?}", resp);
 }
 
+/// Verifies a router storing an interface-typed handler survives repeated web requests.
+#[test]
+fn web_router_interface_handler_survives_repeated_requests() {
+    let dir = make_test_dir("web_router_iface");
+    let src = r#"<?php
+class Request {
+    public string $method;
+    public string $path;
+    public function __construct() {
+        $this->method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+        $uri = $_SERVER['REQUEST_URI'] ?? '/';
+        $cut = strpos($uri, '?');
+        $this->path = $cut === false ? $uri : substr($uri, 0, $cut);
+    }
+    public function segment(int $index, string $default = ''): string {
+        $n = 0;
+        foreach (explode('/', $this->path) as $part) {
+            if ($part === '') { continue; }
+            if ($n === $index) { return $part; }
+            $n++;
+        }
+        return $default;
+    }
+}
+interface Handler { public function handle(Request $request): void; }
+class Hello implements Handler {
+    public function handle(Request $request): void {
+        echo 'Hello, ' . $request->segment(1, 'world') . "\n";
+    }
+}
+class Route {
+    public string $method;
+    public string $pattern;
+    public Handler $handler;
+    public function __construct(string $method, string $pattern, Handler $handler) {
+        $this->method = $method;
+        $this->pattern = $pattern;
+        $this->handler = $handler;
+    }
+    public function matches(Request $request): bool {
+        return $this->method === $request->method;
+    }
+    public function run(Request $request): void {
+        $this->handler->handle($request);
+    }
+}
+class Router {
+    private array $routes = [];
+    public function add(string $method, string $pattern, Handler $handler): void {
+        $this->routes[] = new Route($method, $pattern, $handler);
+    }
+    public function dispatch(Request $request): void {
+        foreach ($this->routes as $route) {
+            if (!$route->matches($request)) { continue; }
+            $route->run($request);
+            return;
+        }
+        echo 'missing';
+    }
+}
+$router = new Router();
+$router->add('GET', '/hello/:name', new Hello());
+$router->dispatch(new Request());
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    for i in 0..25 {
+        let resp = http_get(&addr, "/hello/ada");
+        assert!(
+            resp.ends_with("Hello, ada\n"),
+            "response {i} body: {:?}",
+            resp
+        );
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Verifies $_SERVER is populated from the request line and headers.
 #[test]
 fn web_server_superglobal_populated() {

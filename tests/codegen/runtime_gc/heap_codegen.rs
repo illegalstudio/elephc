@@ -1,5 +1,5 @@
 //! Purpose:
-//! Integration or regression tests for end-to-end codegen coverage of runtime GC heap codegen, including new object codegen sets heap kind, and decref hash codegen skips GC for scalar only hashes.
+//! Integration or regression tests for end-to-end codegen coverage of runtime GC heap codegen, including new object codegen sets heap kind, and explicit GC safe points for `unset()`.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -43,23 +43,34 @@ fn test_new_object_codegen_sets_heap_kind() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies that hash decrement codegen skips the GC cyclic-value check for scalar-only hashes.
+/// Returns the generated assembly body for one runtime helper label.
+fn asm_function<'a>(asm: &'a str, label: &str) -> &'a str {
+    let marker = format!("{label}:");
+    let start = asm
+        .find(&marker)
+        .unwrap_or_else(|| panic!("missing assembly label {label}"));
+    let rest = &asm[start..];
+    let end = rest.find("\n\n").unwrap_or(rest.len());
+    &rest[..end]
+}
+
+/// Verifies `unset()` emits an explicit GC safe point outside hash decref.
 ///
 /// Compiles a PHP snippet that creates a flat string-keyed array `["a" => 1, "b" => 2]` and then
-/// `unset`s it. Asserts the runtime assembly contains `__rt_hash_may_have_cyclic_values`
-/// and the conditional skip branch (`cbz` on AArch64 / `jz` on x86_64) that avoids a full
-/// GC traversal when the hash holds only scalar values.
+/// `unset`s it. The user assembly should call the cycle collector after the PHP-visible
+/// root has been removed, while the runtime hash decref helper should only decrement RC
+/// and free at zero.
 ///
-/// This is a regression guard: scalar-only hashes must not trigger the slower GC path.
+/// This is a regression guard against reintroducing collection from generic release paths.
 #[test]
-fn test_decref_hash_codegen_skips_gc_for_scalar_only_hashes() {
+fn test_unset_codegen_uses_explicit_gc_safe_point() {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
-    let (_user_asm, _runtime_asm, _) = compile_source_to_asm_with_options(
+    let (user_asm, _runtime_asm, _) = compile_source_to_asm_with_options(
         r#"<?php
 $map = ["a" => 1, "b" => 2];
 unset($map);
@@ -70,29 +81,34 @@ unset($map);
         false,
     );
     let runtime_asm = elephc::codegen::generate_runtime(8_388_608, target());
-    assert!(
-        runtime_asm.contains("__rt_hash_may_have_cyclic_values"),
-        "runtime missing cyclic-value check"
-    );
+    let decref_hash = asm_function(&runtime_asm, "__rt_decref_hash");
     match target().arch {
         Arch::AArch64 => {
             assert!(
-                runtime_asm.contains("bl __rt_hash_may_have_cyclic_values"),
-                "runtime missing cyclic-value call"
+                user_asm.contains("bl __rt_gc_collect_cycles"),
+                "unset missing explicit GC safe point: {user_asm}"
             );
             assert!(
-                runtime_asm.contains("cbz x0, __rt_decref_hash_skip"),
-                "runtime missing scalar-only skip branch"
+                !decref_hash.contains("bl __rt_gc_collect_cycles"),
+                "hash decref must not collect from a generic release path: {decref_hash}"
+            );
+            assert!(
+                !decref_hash.contains("bl __rt_hash_may_have_cyclic_values"),
+                "hash decref must not pre-scan for cycle collection: {decref_hash}"
             );
         }
         Arch::X86_64 => {
             assert!(
-                runtime_asm.contains("call __rt_hash_may_have_cyclic_values"),
-                "runtime missing cyclic-value call"
+                user_asm.contains("call __rt_gc_collect_cycles"),
+                "unset missing explicit GC safe point: {user_asm}"
             );
             assert!(
-                runtime_asm.contains("jz __rt_decref_hash_skip"),
-                "runtime missing scalar-only skip branch"
+                !decref_hash.contains("call __rt_gc_collect_cycles"),
+                "hash decref must not collect from a generic release path: {decref_hash}"
+            );
+            assert!(
+                !decref_hash.contains("call __rt_hash_may_have_cyclic_values"),
+                "hash decref must not pre-scan for cycle collection: {decref_hash}"
             );
         }
     }

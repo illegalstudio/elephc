@@ -189,6 +189,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
         Op::Release => ownership::lower_release(ctx, &inst),
+        Op::GcCollect => lower_gc_collect(ctx),
         Op::Move | Op::Borrow => ownership::lower_forward(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),
@@ -1037,6 +1038,12 @@ fn descriptor_entry_stack_offsets(assignments: &[abi::OutgoingArgAssignment]) ->
         next_offset += descriptor_entry_arg_slot_size(&assignment.ty);
     }
     (offsets, next_offset)
+}
+
+/// Lowers an explicit cycle-collection safe point.
+fn lower_gc_collect(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");
+    Ok(())
 }
 
 /// Converts a descriptor overflow offset into a caller-stack frame offset.

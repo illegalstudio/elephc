@@ -6,7 +6,8 @@
 //! - `crate::codegen::runtime::emitters::emit_runtime()` via `crate::codegen::runtime::arrays`.
 //!
 //! Key details:
-//! - Decrement helpers are release paths for refcounted values and must balance recursive frees with GC cycle collection.
+//! - Decrement helpers are release paths for refcounted values; cycle collection
+//!   runs only from explicit safe points after PHP-visible roots are updated.
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -20,8 +21,7 @@ const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 /// Behavior:
 /// - Skips null, non-heap, and sentinel pointers immediately.
 /// - Decrements refcount; if zero, tail-calls `__rt_hash_free_deep` for deep release.
-/// - If refcount remains non-zero and GC is not suppressed/running, checks for cyclic
-///   values via `__rt_hash_may_have_cyclic_values`; if found, triggers `__rt_gc_collect_cycles`.
+/// - If refcount remains non-zero, returns without invoking cycle collection.
 /// - On x86_64, additionally validates the heap magic marker before any operation.
 ///
 /// ABI: preserves all caller-saved registers except `x0`/`rax` used for the optional
@@ -66,22 +66,7 @@ pub fn emit_decref_hash(emitter: &mut Emitter) {
     emitter.instruction("str w9, [x0, #-12]");                                  // store decremented refcount
     emitter.instruction("b.eq __rt_decref_hash_free");                          // zero refcount means the hash can be freed immediately
 
-    // -- non-zero refcount may indicate a now-unrooted cycle; only collect when this hash can still reach cyclic children --
-    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_release_suppressed");
-    emitter.instruction("ldr x9, [x9]");                                        // load the release-suppression flag
-    emitter.instruction("cbnz x9, __rt_decref_hash_skip");                      // ordinary deep-free walks suppress nested collector runs
-    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
-    emitter.instruction("ldr x9, [x9]");                                        // load the collector-active flag
-    emitter.instruction("cbnz x9, __rt_decref_hash_skip");                      // nested decref calls during collection must not restart the collector
-    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address across helper calls
-    emitter.instruction("bl __rt_hash_may_have_cyclic_values");                 // inspect entry tags to see whether this hash can still participate in a cycle
-    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after the helper returns
-    emitter.instruction("cbz x0, __rt_decref_hash_skip");                       // scalar-only hashes can skip the collector entirely
-    emitter.label("__rt_decref_hash_collect");
-    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address across the collector call
-    emitter.instruction("bl __rt_gc_collect_cycles");                           // reclaim any newly-unrooted refcounted graph components
-    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after collection
-    emitter.instruction("b __rt_decref_hash_skip");                             // return after the optional collection pass
+    emitter.instruction("b __rt_decref_hash_skip");                             // non-zero refcount stays alive until an explicit GC safe point
 
     // -- refcount reached zero: deep free the hash table and its owned entries --
     emitter.label("__rt_decref_hash_free");
@@ -100,7 +85,7 @@ pub fn emit_decref_hash(emitter: &mut Emitter) {
 /// - Uses the x86_64 heap magic marker in the high 32 bits of the header word to
 ///   distinguish foreign pointers from eligphc-owned hash tables.
 /// - Does not use a frame pointer or callee-saved registers; preserves `rbx`, `r12`–`r15`.
-/// - `__rt_hash_free_deep` and GC helpers are called with `call` instead of `bl`.
+/// - `__rt_hash_free_deep` is reached through a tail jump.
 fn emit_decref_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: decref_hash ---");
@@ -126,19 +111,7 @@ fn emit_decref_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10d, 1");                                         // decrement the hash refcount for the releasing x86_64 owner
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented hash refcount back into the uniform heap header
     emitter.instruction("jz __rt_decref_hash_free");                            // zero refcount means the hash and its owned entries can be released now
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_release_suppressed");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the release-suppression flag before considering a targeted cycle-collector run
-    emitter.instruction("test r11, r11");                                       // is this decref happening inside an ordinary deep-free walk?
-    emitter.instruction("jnz __rt_decref_hash_skip");                           // yes — nested collector runs stay suppressed during deep frees
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_collecting");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the collector-active flag before attempting another collection pass
-    emitter.instruction("test r11, r11");                                       // is the collector already running?
-    emitter.instruction("jnz __rt_decref_hash_skip");                           // yes — nested decref calls during collection must not restart the collector
-    emitter.instruction("call __rt_hash_may_have_cyclic_values");               // inspect entry tags to see whether this hash can still participate in a cycle
-    emitter.instruction("test rax, rax");                                       // did the cyclic-value inspection find any refcounted hash payloads?
-    emitter.instruction("jz __rt_decref_hash_skip");                            // scalar-only hashes can skip the collector entirely on x86_64 too
-    emitter.instruction("call __rt_gc_collect_cycles");                         // reclaim any newly unrooted hash-containing graph components on x86_64
-    emitter.instruction("jmp __rt_decref_hash_skip");                           // return after the optional x86_64 collector pass
+    emitter.instruction("jmp __rt_decref_hash_skip");                           // non-zero refcount stays alive until an explicit GC safe point
     emitter.label("__rt_decref_hash_skip");
     emitter.instruction("ret");                                                 // nothing else needs to happen for non-zero refcounts or foreign pointers
 
