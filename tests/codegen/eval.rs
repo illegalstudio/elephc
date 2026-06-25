@@ -12228,6 +12228,60 @@ EvalReflectNewProtectedAotCtorChild::run();
     );
 }
 
+/// Verifies eval ReflectionClass::newInstance constructs generated/AOT classes.
+#[test]
+fn test_eval_reflection_class_new_instance_constructs_aot_class() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalReflectNewAotTarget {
+    public string $label = "";
+
+    public function __construct(string $left, string $right = "B") {
+        $this->label = $left . $right;
+    }
+}
+
+echo eval('$ref = new ReflectionClass("EvalReflectNewAotTarget");
+$first = $ref->newInstance("A");
+echo $first->label . ":";
+$second = $ref->newInstance(right: "Y", left: "X");
+return $second->label;');
+"#,
+    );
+    assert_eq!(out, "AB:XY");
+}
+
+/// Verifies eval ReflectionClass::newInstance rejects non-instantiable AOT class-likes.
+#[test]
+fn test_eval_reflection_class_new_instance_rejects_aot_non_instantiable_class_likes() {
+    let cases = [
+        (
+            "abstract class EvalReflectNewAotAbstract {}",
+            "EvalReflectNewAotAbstract",
+        ),
+        ("interface EvalReflectNewAotIface {}", "EvalReflectNewAotIface"),
+        ("trait EvalReflectNewAotTrait {}", "EvalReflectNewAotTrait"),
+        (
+            "enum EvalReflectNewAotEnum { case Ready; }",
+            "EvalReflectNewAotEnum",
+        ),
+    ];
+    for (declaration, class_name) in cases {
+        let source = format!(
+            r#"<?php
+{declaration}
+eval('$ref = new ReflectionClass("{class_name}");
+$ref->newInstance();');
+"#
+        );
+        let err = compile_and_run_expect_failure(&source);
+        assert!(
+            err.contains("Fatal error: eval() runtime failed"),
+            "unexpected stderr for {class_name}: {err}"
+        );
+    }
+}
+
 /// Verifies eval ReflectionMethod::invoke and invokeArgs call eval-declared methods.
 #[test]
 fn test_eval_reflection_method_invoke_calls_eval_method() {
@@ -13383,10 +13437,15 @@ echo eval('$ref = new ReflectionClass("EvalReflectNewArgsAotTarget");
 $first = $ref->newInstanceArgs(["right" => "Y", "left" => "X"]);
 echo $first->label . ":";
 $second = $ref->newInstanceArgs(["Q", "R"]);
-return $second->label;');
+echo $second->label . ":";
+$args = [];
+$args["right"] = "N";
+$args["left"] = "M";
+$third = $ref->newInstanceArgs($args);
+return $third->label;');
 "#,
     );
-    assert_eq!(out, "XY:QR");
+    assert_eq!(out, "XY:QR:MN");
 }
 
 /// Verifies eval object construction passes AOT constructor arguments on the caller stack.

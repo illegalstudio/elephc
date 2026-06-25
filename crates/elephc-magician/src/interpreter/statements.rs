@@ -441,13 +441,51 @@ fn eval_non_object_array_set_var_stmt(
     } else {
         values.array_new(1)?
     };
-    let index = eval_expr(index, context, scope, values)?;
+    let index = eval_array_set_index(index, context, scope, values)?;
     let value = eval_expr(value, context, scope, values)?;
+    let array = eval_array_set_target_for_index(array, index, values)?;
     let array = values.array_set(array, index, value)?;
     for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership)? {
         values.release(replaced)?;
     }
     Ok(())
+}
+
+/// Evaluates an array-set index and normalizes PHP integer-string keys.
+fn eval_array_set_index(
+    index: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let index = eval_expr(index, context, scope, values)?;
+    if values.type_tag(index)? != EVAL_TAG_STRING {
+        return Ok(index);
+    }
+    let bytes = values.string_bytes(index)?;
+    match eval_numeric_string_array_key(&bytes) {
+        Some(key) => values.int(key),
+        None => Ok(index),
+    }
+}
+
+/// Converts indexed arrays to associative arrays before writing a non-numeric string key.
+fn eval_array_set_target_for_index(
+    array: RuntimeCellHandle,
+    index: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if values.type_tag(array)? != EVAL_TAG_ARRAY || values.type_tag(index)? != EVAL_TAG_STRING {
+        return Ok(array);
+    }
+    let len = values.array_len(array)?;
+    let mut assoc = values.assoc_new(len + 1)?;
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, key)?;
+        assoc = values.array_set(assoc, key, value)?;
+    }
+    Ok(assoc)
 }
 
 /// Executes an eval `try` body and handles supported `catch` clauses.
@@ -4003,6 +4041,9 @@ fn eval_reflection_class_new_instance_result(
     let class_name = context
         .resolve_class_name(&reflected_name)
         .unwrap_or(reflected_name);
+    if eval_reflection_aot_class_allows_public_instantiation(&class_name, values)? == Some(false) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     eval_reflection_public_constructor_scope(context, values, |context, values| {
         let instance = values.new_object(&class_name)?;
         eval_native_constructor_with_evaluated_args(
