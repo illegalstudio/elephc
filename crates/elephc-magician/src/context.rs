@@ -125,8 +125,30 @@ pub enum NativeCallableDefault {
     EmptyArray,
     Object {
         class_name: String,
-        args: Vec<NativeCallableDefault>,
+        args: Vec<NativeCallableObjectDefaultArg>,
     },
+}
+
+/// Constructor argument for an object-valued native AOT callable default.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeCallableObjectDefaultArg {
+    pub name: Option<String>,
+    pub value: NativeCallableDefault,
+}
+
+impl NativeCallableObjectDefaultArg {
+    /// Creates one positional constructor argument for an object-valued default.
+    pub fn positional(value: NativeCallableDefault) -> Self {
+        Self { name: None, value }
+    }
+
+    /// Creates one named constructor argument for an object-valued default.
+    pub fn named(name: impl Into<String>, value: NativeCallableDefault) -> Self {
+        Self {
+            name: Some(name.into()),
+            value,
+        }
+    }
 }
 
 /// Native AOT method or constructor signature metadata visible to eval fragments.

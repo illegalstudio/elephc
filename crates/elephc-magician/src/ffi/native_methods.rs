@@ -12,7 +12,9 @@
 
 use super::util::abi_name_to_string;
 use crate::abi::{ElephcEvalContext, ABI_VERSION};
-use crate::context::{NativeCallableDefault, NativeCallableSignature};
+use crate::context::{
+    NativeCallableDefault, NativeCallableObjectDefaultArg, NativeCallableSignature,
+};
 use crate::eval_ir::{
     EvalAttribute, EvalAttributeArg, EvalParameterType, EvalParameterTypeVariant,
 };
@@ -38,6 +40,7 @@ const NATIVE_ATTRIBUTE_ARG_ARRAY: u8 = 6;
 const NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
 const NATIVE_OBJECT_DEFAULT_ARG_OBJECT: u8 = 2;
+const NATIVE_OBJECT_DEFAULT_ARG_NAMED: u8 = 3;
 const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = u8::MAX as usize;
 
 #[derive(Clone, Copy)]
@@ -1844,8 +1847,33 @@ fn native_callable_object_default_from_bytes(
 fn native_callable_object_default_arg(
     bytes: &[u8],
     offset: &mut usize,
+) -> Option<NativeCallableObjectDefaultArg> {
+    let tag = native_attribute_take_u8(bytes, offset)?;
+    if tag == NATIVE_OBJECT_DEFAULT_ARG_NAMED {
+        let name = native_attribute_take_string(bytes, offset)?;
+        let value = native_callable_object_default_arg_value(bytes, offset)?;
+        return Some(NativeCallableObjectDefaultArg::named(name, value));
+    }
+    native_callable_object_default_arg_value_for_tag(tag, bytes, offset)
+        .map(NativeCallableObjectDefaultArg::positional)
+}
+
+/// Decodes one object-default constructor argument value from a generated binary spec.
+fn native_callable_object_default_arg_value(
+    bytes: &[u8],
+    offset: &mut usize,
 ) -> Option<NativeCallableDefault> {
-    match native_attribute_take_u8(bytes, offset)? {
+    let tag = native_attribute_take_u8(bytes, offset)?;
+    native_callable_object_default_arg_value_for_tag(tag, bytes, offset)
+}
+
+/// Decodes one tagged object-default constructor argument value.
+fn native_callable_object_default_arg_value_for_tag(
+    tag: u8,
+    bytes: &[u8],
+    offset: &mut usize,
+) -> Option<NativeCallableDefault> {
+    match tag {
         NATIVE_OBJECT_DEFAULT_ARG_SCALAR => {
             let kind = native_attribute_take_u64(bytes, offset)?;
             let payload = native_attribute_take_u64(bytes, offset)?;

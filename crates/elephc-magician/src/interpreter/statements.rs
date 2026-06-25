@@ -9,6 +9,7 @@
 //! - Scope writes flow through shared scope-cell helpers so global aliases and reference aliases stay coherent.
 
 use super::*;
+use crate::context::NativeCallableObjectDefaultArg;
 
 /// Executes statements in source order and propagates the first eval `return`.
 pub(in crate::interpreter) fn execute_statements(
@@ -5042,7 +5043,7 @@ fn materialize_native_callable_default(
 /// Allocates and constructs one object-valued native AOT parameter default.
 fn materialize_native_callable_object_default(
     class_name: &str,
-    args: &[NativeCallableDefault],
+    args: &[NativeCallableObjectDefaultArg],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -5050,8 +5051,8 @@ fn materialize_native_callable_object_default(
     let mut constructor_args = Vec::with_capacity(args.len());
     for arg in args {
         constructor_args.push(EvaluatedCallArg {
-            name: None,
-            value: materialize_native_callable_default(arg, context, values)?,
+            name: arg.name.clone(),
+            value: materialize_native_callable_default(&arg.value, context, values)?,
             ref_target: None,
         });
     }

@@ -9831,6 +9831,43 @@ return $obj->describe() . ":" . EvalAotObjectDefaultMethodTarget::describeStatic
     assert_eq!(out, "meth:stat:meth");
 }
 
+/// Verifies eval preserves named constructor args in generated/AOT object defaults.
+#[test]
+fn test_eval_aot_object_default_uses_named_constructor_args() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotNamedObjectDefaultDep {
+    public string $label;
+
+    public function __construct(string $left = "l", string $right = "r") {
+        $this->label = $left . $right;
+    }
+}
+
+class EvalAotNamedObjectDefaultMethodTarget {
+    public function describe(EvalAotNamedObjectDefaultDep $dep = new EvalAotNamedObjectDefaultDep(right: "R", left: "L")): string {
+        return $dep->label;
+    }
+}
+
+class EvalAotNamedObjectDefaultCtorTarget {
+    public string $label = "";
+
+    public function __construct(EvalAotNamedObjectDefaultDep $dep = new EvalAotNamedObjectDefaultDep(right: "B", left: "A")) {
+        $this->label = $dep->label;
+    }
+}
+
+echo eval('$obj = new EvalAotNamedObjectDefaultMethodTarget();
+$method = new ReflectionMethod("EvalAotNamedObjectDefaultMethodTarget", "describe");
+$default = $method->getParameters()[0]->getDefaultValue();
+$box = new EvalAotNamedObjectDefaultCtorTarget();
+return $obj->describe() . ":" . $default->label . ":" . $box->label;');
+"#,
+    );
+    assert_eq!(out, "LR:LR:AB");
+}
+
 /// Verifies eval materializes nested generated/AOT object defaults during method dispatch.
 #[test]
 fn test_eval_aot_method_call_uses_nested_object_default() {

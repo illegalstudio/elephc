@@ -72,6 +72,7 @@ const NATIVE_ATTRIBUTE_ARG_ARRAY: u8 = 6;
 const NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
 const NATIVE_OBJECT_DEFAULT_ARG_OBJECT: u8 = 2;
+const NATIVE_OBJECT_DEFAULT_ARG_NAMED: u8 = 3;
 const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = u8::MAX as usize;
 
 /// Local slot metadata needed for conservative eval scope synchronization.
@@ -147,8 +148,14 @@ enum EvalNativeCallableDefault {
     String(String),
     Object {
         class_name: String,
-        args: Vec<EvalNativeCallableDefault>,
+        args: Vec<EvalNativeCallableObjectDefaultArg>,
     },
+}
+
+/// Constructor argument metadata for an object-valued native callable default.
+struct EvalNativeCallableObjectDefaultArg {
+    name: Option<String>,
+    default: EvalNativeCallableDefault,
 }
 
 /// Lowers `eval($code)` to the eval bridge ABI and leaves the eval return cell in result registers.
@@ -1241,12 +1248,27 @@ fn eval_native_object_default(expr: &Expr) -> Option<EvalNativeCallableDefault> 
     }
     let mut default_args = Vec::with_capacity(args.len());
     for arg in args {
-        default_args.push(eval_native_callable_default(arg)?);
+        default_args.push(eval_native_object_default_arg(arg)?);
     }
     Some(EvalNativeCallableDefault::Object {
         class_name: class_name.as_canonical(),
         args: default_args,
     })
+}
+
+/// Converts one object-valued default constructor argument into bridge metadata.
+fn eval_native_object_default_arg(expr: &Expr) -> Option<EvalNativeCallableObjectDefaultArg> {
+    match &expr.kind {
+        ExprKind::NamedArg { name, value } => Some(EvalNativeCallableObjectDefaultArg {
+            name: Some(name.clone()),
+            default: eval_native_callable_default(value)?,
+        }),
+        ExprKind::Spread(_) => None,
+        _ => Some(EvalNativeCallableObjectDefaultArg {
+            name: None,
+            default: eval_native_callable_default(expr)?,
+        }),
+    }
 }
 
 /// Converts supported property defaults into the compact eval bridge default ABI.
@@ -1298,7 +1320,22 @@ fn encode_eval_native_object_default(default: &EvalNativeCallableDefault) -> Vec
 }
 
 /// Encodes one object-default constructor argument for libelephc-magician.
-fn encode_eval_native_object_default_arg(bytes: &mut Vec<u8>, default: &EvalNativeCallableDefault) {
+fn encode_eval_native_object_default_arg(
+    bytes: &mut Vec<u8>,
+    arg: &EvalNativeCallableObjectDefaultArg,
+) {
+    if let Some(name) = &arg.name {
+        bytes.push(NATIVE_OBJECT_DEFAULT_ARG_NAMED);
+        encode_eval_native_default_string(bytes, name);
+    }
+    encode_eval_native_object_default_arg_value(bytes, &arg.default);
+}
+
+/// Encodes one object-default constructor argument value for libelephc-magician.
+fn encode_eval_native_object_default_arg_value(
+    bytes: &mut Vec<u8>,
+    default: &EvalNativeCallableDefault,
+) {
     match default {
         EvalNativeCallableDefault::Scalar { kind, payload } => {
             bytes.push(NATIVE_OBJECT_DEFAULT_ARG_SCALAR);
