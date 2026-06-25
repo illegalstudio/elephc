@@ -4566,6 +4566,36 @@ $box->run();
     assert_eq!(out, "N:I7:I42:N");
 }
 
+/// Verifies eval fragments can read and write public nullable scalar AOT properties through `$this`.
+#[test]
+fn test_eval_fragment_can_mutate_this_nullable_scalar_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNullableScalarPropBox {
+    public ?string $name = null;
+    public ?bool $flag = null;
+    public ?float $ratio = null;
+
+    public function run(): void {
+        echo eval('$out = ($this->name === null && $this->flag === null && $this->ratio === null) ? "N" : "bad";
+            $this->name = "Ada";
+            $this->flag = true;
+            $this->ratio = 2.5;
+            $out = $out . ":" . (($this->name === "Ada" && $this->flag === true && $this->ratio === 2.5) ? "set" : "bad");
+            $this->name = null;
+            $this->flag = null;
+            $this->ratio = null;
+            return $out . ":" . (($this->name === null && $this->flag === null && $this->ratio === null) ? "N" : "bad");');
+    }
+}
+
+$box = new EvalNullableScalarPropBox();
+$box->run();
+"#,
+    );
+    assert_eq!(out, "N:set:N");
+}
+
 /// Verifies eval fragments can replace public array AOT properties through `$this`.
 #[test]
 fn test_eval_fragment_can_mutate_this_array_property() {
@@ -4640,6 +4670,31 @@ echo eval('$out = (EvalNullableIntStaticPropBox::$count === null) ? "N" : "n";
 "#,
     );
     assert_eq!(out, "N:I9:I33:N");
+}
+
+/// Verifies eval fragments can read and write public nullable scalar AOT static properties.
+#[test]
+fn test_eval_fragment_can_mutate_aot_nullable_scalar_static_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNullableScalarStaticPropBox {
+    public static ?string $name = null;
+    public static ?bool $flag = null;
+    public static ?float $ratio = null;
+}
+
+echo eval('$out = (EvalNullableScalarStaticPropBox::$name === null && EvalNullableScalarStaticPropBox::$flag === null && EvalNullableScalarStaticPropBox::$ratio === null) ? "N" : "bad";
+    EvalNullableScalarStaticPropBox::$name = "Bea";
+    EvalNullableScalarStaticPropBox::$flag = false;
+    EvalNullableScalarStaticPropBox::$ratio = 3.5;
+    $out = $out . ":" . ((EvalNullableScalarStaticPropBox::$name === "Bea" && EvalNullableScalarStaticPropBox::$flag === false && EvalNullableScalarStaticPropBox::$ratio === 3.5) ? "set" : "bad");
+    EvalNullableScalarStaticPropBox::$name = null;
+    EvalNullableScalarStaticPropBox::$flag = null;
+    EvalNullableScalarStaticPropBox::$ratio = null;
+    return $out . ":" . ((EvalNullableScalarStaticPropBox::$name === null && EvalNullableScalarStaticPropBox::$flag === null && EvalNullableScalarStaticPropBox::$ratio === null) ? "N" : "bad");');
+"#,
+    );
+    assert_eq!(out, "N:set:N");
 }
 
 /// Verifies eval fragments inherit native class scope for private AOT static properties.
@@ -5854,6 +5909,35 @@ return $value === null ? "N" : "bad";');
     assert_eq!(out, "N");
 }
 
+/// Verifies eval writes nullable scalar by-reference AOT method results back to eval variables.
+#[test]
+fn test_eval_fragment_dispatches_aot_nullable_scalar_by_ref_args() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotNullableScalarRefMethodBox {
+    public function mutate(?string &$name, ?bool &$flag, ?float &$ratio): void {
+        $name = $name === null ? "method" : "eval-method";
+        $flag = true;
+        $ratio = $ratio === null ? 1.5 : 3.0;
+    }
+}
+
+echo eval('$box = new EvalAotNullableScalarRefMethodBox();
+$name = "eval";
+$flag = false;
+$ratio = 2.5;
+$box->mutate($name, $flag, $ratio);
+$first = $name . ":" . ($flag ? "T" : "F") . ":" . $ratio;
+$name = null;
+$flag = null;
+$ratio = null;
+$box->mutate($name, $flag, $ratio);
+return $first . ":" . $name . ":" . ($flag ? "T" : "F") . ":" . $ratio;');
+"#,
+    );
+    assert_eq!(out, "eval-method:T:3:method:T:1.5");
+}
+
 /// Verifies eval dispatches generated/AOT instance methods with string by-reference params.
 #[test]
 fn test_eval_fragment_dispatches_aot_instance_method_with_string_by_ref_arg() {
@@ -6023,6 +6107,34 @@ return $value;');
 "#,
     );
     assert_eq!(out, "27");
+}
+
+/// Verifies eval writes nullable scalar by-reference AOT static method results back to eval variables.
+#[test]
+fn test_eval_fragment_dispatches_aot_nullable_scalar_static_by_ref_args() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotNullableScalarRefStaticBox {
+    public static function mutate(?string &$name, ?bool &$flag, ?float &$ratio): void {
+        $name = $name === null ? "static" : "eval-static";
+        $flag = true;
+        $ratio = $ratio === null ? 1.25 : 2.75;
+    }
+}
+
+echo eval('$name = "eval";
+$flag = false;
+$ratio = 2.5;
+EvalAotNullableScalarRefStaticBox::mutate($name, $flag, $ratio);
+$first = $name . ":" . ($flag ? "T" : "F") . ":" . $ratio;
+$name = null;
+$flag = null;
+$ratio = null;
+EvalAotNullableScalarRefStaticBox::mutate($name, $flag, $ratio);
+return $first . ":" . $name . ":" . ($flag ? "T" : "F") . ":" . $ratio;');
+"#,
+    );
+    assert_eq!(out, "eval-static:T:2.75:static:T:1.25");
 }
 
 /// Verifies eval dispatches generated/AOT static methods with float by-reference params.
@@ -13205,6 +13317,34 @@ return $value;');
 "#,
     );
     assert_eq!(out, "51");
+}
+
+/// Verifies eval writes nullable scalar by-reference AOT constructor results back to eval variables.
+#[test]
+fn test_eval_dynamic_new_runs_constructor_with_nullable_scalar_by_ref_args() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewNullableScalarRefCtor {
+    public function __construct(?string &$name, ?bool &$flag, ?float &$ratio) {
+        $name = $name === null ? "ctor" : "eval-ctor";
+        $flag = true;
+        $ratio = $ratio === null ? 1.75 : 3.25;
+    }
+}
+
+echo eval('$name = "eval";
+$flag = false;
+$ratio = 2.5;
+$box = new EvalDynamicNewNullableScalarRefCtor($name, $flag, $ratio);
+$first = $name . ":" . ($flag ? "T" : "F") . ":" . $ratio;
+$name = null;
+$flag = null;
+$ratio = null;
+$box = new EvalDynamicNewNullableScalarRefCtor($name, $flag, $ratio);
+return $first . ":" . $name . ":" . ($flag ? "T" : "F") . ":" . $ratio;');
+"#,
+    );
+    assert_eq!(out, "eval-ctor:T:3.25:ctor:T:1.75");
 }
 
 /// Verifies eval dispatches generated/AOT constructors with string by-reference params.
