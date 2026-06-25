@@ -11831,6 +11831,30 @@ echo str_replace("\n", "|", $method->__toString());');
     );
 }
 
+/// Verifies eval ReflectionClass stringifies retained class metadata sections.
+#[test]
+fn test_eval_reflection_class_to_string() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectClassStringTarget {
+    public const ANSWER = 42;
+    public int $id = 7;
+    public function read(string $name = "Ada"): ?string { return $name; }
+}
+echo str_replace("\n", "|", (new ReflectionClass("EvalReflectClassStringTarget"))->__toString());
+echo "::";
+echo str_replace("\n", "|", (new ReflectionObject(new EvalReflectClassStringTarget()))->__toString());');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    let expected = "Class [ <user> class EvalReflectClassStringTarget ] {|  - Constants [1] {|    Constant [ public int ANSWER ] { 42 }|  }|  - Properties [1] {|    Property [ public int $id = 7 ]|  }|  - Methods [1] {|    Method [ <user> public method read ]|  }|}|";
+    assert_eq!(out.stdout, format!("{expected}::{expected}"));
+}
+
 /// Verifies eval Reflection origin metadata APIs are present on supported owners.
 #[test]
 fn test_eval_reflection_origin_metadata_defaults() {
