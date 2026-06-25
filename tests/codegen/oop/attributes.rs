@@ -650,6 +650,48 @@ echo $instance->named;
     assert_eq!(out, "2:1.5:-2.25:1.5:-2.25:1.5:-2.25");
 }
 
+/// Verifies that `ClassName::class` attribute args are retained as strings.
+#[test]
+fn test_class_attribute_args_preserves_class_name_literals() {
+    let out = compile_and_run(
+        r#"<?php
+class ClassNameArgAttr {
+    public function __construct(public string $target, public string $named) {}
+}
+
+class ClassNameArgTarget {}
+class ClassNameArgOther {}
+
+#[ClassNameArgAttr(ClassNameArgTarget::class, named: ClassNameArgOther::class)]
+class ClassNameArgSubject {}
+
+$args = class_attribute_args('ClassNameArgSubject', 'ClassNameArgAttr');
+echo count($args);
+echo ":";
+echo $args[0];
+echo ":";
+echo $args["named"];
+
+$attr = class_get_attributes('ClassNameArgSubject')[0];
+$attrArgs = $attr->getArguments();
+echo ":";
+echo $attrArgs[0];
+echo ":";
+echo $attrArgs["named"];
+
+$instance = $attr->newInstance();
+echo ":";
+echo $instance->target;
+echo ":";
+echo $instance->named;
+"#,
+    );
+    assert_eq!(
+        out,
+        "2:ClassNameArgTarget:ClassNameArgOther:ClassNameArgTarget:ClassNameArgOther:ClassNameArgTarget:ClassNameArgOther"
+    );
+}
+
 /// Verifies that boolean (`true`, `false`) and `null` literal arguments are
 /// preserved by `class_attribute_args()` as strings. Booleans render as
 /// PHP echo would (true → "1", false → ""), null renders as empty string,

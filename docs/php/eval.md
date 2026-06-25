@@ -180,7 +180,7 @@ interfaces, traits, and enums, plus bridge-registered generated/AOT class-level
 attributes, are visible through `class_attribute_names()`,
 `class_attribute_args()`, and `class_get_attributes()` when their arguments fit
 the supported literal positional/named subset (`string`, `int`, `float`, `bool`,
-`null`, or negated numeric literals). Positional arguments keep integer keys in
+`null`, negated numeric literals, or `ClassName::class` strings). Positional arguments keep integer keys in
 `class_attribute_args()` / `ReflectionAttribute::getArguments()`, and named
 arguments keep their PHP names as string keys.
 `ReflectionAttribute::newInstance()` instantiates eval-declared or

@@ -18,7 +18,8 @@ use super::{FunctionSig, PhpType};
 
 /// Compile-time attribute argument value. Captures the subset of PHP
 /// attribute argument expressions that reflection helpers can materialize:
-/// scalars (string/int/bool/null/float), and nested arrays of the same.
+/// scalars (string/int/bool/null/float), `ClassName::class` strings, symbolic
+/// references, and nested arrays of the same.
 ///
 /// `Float` stores the IEEE-754 bit pattern (`f64::to_bits`) rather than an
 /// `f64` so the enum can keep deriving `Eq`/`Hash`/`Ord` (used by the

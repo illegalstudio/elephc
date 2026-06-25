@@ -7535,7 +7535,8 @@ echo EvalClassNameChild::staticName();');
 fn test_eval_declared_class_attribute_metadata() {
     let out = compile_and_run_capture(
         r#"<?php
-eval('#[Route("/home", -1, 1.5, true, null)]
+eval('class EvalAttrDep {}
+#[Route("/home", -1, 1.5, true, null, EvalAttrDep::class)]
 #[Tag("first"), Tag("second")]
 class EvalAttrMeta {}
 $names = class_attribute_names("EvalAttrMeta");
@@ -7543,6 +7544,7 @@ echo count($names) . ":" . $names[0] . ":" . $names[1] . ":" . $names[2] . ":";
 $args = class_attribute_args("EvalAttrMeta", "route");
 echo count($args) . ":" . $args[0] . ":" . $args[1] . ":";
 echo $args[2] . ":" . ($args[3] ? "T" : "F") . ":" . (is_null($args[4]) ? "N" : "bad") . ":";
+echo $args[5] . ":";
 $tag = class_attribute_args("evalattrmeta", "Tag");
 echo $tag[0] . ":";
 $attrs = class_get_attributes("EvalAttrMeta");
@@ -7550,6 +7552,7 @@ echo count($attrs) . ":" . $attrs[0]->getName() . ":";
 $attrArgs = $attrs[0]->getArguments();
 echo count($attrArgs) . ":" . $attrArgs[0] . ":" . $attrArgs[1] . ":";
 echo $attrArgs[2] . ":" . ($attrArgs[3] ? "T" : "F") . ":" . (is_null($attrArgs[4]) ? "N" : "bad") . ":";
+echo $attrArgs[5] . ":";
 $tagArgs = $attrs[1]->getArguments();
 echo $attrs[1]->getName() . ":" . $tagArgs[0] . ":";
 echo is_null($attrs[0]->newInstance()) ? "N" : "bad";');
@@ -7562,7 +7565,7 @@ echo is_null($attrs[0]->newInstance()) ? "N" : "bad";');
     );
     assert_eq!(
         out.stdout,
-        "3:Route:Tag:Tag:5:/home:-1:1.5:T:N:first:3:Route:5:/home:-1:1.5:T:N:Tag:first:N"
+        "3:Route:Tag:Tag:6:/home:-1:1.5:T:N:EvalAttrDep:first:3:Route:6:/home:-1:1.5:T:N:EvalAttrDep:Tag:first:N"
     );
 }
 
