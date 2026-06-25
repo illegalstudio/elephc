@@ -768,7 +768,12 @@ impl FakeOps {
             properties.push(("__is_abstract".to_string(), is_abstract));
             properties.push(("__modifiers".to_string(), method_modifiers));
         }
-        if owner_kind == EVAL_REFLECTION_OWNER_CLASS_CONSTANT {
+        if matches!(
+            owner_kind,
+            EVAL_REFLECTION_OWNER_CLASS_CONSTANT
+                | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE
+                | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
+        ) {
             let is_public = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_PUBLIC) != 0)?;
             let is_protected =
                 self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED) != 0)?;
@@ -782,6 +787,8 @@ impl FakeOps {
             properties.push(("__is_final".to_string(), is_final));
             properties.push(("__is_enum_case".to_string(), is_enum_case));
             properties.push(("__modifiers".to_string(), modifiers_cell));
+        }
+        if owner_kind == EVAL_REFLECTION_OWNER_CLASS_CONSTANT {
             properties.push(("__value".to_string(), constant_value));
         }
         if matches!(

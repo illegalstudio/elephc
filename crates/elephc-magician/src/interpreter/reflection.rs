@@ -3228,6 +3228,9 @@ fn eval_reflection_enum_case_new(
         .case(&case_name)
         .map(|case| case.attributes().to_vec())
         .ok_or(EvalStatus::RuntimeFatal)?;
+    let flags = eval_reflection_member_flags(EvalVisibility::Public, false, false, false, false)
+        | EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE;
+    let modifiers = eval_reflection_class_constant_modifiers(EvalVisibility::Public, false);
     eval_reflection_owner_object(
         owner_kind,
         &case_name,
@@ -3240,8 +3243,8 @@ fn eval_reflection_enum_case_new(
         &[],
         None,
         None,
-        0,
-        0,
+        flags,
+        modifiers,
         0,
         Some(case_value),
         backing_value,

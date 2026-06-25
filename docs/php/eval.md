@@ -499,10 +499,12 @@ and `getDeclaringClass()` returns the declaring class or enum as a
 `getType()` with PHP's current untyped defaults: `false`, `false`, and `null`.
 Their `__toString()` methods format retained constant and enum-case metadata in
 PHP's `Constant [ ... ] { ... }` shape.
-`ReflectionClassConstant::isPublic()`, `isProtected()`, `isPrivate()`,
-`isFinal()`, and `getModifiers()` report visibility/finality metadata with
-PHP's `ReflectionClassConstant::IS_*` bitmasks; enum cases report public,
-non-final constants.
+`ReflectionClassConstant`, `ReflectionEnumUnitCase`, and
+`ReflectionEnumBackedCase` expose `isEnumCase()`, `isPublic()`,
+`isProtected()`, `isPrivate()`, `isFinal()`, and `getModifiers()` with PHP's
+`ReflectionClassConstant::IS_*` bitmasks. Enum cases report public,
+non-final constant metadata, and the enum-case reflection classes expose the
+same inherited `IS_*` constants as PHP.
 Concrete property hooks are lowered to eval accessor methods; reads and writes
 route through inherited hooks, while access from the accessor itself uses the
 raw backing slot. `readonly` eval properties may be assigned from the

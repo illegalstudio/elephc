@@ -12129,6 +12129,60 @@ echo ReflectionClassConstant::IS_FINAL;
     );
 }
 
+/// Verifies eval and AOT enum-case reflectors expose inherited constant predicates.
+#[test]
+fn test_eval_reflection_enum_case_visibility_and_modifiers() {
+    let out = compile_and_run_capture(
+        r#"<?php
+enum EvalAotEnumCaseVisibility: string {
+    case Ready = "ready";
+}
+$unit = new ReflectionEnumUnitCase("EvalAotEnumCaseVisibility", "Ready");
+$backed = new ReflectionEnumBackedCase("EvalAotEnumCaseVisibility", "Ready");
+echo "AOT:";
+foreach ([$unit, $backed] as $case) {
+    echo $case->isEnumCase() ? "E" : "e";
+    echo $case->isPrivate() ? "R" : "r";
+    echo $case->isProtected() ? "P" : "p";
+    echo $case->isPublic() ? "U" : "u";
+    echo $case->isFinal() ? "F" : "f";
+    echo $case->getModifiers() . ":";
+}
+eval('enum EvalEnumCaseVisibility: string {
+    case Ready = "ready";
+}
+$unit = new ReflectionEnumUnitCase("EvalEnumCaseVisibility", "Ready");
+$backed = new ReflectionEnumBackedCase("EvalEnumCaseVisibility", "Ready");
+echo "\nEVAL:";
+foreach ([$unit, $backed] as $case) {
+    echo $case->isEnumCase() ? "E" : "e";
+    echo $case->isPrivate() ? "R" : "r";
+    echo $case->isProtected() ? "P" : "p";
+    echo $case->isPublic() ? "U" : "u";
+    echo $case->isFinal() ? "F" : "f";
+    echo $case->getModifiers() . ":";
+}
+echo ReflectionEnumUnitCase::IS_PUBLIC . ":";
+echo ReflectionEnumUnitCase::IS_PROTECTED . ":";
+echo ReflectionEnumUnitCase::IS_PRIVATE . ":";
+echo ReflectionEnumUnitCase::IS_FINAL . ":";
+echo ReflectionEnumBackedCase::IS_PUBLIC . ":";
+echo ReflectionEnumBackedCase::IS_PROTECTED . ":";
+echo ReflectionEnumBackedCase::IS_PRIVATE . ":";
+echo ReflectionEnumBackedCase::IS_FINAL;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "AOT:ErpUf1:ErpUf1:\nEVAL:ErpUf1:ErpUf1:1:2:4:32:1:2:4:32"
+    );
+}
+
 /// Verifies eval interface and trait constants work through the bridge.
 #[test]
 fn test_eval_declared_interface_and_trait_constants() {

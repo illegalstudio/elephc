@@ -512,7 +512,10 @@ fn emit_reflection_owner_object(
             emit_reflection_owner_mixed_property_from_result(ctx, class_name, "__backing_value")?;
         }
     }
-    if class_name == "ReflectionClassConstant" {
+    if matches!(
+        class_name,
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
         emit_reflection_owner_bool_property(
             ctx,
             class_name,
@@ -1486,8 +1489,15 @@ fn reflection_enum_case_metadata(
                 is_instantiable: false,
                 is_cloneable: false,
                 is_iterable: false,
-                modifiers: 0,
-                member_flags: ReflectionMemberFlags::default(),
+                modifiers: reflection_class_constant_modifiers(&Visibility::Public, false),
+                member_flags: reflection_member_flags(
+                    false,
+                    &Visibility::Public,
+                    false,
+                    false,
+                    false,
+                    false,
+                ),
             })
             .unwrap_or_else(empty_reflection_metadata),
     )
@@ -6519,7 +6529,7 @@ fn emit_reflection_member_flag_properties(
             )?;
             emit_reflection_owner_bool_property(ctx, class_name, "__is_virtual", flags.is_virtual)?;
         }
-        "ReflectionClassConstant" => {
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => {
             emit_reflection_owner_bool_property(ctx, class_name, "__is_public", flags.is_public)?;
             emit_reflection_owner_bool_property(
                 ctx,

@@ -911,7 +911,15 @@ echo ReflectionProperty::IS_FINAL; echo ":";
 echo ReflectionClassConstant::IS_PUBLIC; echo ":";
 echo ReflectionClassConstant::IS_PROTECTED; echo ":";
 echo ReflectionClassConstant::IS_PRIVATE; echo ":";
-echo ReflectionClassConstant::IS_FINAL;
+echo ReflectionClassConstant::IS_FINAL; echo ":";
+echo ReflectionEnumUnitCase::IS_PUBLIC; echo ":";
+echo ReflectionEnumUnitCase::IS_PROTECTED; echo ":";
+echo ReflectionEnumUnitCase::IS_PRIVATE; echo ":";
+echo ReflectionEnumUnitCase::IS_FINAL; echo ":";
+echo ReflectionEnumBackedCase::IS_PUBLIC; echo ":";
+echo ReflectionEnumBackedCase::IS_PROTECTED; echo ":";
+echo ReflectionEnumBackedCase::IS_PRIVATE; echo ":";
+echo ReflectionEnumBackedCase::IS_FINAL;
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -922,7 +930,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "32:64:65536:16:4:64:16:128:1:2:4:64:2048:4096:512:32:1:2:4:32"
+        "32:64:65536:16:4:64:16:128:1:2:4:64:2048:4096:512:32:1:2:4:32:1:2:4:32:1:2:4:32"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
@@ -2970,6 +2978,43 @@ return true;"#,
         values.output,
         "Constant [ public int ANSWER ] { 42 }\\n|Constant [ final protected int LIMIT ] { 7 }\\n|Constant [ private bool FLAG ] { 1 }\\n|Constant [ public string LABEL ] { ok }\\n|Constant [ public null NOTHING ] {  }\\n|Constant [ public EvalConstStringEnum Ready ] { Object }\\n|Constant [ public EvalConstStringEnum Ready ] { Object }\\n|Constant [ public EvalConstStringEnum Ready ] { Object }\\n"
     );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies enum-case reflection owners expose inherited constant metadata predicates.
+#[test]
+fn execute_program_reflects_enum_case_visibility_and_modifiers() {
+    let program = parse_fragment(
+        br#"enum EvalEnumCaseVisibility: string {
+    case Ready = "ready";
+}
+$unit = new ReflectionEnumUnitCase("EvalEnumCaseVisibility", "Ready");
+$backed = new ReflectionEnumBackedCase("EvalEnumCaseVisibility", "Ready");
+foreach ([$unit, $backed] as $case) {
+    echo $case->isEnumCase() ? "E" : "e";
+    echo $case->isPrivate() ? "R" : "r";
+    echo $case->isProtected() ? "P" : "p";
+    echo $case->isPublic() ? "U" : "u";
+    echo $case->isFinal() ? "F" : "f";
+    echo $case->getModifiers(); echo ":";
+}
+echo ReflectionEnumUnitCase::IS_PUBLIC; echo ":";
+echo ReflectionEnumUnitCase::IS_PROTECTED; echo ":";
+echo ReflectionEnumUnitCase::IS_PRIVATE; echo ":";
+echo ReflectionEnumUnitCase::IS_FINAL; echo ":";
+echo ReflectionEnumBackedCase::IS_PUBLIC; echo ":";
+echo ReflectionEnumBackedCase::IS_PROTECTED; echo ":";
+echo ReflectionEnumBackedCase::IS_PRIVATE; echo ":";
+echo ReflectionEnumBackedCase::IS_FINAL;
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "ErpUf1:ErpUf1:1:2:4:32:1:2:4:32");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

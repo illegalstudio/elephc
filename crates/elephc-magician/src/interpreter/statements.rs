@@ -2759,7 +2759,10 @@ fn eval_builtin_reflection_class_constant(
             "IS_FINAL" => Some(32),
             _ => None,
         }
-    } else if class_name.eq_ignore_ascii_case("ReflectionClassConstant") {
+    } else if class_name.eq_ignore_ascii_case("ReflectionClassConstant")
+        || class_name.eq_ignore_ascii_case("ReflectionEnumUnitCase")
+        || class_name.eq_ignore_ascii_case("ReflectionEnumBackedCase")
+    {
         match constant_name {
             "IS_PUBLIC" => Some(1),
             "IS_PROTECTED" => Some(2),

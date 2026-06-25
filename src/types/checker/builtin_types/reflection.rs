@@ -2987,7 +2987,10 @@ fn reflection_owner_constants(class_name: &str) -> Vec<ClassConst> {
             builtin_class_const("IS_FINAL", 32),
         ];
     }
-    if class_name == "ReflectionClassConstant" {
+    if matches!(
+        class_name,
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
         return vec![
             builtin_class_const("IS_PUBLIC", 1),
             builtin_class_const("IS_PROTECTED", 2),
@@ -3182,7 +3185,11 @@ fn add_reflection_member_flag_methods(
     ];
     if matches!(
         class_name,
-        "ReflectionMethod" | "ReflectionProperty" | "ReflectionClassConstant"
+        "ReflectionMethod"
+            | "ReflectionProperty"
+            | "ReflectionClassConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
     ) {
         for (property, method) in visibility_flags {
             properties.push(builtin_property(
@@ -3374,6 +3381,11 @@ fn add_reflection_member_flag_methods(
             Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
         ));
         methods.push(builtin_reflection_class_mixed_method("getValue", "__value"));
+    }
+    if matches!(
+        class_name,
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
         properties.push(builtin_property(
             "__is_enum_case",
             Visibility::Private,
