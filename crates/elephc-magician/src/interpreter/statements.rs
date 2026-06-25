@@ -3910,6 +3910,11 @@ fn eval_reflection_class_new_instance_without_constructor_result(
     let class_name = context
         .resolve_class_name(&reflected_name)
         .unwrap_or(reflected_name);
+    if eval_reflection_aot_class_allows_without_constructor_allocation(&class_name, values)?
+        == Some(false)
+    {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     values.new_object(&class_name).map(Some)
 }
 

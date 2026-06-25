@@ -11674,6 +11674,59 @@ echo $with->label();');
     assert_eq!(out, "default:hidden:ctor");
 }
 
+/// Verifies eval ReflectionClass::newInstanceWithoutConstructor allocates generated/AOT classes.
+#[test]
+fn test_eval_reflection_class_new_instance_without_constructor_allocates_aot_class() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalReflectNoCtorAotTarget {
+    public int $value = 4;
+
+    private function __construct() {
+        $this->value = 9;
+    }
+}
+
+echo eval('$ref = new ReflectionClass("EvalReflectNoCtorAotTarget");
+$object = $ref->newInstanceWithoutConstructor();
+echo $object->value . ":";
+echo $ref->isInstantiable() ? "I" : "i";');
+"#,
+    );
+    assert_eq!(out, "4:i");
+}
+
+/// Verifies eval ReflectionClass::newInstanceWithoutConstructor rejects non-allocatable AOT class-likes.
+#[test]
+fn test_eval_reflection_class_new_instance_without_constructor_rejects_aot_non_classes() {
+    let cases = [
+        (
+            "abstract class EvalReflectNoCtorAotAbstract {}",
+            "EvalReflectNoCtorAotAbstract",
+        ),
+        ("interface EvalReflectNoCtorAotIface {}", "EvalReflectNoCtorAotIface"),
+        ("trait EvalReflectNoCtorAotTrait {}", "EvalReflectNoCtorAotTrait"),
+        (
+            "enum EvalReflectNoCtorAotEnum { case Ready; }",
+            "EvalReflectNoCtorAotEnum",
+        ),
+    ];
+    for (declaration, class_name) in cases {
+        let source = format!(
+            r#"<?php
+{declaration}
+eval('$ref = new ReflectionClass("{class_name}");
+$ref->newInstanceWithoutConstructor();');
+"#
+        );
+        let err = compile_and_run_expect_failure(&source);
+        assert!(
+            err.contains("Fatal error: eval() runtime failed"),
+            "unexpected stderr for {class_name}: {err}"
+        );
+    }
+}
+
 /// Verifies eval ReflectionClassConstant/EnumCase expose eval-declared attributes.
 #[test]
 fn test_eval_reflection_constant_and_enum_case_attributes() {
