@@ -697,6 +697,31 @@ echo $args[0];
     assert_eq!(out, "/x");
 }
 
+/// Verifies that named PHP attribute arguments are returned under string keys
+/// while positional arguments keep integer keys.
+#[test]
+fn test_class_attribute_args_preserves_named_literal_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+#[Route("api", path: "/users", secure: true, code: 7, empty: null)]
+class Controller {}
+$args = class_attribute_args('Controller', 'Route');
+echo count($args);
+echo ":";
+echo $args[0];
+echo ":";
+echo $args["path"];
+echo ":";
+echo $args["secure"] ? "T" : "F";
+echo ":";
+echo $args["code"];
+echo ":";
+echo is_null($args["empty"]) ? "N" : "bad";
+"#,
+    );
+    assert_eq!(out, "5:api:/users:T:7:N");
+}
+
 // --- ReflectionAttribute synthetic class + class_get_attributes() ---
 
 /// Verifies that `class_get_attributes()` returns an array of
@@ -720,6 +745,39 @@ foreach ($attrs as $attr) {
 "#,
     );
     assert_eq!(out, "count=2\nAuthor:[Ada][1815]\nVersion:[1.0][1]\n");
+}
+
+/// Verifies that `ReflectionAttribute::getArguments()` exposes named args and
+/// `newInstance()` binds them by constructor parameter name.
+#[test]
+fn test_reflection_attribute_preserves_named_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class Route {
+    public string $path;
+    public string $method;
+    public function __construct(string $path, string $method = "GET") {
+        $this->path = $path;
+        $this->method = $method;
+    }
+}
+#[Route(method: "POST", path: "/submit")]
+class Controller {}
+$attr = (new ReflectionClass(Controller::class))->getAttributes()[0];
+$args = $attr->getArguments();
+echo count($args);
+echo ":";
+echo $args["path"];
+echo ":";
+echo $args["method"];
+echo ":";
+$instance = $attr->newInstance();
+echo $instance->path;
+echo ":";
+echo $instance->method;
+"#,
+    );
+    assert_eq!(out, "2:/submit:POST:/submit:POST");
 }
 
 /// Verifies that `ReflectionAttribute::getTarget()` and `isRepeated()` report

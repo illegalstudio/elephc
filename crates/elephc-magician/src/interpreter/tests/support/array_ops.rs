@@ -107,6 +107,9 @@ impl FakeOps {
         }
     }
     /// Writes one fake indexed or associative array element.
+    ///
+    /// String keys promote indexed arrays to associative arrays so fake PHP arrays can
+    /// model mixed integer/string keys produced by runtime metadata helpers.
     pub(super) fn runtime_array_set(
         &mut self,
         array: RuntimeCellHandle,
@@ -115,21 +118,35 @@ impl FakeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let key = self.key(index)?;
         let id = array.as_ptr() as usize;
-        match self.values.get_mut(&id) {
-            Some(FakeValue::Array(elements)) => {
-                let FakeKey::Int(index) = key else {
-                    return Err(EvalStatus::UnsupportedConstruct);
-                };
-                if index < 0 {
-                    return Err(EvalStatus::UnsupportedConstruct);
+        let Some(slot) = self.values.get_mut(&id) else {
+            return Err(EvalStatus::UnsupportedConstruct);
+        };
+        match slot {
+            FakeValue::Array(elements) => match key {
+                FakeKey::Int(index) => {
+                    if index < 0 {
+                        return Err(EvalStatus::UnsupportedConstruct);
+                    }
+                    let index = index as usize;
+                    while elements.len() <= index {
+                        elements.push(RuntimeCellHandle::from_raw(std::ptr::null_mut()));
+                    }
+                    elements[index] = value;
                 }
-                let index = index as usize;
-                while elements.len() <= index {
-                    elements.push(RuntimeCellHandle::from_raw(std::ptr::null_mut()));
+                key => {
+                    let mut entries = std::mem::take(elements)
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(index, value)| {
+                            (!value.as_ptr().is_null())
+                                .then_some((FakeKey::Int(index as i64), value))
+                        })
+                        .collect::<Vec<_>>();
+                    entries.push((key, value));
+                    *slot = FakeValue::Assoc(entries);
                 }
-                elements[index] = value;
-            }
-            Some(FakeValue::Assoc(entries)) => {
+            },
+            FakeValue::Assoc(entries) => {
                 if let Some((_, existing_value)) =
                     entries.iter_mut().find(|(entry_key, _)| entry_key == &key)
                 {

@@ -32,6 +32,7 @@ const NATIVE_ATTRIBUTE_ARG_NULL: u8 = 0;
 const NATIVE_ATTRIBUTE_ARG_BOOL: u8 = 1;
 const NATIVE_ATTRIBUTE_ARG_INT: u8 = 2;
 const NATIVE_ATTRIBUTE_ARG_STRING: u8 = 3;
+const NATIVE_ATTRIBUTE_ARG_NAMED: u8 = 4;
 const NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
 const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = 8;
@@ -1727,6 +1728,14 @@ fn native_attribute_take_arg(bytes: &[u8], offset: &mut usize) -> Option<EvalAtt
         )?)),
         NATIVE_ATTRIBUTE_ARG_STRING => {
             native_attribute_take_string(bytes, offset).map(EvalAttributeArg::String)
+        }
+        NATIVE_ATTRIBUTE_ARG_NAMED => {
+            let name = native_attribute_take_string(bytes, offset)?;
+            let value = native_attribute_take_arg(bytes, offset)?;
+            Some(EvalAttributeArg::Named {
+                name,
+                value: Box::new(value),
+            })
         }
         _ => None,
     }

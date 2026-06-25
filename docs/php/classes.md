@@ -1019,6 +1019,7 @@ function double(int $x): int { return $x * 2; }
 Supported syntax:
 - single attribute: `#[Foo]`
 - attribute with arguments: `#[Bar(1, "two")]`
+- named attribute arguments: `#[Bar(path: "/home", secure: true)]`
 - multiple attributes per group: `#[A, B(1)]`
 - stacked groups: `#[A] #[B]`
 - fully-qualified names: `#[\Symfony\Contracts\Service\Attribute\Required]`
@@ -1049,7 +1050,7 @@ echo $b->name;            // "elephc"
 echo $b->missing;         // empty (Mixed null)
 ```
 
-User-defined attributes (e.g. `#[Author]`, `#[Pure]`, `#[Memoized]`) parse and persist in the AST. They have no compile-time semantics, but their **names** and **literal arguments** (positional and named) are reachable at runtime through lightweight helper builtins and the supported Reflection API:
+User-defined attributes (e.g. `#[Author]`, `#[Pure]`, `#[Memoized]`) parse and persist in the AST. They have no compile-time semantics, but their **names** and literal positional or named **arguments** are reachable at runtime through lightweight helper builtins and the supported Reflection API:
 
 ```php
 <?php
@@ -1059,7 +1060,7 @@ class Greeter {}
 #[\Override]
 class Solo {}
 
-#[Route("/api/users", "GET", true)]
+#[Route(path: "/api/users", method: "GET", secure: true)]
 class UserController {}
 
 foreach (class_attribute_names('Greeter') as $name) {
@@ -1070,15 +1071,15 @@ foreach (class_attribute_names('Greeter') as $name) {
 
 echo class_attribute_names('Solo')[0]; // "Override" (resolved name)
 
-foreach (class_attribute_args('UserController', 'Route') as $arg) {
-    echo $arg, "\n";
+foreach (class_attribute_args('UserController', 'Route') as $key => $arg) {
+    echo $key, "=", $arg, "\n";
 }
-// /api/users
-// GET
-// 1     ← `true` echoes as 1 in PHP
+// path=/api/users
+// method=GET
+// secure=1     ← `true` echoes as 1 in PHP
 ```
 
-`class_attribute_args()` returns an `array<mixed>` whose elements preserve their original PHP type — strings stay strings, ints stay ints, booleans stay booleans, and `null` is `null`. The args are interned at compile time and boxed into mixed cells on demand at the call site.
+`class_attribute_args()` returns an `array<int|string, mixed>`: positional arguments keep integer keys, named arguments keep their PHP argument names as string keys, and values preserve their original PHP type — strings stay strings, ints stay ints, booleans stay booleans, and `null` is `null`. The args are interned at compile time and boxed into mixed cells on demand at the call site.
 
 For a more PHP-idiomatic API, `class_get_attributes()` and `ReflectionClass::getAttributes()` return the same data wrapped as `ReflectionAttribute` instances:
 
@@ -1120,7 +1121,7 @@ $property = new ReflectionProperty('Controller', 'id');
 echo $property->getAttributes()[0]->getName(); // Column
 ```
 
-`ReflectionAttribute` is a final synthetic built-in class with `getName(): string`, `getArguments(): array`, and `newInstance(): mixed` methods. It is populated internally by `class_get_attributes()` and the supported Reflection lookups and cannot be constructed or populated directly from user code; its metadata slots are private. `newInstance()` constructs the attribute class on demand when the attribute class exists in the program and the captured arguments are supported literals:
+`ReflectionAttribute` is a final synthetic built-in class with `getName(): string`, `getArguments(): array`, and `newInstance(): mixed` methods. It is populated internally by `class_get_attributes()` and the supported Reflection lookups and cannot be constructed or populated directly from user code; its metadata slots are private. `getArguments()` returns the same `array<int|string, mixed>` shape as `class_attribute_args()`. `newInstance()` constructs the attribute class on demand when the attribute class exists in the program and the captured positional or named arguments are supported literals:
 
 ```php
 <?php
@@ -1141,7 +1142,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | Function | Signature | Description |
 |---|---|---|
 | `class_attribute_names()` | `class_attribute_names($class_name): array` | Return the resolved attribute names decorating the class |
-| `class_attribute_args()` | `class_attribute_args($class_name, $attribute_name): array` | Return the supported literal positional arguments for the first matching class attribute |
+| `class_attribute_args()` | `class_attribute_args($class_name, $attribute_name): array` | Return the supported literal positional/named arguments for the first matching class attribute |
 | `class_get_attributes()` | `class_get_attributes($class_name): array` | Return `ReflectionAttribute` objects for the class attributes |
 
 | Reflection method | Supported constructor | Description |
@@ -1301,7 +1302,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionEnumUnitCase::getAttributes()` / `ReflectionEnumBackedCase::getAttributes()` | Same as enum-case `getName()` | Return `ReflectionAttribute` objects for enum-case attributes |
 | `ReflectionEnumUnitCase::getDeclaringClass()` / `ReflectionEnumBackedCase::getDeclaringClass()` | Same as enum-case `getName()` | Return a `ReflectionClass` object for the enum that declares the reflected case |
 | `ReflectionEnumUnitCase::getEnum()` / `ReflectionEnumBackedCase::getEnum()` | Same as enum-case `getName()` | Return a `ReflectionEnum` object for the enum that declares the reflected case |
-| `ReflectionAttribute::newInstance()` | Internal only | Instantiate the attribute class from captured literal args |
+| `ReflectionAttribute::newInstance()` | Internal only | Instantiate the attribute class from captured literal positional/named args |
 
 Functions and their parameters can also be reflected. `ReflectionFunction` reads
 a named function's signature, and `getParameters()` returns one

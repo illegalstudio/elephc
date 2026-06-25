@@ -4080,16 +4080,10 @@ fn eval_reflection_attribute_new_instance_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let args = eval_reflection_attribute_arg_values(attribute, values)?;
+    let args = eval_reflection_attribute_evaluated_args(attribute, values)?;
     if let Some(class) = context.class(attribute.name()).cloned() {
         let mut scope = ElephcEvalScope::new();
-        return eval_dynamic_class_new_object(
-            &class,
-            positional_args(args),
-            context,
-            &mut scope,
-            values,
-        );
+        return eval_dynamic_class_new_object(&class, args, context, &mut scope, values);
     }
     let class_name = context
         .resolve_class_name(attribute.name())
@@ -4101,7 +4095,7 @@ fn eval_reflection_attribute_new_instance_result(
     if let Err(err) = eval_native_constructor_with_evaluated_args(
         &class_name,
         object,
-        positional_args(args),
+        args,
         context,
         values,
     ) {
@@ -4111,16 +4105,22 @@ fn eval_reflection_attribute_new_instance_result(
     Ok(object)
 }
 
-/// Materializes eval attribute literal arguments as constructor argument cells.
-fn eval_reflection_attribute_arg_values(
+/// Materializes eval attribute literal arguments as evaluated constructor args.
+fn eval_reflection_attribute_evaluated_args(
     attribute: &EvalAttribute,
     values: &mut impl RuntimeValueOps,
-) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
     let Some(args) = attribute.args() else {
         return Err(EvalStatus::RuntimeFatal);
     };
     args.iter()
-        .map(|arg| eval_reflection_attribute_arg_value(arg, values))
+        .map(|arg| {
+            Ok(EvaluatedCallArg {
+                name: arg.name().map(str::to_string),
+                value: eval_reflection_attribute_arg_value(arg.value(), values)?,
+                ref_target: None,
+            })
+        })
         .collect()
 }
 
@@ -4134,6 +4134,7 @@ fn eval_reflection_attribute_arg_value(
         EvalAttributeArg::Int(value) => values.int(*value),
         EvalAttributeArg::Bool(value) => values.bool_value(*value),
         EvalAttributeArg::Null => values.null(),
+        EvalAttributeArg::Named { value, .. } => eval_reflection_attribute_arg_value(value, values),
     }
 }
 

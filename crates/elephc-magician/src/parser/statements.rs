@@ -202,7 +202,7 @@ impl Parser {
         Ok(attributes)
     }
 
-    /// Parses one attribute name and optional literal positional arguments.
+    /// Parses one attribute name and optional literal positional/named arguments.
     pub(super) fn parse_attribute(&mut self) -> Result<EvalAttribute, EvalParseError> {
         let name = self.parse_qualified_name()?;
         let name = self.resolve_class_name(name);
@@ -211,12 +211,18 @@ impl Parser {
             let mut supported = true;
             if !self.consume(TokenKind::RParen) {
                 loop {
-                    let arg = self.parse_call_arg()?;
+                    let call_arg = self.parse_call_arg()?;
                     if supported {
-                        if arg.name().is_some() || arg.is_spread() {
+                        if call_arg.is_spread() {
                             supported = false;
-                        } else if let Some(arg) = eval_attribute_arg_from_expr(arg.value()) {
-                            args.push(arg);
+                        } else if let Some(arg) = eval_attribute_arg_from_expr(call_arg.value()) {
+                            args.push(match call_arg.name() {
+                                Some(name) => EvalAttributeArg::Named {
+                                    name: name.to_string(),
+                                    value: Box::new(arg),
+                                },
+                                None => arg,
+                            });
                         } else {
                             supported = false;
                         }

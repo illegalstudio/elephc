@@ -229,15 +229,18 @@ fn eval_attribute_is_repeated(attributes: &[EvalAttribute], name: &str) -> bool 
         .is_some()
 }
 
-/// Builds the indexed mixed array returned by `class_attribute_args()`.
+/// Builds the mixed PHP array returned by `class_attribute_args()`.
 fn eval_class_attribute_args_result(
     args: &[EvalAttributeArg],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut result = values.array_new(args.len())?;
     for (index, arg) in args.iter().enumerate() {
-        let key = values.int(index as i64)?;
-        let value = eval_class_attribute_arg_value(arg, values)?;
+        let key = match arg.name() {
+            Some(name) => values.string(name)?,
+            None => values.int(index as i64)?,
+        };
+        let value = eval_class_attribute_arg_value(arg.value(), values)?;
         result = values.array_set(result, key, value)?;
     }
     Ok(result)
@@ -253,6 +256,7 @@ fn eval_class_attribute_arg_value(
         EvalAttributeArg::Int(value) => values.int(*value),
         EvalAttributeArg::Bool(value) => values.bool_value(*value),
         EvalAttributeArg::Null => values.null(),
+        EvalAttributeArg::Named { value, .. } => eval_class_attribute_arg_value(value, values),
     }
 }
 

@@ -66,6 +66,7 @@ const NATIVE_ATTRIBUTE_ARG_NULL: u8 = 0;
 const NATIVE_ATTRIBUTE_ARG_BOOL: u8 = 1;
 const NATIVE_ATTRIBUTE_ARG_INT: u8 = 2;
 const NATIVE_ATTRIBUTE_ARG_STRING: u8 = 3;
+const NATIVE_ATTRIBUTE_ARG_NAMED: u8 = 4;
 const NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
 const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = 8;
@@ -2161,6 +2162,11 @@ fn eval_native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &AttrArgValu
         AttrArgValue::Str(value) => {
             record.push(NATIVE_ATTRIBUTE_ARG_STRING);
             eval_native_member_attribute_push_string(record, value);
+        }
+        AttrArgValue::Named { name, value } => {
+            record.push(NATIVE_ATTRIBUTE_ARG_NAMED);
+            eval_native_member_attribute_push_string(record, name);
+            eval_native_member_attribute_push_arg(record, value);
         }
     }
 }

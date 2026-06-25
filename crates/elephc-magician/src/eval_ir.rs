@@ -431,6 +431,28 @@ pub enum EvalAttributeArg {
     Int(i64),
     Bool(bool),
     Null,
+    Named {
+        name: String,
+        value: Box<EvalAttributeArg>,
+    },
+}
+
+impl EvalAttributeArg {
+    /// Returns the PHP named-argument key when this attribute arg is named.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            EvalAttributeArg::Named { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
+    /// Returns the scalar payload, unwrapping a named-argument wrapper.
+    pub fn value(&self) -> &EvalAttributeArg {
+        match self {
+            EvalAttributeArg::Named { value, .. } => value,
+            _ => self,
+        }
+    }
 }
 
 /// Attribute metadata retained for eval class-like declarations.
