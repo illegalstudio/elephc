@@ -108,6 +108,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::MethodCall => super::methods::lower_method_call(ctx, &inst),
         Op::StaticMethodCall => super::methods::lower_static_method_call(ctx, &inst),
         Op::NullsafeMethodCall => super::methods::lower_nullsafe_method_call(ctx, &inst),
+        Op::NullsafePropGet => super::objects::lower_nullsafe_prop_get(ctx, &inst),
         Op::InstanceOf => super::classes::lower_instanceof(ctx, &inst),
         Op::InstanceOfDynamic => super::classes::lower_instanceof_dynamic(ctx, &inst),
         other => Err(WasmError::Unsupported(format!("op {:?}", other))),

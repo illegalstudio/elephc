@@ -33,7 +33,7 @@ use super::context::{FnCtx, Result};
 use super::inst::{data_immediate, operand, store_result};
 use super::wat::{DataSegment, Global, ValType, WatModule};
 use super::WasmError;
-use crate::ir::{Instruction, Module};
+use crate::ir::{Instruction, Module, ValueId};
 use crate::types::{ClassInfo, PhpType};
 use std::collections::HashMap;
 
@@ -180,30 +180,82 @@ const RT_CLASS_NAME_BY_OBJ: &str = r#"(func $__rt_class_name_by_obj (param $obj 
   (call $__rt_class_name_by_cid (i64.load (local.get $obj))))           ;; cid = [obj+0], lookup
 "#;
 
+/// `__rt_instanceof_lookup`: resolves a runtime class/interface name string to
+/// `(success, target_id, target_kind)` via a linear scan of `__instanceof_target_entries`
+/// (32-byte rows: `[name_ptr i32][pad4][name_len i64][target_id i64][target_kind i32][pad4]`),
+/// case-insensitively (A-Z folded to a-z; other bytes compared verbatim). Returns
+/// `(1, id, kind)` on the first match — kind 0 = class, 1 = interface — and `(0, 0, 0)`
+/// when no row matches or the table is empty. Borrows the query string (never frees it),
+/// mirroring the native `__rt_instanceof_lookup` exactly. The empty-table case is handled
+/// by `$count == 0`, so unit-test harnesses (`emit_class_metadata_stub`) no-op safely.
+const RT_INSTANCEOF_LOOKUP: &str = r#"(func $__rt_instanceof_lookup (param $qptr i32) (param $qlen i64) (result i32) (result i64) (result i32)
+  (local $count i32) (local $base i32) (local $i i32) (local $row i32) (local $nlen i64) (local $b i32) (local $qb i32) (local $nb i32) (local $nptr i32)
+  (local.set $count (global.get $__instanceof_target_count))                          ;; row count (0 -> no match)
+  (local.set $base (global.get $__instanceof_target_entries))                         ;; row table base
+  (local.set $i (i32.const 0))                                                        ;; row index = 0
+  (block $no_match                                                                   ;; break target = no match
+    (loop $scan
+      (br_if $no_match (i32.ge_u (local.get $i) (local.get $count)))                 ;; all rows scanned -> no match
+      (local.set $row (i32.add (local.get $base) (i32.mul (local.get $i) (i32.const 32))))  ;; row = base + i*32
+      (local.set $nlen (i64.load offset=8 (local.get $row)))                          ;; candidate name length
+      (if (i64.eq (local.get $qlen) (local.get $nlen))                                ;; same length -> compare bytes
+        (then
+          (local.set $nptr (i32.load offset=0 (local.get $row)))                      ;; candidate name pointer
+          (local.set $b (i32.const 0))                                                ;; byte index = 0
+          (block $next_row                                                            ;; break target = next row
+            (loop $byte_loop
+              (if (i64.ge_u (i64.extend_i32_u (local.get $b)) (local.get $qlen))     ;; all bytes matched -> return
+                (then
+                  (return (i32.const 1) (i64.load offset=16 (local.get $row)) (i32.load offset=24 (local.get $row)))  ;; (1, target_id, target_kind)
+                )
+              )
+              (local.set $qb (i32.load8_u (i32.add (local.get $qptr) (local.get $b))))  ;; query byte
+              (local.set $nb (i32.load8_u (i32.add (local.get $nptr) (local.get $b))))  ;; candidate byte
+              (local.set $qb (select (i32.add (local.get $qb) (i32.const 32)) (local.get $qb) (i32.and (i32.ge_u (local.get $qb) (i32.const 65)) (i32.le_u (local.get $qb) (i32.const 90)))))  ;; fold A-Z -> a-z
+              (local.set $nb (select (i32.add (local.get $nb) (i32.const 32)) (local.get $nb) (i32.and (i32.ge_u (local.get $nb) (i32.const 65)) (i32.le_u (local.get $nb) (i32.const 90)))))  ;; fold A-Z -> a-z
+              (br_if $next_row (i32.ne (local.get $qb) (local.get $nb)))               ;; mismatch -> next row
+              (local.set $b (i32.add (local.get $b) (i32.const 1)))                   ;; b++
+              (br $byte_loop)                                                         ;; continue byte loop
+            )
+          )
+        )
+      )
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))                           ;; i++
+      (br $scan)                                                                      ;; next row
+    )
+  )
+  (i32.const 0) (i64.const 0) (i32.const 0)                                          ;; no match -> (0, 0, 0)
+)
+"#;
+
 /// Registers the import-free class runtime helpers on `wm`.
 ///
-/// Emits `__rt_instanceof`, `__rt_mixed_instanceof`, `__rt_class_name_by_cid`, and
-/// `__rt_class_name_by_obj`. They reference the `$__gc_desc_count`,
+/// Emits `__rt_instanceof`, `__rt_mixed_instanceof`, `__rt_class_name_by_cid`,
+/// `__rt_class_name_by_obj`, and `__rt_instanceof_lookup`. They reference the
+/// `$__gc_desc_count`,
 /// `$__class_parent_ids`, `$__class_interface_ptrs`, `$__class_name_entries`, and
 /// `$__class_name_missing` globals, so every module emitting them must also emit
 /// either `emit_class_metadata_tables` (real programs) or `emit_class_metadata_stub`
 /// (unit-test harnesses) so the globals exist and the WAT validates. The helpers are
-/// borrow-only and safely return false/empty when `__gc_desc_count == 0`.
+/// borrow-only and safely return false/empty when `__gc_desc_count == 0` or
+/// `__instanceof_target_count == 0`.
 pub(super) fn emit_class_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_INSTANCEOF);
     wm.add_raw_func(RT_MIXED_INSTANCEOF);
     wm.add_raw_func(RT_CLASS_NAME_BY_CID);
     wm.add_raw_func(RT_CLASS_NAME_BY_OBJ);
+    wm.add_raw_func(RT_INSTANCEOF_LOOKUP);
 }
 
 /// Declares the class-metadata globals at zero/empty for unit-test harnesses that
 /// register no classes.
 ///
 /// With `__gc_desc_count == 0` (from `emit_gc_desc_stub`) the instanceof bounds
-/// check fails for every `cid` and the name lookup returns the missing row, so the
-/// helpers no-op safely. `$__class_name_missing` still needs a real address, so a
-/// single null byte is laid out at offset 0 (linear memory always has a valid
-/// address 0 region in the runtime scratch space).
+/// check fails for every `cid`, the name lookup returns the missing row, and
+/// `__rt_instanceof_lookup` sees `__instanceof_target_count == 0` so its scan is
+/// empty, so the helpers no-op safely. `$__class_name_missing` still needs a real
+/// address, so a single null byte is laid out at offset 0 (linear memory always has a
+/// valid address 0 region in the runtime scratch space).
 #[cfg(test)]
 pub(super) fn emit_class_metadata_stub(wm: &mut WatModule) {
     wm.add_data(DataSegment {
@@ -230,6 +282,20 @@ pub(super) fn emit_class_metadata_stub(wm: &mut WatModule) {
     });
     wm.add_global(Global {
         name: "__class_name_entries".to_string(),
+        ty: ValType::I32,
+        mutable: false,
+        init: 0,
+    });
+    // P6g: empty instanceof target table so `__rt_instanceof_lookup` (now registered by
+    // `emit_class_runtime`) validates and no-ops with `count == 0`.
+    wm.add_global(Global {
+        name: "__instanceof_target_entries".to_string(),
+        ty: ValType::I32,
+        mutable: false,
+        init: 0,
+    });
+    wm.add_global(Global {
+        name: "__instanceof_target_count".to_string(),
         ty: ValType::I32,
         mutable: false,
         init: 0,
@@ -417,6 +483,109 @@ pub(super) fn emit_class_metadata_tables(wm: &mut WatModule, module: &Module, cu
     cursor
 }
 
+/// Emits the `__instanceof_target_entries` lookup table — one row per class/interface name
+/// spelling (plain and leading-backslash absolute) — plus the `$__instanceof_target_entries`
+/// (base) and `$__instanceof_target_count` (row count) globals, advancing the static-data
+/// cursor and returning the new cursor.
+///
+/// Each row is 32 bytes: `[name_ptr i32][pad4][name_len i64][target_id i64][target_kind
+/// i32][pad4]`, 8-aligned so the i64 fields load cleanly. `__rt_instanceof_lookup` scans
+/// this table case-insensitively to resolve a dynamic string instanceof target. Mirrors
+/// the native `_instanceof_target_entries` table (two spellings per target: plain + `\Name`,
+/// so `count == (classes + interfaces) * 2`). `generate()` threads this after
+/// `emit_class_metadata_tables`, before `heap_base` is computed, so the table sits in
+/// static memory below the heap. With no classes or interfaces the globals are zeroed so
+/// the lookup no-ops with `count == 0`.
+pub(super) fn emit_instanceof_target_table(wm: &mut WatModule, module: &Module, cursor: u32) -> u32 {
+    // Collect (name, id, kind): classes (kind 0) then interfaces (kind 1). Class and
+    // interface id spaces are distinct; `target_kind` disambiguates them at lookup time.
+    let mut targets: Vec<(String, u64, i32)> = Vec::new();
+    for (name, ci) in &module.class_infos {
+        targets.push((name.clone(), ci.class_id, 0));
+    }
+    for (name, ii) in &module.interface_infos {
+        targets.push((name.clone(), ii.interface_id, 1));
+    }
+    targets.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.2.cmp(&b.2)));
+
+    let mut cursor = (cursor + 7) & !7; // 8-align the name bytes and the i64-bearing rows
+
+    if targets.is_empty() {
+        wm.add_global(Global {
+            name: "__instanceof_target_entries".to_string(),
+            ty: ValType::I32,
+            mutable: false,
+            init: 0,
+        });
+        wm.add_global(Global {
+            name: "__instanceof_target_count".to_string(),
+            ty: ValType::I32,
+            mutable: false,
+            init: 0,
+        });
+        return cursor;
+    }
+
+    // Emit the plain and absolute (`\Name`) name bytes, recording each spelling's offset.
+    let mut name_off: HashMap<(u64, i32, bool), u32> = HashMap::new();
+    let mut name_len: HashMap<(u64, i32, bool), u64> = HashMap::new();
+    for (name, id, kind) in &targets {
+        for is_abs in [false, true] {
+            let bytes: Vec<u8> = if is_abs {
+                let mut b = vec![b'\\'];
+                b.extend_from_slice(name.as_bytes());
+                b
+            } else {
+                name.as_bytes().to_vec()
+            };
+            name_len.insert((*id, *kind, is_abs), bytes.len() as u64);
+            name_off.insert((*id, *kind, is_abs), cursor);
+            wm.add_data(DataSegment {
+                offset: cursor,
+                bytes,
+            });
+            cursor += name_len[&(*id, *kind, is_abs)] as u32;
+        }
+    }
+
+    // 8-align for the i64-bearing rows, then emit one 32-byte row per spelling.
+    cursor = (cursor + 7) & !7;
+    let rows_off = cursor;
+    let mut row_bytes: Vec<u8> = Vec::with_capacity(targets.len() * 2 * 32);
+    for (name, id, kind) in &targets {
+        let _ = name; // name bytes already emitted above; only offsets are referenced here.
+        for is_abs in [false, true] {
+            let ptr = name_off[&(*id, *kind, is_abs)] as i32;
+            let len = name_len[&(*id, *kind, is_abs)] as i64;
+            row_bytes.extend_from_slice(&ptr.to_le_bytes()); // name_ptr (i32)
+            row_bytes.extend_from_slice(&0u32.to_le_bytes()); // pad (i32)
+            row_bytes.extend_from_slice(&len.to_le_bytes()); // name_len (i64)
+            row_bytes.extend_from_slice(&(*id as i64).to_le_bytes()); // target_id (i64)
+            row_bytes.extend_from_slice(&(*kind as i32).to_le_bytes()); // target_kind (i32)
+            row_bytes.extend_from_slice(&0u32.to_le_bytes()); // pad (i32)
+        }
+    }
+    wm.add_data(DataSegment {
+        offset: rows_off,
+        bytes: row_bytes,
+    });
+    cursor += (targets.len() as u32 * 2 * 32) as u32;
+
+    wm.add_global(Global {
+        name: "__instanceof_target_entries".to_string(),
+        ty: ValType::I32,
+        mutable: false,
+        init: rows_off as i64,
+    });
+    wm.add_global(Global {
+        name: "__instanceof_target_count".to_string(),
+        ty: ValType::I32,
+        mutable: false,
+        init: (targets.len() as i64) * 2,
+    });
+    cursor
+}
+
 /// Reads the class-name immediate of an instanceof instruction.
 ///
 /// `Op::InstanceOf` carries `Immediate::Data` indexing into `module.data.class_names`
@@ -522,41 +691,19 @@ pub(super) fn lower_instanceof(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
     }
 }
 
-/// Lowers `Op::InstanceOfDynamic` (a runtime target operand).
+/// Emits the code that normalizes an instanceof value receiver to a raw object pointer
+/// in local `vp` (0 when the value is not an object).
 ///
-/// Supported targets: an `Object` (read its runtime class id) and a `Mixed`/`Union`
-/// (unbox; an object payload uses the object path, anything else is false). A null
-/// target is false. A string target needs a name->id lookup table and is deferred to
-/// P6g, emitting `Unsupported` before any dereference. A scalar target is false.
-pub(super) fn lower_instanceof_dynamic(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    let value = operand(inst, 0)?;
-    let target = operand(inst, 1)?;
-    let value_ty = ctx.value_php_type(value)?;
-    let target_ty = ctx.value_php_type(target)?;
-
-    // Type-gate the target FIRST (before any dereference of it).
-    match target_ty {
-        PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_) => {}
-        PhpType::Str => {
-            return Err(WasmError::Unsupported(
-                "P6f: dynamic string instanceof target deferred (P6g)".to_string(),
-            ));
-        }
-        _ => {
-            // scalar/null target -> always false
-            ctx.fb
-                .ins("i64.const 0", "instanceof scalar/null target -> false");
-            return store_result(ctx, inst);
-        }
-    }
-
-    // Shared temps: the value receiver pointer (0 = non-object) and the resolved
-    // target class id + validity flag.
-    let vp = ctx.fresh_temp(ValType::I32);
-    let tcid = ctx.fresh_temp(ValType::I64);
-    let tvalid = ctx.fresh_temp(ValType::I32);
-
-    // Normalize the value to a receiver pointer (0 = not an object).
+/// Shared by the object/mixed-target and string-target paths of `lower_instanceof_dynamic`:
+/// both end in `__rt_instanceof(vp, target_id, target_kind)`, which returns false for a
+/// null receiver (`vp == 0`). A `Mixed`/`Union` value is unboxed and the object payload
+/// extracted via a `select` (`lo_i32` when tag == 6, else 0); a scalar/null value yields 0.
+fn normalize_receiver_ptr(
+    ctx: &mut FnCtx,
+    value: ValueId,
+    value_ty: &PhpType,
+    vp: &str,
+) -> Result<()> {
     match value_ty {
         PhpType::Object(_) => {
             ctx.emit_load_value(value)?;
@@ -589,6 +736,107 @@ pub(super) fn lower_instanceof_dynamic(ctx: &mut FnCtx, inst: &Instruction) -> R
                 .ins(&format!("local.set {}", vp), "value receiver pointer");
         }
     }
+    Ok(())
+}
+
+/// String-target arm of `Op::InstanceOfDynamic` (`$x instanceof "SomeClass"`).
+///
+/// Resolves the runtime target name via `__rt_instanceof_lookup` (case-insensitive scan
+/// of `__instanceof_target_entries`), then runs `__rt_instanceof` with the resolved
+/// `(target_id, target_kind)` against the value's object pointer. An unknown name yields
+/// `(0, 0, 0)` -> false (PHP warns + false, never a trap). The value is normalized to a
+/// receiver pointer exactly like the object-target path, so a non-object value
+/// (`vp == 0`) is false. Borrows the target string (the lookup never frees it).
+fn lower_instanceof_dynamic_string(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    value: ValueId,
+    target: ValueId,
+    value_ty: PhpType,
+) -> Result<()> {
+    let vp = ctx.fresh_temp(ValType::I32);
+    normalize_receiver_ptr(ctx, value, &value_ty, &vp)?;
+
+    // Load the target string (ptr i32, len i64) and look it up. `emit_load_value` pushes
+    // the pair [ptr, len] with len on top, so capture len then ptr.
+    let qlen = ctx.fresh_temp(ValType::I64);
+    let qptr = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(target)?;
+    ctx.fb
+        .ins(&format!("local.set {}", qlen), "target string length (top of str pair)");
+    ctx.fb
+        .ins(&format!("local.set {}", qptr), "target string pointer");
+    let tid = ctx.fresh_temp(ValType::I64);
+    let tkind = ctx.fresh_temp(ValType::I32);
+    let tvalid = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(&format!("local.get {}", qptr), "target string pointer");
+    ctx.fb.ins(&format!("local.get {}", qlen), "target string length");
+    ctx.fb.ins(
+        "call $__rt_instanceof_lookup",
+        "look up target name -> (success, id, kind)",
+    );
+    ctx.fb
+        .ins(&format!("local.set {}", tkind), "resolved target kind (top)");
+    ctx.fb
+        .ins(&format!("local.set {}", tid), "resolved target id");
+    ctx.fb
+        .ins(&format!("local.set {}", tvalid), "lookup success flag");
+
+    // if success: __rt_instanceof(vp, id, kind) else 0; widen to i64 Bool.
+    ctx.fb.ins(&format!("local.get {}", tvalid), "lookup success flag");
+    ctx.fb.ins("if (result i32)", "resolved target -> check, else false");
+    ctx.fb
+        .ins(&format!("local.get {}", vp), "value receiver pointer");
+    ctx.fb
+        .ins(&format!("local.get {}", tid), "resolved target id");
+    ctx.fb
+        .ins(&format!("local.get {}", tkind), "resolved target kind");
+    ctx.fb.ins(
+        "call $__rt_instanceof",
+        "runtime instanceof (string target)",
+    );
+    ctx.fb.ins("else", "unknown name -> false");
+    ctx.fb.ins("i32.const 0", "false");
+    ctx.fb.ins("end", "end string-target instanceof");
+    ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+    store_result(ctx, inst)
+}
+
+/// Lowers `Op::InstanceOfDynamic` (a runtime target operand).
+///
+/// Supported targets: an `Object` (read its runtime class id), a `Mixed`/`Union`
+/// (unbox; an object payload uses the object path, anything else is false), and a `Str`
+/// (resolved via `__rt_instanceof_lookup` against the `__instanceof_target_entries`
+/// table — P6g). A null/scalar target is false. The value is normalized to a receiver
+/// pointer (0 = non-object) shared by every target arm.
+pub(super) fn lower_instanceof_dynamic(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let value = operand(inst, 0)?;
+    let target = operand(inst, 1)?;
+    let value_ty = ctx.value_php_type(value)?;
+    let target_ty = ctx.value_php_type(target)?;
+
+    // Type-gate the target FIRST (before any dereference of it).
+    match target_ty {
+        PhpType::Str => {
+            return lower_instanceof_dynamic_string(ctx, inst, value, target, value_ty);
+        }
+        PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_) => {}
+        _ => {
+            // scalar/null target -> always false
+            ctx.fb
+                .ins("i64.const 0", "instanceof scalar/null target -> false");
+            return store_result(ctx, inst);
+        }
+    }
+
+    // Shared temps: the value receiver pointer (0 = non-object) and the resolved
+    // target class id + validity flag.
+    let vp = ctx.fresh_temp(ValType::I32);
+    let tcid = ctx.fresh_temp(ValType::I64);
+    let tvalid = ctx.fresh_temp(ValType::I32);
+
+    // Normalize the value to a receiver pointer (0 = not an object).
+    normalize_receiver_ptr(ctx, value, &value_ty, &vp)?;
 
     // Resolve the target to (target_cid, valid). kind is always 0 (class).
     match target_ty {

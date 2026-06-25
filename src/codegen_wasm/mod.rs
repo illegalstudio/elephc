@@ -121,6 +121,14 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // indexed by runtime class_id. Reuses `$__gc_desc_count` as the shared bounds.
     cursor = classes::emit_class_metadata_tables(&mut wm, module, cursor);
 
+    // P6g: dynamic-string instanceof target lookup table
+    // (`__instanceof_target_entries` + `__instanceof_target_count`), advancing the
+    // static-data cursor. Must land immediately after `emit_class_metadata_tables` and
+    // before `heap_base` is computed so the table sits in static memory below the heap,
+    // scanned case-insensitively by `__rt_instanceof_lookup` (registered in
+    // `emit_class_runtime`).
+    cursor = classes::emit_instanceof_target_table(&mut wm, module, cursor);
+
     // The heap begins 16-aligned just above the string/data region; reserve two
     // pages of initial headroom above it. The bump allocator grows beyond
     // `heap_end` with `memory.grow` when this region is exhausted.
@@ -5121,6 +5129,21 @@ mod tests {
         .expect("NullsafeMethodCall lowers")
     }
 
+    /// Emits `receiver?->prop` (Op::NullsafePropGet): operands are `[receiver]`, the
+    /// immediate is the interned property-name string. The result is always a `Mixed`
+    /// cell (`Heap(IrHeapKind::Mixed)`), matching the EIR lowering.
+    fn emit_nullsafe_prop_get(b: &mut Builder, receiver: ValueId, prop_data: DataId) -> ValueId {
+        b.emit(
+            Op::NullsafePropGet,
+            vec![receiver],
+            Some(Immediate::Data(prop_data)),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            Ownership::Owned,
+        )
+        .expect("NullsafePropGet lowers")
+    }
+
     /// Boxes `value` into a Mixed/Union cell (Op::MixedBox) with the given result PHP
     /// type, returning the cell value id. Used to build mixed/union receivers.
     fn box_into_mixed(b: &mut Builder, value: ValueId, result_php: PhpType) -> ValueId {
@@ -5546,16 +5569,19 @@ mod tests {
         }
     }
 
-    /// `$x instanceof "P"` (string target) is rejected: a dynamic string instanceof
-    /// target needs a name->id lookup table (deferred to P6g), so `generate` returns an
-    /// `Unsupported` error before any dereference.
+    /// `$x instanceof "P6fIL"` (string target naming the class) -> "[1]". The
+    /// `__instanceof_target_entries` table holds a row for `P6fIL` (plain + `\P6fIL`),
+    /// `__rt_instanceof_lookup` resolves the string to `(target_id=1, kind=0)`, and
+    /// `__rt_instanceof` matches the object's own class id.
     #[test]
-    fn instanceof_dynamic_string_target_rejected() {
+    fn instanceof_dynamic_string_target_matches() {
         let class = "P6fIL";
         let mut module = Module::new(Target::wasm());
         let class_data = module.data.intern_class_name(class);
         module.class_infos.insert(class.to_string(), test_class_info(1, vec![], vec![], false));
         let name = module.data.intern_string(class);
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
         let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
         main.flags.is_main = true;
         {
@@ -5565,16 +5591,45 @@ mod tests {
             b.position_at_end(entry);
             let value = emit_object_new(&mut b, class, class_data);
             let target = b.emit_const_str(name);
-            let _ = emit_instanceof_dynamic(&mut b, value, target);
+            let r = emit_instanceof_dynamic(&mut b, value, target);
+            echo_bool_bracketed(&mut b, open, r, close);
             b.terminate(Terminator::Return { value: None });
         }
         module.add_function(main);
-        let err = generate(&module, Emit::Executable)
-            .expect_err("dynamic string instanceof target should be rejected");
-        assert!(
-            err.to_string().contains("string instanceof"),
-            "unexpected error: {err}"
-        );
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[1]");
+        }
+    }
+
+    /// `$x instanceof "P6fZZ"` (string target naming an unrelated class) -> "[]". The
+    /// lookup table has no row for `P6fZZ`, so `__rt_instanceof_lookup` returns
+    /// `(0, 0, 0)` (no match) and the dynamic instanceof short-circuits to false.
+    #[test]
+    fn instanceof_dynamic_string_target_unrelated_returns_false() {
+        let class = "P6fIU";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        module.class_infos.insert(class.to_string(), test_class_info(1, vec![], vec![], false));
+        let name = module.data.intern_string("P6fZZ");
+        let open = module.data.intern_string("[");
+        let close = module.data.intern_string("]");
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let value = emit_object_new(&mut b, class, class_data);
+            let target = b.emit_const_str(name);
+            let r = emit_instanceof_dynamic(&mut b, value, target);
+            echo_bool_bracketed(&mut b, open, r, close);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "[]");
+        }
     }
 
     /// `get_class(new P())` -> "P". `__rt_class_name_by_obj` reads the runtime class id
@@ -6339,6 +6394,263 @@ mod tests {
         module.add_function(main);
         if let Some(out) = run_main(&module) {
             assert_eq!(out, "[]");
+        }
+    }
+
+    // ----- P6g: dynamic properties + stdClass + nullsafe property access -----
+
+    /// `new P6gA(); $o->k = "hello"; echo $o->k;` -> "hello". An
+    /// `#[\AllowDynamicProperties]` class (no declared slots) stores the undeclared
+    /// property `k` in the dyn-prop hash tail and reads it back through the same hash.
+    #[test]
+    fn dyn_props_string_roundtrip() {
+        let class = "P6gA";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let k_data = module.data.intern_string("k");
+        let hello_data = module.data.intern_string("hello");
+        module
+            .class_infos
+            .insert(class.to_string(), test_class_info(1, vec![], vec![], true));
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let val = b.emit_const_str(hello_data);
+            emit_prop_set(&mut b, obj, k_data, val);
+            let got = emit_prop_get(&mut b, obj, k_data, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![got],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "hello");
+        }
+    }
+
+    /// `$o = new stdClass(); $o->k = 99; echo $o->k;` -> "99". `stdClass` is dynamic by
+    /// name (no declared slots, `allow_dynamic_properties` left false); the dyn hash tail
+    /// lives at offset 8 (the whole 8-byte payload).
+    #[test]
+    fn stdclass_dynamic_props_roundtrip() {
+        let class = "stdClass";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let k_data = module.data.intern_string("k");
+        module
+            .class_infos
+            .insert(class.to_string(), test_class_info(1, vec![], vec![], false));
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let val = b.emit_const_i64(99);
+            emit_prop_set(&mut b, obj, k_data, val);
+            let got = emit_prop_get(&mut b, obj, k_data, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![got],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "99");
+        }
+    }
+
+    /// `$o?->x` on a non-null nullable object holding an ADP object with dyn int `x=7`
+    /// -> "7". The receiver unboxes to tag 6 (object); the object arm reads the dyn prop
+    /// and boxes it into the Mixed result, which echoes as the integer.
+    #[test]
+    fn nullsafe_prop_get_object_reads_dyn_prop() {
+        let class = "P6gNO";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let x_data = module.data.intern_string("x");
+        module
+            .class_infos
+            .insert(class.to_string(), test_class_info(1, vec![], vec![], true));
+        let union_ty = PhpType::Union(vec![PhpType::Object(class.to_string()), PhpType::Void]);
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let v = b.emit_const_i64(7);
+            emit_prop_set(&mut b, obj, x_data, v);
+            let recv = box_into_mixed(&mut b, obj, union_ty);
+            let got = emit_nullsafe_prop_get(&mut b, recv, x_data);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![got],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "7");
+        }
+    }
+
+    /// `$o?->x` on a null nullable object -> "" (PHP prints nothing for `echo null`).
+    /// The receiver unboxes to tag 8 (null); the null arm boxes a fresh null Mixed cell,
+    /// which echoes as the empty string.
+    #[test]
+    fn nullsafe_prop_get_null_short_circuits() {
+        let class = "P6gNN";
+        let mut module = Module::new(Target::wasm());
+        let _class_data = module.data.intern_class_name(class);
+        let x_data = module.data.intern_string("x");
+        module
+            .class_infos
+            .insert(class.to_string(), test_class_info(1, vec![], vec![], true));
+        let union_ty = PhpType::Union(vec![PhpType::Object(class.to_string()), PhpType::Void]);
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let null = b.emit_const_null();
+            let recv = box_into_mixed(&mut b, null, union_ty);
+            let got = emit_nullsafe_prop_get(&mut b, recv, x_data);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![got],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "");
+        }
+    }
+
+    /// `$o->k = mixed_box(7); echo $o->k` -> "7". Exercises the dyn-prop SET MOVE path (RHS
+    /// already a Mixed cell, stored directly) plus the balancing post-`__rt_hash_set`
+    /// `__rt_decref_any` of the inbound cell temp. Without the balance the cell would leak one
+    /// ref per store; with it the hash owns exactly one ref and the moved temp's ref is dropped.
+    #[test]
+    fn dyn_props_mixed_move_roundtrip() {
+        let class = "P6gM";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let k_data = module.data.intern_string("k");
+        module
+            .class_infos
+            .insert(class.to_string(), test_class_info(1, vec![], vec![], true));
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let int_val = b.emit_const_i64(7);
+            let mixed_val = box_into_mixed(&mut b, int_val, PhpType::Mixed);
+            emit_prop_set(&mut b, obj, k_data, mixed_val);
+            let got = emit_prop_get(&mut b, obj, k_data, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![got],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "7");
+        }
+    }
+
+    /// `new P6gD{int a}; $o->a = 42; $o->k = 99; echo $o->a, " ", $o->k` -> "42 99". Exercises an
+    /// ADP class with ONE declared slot (`a` at offset 8) coexisting with the +8 dyn hash tail
+    /// (at offset 24): the declared SET/GET use the slot walk, the dyn SET/GET use the hash
+    /// tail, and `RT_DECREF_OBJECT` walks the one declared slot then releases the tail
+    /// (`n = (size-8) >> 4` truncates the +8, so the tail is freed separately).
+    #[test]
+    fn dyn_props_alongside_declared_slot() {
+        let class = "P6gD";
+        let mut module = Module::new(Target::wasm());
+        let class_data = module.data.intern_class_name(class);
+        let a_data = module.data.intern_string("a");
+        let k_data = module.data.intern_string("k");
+        let sep_data = module.data.intern_string(" ");
+        module
+            .class_infos
+            .insert(class.to_string(), test_class_info(1, vec![("a".to_string(), PhpType::Int)], vec![None], true));
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let obj = emit_object_new(&mut b, class, class_data);
+            let a_val = b.emit_const_i64(42);
+            emit_prop_set(&mut b, obj, a_data, a_val);
+            let k_val = b.emit_const_i64(99);
+            emit_prop_set(&mut b, obj, k_data, k_val);
+            let a = emit_prop_get(&mut b, obj, a_data, IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![a],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            echo_str(&mut b, sep_data);
+            let k = emit_prop_get(&mut b, obj, k_data, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![k],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "42 99");
         }
     }
 }

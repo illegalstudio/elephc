@@ -11,8 +11,10 @@
 //! Key details:
 //! - P6b scope: declared properties of scalar, string, container (array/hash/object), and
 //!   mixed/union/iterable type. Constructors (P6c), method dispatch (P6d), and destructors
-//!   (P6e) are now supported; dynamic properties remain a later sub-phase and return
-//!   `WasmError::Unsupported`.
+//!   (P6e) are supported. P6g adds dynamic properties (`#[\AllowDynamicProperties]` and
+//!   `stdClass`) via an 8-byte Mixed-cell hash tail after the declared payload, plus
+//!   `NullsafePropGet` for nullable concrete receivers (short-circuits to a null Mixed cell
+//!   on a null unbox).
 //! - Objects are heap blocks whose 16-byte header (`__rt_heap_alloc`) is stamped with
 //!   heap-kind 4 at `[ptr-8]`; the payload holds `class_id` at `+0` and one 16-byte
 //!   `(value_lo i64, value_hi i64)` slot per declared property (parent-first). The hi word is
@@ -24,7 +26,9 @@
 //!   slot value (desc tag in {1,4,5,6,7}) before freeing the block via `__rt_heap_free` (unsafe;
 //!   refcount is already 0). The property count is derived from the object's own size header
 //!   (`n = (size-8) >> 4`), not from a terminator, so a scalar-then-refcounted property ordering
-//!   is handled correctly.
+//!   is handled correctly. P6g appends a dyn-tail release: when `(size-8) & 15 == 8` an ADP/
+//!   stdClass object carries a Mixed-cell hash at `[ptr + (size-8)]`, released via
+//!   `__rt_decref_any` before `__rt_heap_free` (the declared-slot walk truncates the +8 tail).
 //!   The gc_desc table is emitted by `emit_gc_desc_table` (one tag byte per property, indexed by
 //!   `class_id`); `emit_gc_desc_stub` declares empty-table globals for unit-test harnesses that
 //!   register no classes (the `cid < count` check is then false for every cid and the walk is
@@ -40,7 +44,7 @@ use super::values::WasmRepr;
 use super::wat::{DataSegment, Global, ValType, WatModule};
 use super::WasmError;
 use crate::codegen_ir::{literal_default_value, LiteralDefaultValue};
-use crate::ir::{Instruction, IrHeapKind, IrType, ValueId};
+use crate::ir::{DataId, Instruction, IrHeapKind, IrType, ValueId};
 use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
 use std::collections::HashMap;
@@ -222,7 +226,7 @@ fn gc_desc_tag(ty: &PhpType) -> u8 {
 /// skipped. Finally the block is freed with `__rt_heap_free` (unsafe, no refcount guard) since the
 /// refcount is already 0.
 const RT_DECREF_OBJECT: &str = r#"(func $__rt_decref_object (param $ptr i32)
-  (local $rc i32) (local $n i32) (local $cid i32) (local $desc i32) (local $i i32) (local $tag i32) (local $slot i32)
+  (local $rc i32) (local $n i32) (local $cid i32) (local $desc i32) (local $i i32) (local $tag i32) (local $slot i32) (local $tail_off i32)
   (if (i32.eqz (local.get $ptr)) (then (return)))                    ;; guard: null pointer
   (if (i32.lt_u (local.get $ptr) (i32.add (global.get $__heap_base) (i32.const 16)))
     (then (return)))                                                  ;; guard: below first payload (borrowed/literal)
@@ -256,6 +260,16 @@ const RT_DECREF_OBJECT: &str = r#"(func $__rt_decref_object (param $ptr i32)
     )                                                          ;; close block $walk_end
   )                                                            ;; close then (cid < count)
   )                                                            ;; close if (cid < count)
+  ;; -- P6g: release the dynamic-property hash tail (AllowDynamicProperties / stdClass) --
+  ;; The dyn hash lives at [ptr + (size-8)]. When the declared-slot payload is a whole
+  ;; number of 16-byte slots, (size-8) & 15 == 0 (no tail); an ADP/stdClass object adds an
+  ;; 8-byte tail so (size-8) & 15 == 8. The declared-slot walk above ignores it ((n = (size-8)
+  ;; >> 4) truncates the +8), so release the hash here before freeing the storage.
+  (local.set $tail_off (i32.sub (i32.load (i32.sub (local.get $ptr) (i32.const 16))) (i32.const 8)))  ;; tail_off = size - 8 (dyn hash offset when present)
+  (if (i32.eq (i32.and (local.get $tail_off) (i32.const 15)) (i32.const 8)) (then  ;; (size-8) & 15 == 8 -> dyn hash tail present
+    (call $__rt_decref_any (i32.load (i32.add (local.get $ptr) (local.get $tail_off))))  ;; release the dyn hash at [ptr + (size-8)]
+  )                                                              ;; close then (dyn tail)
+  )                                                              ;; close if (dyn tail)
   (call $__rt_heap_free (local.get $ptr))                         ;; free the object storage (unsafe: refcount already 0)
   (return)                                                    ;; top-level return
 )                                                              ;; close func
@@ -388,9 +402,11 @@ fn value_php_type(ctx: &FnCtx, v: ValueId) -> Result<PhpType> {
         .clone())
 }
 
-/// Resolves the `ClassInfo` for a receiver's PHP object type, rejecting non-object receivers
-/// with a clean `Unsupported` error.
-fn receiver_class_info(ctx: &FnCtx, object: ValueId) -> Result<ClassInfo> {
+/// Resolves the `(class_name, ClassInfo)` for a receiver's PHP object type, rejecting
+/// non-object receivers with a clean `Unsupported` error. The name is returned alongside the
+/// info so callers can run dynamic-property probes that depend on the canonical class name
+/// (`stdClass` detection).
+fn receiver_class_info(ctx: &FnCtx, object: ValueId) -> Result<(String, ClassInfo)> {
     let php_type = value_php_type(ctx, object)?;
     let class_name = match php_type {
         PhpType::Object(name) => name,
@@ -401,11 +417,13 @@ fn receiver_class_info(ctx: &FnCtx, object: ValueId) -> Result<ClassInfo> {
             )))
         }
     };
-    ctx.module
+    let ci = ctx
+        .module
         .class_infos
         .get(&class_name)
         .cloned()
-        .ok_or_else(|| WasmError::Unsupported(format!("unknown class {}", class_name)))
+        .ok_or_else(|| WasmError::Unsupported(format!("unknown class {}", class_name)))?;
+    Ok((class_name, ci))
 }
 
 /// Looks up a declared property's `(index, byte_offset, php_type)` on `ci`, rejecting
@@ -422,6 +440,42 @@ fn resolve_property_slot(ci: &ClassInfo, property: &str) -> Result<(usize, usize
         .copied()
         .unwrap_or(8 + index * 16);
     Ok((index, offset, ci.properties[index].1.clone()))
+}
+
+/// True if `name` is the canonical `stdClass` (bare or backslashed). stdClass is the PHP
+/// built-in bag-of-dynamic-properties: it has no declared slots and every property is dynamic.
+fn is_stdclass(name: &str) -> bool {
+    name == "stdClass" || name == "\\stdClass"
+}
+
+/// True if the class carries an 8-byte dynamic-property hash tail: either it is annotated
+/// `#[\AllowDynamicProperties]` (`ci.allow_dynamic_properties`) or it is `stdClass`, which is
+/// dynamic by definition regardless of the attribute.
+fn has_dynamic_properties(ci: &ClassInfo, class_name: &str) -> bool {
+    ci.allow_dynamic_properties || is_stdclass(class_name)
+}
+
+/// Returns the byte offset of the dynamic-property hash tail (`[obj + off]`) when a property
+/// read/write must go through the dyn hash instead of a declared slot.
+///
+/// `Some(off)` only when the property is NOT one of the declared slots AND the class has a
+/// dynamic-property tail. The dyn hash lives immediately after the declared payload:
+/// `8 + n*16` (for stdClass `n == 0`, so the whole 8-byte payload is the hash slot). Declared
+/// properties and classes without a dyn tail return `None` so the caller falls back to the
+/// direct-slot path.
+fn dynamic_property_hash_offset_for_class(
+    ci: &ClassInfo,
+    class_name: &str,
+    property: &str,
+) -> Option<usize> {
+    if !has_dynamic_properties(ci, class_name) {
+        return None;
+    }
+    let declared = ci.properties.iter().any(|(p, _)| p == property);
+    if declared {
+        return None;
+    }
+    Some(8 + ci.properties.len() * 16)
 }
 
 /// Loads the object pointer local ref for `object`, rejecting a non-pointer repr.
@@ -446,10 +500,12 @@ fn object_ptr_ref(ctx: &FnCtx, object: ValueId) -> Result<String> {
 /// `[$this, ...user_args]` — the fresh object pointer is the first arg, matching the native
 /// `emit_constructor_call` and the hidden leading `this` param convention. `Op::ObjectNew`
 /// operands are the ctor USER args only (the receiver is not in operands; the backend prepends
-/// it), mirroring the native `lower_new_object`. Rejects `#[AllowDynamicProperties]` classes,
-/// args without a `__construct`, ctor arg-count mismatch, and variadic / by-ref ctor params
-/// with `Unsupported`. Non-scalar property defaults (string/container/mixed) are a follow-up
-/// sub-phase and surface as `Unsupported` from `emit_scalar_default`.
+/// it), mirroring the native `lower_new_object`. Rejects args without a `__construct`, ctor
+/// arg-count mismatch, and variadic / by-ref ctor params with `Unsupported`. Classes with a
+/// dynamic-property tail (`#[\AllowDynamicProperties]` or `stdClass`) get an extra 8-byte slot
+/// after the declared payload holding a `Mixed`-cell hash (`__rt_hash_new(4, 7)`) so undeclared
+/// property reads/writes go through the hash. Non-scalar property defaults (string/container/mixed)
+/// are a follow-up sub-phase and surface as `Unsupported` from `emit_scalar_default`.
 pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let class_data = data_immediate(inst)?;
     let class_name = ctx
@@ -465,12 +521,6 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
         .get(&class_name)
         .cloned()
         .ok_or_else(|| WasmError::Unsupported(format!("unknown class {}", class_name)))?;
-    if ci.allow_dynamic_properties {
-        return Err(WasmError::Unsupported(format!(
-            "dynamic properties not yet supported on wasm32-wasi for class {}",
-            class_name
-        )));
-    }
     // Resolve the constructor (case-insensitive key) and the declaring class for an
     // inherited ctor (defaults to self). The call is emitted after the defaults loop;
     // the gate logic moves there so a 0-arg ctor is still called with just `$this`.
@@ -483,7 +533,9 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
         .unwrap_or_else(|| class_name.clone());
 
     let n = ci.properties.len();
-    let payload_size: i32 = 8 + (n as i32) * 16;
+    let has_dyn = has_dynamic_properties(&ci, &class_name);
+    let dyn_off = if has_dyn { Some(8 + (n as i32) * 16) } else { None };
+    let payload_size: i32 = 8 + (n as i32) * 16 + if has_dyn { 8 } else { 0 };
     let class_id = ci.class_id as i64;
 
     // -- allocate the object block --
@@ -535,6 +587,23 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
         )
         .map_err(|e| WasmError::Unsupported(e.to_string()))?;
         emit_scalar_default(ctx, &obj, off, &lit, &prop_name)?;
+    }
+
+    // -- initialise the dynamic-property hash tail (ADP / stdClass) --
+    // An extra 8-byte slot after the declared payload holds an i32 ptr to a Mixed-cell
+    // hash (capacity 4, value_tag 7). Undeclared reads/writes go through it; the tail is
+    // released by __rt_decref_object when (size-8) & 15 == 8. stdClass has no declared
+    // properties, so dyn_off == 8 and the whole payload is the 8-byte hash slot.
+    if let Some(off) = dyn_off {
+        ctx.fb.ins("i64.const 4", "dynamic-property hash capacity (4 entries)");
+        ctx.fb.ins("i64.const 7", "dynamic-property hash value tag (7 = mixed cell)");
+        ctx.fb.ins("call $__rt_hash_new", "allocate the dyn-prop mixed hash -> ptr (i32)");
+        let dyn_hash = ctx.fresh_temp(ValType::I32);
+        ctx.fb.ins(&format!("local.set {}", dyn_hash), "capture dyn-prop hash pointer");
+        ctx.fb.ins(&format!("local.get {}", obj), "object base address (store addr)");
+        ctx.fb.ins(&format!("local.get {}", dyn_hash), "dyn-prop hash ptr (value)");
+        ctx.fb.ins("i64.extend_i32_u", "widen the hash ptr to i64 for storage");
+        ctx.fb.ins(&format!("i64.store offset={}", off), "store the dyn-prop hash ptr at [obj + dyn_off]");
     }
 
     // -- call __construct (if declared) with [$this, ...user_args]; defaults run first --
@@ -725,7 +794,11 @@ pub(super) fn lower_prop_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
         .cloned()
         .ok_or_else(|| WasmError::Unsupported(format!("invalid string data id {:?}", prop_data)))?;
 
-    let ci = receiver_class_info(ctx, object)?;
+    let (class_name, ci) = receiver_class_info(ctx, object)?;
+    // Undeclared property on an ADP / stdClass class -> read through the dyn-prop hash tail.
+    if let Some(dyn_off) = dynamic_property_hash_offset_for_class(&ci, &class_name, &property) {
+        return lower_dyn_prop_get(ctx, inst, object, dyn_off, prop_data);
+    }
     let (_, offset, prop_type) = resolve_property_slot(&ci, &property)?;
     let obj_ref = object_ptr_ref(ctx, object)?;
 
@@ -798,7 +871,11 @@ pub(super) fn lower_prop_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
         .cloned()
         .ok_or_else(|| WasmError::Unsupported(format!("invalid string data id {:?}", prop_data)))?;
 
-    let ci = receiver_class_info(ctx, object)?;
+    let (class_name, ci) = receiver_class_info(ctx, object)?;
+    // Undeclared property on an ADP / stdClass class -> write through the dyn-prop hash tail.
+    if let Some(dyn_off) = dynamic_property_hash_offset_for_class(&ci, &class_name, &property) {
+        return lower_dyn_prop_set(ctx, inst, object, value, dyn_off, prop_data);
+    }
     let (_, offset, prop_type) = resolve_property_slot(&ci, &property)?;
     let obj_ref = object_ptr_ref(ctx, object)?;
 
@@ -893,5 +970,336 @@ pub(super) fn lower_prop_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
         }
     }
 
+    Ok(())
+}
+
+/// Lowers `Op::PropGet` of an UNDECLARED property on an ADP / `stdClass` class to a
+/// `__rt_hash_get` of the property name against the dynamic-property hash tail.
+///
+/// The dyn hash pointer lives at `[obj + dyn_off]` (an i32). The key is the property-name
+/// string `(zext ptr, len)` borrowed from static data (`__rt_hash_get` owns no key copy).
+/// A hit returns `(1, cell_ptr, 0, 7)`; the stored Mixed cell is incref'd so the read result
+/// owns it (the result slot is `Mixed`). A miss returns `(0, 0, 0, 8)`; a fresh null Mixed cell
+/// is boxed via `__rt_mixed_from_value(8, 0, 0)` and stored (matching PHP's null for a missing
+/// dynamic property).
+fn lower_dyn_prop_get(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    object: ValueId,
+    dyn_off: usize,
+    prop_data: DataId,
+) -> Result<()> {
+    let (kptr, klen) = ctx.str_literal(prop_data)?;
+    let obj_ref = object_ptr_ref(ctx, object)?;
+    // Load the dyn hash pointer at [obj + dyn_off] and look up the property name.
+    ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
+    ctx.fb.ins(&format!("i32.load offset={}", dyn_off), "load dynamic-property hash pointer");
+    let hash = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(&format!("local.set {}", hash), "save dyn-prop hash pointer");
+    ctx.fb.ins(&format!("local.get {}", hash), "dyn-prop hash pointer");
+    ctx.fb.ins(&format!("i32.const {}", kptr), "property name pointer (static data)");
+    ctx.fb.ins("i64.extend_i32_u", "key_lo = zext(name ptr)");
+    ctx.fb.ins(&format!("i64.const {}", klen), "key_hi = name length");
+    ctx.fb.ins("call $__rt_hash_get", "look up the dynamic property -> (found, vlo, vhi, vtag)");
+    let vtag = ctx.fresh_temp(ValType::I64);
+    ctx.fb.ins(&format!("local.set {}", vtag), "captured value tag (7 = mixed)");
+    let vhi = ctx.fresh_temp(ValType::I64);
+    ctx.fb.ins(&format!("local.set {}", vhi), "captured value high word (0)");
+    let vlo = ctx.fresh_temp(ValType::I64);
+    ctx.fb.ins(&format!("local.set {}", vlo), "captured value low word (cell ptr)");
+    let found = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(&format!("local.set {}", found), "captured found flag");
+    // hit -> incref the borrowed Mixed cell (hash_get is borrow-only); miss -> box null.
+    ctx.fb.ins(&format!("local.get {}", found), "found flag");
+    ctx.fb.ins("if (result i32)", "dynamic property present?");
+    ctx.fb.ins(&format!("local.get {}", vlo), "stored mixed cell ptr (i64)");
+    ctx.fb.ins("i32.wrap_i64", "cell ptr -> i32");
+    let cell = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(&format!("local.set {}", cell), "save hit cell ptr");
+    ctx.fb.ins(&format!("local.get {}", cell), "hit cell ptr");
+    ctx.fb.ins("call $__rt_incref", "retain the borrowed dyn-prop cell");
+    ctx.fb.ins(&format!("local.get {}", cell), "hit cell ptr for result");
+    ctx.fb.ins("else", "miss -> box a fresh null mixed cell");
+    ctx.fb.ins("i64.const 8", "mixed tag (null)");
+    ctx.fb.ins("i64.const 0", "null lo");
+    ctx.fb.ins("i64.const 0", "null hi");
+    ctx.fb.ins("call $__rt_mixed_from_value", "box a fresh null mixed cell");
+    ctx.fb.ins("end", "end hit/miss");
+    store_result(ctx, inst)?;
+    Ok(())
+}
+
+/// Lowers `Op::PropSet` of an UNDECLARED property on an ADP / `stdClass` class to a
+/// `__rt_hash_set` against the dynamic-property hash tail.
+///
+/// The value is materialized as an OWNED boxed Mixed cell: MOVE for a value that is already a
+/// Mixed cell (stored directly), BOX via `emit_box_value_into_mixed` otherwise. `__rt_hash_set`
+/// owns the inbound tag-7 cell by incref'ing it itself, so the materialized temp ref is dropped
+/// with a balancing `__rt_decref_any` after the call (rc 1 -> incref -> 2 -> decref -> 1, owned by
+/// the hash). The (possibly reallocated) hash pointer returned by `__rt_hash_set` is written back
+/// to `[obj + dyn_off]` (stored as i64 for consistency with `lower_object_new`). `PropSet` is void.
+fn lower_dyn_prop_set(
+    ctx: &mut FnCtx,
+    _inst: &Instruction,
+    object: ValueId,
+    value: ValueId,
+    dyn_off: usize,
+    prop_data: DataId,
+) -> Result<()> {
+    let (kptr, klen) = ctx.str_literal(prop_data)?;
+    let obj_ref = object_ptr_ref(ctx, object)?;
+    // Materialize the RHS as an owned boxed Mixed cell. MOVE a value that is already a Mixed
+    // cell; BOX anything else (hash_set increfs the tag-7 cell itself).
+    let value_repr = ctx.value_repr(value)?.clone();
+    let value_ir_type = ctx.function.value(value).map(|v| v.ir_type);
+    let is_move = matches!(&value_repr, WasmRepr::Ptr(_))
+        && matches!(value_ir_type, Some(IrType::Heap(IrHeapKind::Mixed)));
+    let cell = if is_move {
+        ctx.emit_load_value(value)?;
+        let c = ctx.fresh_temp(ValType::I32);
+        ctx.fb.ins(&format!("local.set {}", c), "save moved mixed cell ptr");
+        c
+    } else {
+        emit_box_value_into_mixed(ctx, value)?
+    };
+    // Load the dyn hash, call __rt_hash_set, write back the (possibly new) hash pointer.
+    ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
+    ctx.fb.ins(&format!("i32.load offset={}", dyn_off), "load dynamic-property hash pointer");
+    let hash = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(&format!("local.set {}", hash), "save dyn-prop hash pointer");
+    ctx.fb.ins(&format!("local.get {}", hash), "dyn-prop hash pointer");
+    ctx.fb.ins(&format!("i32.const {}", kptr), "property name pointer (static data)");
+    ctx.fb.ins("i64.extend_i32_u", "key_lo = zext(name ptr)");
+    ctx.fb.ins(&format!("i64.const {}", klen), "key_hi = name length");
+    ctx.fb.ins(&format!("local.get {}", cell), "boxed mixed value cell ptr");
+    ctx.fb.ins("i64.extend_i32_u", "val_lo = zext(cell ptr)");
+    ctx.fb.ins("i64.const 0", "val_hi = 0 (mixed cell)");
+    ctx.fb.ins("i64.const 7", "val_tag = 7 (mixed)");
+    ctx.fb.ins("call $__rt_hash_set", "store the dynamic property -> (possibly moved) hash ptr");
+    let new_hash = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(&format!("local.set {}", new_hash), "capture possibly-reallocated hash ptr");
+    ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address (writeback addr)");
+    ctx.fb.ins(&format!("local.get {}", new_hash), "writeback hash pointer");
+    ctx.fb.ins("i64.extend_i32_u", "widen hash ptr to i64 for writeback");
+    ctx.fb.ins(&format!("i64.store offset={}", dyn_off), "store back the dyn-prop hash ptr");
+    // `__rt_hash_set` owns the inbound tag-7 cell by incref'ing it itself, so the temp ref we
+    // materialized above (a fresh BOX cell, or a moved value's cell) must be dropped here to keep
+    // the refcount balanced: rc 1 -> hash_set incref -> 2 -> this decref -> 1 (owned by the hash).
+    ctx.fb.ins(&format!("local.get {}", cell), "inbound cell temp for refcount balance");
+    ctx.fb.ins("call $__rt_decref_any", "release the temp ref that __rt_hash_set replaced");
+    Ok(())
+}
+
+/// Emits a property read that leaves an OWNED Mixed cell pointer (i32) on the stack.
+///
+/// Used by `lower_nullsafe_prop_get` (the result of `NullsafePropGet` is always `Mixed`).
+/// When the property is undeclared on an ADP / `stdClass` class, it reads through the dyn-prop
+/// hash (hit -> incref the stored cell; miss -> box null). Otherwise it loads the declared slot
+/// and boxes it into a Mixed cell by property type: scalars via `__rt_mixed_from_value`, strings
+/// via `__rt_mixed_from_value(1, ptr, len)` (persists a copy), containers (array/hash/object) via
+/// `__rt_mixed_from_value(tag, ptr, 0)` (increfs the child itself), and an already-Mixed slot via
+/// a plain incref + return-the-cell (no re-box, avoiding a double wrapper).
+fn emit_prop_get_into_mixed(
+    ctx: &mut FnCtx,
+    obj: &str,
+    ci: &ClassInfo,
+    class_name: &str,
+    prop_data: DataId,
+    property: &str,
+) -> Result<()> {
+    // Dynamic-property hash tail (ADP / stdClass, undeclared property).
+    if let Some(dyn_off) = dynamic_property_hash_offset_for_class(ci, class_name, property) {
+        let (kptr, klen) = ctx.str_literal(prop_data)?;
+        ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+        ctx.fb.ins(&format!("i32.load offset={}", dyn_off), "load dynamic-property hash pointer");
+        let hash = ctx.fresh_temp(ValType::I32);
+        ctx.fb.ins(&format!("local.set {}", hash), "save dyn-prop hash pointer");
+        ctx.fb.ins(&format!("local.get {}", hash), "dyn-prop hash pointer");
+        ctx.fb.ins(&format!("i32.const {}", kptr), "property name pointer (static data)");
+        ctx.fb.ins("i64.extend_i32_u", "key_lo = zext(name ptr)");
+        ctx.fb.ins(&format!("i64.const {}", klen), "key_hi = name length");
+        ctx.fb.ins("call $__rt_hash_get", "look up the dynamic property -> (found, vlo, vhi, vtag)");
+        let vtag = ctx.fresh_temp(ValType::I64);
+        ctx.fb.ins(&format!("local.set {}", vtag), "captured value tag");
+        let vhi = ctx.fresh_temp(ValType::I64);
+        ctx.fb.ins(&format!("local.set {}", vhi), "captured value high word");
+        let vlo = ctx.fresh_temp(ValType::I64);
+        ctx.fb.ins(&format!("local.set {}", vlo), "captured value low word (cell ptr)");
+        let found = ctx.fresh_temp(ValType::I32);
+        ctx.fb.ins(&format!("local.set {}", found), "captured found flag");
+        ctx.fb.ins(&format!("local.get {}", found), "found flag");
+        ctx.fb.ins("if (result i32)", "dynamic property present?");
+        ctx.fb.ins(&format!("local.get {}", vlo), "stored mixed cell ptr (i64)");
+        ctx.fb.ins("i32.wrap_i64", "cell ptr -> i32");
+        let cell = ctx.fresh_temp(ValType::I32);
+        ctx.fb.ins(&format!("local.set {}", cell), "save hit cell ptr");
+        ctx.fb.ins(&format!("local.get {}", cell), "hit cell ptr");
+        ctx.fb.ins("call $__rt_incref", "retain the borrowed dyn-prop cell");
+        ctx.fb.ins(&format!("local.get {}", cell), "hit cell ptr for result");
+        ctx.fb.ins("else", "miss -> box null");
+        ctx.fb.ins("i64.const 8", "mixed tag (null)");
+        ctx.fb.ins("i64.const 0", "null lo");
+        ctx.fb.ins("i64.const 0", "null hi");
+        ctx.fb.ins("call $__rt_mixed_from_value", "box a fresh null mixed cell");
+        ctx.fb.ins("end", "end hit/miss");
+        return Ok(());
+    }
+    // Declared property: load the slot and box into a Mixed cell.
+    let (_, offset, prop_type) = resolve_property_slot(ci, property)?;
+    match &prop_type {
+        PhpType::Int => {
+            ctx.fb.ins("i64.const 0", "mixed tag (int)");
+            ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+            ctx.fb.ins(&format!("i64.load offset={}", offset), "load int property value_lo");
+            ctx.fb.ins("i64.const 0", "hi unused");
+            ctx.fb.ins("call $__rt_mixed_from_value", "box int into a mixed cell");
+        }
+        PhpType::Bool => {
+            ctx.fb.ins("i64.const 3", "mixed tag (bool)");
+            ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+            ctx.fb.ins(&format!("i64.load offset={}", offset), "load bool property value_lo");
+            ctx.fb.ins("i64.const 0", "hi unused");
+            ctx.fb.ins("call $__rt_mixed_from_value", "box bool into a mixed cell");
+        }
+        PhpType::Float => {
+            ctx.fb.ins("i64.const 2", "mixed tag (float)");
+            ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+            ctx.fb.ins(&format!("f64.load offset={}", offset), "load float property value_lo");
+            ctx.fb.ins("i64.reinterpret_f64", "float bits -> i64 lo");
+            ctx.fb.ins("i64.const 0", "hi unused");
+            ctx.fb.ins("call $__rt_mixed_from_value", "box float into a mixed cell");
+        }
+        PhpType::Str => {
+            ctx.fb.ins("i64.const 1", "mixed tag (string)");
+            ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+            ctx.fb.ins(&format!("i32.load offset={}", offset), "load string property ptr");
+            ctx.fb.ins("i64.extend_i32_u", "ptr -> lo");
+            ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+            ctx.fb.ins(&format!("i64.load offset={}", offset + 8), "load string property len -> hi");
+            ctx.fb.ins("call $__rt_mixed_from_value", "box string (persists a copy)");
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            let tag = crate::codegen::runtime_value_tag(&prop_type) as i64;
+            ctx.fb.ins(&format!("i64.const {}", tag), "mixed tag (heap kind)");
+            ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+            ctx.fb.ins(&format!("i32.load offset={}", offset), "load container property ptr");
+            ctx.fb.ins("i64.extend_i32_u", "ptr -> lo");
+            ctx.fb.ins("i64.const 0", "hi unused");
+            ctx.fb.ins("call $__rt_mixed_from_value", "box container (increfs the child)");
+        }
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => {
+            // The slot already holds a Mixed cell; incref + return the cell (no re-box).
+            ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+            ctx.fb.ins(&format!("i32.load offset={}", offset), "load mixed property cell ptr");
+            let c = ctx.fresh_temp(ValType::I32);
+            ctx.fb.ins(&format!("local.set {}", c), "save mixed cell ptr");
+            ctx.fb.ins(&format!("local.get {}", c), "mixed cell ptr");
+            ctx.fb.ins("call $__rt_incref", "retain the borrowed mixed cell");
+            ctx.fb.ins(&format!("local.get {}", c), "mixed cell ptr for result");
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "nullsafe property ${} of type {:?} not yet supported on wasm32-wasi",
+                property, other
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// Lowers `Op::NullsafePropGet` (`$o?->p`) for a concrete-object or nullable-object receiver.
+///
+/// `NullsafePropGet` operands are `[receiver]` with the property name as the data immediate; the
+/// result is always a `Mixed` cell (the EIR lowering forces it). A non-nullable `Object(C)`
+/// receiver reads the property (declared or dyn) and boxes it into a Mixed cell directly. A
+/// nullable `Union([Object(C), Void])` receiver is a Mixed cell: `__rt_mixed_unbox` yields the
+/// `(tag, lo, hi)` triple, and a `tag == 8` (null) short-circuits to a fresh null Mixed cell; a
+/// `tag == 6` (object) reads the property off `lo` (the object pointer) and boxes it. Non-object
+/// or object-less union receivers return `Unsupported`, mirroring the native backend.
+pub(super) fn lower_nullsafe_prop_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let receiver = operand(inst, 0)?;
+    let prop_data = data_immediate(inst)?;
+    let property = ctx
+        .module
+        .data
+        .strings
+        .get(prop_data.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| WasmError::Unsupported(format!("invalid string data id {:?}", prop_data)))?;
+    let receiver_ty = value_php_type(ctx, receiver)?;
+
+    // Resolve the receiver class. Non-nullable Object reads the property directly; a nullable
+    // Union([Object(C), Void]) unboxes the Mixed cell and short-circuits on null. A bare Mixed /
+    // non-object receiver is unsupported (mirrors native).
+    let (class_name, nullable) = match &receiver_ty {
+        PhpType::Object(name) => (name.clone(), false),
+        PhpType::Union(variants) => {
+            let obj_name = variants.iter().find_map(|v| {
+                if let PhpType::Object(n) = v {
+                    Some(n.clone())
+                } else {
+                    None
+                }
+            });
+            match obj_name {
+                Some(n) => (n, true),
+                None => {
+                    return Err(WasmError::Unsupported(
+                        "nullsafe property access on a union without an object variant".to_string(),
+                    ))
+                }
+            }
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "nullsafe property access on non-object receiver {:?}",
+                other
+            )))
+        }
+    };
+    let ci = ctx
+        .module
+        .class_infos
+        .get(&class_name)
+        .cloned()
+        .ok_or_else(|| WasmError::Unsupported(format!("unknown class {}", class_name)))?;
+
+    if !nullable {
+        // Non-nullable Object: read the property (declared or dyn) and box into the Mixed result.
+        // EIR normally emits a plain PropGet here, but handle it safely so a stray nullsafe op
+        // does not miscompile.
+        let obj_ref = object_ptr_ref(ctx, receiver)?;
+        emit_prop_get_into_mixed(ctx, &obj_ref, &ci, &class_name, prop_data, &property)?;
+        return store_result(ctx, inst);
+    }
+
+    // Nullable: unbox the Mixed-cell receiver. tag 8 -> null -> box null; tag 6 -> object ->
+    // read the property and box into the Mixed result.
+    let hi = ctx.fresh_temp(ValType::I64);
+    let lo = ctx.fresh_temp(ValType::I64);
+    let tag = ctx.fresh_temp(ValType::I64);
+    ctx.emit_load_value(receiver)?;
+    ctx.fb.ins("call $__rt_mixed_unbox", "unbox nullsafe receiver -> (tag, lo, hi)");
+    ctx.fb.ins(&format!("local.set {}", hi), "discard receiver high word");
+    ctx.fb.ins(&format!("local.set {}", lo), "receiver low word (object ptr when non-null)");
+    ctx.fb.ins(&format!("local.set {}", tag), "receiver runtime tag");
+    ctx.fb.ins(&format!("local.get {}", tag), "receiver runtime tag");
+    ctx.fb.ins("i64.const 8", "null tag");
+    ctx.fb.ins("i64.eq", "is receiver null?");
+    ctx.fb.ins("if (result i32)", "null -> box null, else read property");
+    // null arm: box a fresh null Mixed cell.
+    ctx.fb.ins("i64.const 8", "mixed tag (null)");
+    ctx.fb.ins("i64.const 0", "null lo");
+    ctx.fb.ins("i64.const 0", "null hi");
+    ctx.fb.ins("call $__rt_mixed_from_value", "box a fresh null mixed cell");
+    ctx.fb.ins("else", "object -> read property into a mixed cell");
+    // object arm: recover the object pointer and read the property.
+    ctx.fb.ins(&format!("local.get {}", lo), "object payload low word");
+    ctx.fb.ins("i32.wrap_i64", "low word -> object pointer i32");
+    let obj = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(&format!("local.set {}", obj), "save object pointer");
+    emit_prop_get_into_mixed(ctx, &obj, &ci, &class_name, prop_data, &property)?;
+    ctx.fb.ins("end", "end nullsafe property get");
+    store_result(ctx, inst)?;
     Ok(())
 }
