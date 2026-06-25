@@ -9867,6 +9867,43 @@ return $obj->describe() . ":" . $default->inner->label;');
     assert_eq!(out, "method:method");
 }
 
+/// Verifies eval materializes generated/AOT object defaults with more than eight constructor args.
+#[test]
+fn test_eval_aot_object_default_uses_large_constructor_arg_list() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotLargeObjectDefaultDep {
+    public string $label;
+
+    public function __construct(string ...$parts) {
+        $this->label = implode("", $parts);
+    }
+}
+
+class EvalAotLargeObjectDefaultMethodTarget {
+    public function describe(EvalAotLargeObjectDefaultDep $dep = new EvalAotLargeObjectDefaultDep("A", "B", "C", "D", "E", "F", "G", "H", "I")): string {
+        return $dep->label;
+    }
+}
+
+class EvalAotLargeObjectDefaultCtorTarget {
+    public string $label = "";
+
+    public function __construct(EvalAotLargeObjectDefaultDep $dep = new EvalAotLargeObjectDefaultDep("J", "K", "L", "M", "N", "O", "P", "Q", "R")) {
+        $this->label = $dep->label;
+    }
+}
+
+echo eval('$obj = new EvalAotLargeObjectDefaultMethodTarget();
+$method = new ReflectionMethod("EvalAotLargeObjectDefaultMethodTarget", "describe");
+$default = $method->getParameters()[0]->getDefaultValue();
+$box = new EvalAotLargeObjectDefaultCtorTarget();
+return $obj->describe() . ":" . $default->label . ":" . $box->label;');
+"#,
+    );
+    assert_eq!(out, "ABCDEFGHI:ABCDEFGHI:JKLMNOPQR");
+}
+
 /// Verifies eval ReflectionMethod exposes generated/AOT by-ref and variadic parameter flags.
 #[test]
 fn test_eval_reflection_method_exposes_aot_parameter_flags() {

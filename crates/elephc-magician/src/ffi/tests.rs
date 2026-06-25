@@ -34,6 +34,7 @@ const TEST_NATIVE_DEFAULT_EMPTY_ARRAY: u64 = 4;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_OBJECT: u8 = 2;
+const TEST_MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = u8::MAX as usize;
 
 /// Test native invoker placeholder used only to validate ABI registration.
 unsafe extern "C" fn fake_native_invoker(
@@ -681,6 +682,44 @@ fn register_native_object_default_decodes_nested_objects() {
         args: nested_args.clone(),
     };
     let spec = native_object_default_record("OuterDefault", &nested_args);
+
+    let constructor_registered = unsafe {
+        __elephc_eval_register_native_constructor(&mut ctx, class.as_ptr(), class.len() as u64, 1)
+    };
+    let default_registered = unsafe {
+        __elephc_eval_register_native_constructor_param_default_object(
+            &mut ctx,
+            class.as_ptr(),
+            class.len() as u64,
+            0,
+            spec.as_ptr(),
+            spec.len() as u64,
+        )
+    };
+
+    assert_eq!(constructor_registered, 1);
+    assert_eq!(default_registered, 1);
+    assert_eq!(
+        ctx.native_constructor_signature("knownclass")
+            .expect("constructor metadata")
+            .param_default(0),
+        Some(&expected_default)
+    );
+}
+
+/// Verifies native AOT object defaults decode the full u8 constructor argument range.
+#[test]
+fn register_native_object_default_decodes_full_u8_arg_count() {
+    let mut ctx = ElephcEvalContext::new();
+    let class = b"KnownClass";
+    let args = (0..TEST_MAX_NATIVE_OBJECT_DEFAULT_ARGS)
+        .map(|index| NativeCallableDefault::String(format!("arg{}", index)))
+        .collect::<Vec<_>>();
+    let expected_default = NativeCallableDefault::Object {
+        class_name: "LargeDefault".to_string(),
+        args: args.clone(),
+    };
+    let spec = native_object_default_record("LargeDefault", &args);
 
     let constructor_registered = unsafe {
         __elephc_eval_register_native_constructor(&mut ctx, class.as_ptr(), class.len() as u64, 1)

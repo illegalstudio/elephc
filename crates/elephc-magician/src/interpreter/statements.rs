@@ -4703,6 +4703,7 @@ pub(in crate::interpreter) fn positional_evaluated_arg_values(
 pub(in crate::interpreter) fn bind_native_callable_bound_args(
     signature: Option<NativeCallableSignature>,
     args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let Some(signature) = signature else {
@@ -4712,7 +4713,7 @@ pub(in crate::interpreter) fn bind_native_callable_bound_args(
         return Err(EvalStatus::RuntimeFatal);
     }
     if signature.param_names().len() == signature.param_count() {
-        bind_native_signature_args(&signature, args, values)
+        bind_native_signature_args(&signature, args, context, values)
     } else {
         positional_evaluated_bound_args(Some(&signature), args)
     }
@@ -4768,10 +4769,11 @@ pub(in crate::interpreter) fn write_back_native_callable_ref_args(
     Ok(())
 }
 
-/// Binds native AOT callable args and fills omitted scalar defaults from metadata.
+/// Binds native AOT callable args and fills omitted defaults from metadata.
 fn bind_native_signature_args(
     signature: &NativeCallableSignature,
     args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let mut bound_args = vec![None; signature.param_count()];
@@ -4826,7 +4828,7 @@ fn bind_native_signature_args(
             return Err(EvalStatus::RuntimeFatal);
         };
         *value = Some(BoundMethodArg {
-            value: materialize_native_callable_default(default, values)?,
+            value: materialize_native_callable_default(default, context, values)?,
             ref_target: None,
             variadic_ref_targets: Vec::new(),
         });
@@ -4956,9 +4958,11 @@ pub(in crate::interpreter) fn eval_native_method_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let signature = context.native_method_signature(class_name, method_name);
     let bound_args = bind_native_callable_bound_args(
-        context.native_method_signature(class_name, method_name),
+        signature,
         evaluated_args,
+        context,
         values,
     )?;
     let result = values.method_call(object, method_name, native_bound_arg_values(&bound_args));
@@ -4977,9 +4981,11 @@ pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let signature = context.native_static_method_signature(class_name, method_name);
     let bound_args = bind_native_callable_bound_args(
-        context.native_static_method_signature(class_name, method_name),
+        signature,
         evaluated_args,
+        context,
         values,
     )?;
     let result =
@@ -4999,9 +5005,11 @@ pub(in crate::interpreter) fn eval_native_constructor_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    let signature = context.native_constructor_signature(class_name);
     let bound_args = bind_native_callable_bound_args(
-        context.native_constructor_signature(class_name),
+        signature,
         evaluated_args,
+        context,
         values,
     )?;
     let result = values.construct_object(object, native_bound_arg_values(&bound_args));
@@ -5015,6 +5023,7 @@ pub(in crate::interpreter) fn eval_native_constructor_with_evaluated_args(
 /// Allocates a fresh runtime cell for one invocation-safe native AOT default.
 fn materialize_native_callable_default(
     default: &NativeCallableDefault,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match default {
@@ -5025,7 +5034,7 @@ fn materialize_native_callable_default(
         NativeCallableDefault::String(value) => values.string(value),
         NativeCallableDefault::EmptyArray => values.array_new(0),
         NativeCallableDefault::Object { class_name, args } => {
-            materialize_native_callable_object_default(class_name, args, values)
+            materialize_native_callable_object_default(class_name, args, context, values)
         }
     }
 }
@@ -5034,14 +5043,25 @@ fn materialize_native_callable_default(
 fn materialize_native_callable_object_default(
     class_name: &str,
     args: &[NativeCallableDefault],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let object = values.new_object(class_name)?;
     let mut constructor_args = Vec::with_capacity(args.len());
     for arg in args {
-        constructor_args.push(materialize_native_callable_default(arg, values)?);
+        constructor_args.push(EvaluatedCallArg {
+            name: None,
+            value: materialize_native_callable_default(arg, context, values)?,
+            ref_target: None,
+        });
     }
-    if let Err(err) = values.construct_object(object, constructor_args) {
+    if let Err(err) = eval_native_constructor_with_evaluated_args(
+        class_name,
+        object,
+        constructor_args,
+        context,
+        values,
+    ) {
         let _ = values.release(object);
         return Err(err);
     }
