@@ -285,10 +285,10 @@ echo ":" . $listed->invoke($object);
     assert_eq!(out, "M:secret:L:secret");
 }
 
-/// Verifies inferred AOT method signatures are rejected instead of miscompiled.
+/// Verifies `ReflectionMethod::invoke()` supports inferred AOT signatures.
 #[test]
-fn test_reflection_method_invoke_rejects_inferred_aot_signature() {
-    let err = compile_and_run_expect_failure(
+fn test_reflection_method_invoke_calls_inferred_aot_signature() {
+    let out = compile_and_run(
         r#"<?php
 class ReflectInvokeInferredTarget {
     public function join($a, $b) { return $a . $b; }
@@ -297,8 +297,5 @@ $object = new ReflectInvokeInferredTarget();
 echo (new ReflectionMethod(ReflectInvokeInferredTarget::class, "join"))->invoke($object, "A", "B");
 "#,
     );
-    assert!(
-        err.contains("Fatal error: unsupported ReflectionMethod::invoke()"),
-        "unexpected stderr: {err}"
-    );
+    assert_eq!(out, "AB");
 }

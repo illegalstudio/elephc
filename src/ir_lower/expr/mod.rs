@@ -9406,13 +9406,6 @@ fn lower_reflection_function_invoke_call(
             expr,
         ));
     }
-    if !reflection_user_function_target_has_declared_params(ctx, &function_name) {
-        return Some(lower_reflection_function_invoke_unsupported(
-            ctx,
-            &method_key,
-            expr,
-        ));
-    }
     let name = Name::from(function_name);
     Some(lower_function_call(ctx, &name, &forwarded_args, expr))
 }
@@ -9484,19 +9477,6 @@ fn reflection_function_invoke_args_array(
     reflection_class_new_instance_args_value(ctx, forwarded_arg)
 }
 
-/// Returns true when reflected invocation can trust a user function's parameter types.
-fn reflection_user_function_target_has_declared_params(
-    ctx: &LoweringContext<'_, '_>,
-    function_name: &str,
-) -> bool {
-    ctx.functions.get(function_name).is_some_and(|signature| {
-        signature
-            .declared_params
-            .iter()
-            .all(|is_declared| *is_declared)
-    })
-}
-
 /// Emits a runtime fatal for ReflectionFunction invocation forms not yet lowered.
 fn lower_reflection_function_invoke_unsupported(
     ctx: &mut LoweringContext<'_, '_>,
@@ -9539,15 +9519,6 @@ fn lower_reflection_method_invoke_call(
     else {
         return Some(lower_reflection_method_invoke_unsupported(ctx, &method_key, expr));
     };
-    if !reflection_method_target_has_declared_params(
-        ctx,
-        &class_name,
-        &reflected_method,
-        target_kind,
-    )
-    {
-        return Some(lower_reflection_method_invoke_unsupported(ctx, &method_key, expr));
-    }
     match target_kind {
         ReflectionMethodTargetKind::Static => Some(lower_reflection_static_method_invoke(
             ctx,
@@ -9709,34 +9680,6 @@ fn reflection_method_target_kind(
         return Some(ReflectionMethodTargetKind::Instance);
     }
     None
-}
-
-/// Returns true when reflected invocation can trust the target method's parameter types.
-fn reflection_method_target_has_declared_params(
-    ctx: &LoweringContext<'_, '_>,
-    class_name: &str,
-    method: &str,
-    target_kind: ReflectionMethodTargetKind,
-) -> bool {
-    let signature = match target_kind {
-        ReflectionMethodTargetKind::Instance => {
-            class_method_signature(
-                ctx,
-                class_name.trim_start_matches('\\'),
-                &php_symbol_key(method),
-            )
-        }
-        ReflectionMethodTargetKind::Static => {
-            let receiver = StaticReceiver::Named(Name::from(class_name.to_string()));
-            static_method_implementation_signature(ctx, &receiver, method)
-        }
-    };
-    signature.is_some_and(|signature| {
-        signature
-            .declared_params
-            .iter()
-            .all(|is_declared| *is_declared)
-    })
 }
 
 /// Dispatch kind for a statically-known reflected method.

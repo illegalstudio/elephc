@@ -231,10 +231,10 @@ echo $ref->invokeArgs(args: ["Q"]);
     assert_eq!(out, "XY:OP:AC:QB");
 }
 
-/// Verifies inferred AOT function signatures are rejected instead of miscompiled.
+/// Verifies `ReflectionFunction::invoke()` supports inferred AOT signatures.
 #[test]
-fn test_reflection_function_invoke_rejects_inferred_aot_signature() {
-    let err = compile_and_run_expect_failure(
+fn test_reflection_function_invoke_calls_inferred_aot_signature() {
+    let out = compile_and_run(
         r#"<?php
 function reflect_function_invoke_inferred($left, $right) {
     return $left . $right;
@@ -243,8 +243,5 @@ function reflect_function_invoke_inferred($left, $right) {
 echo (new ReflectionFunction("reflect_function_invoke_inferred"))->invoke("A", "B");
 "#,
     );
-    assert!(
-        err.contains("Fatal error: unsupported ReflectionFunction::invoke()"),
-        "unexpected stderr: {err}"
-    );
+    assert_eq!(out, "AB");
 }
