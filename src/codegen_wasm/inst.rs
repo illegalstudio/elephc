@@ -308,7 +308,7 @@ struct TempCell {
 
 /// The source of a by-ref argument, resolved by introspecting the operand's defining
 /// instruction.
-enum ByRefSource {
+pub(super) enum ByRefSource {
     /// The operand is `LoadRefCell(slot)`: the caller's local is already ref-bound (from
     /// a prior `=&`/foreach), so the existing cell pointer is shared with the callee.
     AlreadyRefBound(u32),
@@ -326,7 +326,7 @@ enum ByRefSource {
 /// the argument is not a local, so by-ref is unsupported (clean diagnostic). This keeps
 /// the ABI agreement — only a local's storage can be safely mirrored into / shared as a
 /// cell — enforced at the lowering edge.
-fn resolve_by_ref_source(ctx: &FnCtx, arg: ValueId) -> Result<ByRefSource> {
+pub(super) fn resolve_by_ref_source(ctx: &FnCtx, arg: ValueId) -> Result<ByRefSource> {
     let val = ctx
         .function
         .value(arg)
@@ -352,7 +352,7 @@ fn resolve_by_ref_source(ctx: &FnCtx, arg: ValueId) -> Result<ByRefSource> {
 ///
 /// Drives the retain kind (Callable special-case) and the cell's payload release in
 /// `emit_ref_cell_release_seq` (`needs_payload_release`).
-fn slot_payload_type(ctx: &FnCtx, slot: LocalSlotId) -> Result<PhpType> {
+pub(super) fn slot_payload_type(ctx: &FnCtx, slot: LocalSlotId) -> Result<PhpType> {
     let local = ctx
         .function
         .locals
@@ -644,12 +644,28 @@ fn lower_str_concat(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
-/// Lowers `LoadLocal`: copies the slot's local(s) into the result value's local(s).
+/// Lowers `LoadLocal`: copies the slot's value into the result value's local(s).
+///
+/// If the slot stores a ref-cell pointer (a by-ref free-function param per P7c0b, or a
+/// caller local promoted by a P7c by-ref closure capture), the value lives in the cell,
+/// not the slot's own locals — so the load dereferences the cell. This retroactive
+/// routing is what lets the EIR emit a plain `Op::LoadLocal` (it does not mark a
+/// by-ref-captured caller local ref-bound) while still reading through the shared cell,
+/// mirroring the active native backend's `local_stores_ref_cell_pointer` check in
+/// `load_local_to_result`. A preceding `Op::Release(LoadLocal($x))` (emitted before a
+/// store_local overwrite) therefore releases the cell's current value, not the slot's
+/// stale locals.
 fn lower_load_local(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let slot = slot_immediate(inst)?;
     let result = inst
         .result
         .ok_or_else(|| WasmError::Unsupported("load_local without result".to_string()))?;
+    if let Ok(ptr_local) = ctx.ref_cell_ptr(slot.as_raw()) {
+        let ptr_local = ptr_local.to_string();
+        let result_repr = ctx.value_repr(result)?.clone();
+        super::refcell::emit_cell_load(ctx, &ptr_local, &result_repr)?;
+        return ctx.emit_store_value(result);
+    }
     let slot_refs = ctx.slot_repr(slot)?.local_refs();
     let result_refs = ctx.value_repr(result)?.local_refs();
     if slot_refs.len() != result_refs.len() {
@@ -665,10 +681,23 @@ fn lower_load_local(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.emit_store_value(result)
 }
 
-/// Lowers `StoreLocal`: stores the operand value into the slot's local(s).
+/// Lowers `StoreLocal`: stores the operand value into the slot.
+///
+/// If the slot stores a ref-cell pointer (by-ref param or P7c-promoted caller local),
+/// the store writes through the cell. It does NOT release the cell's previous payload:
+/// the EIR emits the prior-value release (`Op::Release(LoadLocal($x))`) before this op,
+/// and (after the LoadLocal routing above) that release decrefs the cell's current
+/// value. Releasing here too would double-free. This matches the contract documented on
+/// `lower_store_ref_cell` and native `store_value_to_ref_cell_as`.
 fn lower_store_local(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let slot = slot_immediate(inst)?;
     let value = operand(inst, 0)?;
+    if let Ok(ptr_local) = ctx.ref_cell_ptr(slot.as_raw()) {
+        let ptr_local = ptr_local.to_string();
+        let value_repr = ctx.value_repr(value)?.clone();
+        super::refcell::emit_cell_store(ctx, &ptr_local, &value_repr)?;
+        return Ok(());
+    }
     let slot_refs = ctx.slot_repr(slot)?.local_refs();
     let value_refs = ctx.value_repr(value)?.local_refs();
     if slot_refs.len() != value_refs.len() {

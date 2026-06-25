@@ -49,12 +49,14 @@
 //!   that `__rt_mixed_from_value` incref'd/persisted.
 
 use super::context::{wasm_fn_symbol, FnCtx, Result};
-use super::inst::{data_immediate, operand, store_result};
+use super::inst::{
+    ByRefSource, data_immediate, operand, resolve_by_ref_source, slot_payload_type, store_result,
+};
 use super::objects::emit_box_value_into_mixed;
 use super::values::WasmRepr;
 use super::wat::{DataSegment, ValType, WatModule};
 use super::WasmError;
-use crate::ir::{Function, Instruction, IrHeapKind, IrType, Module, Ownership, ValueId};
+use crate::ir::{Function, Instruction, IrHeapKind, IrType, LocalSlotId, Module, Ownership, ValueId};
 use crate::types::PhpType;
 
 /// Registers the callable-descriptor refcount runtime (`__rt_callable_descriptor_release`)
@@ -307,11 +309,17 @@ pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
         "capture_tags_ptr = static per-closure tag array (0 if no captures)",
     );
 
-    // Stamp each by-value capture into its 16-byte slot at [desc + 32 + i*16].
+    // Stamp each capture into its 16-byte slot at [desc + 32 + i*16]. A by-ref
+    // capture (`use (&$x)`) stamps the caller's ref-cell pointer (P7c); a by-value
+    // capture stamps the retained value (P7b).
     for i in 0..capture_count {
         let operand = operand(inst, i)?;
         let cap_p = &closure_fn.params[visible_count + i];
-        stamp_capture_slot(ctx, &desc, i, operand, cap_p)?;
+        if cap_p.by_ref {
+            stamp_by_ref_capture_slot(ctx, &desc, i, operand, cap_p)?;
+        } else {
+            stamp_capture_slot(ctx, &desc, i, operand, cap_p)?;
+        }
     }
 
     ctx.fb.ins(&format!("local.get {}", desc), "descriptor pointer");
@@ -319,19 +327,16 @@ pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     store_result(ctx, inst)
 }
 
-/// Rejects a capture param whose kind is outside the P7b by-value supported set.
-/// By-ref captures need ref-cell promotion (P7c0/P7c); `Mixed`/`Union`/`Iterable`/
-/// `Buffer`/`TaggedScalar` captures need a cell-ptr stamp + Mixed unbox arm (P7d);
-/// `Pointer`/`Resource`/`Packed`/`Never` captures would stamp a slot whose tag is not
-/// in the release set `{1,4,5,6,7,10}` (an unleakable ptr). `Void` captures carry no
-/// value. Each is rejected with a phase tag so the caller knows where it lands later.
+/// Rejects a capture param whose kind is outside the supported set.
+/// By-ref captures are supported (P7c) for the by-value value-type set: the caller
+/// local is promoted into a persistent ref-cell and the cell pointer is stamped into
+/// the descriptor. `Mixed`/`Union`/`Iterable`/`Buffer`/`TaggedScalar` captures need a
+/// cell-ptr stamp + Mixed unbox arm (P7d); `Pointer`/`Resource`/`Packed`/`Never`
+/// captures would stamp a slot whose tag is not in the release set
+/// `{1,4,5,6,7,10}` (an unleakable ptr) — and a by-ref capture of them has no sound
+/// promote either. `Void` captures carry no value. Each is rejected with a phase tag
+/// so the caller knows where it lands later.
 fn reject_unsupported_capture(name: &str, p: &crate::ir::FunctionParam) -> Result<()> {
-    if p.by_ref {
-        return Err(WasmError::Unsupported(format!(
-            "ClosureNew by-ref capture {} on wasm32-wasi (P7c)",
-            p.name
-        )));
-    }
     // Reject by php_type first: Pointer/Resource lower to a raw I64 and Packed to
     // Heap(Object), so the ir_type match below would otherwise accept them even
     // though their capture tags (9/11, or a Packed-as-object ref) are outside the
@@ -481,6 +486,76 @@ fn stamp_capture_slot(
             )))
         }
     }
+    Ok(())
+}
+
+/// Promotes a caller local into a persistent ref-cell for a by-ref closure capture, or
+/// returns the existing cell pointer if the slot is already ref-bound.
+///
+/// Unlike P7c0b's transient temp cell (synthesized per call, written back + freed after),
+/// a by-ref closure capture's cell outlives the `ClosureNew`: the closure holds the cell
+/// pointer in its descriptor, so the cell must persist for the closure's lifetime. The
+/// cell is released once by the `Return` epilogue via `ref_cell_owners` (the descriptor's
+/// release walk skips the 0xFF by-ref tag), and the slot's old value is released here
+/// (WASM has no PhpLocal-exit-release epilogue, so the lingering slot reference must drop
+/// now). Mirrors the active native backend's `promote_local_slot_for_ref_capture`.
+///
+/// If the slot already stores a ref-cell pointer (a prior `use(&$x)`, a `=&` alias, or a
+/// by-ref free-function param), the existing cell is shared — no re-alloc, no second
+/// owner (`add_ref_cell_owner` dedups by slot). After this, the caller's subsequent
+/// `LoadLocal`/`StoreLocal` route through the cell (see `inst::lower_load_local` /
+/// `lower_store_local`).
+fn promote_local_for_by_ref_capture(ctx: &mut FnCtx, slot: LocalSlotId) -> Result<String> {
+    let slot_raw = slot.as_raw();
+    if let Some(ptr) = ctx.ref_cell_ptrs.get(&slot_raw) {
+        return Ok(ptr.clone());
+    }
+    let slot_repr = ctx.slot_repr(slot)?.clone();
+    let payload = slot_payload_type(ctx, slot)?;
+    let ptr_local = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins("i32.const 16", "ref cell size (16 bytes)");
+    ctx.fb.ins("call $__rt_heap_alloc", "allocate the by-ref capture ref cell");
+    ctx.fb.ins(&format!("local.set {}", ptr_local), "by-ref capture cell pointer");
+    super::refcell::retain_and_store_slot_value(ctx, &ptr_local, &slot_repr, &payload)?;
+    ctx.register_ref_cell_ptr(slot_raw, ptr_local.clone());
+    ctx.add_ref_cell_owner(slot_raw, payload.clone());
+    super::refcell::release_old_slot_value(ctx, &slot_repr, &payload)?;
+    Ok(ptr_local)
+}
+
+/// Stamps one by-ref capture `operand` into descriptor slot `i` (`[desc + 32 + i*16]`).
+///
+/// Resolves the operand's source local (a `LoadLocal`/`LoadRefCell` of a php-visible
+/// local; non-locals are rejected, matching P7c0b's restriction), promotes it into a
+/// ref-cell (or reuses its existing cell), and stores the cell pointer (i32) into the
+/// slot's low word. The capture tag is 0xFF (`capture_tag_for_php_type` with `by_ref`),
+/// stamped by `emit_closure_capture_tag_tables`, so the descriptor's release walk skips
+/// it — the caller owns the cell, not the descriptor.
+fn stamp_by_ref_capture_slot(
+    ctx: &mut FnCtx,
+    desc: &str,
+    i: usize,
+    operand: ValueId,
+    cap_p: &crate::ir::FunctionParam,
+) -> Result<()> {
+    let off = CAPTURE_SLOT_OFFSET + i as i32 * CAPTURE_SLOT_BYTES;
+    let slot = match resolve_by_ref_source(ctx, operand)? {
+        ByRefSource::AlreadyRefBound(raw) => LocalSlotId::from_raw(raw),
+        ByRefSource::FreshLocal(slot) => slot,
+        ByRefSource::NonLocal => {
+            return Err(WasmError::Unsupported(format!(
+                "by-ref capture {} of a non-local on wasm32-wasi (P7c: deferred)",
+                cap_p.name
+            )));
+        }
+    };
+    let cell_ptr = promote_local_for_by_ref_capture(ctx, slot)?;
+    ctx.fb.ins(&format!("local.get {}", desc), "descriptor address");
+    ctx.fb.ins(&format!("local.get {}", cell_ptr), "by-ref capture cell pointer");
+    ctx.fb.ins(
+        &format!("i32.store offset={}", off),
+        "stamp the cell pointer @ capture slot+0 (tag 0xFF, release walk skips)",
+    );
     Ok(())
 }
 
@@ -762,14 +837,26 @@ fn build_closure_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
     }
 
     // Unbox each capture from the descriptor and push it for the body call. Captures sit
-    // at [desc + 32 + j*16] (raw slots, NOT Mixed cells), so they use `unbox_capture_wat`.
+    // at [desc + 32 + j*16] (raw slots, NOT Mixed cells). A by-ref capture stores the
+    // caller's ref-cell pointer (i32) at slot+0; the body's by-ref capture param is a
+    // single i32 (`WasmRepr::Ptr`, declared by P7c0b's `lower_function`), so the wrapper
+    // pushes the cell pointer with no incref — the body borrows the caller's cell. A
+    // by-value capture uses `unbox_capture_wat`.
     for (j, p) in f.params[vis..].iter().enumerate() {
         let slot_off = CAPTURE_SLOT_OFFSET as usize + j * CAPTURE_SLOT_BYTES as usize;
-        wat.push_str(&format!(
-            "  ;; unbox capture {} (param {} : {:?}) from descriptor slot +{}\n",
-            j, p.name, p.ir_type, slot_off
-        ));
-        wat.push_str(&unbox_capture_wat(slot_off, &p.ir_type, &p.php_type)?);
+        if p.by_ref {
+            wat.push_str(&format!(
+                "  ;; unbox by-ref capture {} (param {} : &{:?}) cell ptr from descriptor slot +{}\n",
+                j, p.name, p.ir_type, slot_off
+            ));
+            wat.push_str(&unbox_by_ref_capture_wat(slot_off)?);
+        } else {
+            wat.push_str(&format!(
+                "  ;; unbox capture {} (param {} : {:?}) from descriptor slot +{}\n",
+                j, p.name, p.ir_type, slot_off
+            ));
+            wat.push_str(&unbox_capture_wat(slot_off, &p.ir_type, &p.php_type)?);
+        }
     }
 
     // Call the closure body with the forwarded visible + capture args on the stack.
@@ -780,6 +867,22 @@ fn build_closure_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
     wat.push_str(&box_result_wat(&f.return_type, &f.return_php_type)?);
     wat.push_str(")\n");
     Ok(wat)
+}
+
+/// Returns the raw WAT sequence that unboxes one by-ref capture from a descriptor slot
+/// at `[desc + slot_off]`: a single `i32.load` of the cell pointer stored by
+/// `stamp_by_ref_capture_slot`. The body's by-ref capture parameter is a single i32
+/// (`WasmRepr::Ptr`, declared by P7c0b's `lower_function`), so exactly one i32 is pushed.
+/// No incref: the body borrows the caller's cell (the caller owns it; the descriptor's
+/// release walk skips the 0xFF by-ref tag).
+fn unbox_by_ref_capture_wat(slot_off: usize) -> Result<String> {
+    let off = slot_off as i32;
+    let mut s = String::new();
+    s.push_str(&wat_ins(
+        &format!("(i32.load offset={} (local.get $desc))", off),
+        "load the by-ref capture cell pointer (single i32, body borrows the caller's cell)",
+    ));
+    Ok(s)
 }
 
 /// Returns the raw WAT sequence that unboxes one capture from a raw descriptor slot at

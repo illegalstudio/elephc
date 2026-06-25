@@ -3270,6 +3270,539 @@ mod tests {
         }
     }
 
+    // ----- P7c: by-ref closure captures (caller-side promote + retroactive routing) -----
+
+    /// Helper: builds a by-ref int capture closure body `() { $n = $n + by }` (void).
+    /// The body reads the cell's value via `LoadRefCell`, adds `by`, and stores back via
+    /// `StoreRefCell` — the canonical by-ref mutation through the shared cell. The capture
+    /// param is `by_ref: true`; the WASM backend declares it as a single i32 cell pointer
+    /// and registers it in `ref_cell_ptrs` (P7c0b body side).
+    fn build_by_ref_int_capture_body(module: &mut Module, name: &str, by: i64) -> DataId {
+        let name_id = module.data.intern_string(name);
+        let mut body = Function::new(name.to_string(), IrType::Void, PhpType::Void);
+        body.flags.is_closure = true;
+        body.flags.closure_capture_count = 1;
+        body.params.push(FunctionParam {
+            name: "n".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: true,
+            variadic: false,
+        });
+        let slot_n = body.add_local(Some("n".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let old = b
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot_n)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let add = b.emit_const_i64(by);
+            let sum = b
+                .emit(Op::IAdd, vec![old, add], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            let _ = b.emit(
+                Op::StoreRefCell,
+                vec![sum],
+                Some(Immediate::LocalSlot(slot_n)),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_closure(body);
+        name_id
+    }
+
+    /// `$x = 10; fn() use(&$x) { $x = $x + 1; }(); echo $x;` echoes "11". Exercises the core
+    /// P7c path: `lower_closure_new` promotes `$x` into a ref-cell (retain-store + register
+    /// ref_cell_ptrs + owner + release-old), the body mutates the cell, and the caller's
+    /// post-call `LoadLocal($x)` retroactively routes through the cell (Edit B) to read 11.
+    #[test]
+    fn by_ref_capture_int_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = build_by_ref_int_capture_body(&mut module, "__eir_closure_byref_int_0", 1);
+        let mut m = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        m.flags.is_main = true;
+        let slot_x = m.add_local(Some("x".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut m);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let ten = b.emit_const_i64(10);
+            b.emit_store_local(slot_x, ten);
+            let cap = b.emit_load_local(slot_x, IrType::I64, PhpType::Int);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap],
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            let after = b.emit_load_local(slot_x, IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![after],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(m);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "11");
+        }
+    }
+
+    /// `$x = 0; $f = fn() use(&$x) { $x = $x + 1; }; $f(); $f(); echo $x;` echoes "2".
+    /// Exercises repeated mutation through the persistent cell: each call mutates the
+    /// same cell, and the retroactive `LoadLocal`/`StoreLocal` routing stays consistent
+    /// across calls (no re-promote, no stale slot read).
+    #[test]
+    fn by_ref_capture_int_twice_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = build_by_ref_int_capture_body(&mut module, "__eir_closure_byref_int_tw", 1);
+        let mut m = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        m.flags.is_main = true;
+        let slot_x = m.add_local(Some("x".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut m);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let zero = b.emit_const_i64(0);
+            b.emit_store_local(slot_x, zero);
+            let cap = b.emit_load_local(slot_x, IrType::I64, PhpType::Int);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap],
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            for _ in 0..2 {
+                let _ = b
+                    .emit(
+                        Op::ClosureCall,
+                        vec![callable],
+                        None,
+                        IrType::Void,
+                        PhpType::Void,
+                        Ownership::NonHeap,
+                    );
+            }
+            let after = b.emit_load_local(slot_x, IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![after],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(m);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "2");
+        }
+    }
+
+    /// `$s = "old"; fn() use(&$s) { $s = "hi"; }(); echo $s;` echoes "hi". Exercises the
+    /// string by-ref capture refcount balance: promote persists an owned copy into the
+    /// cell and `release_old_slot_value` frees the slot's old ptr; the body releases the
+    /// cell's old string and stores the new owned copy; the owner epilogue frees the cell
+    /// payload + block. Copy-on-acquire means the slot and cell hold distinct pointers.
+    #[test]
+    fn by_ref_capture_string_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let old_lit = module.data.intern_string("old");
+        let hi_lit = module.data.intern_string("hi");
+        let name_id = module.data.intern_string("__eir_closure_byref_str_0");
+
+        let mut body = Function::new("__eir_closure_byref_str_0".to_string(), IrType::Void, PhpType::Void);
+        body.flags.is_closure = true;
+        body.flags.closure_capture_count = 1;
+        body.params.push(FunctionParam {
+            name: "s".to_string(),
+            ir_type: IrType::Str,
+            php_type: PhpType::Str,
+            by_ref: true,
+            variadic: false,
+        });
+        let slot_s = body.add_local(Some("s".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            // $s = "hi": release the cell's old payload, acquire the new literal, store it.
+            let old = b
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot_s)),
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::Release,
+                vec![old],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let lit = b.emit_const_str(hi_lit);
+            let owned = b
+                .emit(Op::Acquire, vec![lit], None, IrType::Str, PhpType::Str, Ownership::Owned)
+                .unwrap();
+            let _ = b.emit(
+                Op::StoreRefCell,
+                vec![owned],
+                Some(Immediate::LocalSlot(slot_s)),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_closure(body);
+
+        let mut m = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        m.flags.is_main = true;
+        let slot_s = m.add_local(Some("s".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut m);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let lit = b.emit_const_str(old_lit);
+            let owned = b
+                .emit(Op::Acquire, vec![lit], None, IrType::Str, PhpType::Str, Ownership::Owned)
+                .unwrap();
+            b.emit_store_local(slot_s, owned);
+            let cap = b.emit_load_local(slot_s, IrType::Str, PhpType::Str);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap],
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            let after = b.emit_load_local(slot_s, IrType::Str, PhpType::Str);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![after],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(m);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "hi");
+        }
+    }
+
+    /// `echo $x; fn() use(&$x) { $x = $x * 2; }(); echo $x;` with `$x = 5` echoes "510".
+    /// The first echo reads the slot directly (not yet promoted); `ClosureNew` then
+    /// promotes `$x`, seeding the cell from the slot's current value (5); the second
+    /// echo routes through the cell (retroactive LoadLocal) and reads the mutated 10.
+    /// Guards that the promote initializes the cell from the slot's live value and that
+    /// pre-promote vs post-promote reads agree.
+    #[test]
+    fn by_ref_capture_read_after_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = build_by_ref_int_capture_body(&mut module, "__eir_closure_byref_read", 5);
+        let mut m = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        m.flags.is_main = true;
+        let slot_x = m.add_local(Some("x".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut m);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let five = b.emit_const_i64(5);
+            b.emit_store_local(slot_x, five);
+            let before = b.emit_load_local(slot_x, IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![before],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let cap = b.emit_load_local(slot_x, IrType::I64, PhpType::Int);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap],
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            let after = b.emit_load_local(slot_x, IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![after],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(m);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "510");
+        }
+    }
+
+    /// `$x = 1; $f = fn() use(&$x) { $x += 10; }; $g = fn() use(&$x) { $x += 100; }; $f(); $g();
+    /// echo $x;` echoes "111". Both closures capture `&$x`; the second `ClosureNew` finds
+    /// `ref_cell_ptrs[$x]` already set and reuses the existing cell (the promote guard in
+    /// `promote_local_for_by_ref_capture`), so both descriptors share one cell. Guards
+    /// against a re-alloc that would split the two closures' view of `$x`.
+    #[test]
+    fn by_ref_capture_double_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let f_id = build_by_ref_int_capture_body(&mut module, "__eir_closure_byref_dbl_f", 10);
+        let g_id = build_by_ref_int_capture_body(&mut module, "__eir_closure_byref_dbl_g", 100);
+        let mut m = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        m.flags.is_main = true;
+        let slot_x = m.add_local(Some("x".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut m);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let one = b.emit_const_i64(1);
+            b.emit_store_local(slot_x, one);
+            let cap_f = b.emit_load_local(slot_x, IrType::I64, PhpType::Int);
+            let f = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap_f],
+                    Some(Immediate::Data(f_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let cap_g = b.emit_load_local(slot_x, IrType::I64, PhpType::Int);
+            let g = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap_g],
+                    Some(Immediate::Data(g_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b
+                .emit(Op::ClosureCall, vec![f], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            let _ = b
+                .emit(Op::ClosureCall, vec![g], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            let after = b.emit_load_local(slot_x, IrType::I64, PhpType::Int);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![after],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(m);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "111");
+        }
+    }
+
+    /// `$x = 10; fn() use(&$x) {}(); $y =& $x; $y = 20; echo $x;` echoes "20". Exercises
+    /// the Edit F idempotency guard: after the by-ref capture promotes `$x`
+    /// (`ref_cell_ptrs[$x]` set), the `=&` alias emits `Op::PromoteLocalRefCell($x)`,
+    /// which must be a no-op (not re-alloc + read stale dangling slot locals → UAF, nor
+    /// register a second owner → double-free). `Op::AliasLocalRefCell($y, $x)` then binds
+    /// `$y` to the existing cell; mutating through `$y` is visible through `$x`. Without
+    /// the guard this traps (UAF) or double-frees at exit.
+    #[test]
+    fn by_ref_capture_then_alias_e2e() {
+        let mut module = Module::new(Target::wasm());
+        // No-op closure body: captures &$x and does nothing.
+        let name_id = module.data.intern_string("__eir_closure_byref_alias_0");
+        let mut body = Function::new("__eir_closure_byref_alias_0".to_string(), IrType::Void, PhpType::Void);
+        body.flags.is_closure = true;
+        body.flags.closure_capture_count = 1;
+        body.params.push(FunctionParam {
+            name: "n".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: true,
+            variadic: false,
+        });
+        let _slot_n = body.add_local(Some("n".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_closure(body);
+
+        let mut m = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        m.flags.is_main = true;
+        let slot_x = m.add_local(Some("x".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        let owner_x = m.add_local(Some("x\u{0}owner".to_string()), IrType::I64, PhpType::Int, LocalKind::RefCell);
+        let slot_y = m.add_local(Some("y".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut m);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let ten = b.emit_const_i64(10);
+            b.emit_store_local(slot_x, ten);
+            // Capture &$x: promotes $x into a ref-cell (ref_cell_ptrs[$x] set).
+            let cap = b.emit_load_local(slot_x, IrType::I64, PhpType::Int);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap],
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            // $y =& $x: the EIR emits PromoteLocalRefCell($x) (must no-op, already promoted)
+            // then AliasLocalRefCell($y, $x) to bind $y to $x's cell.
+            let _ = b.emit(
+                Op::PromoteLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: slot_x,
+                    second: owner_x,
+                }),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            let _ = b.emit(
+                Op::AliasLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: slot_y,
+                    second: slot_x,
+                }),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            // $y = 20 (store through $y's cell, which is $x's cell).
+            let twenty = b.emit_const_i64(20);
+            let _ = b.emit(
+                Op::StoreRefCell,
+                vec![twenty],
+                Some(Immediate::LocalSlot(slot_y)),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            // echo $x reads through $x's cell (aliased to $y) → 20.
+            let after = b
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot_x)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![after],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(m);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "20");
+        }
+    }
+
     // ----- P2: scalar instruction lowering, observed via wasmer --invoke -----
 
     /// Returns whether the `wasmer` CLI is available.

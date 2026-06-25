@@ -76,7 +76,7 @@ fn payload_type(inst: &Instruction) -> PhpType {
 /// word to @8. Single-word reprs (I64, F64, Ptr) write @0 only — this is required for
 /// by-reference foreach, where the pointer targets an in-place array element and an
 /// @8 write would corrupt the neighbouring slot.
-fn emit_cell_store(ctx: &mut FnCtx, ptr_local: &str, repr: &WasmRepr) -> Result<()> {
+pub(super) fn emit_cell_store(ctx: &mut FnCtx, ptr_local: &str, repr: &WasmRepr) -> Result<()> {
     match repr {
         WasmRepr::I64(local) => {
             ctx.fb.ins(&format!("local.get {}", ptr_local), "cell address");
@@ -127,7 +127,7 @@ fn emit_cell_store(ctx: &mut FnCtx, ptr_local: &str, repr: &WasmRepr) -> Result<
 /// stack in the order `emit_store_value` consumes (Str: ptr then len; Tagged: payload
 /// then tag; single-word reprs: the one value). The caller then stores them into the
 /// result value's local(s).
-fn emit_cell_load(ctx: &mut FnCtx, ptr_local: &str, repr: &WasmRepr) -> Result<()> {
+pub(super) fn emit_cell_load(ctx: &mut FnCtx, ptr_local: &str, repr: &WasmRepr) -> Result<()> {
     match repr {
         WasmRepr::I64(_) => {
             ctx.fb.ins(&format!("local.get {}", ptr_local), "cell address");
@@ -243,6 +243,18 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FnCtx, inst: &Instruction) -> Resul
 /// unchanged. The owner is recorded for the `Return` epilogue.
 pub(super) fn lower_promote_local_ref_cell(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let (php_slot, owner_slot) = slot_pair_immediate(inst)?;
+    // Idempotency guard: if the slot already stores a ref-cell pointer (a P7c by-ref
+    // closure capture promoted it, or a prior `=&` did), the cell already exists and an
+    // owner is already registered. Re-promoting would `retain_and_store_slot_value`
+    // against the slot's now-stale/dangling value locals (UAF for refcounted types)
+    // and register a second owner under a different key (double-free + leak). Native
+    // guards this at `codegen_ir/lower_inst.rs` via `local_stores_ref_cell_pointer`;
+    // the EIR does not mark a by-ref-captured caller local ref-bound, so a subsequent
+    // `$y =& $x` reaches `Op::PromoteLocalRefCell($x)` and needs this no-op here. The
+    // following `Op::AliasLocalRefCell` then binds `$y` to the existing cell.
+    if ctx.ref_cell_ptrs.contains_key(&php_slot.as_raw()) {
+        return Ok(());
+    }
     let payload = payload_type(inst);
     let slot_repr = ctx.slot_repr(php_slot)?.clone();
 
