@@ -11,7 +11,7 @@
 //!   conservative effects until Phase 04 gives them target-specific meaning.
 
 use crate::ir::{
-    BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, MixedNumericOp, Op,
+    BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, LocalSlotId, MixedNumericOp, Op,
     Ownership, Terminator, ValueId,
 };
 use crate::ir_lower::context::{
@@ -30,6 +30,7 @@ use crate::types::{
     array_key_type_from_value_type, checker::infer_expr_type_syntactic,
     merge_array_key_types, normalized_array_key_type, ExternFunctionSig, FunctionSig, PhpType,
 };
+use std::collections::HashSet;
 
 mod constants;
 mod nullsafe_chain;
@@ -1026,7 +1027,7 @@ fn lower_logical_binary(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Lowers non-short-circuiting PHP logical `xor`.
@@ -1111,6 +1112,7 @@ fn lower_null_coalesce(
     );
     let result_type = null_coalesce_result_type(ctx, value.value, default);
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let split_initialized = ctx.initialized_slots_snapshot();
     let default_block = ctx.builder.create_named_block("coalesce.default", Vec::new());
     let value_block = ctx.builder.create_named_block("coalesce.value", Vec::new());
     let merge = ctx.builder.create_named_block("coalesce.merge", Vec::new());
@@ -1123,16 +1125,29 @@ fn lower_null_coalesce(
     });
 
     ctx.builder.position_at_end(default_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     store_expr_into_temp(ctx, &temp_name, result_type.clone(), default, expr.span);
     release_discarded_branch_value(ctx, value, expr.span);
+    let default_reachable = !ctx.builder.insertion_block_is_terminated();
+    let default_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(value_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     store_value_into_temp(ctx, &temp_name, result_type, value, expr.span);
+    let value_reachable = !ctx.builder.insertion_block_is_terminated();
+    let value_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &split_initialized,
+        default_initialized,
+        default_reachable,
+        value_initialized,
+        value_reachable,
+    ));
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Returns the materialized result type for a null-coalesce merge.
@@ -1200,6 +1215,7 @@ fn lower_short_ternary(
     let cond = ctx.truthy(value, Some(condition_span));
     let result_type = fallback_expr_type(expr);
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let split_initialized = ctx.initialized_slots_snapshot();
     let value_block = ctx.builder.create_named_block("short_ternary.value", Vec::new());
     let default_block = ctx.builder.create_named_block("short_ternary.default", Vec::new());
     let merge = ctx.builder.create_named_block("short_ternary.merge", Vec::new());
@@ -1212,16 +1228,29 @@ fn lower_short_ternary(
     });
 
     ctx.builder.position_at_end(value_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     store_value_into_temp(ctx, &temp_name, result_type.clone(), value, expr.span);
+    let value_reachable = !ctx.builder.insertion_block_is_terminated();
+    let value_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(default_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     store_expr_into_temp(ctx, &temp_name, result_type, default, expr.span);
     release_discarded_branch_value(ctx, value, expr.span);
+    let default_reachable = !ctx.builder.insertion_block_is_terminated();
+    let default_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &split_initialized,
+        value_initialized,
+        value_reachable,
+        default_initialized,
+        default_reachable,
+    ));
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Releases a lowered value that a lazy branch tested but did not forward.
@@ -1724,7 +1753,7 @@ fn lower_lazy_isset(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    Some(ctx.load_local(&temp_name, Some(expr.span)))
+    Some(take_owned_temp(ctx, &temp_name, expr.span))
 }
 
 /// Lowers a single `isset()` operand that has special lazy PHP semantics.
@@ -1804,7 +1833,7 @@ fn lower_nullable_native_isset_offset_probe(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Lowers native array/hash `isset` once the receiver has already been evaluated.
@@ -2589,7 +2618,7 @@ fn lower_static_array_reduce(
         )?;
         store_value_into_temp(ctx, &temp_name, result_type.clone(), reduced, expr.span);
     }
-    Some(ctx.load_local(&temp_name, Some(expr.span)))
+    Some(take_owned_temp(ctx, &temp_name, expr.span))
 }
 
 /// Lowers `array_walk()` for a static callback and immediate indexed-array literal.
@@ -6103,7 +6132,7 @@ fn lower_match(
         ctx.builder.terminate(Terminator::Fatal { message });
     }
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Lowers array, hash, string, or ArrayAccess indexing.
@@ -6186,7 +6215,7 @@ fn lower_nullable_array_access(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Returns the best PHP result type for a lowered array/string/hash access.
@@ -6418,6 +6447,7 @@ fn lower_ternary(
     let cond = ctx.truthy(cond, Some(condition.span));
     let result_type = branch_merge_result_type(ctx, then_expr, else_expr, expr);
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let split_initialized = ctx.initialized_slots_snapshot();
     let then_block = ctx.builder.create_named_block("ternary.then", Vec::new());
     let else_block = ctx.builder.create_named_block("ternary.else", Vec::new());
     let merge = ctx.builder.create_named_block("ternary.merge", Vec::new());
@@ -6430,15 +6460,28 @@ fn lower_ternary(
     });
 
     ctx.builder.position_at_end(then_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     store_expr_into_temp(ctx, &temp_name, result_type.clone(), then_expr, expr.span);
+    let then_reachable = !ctx.builder.insertion_block_is_terminated();
+    let then_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(else_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     store_expr_into_temp(ctx, &temp_name, result_type, else_expr, expr.span);
+    let else_reachable = !ctx.builder.insertion_block_is_terminated();
+    let else_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &split_initialized,
+        then_initialized,
+        then_reachable,
+        else_initialized,
+        else_reachable,
+    ));
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Lowers a cast expression.
@@ -7666,7 +7709,7 @@ fn lower_nullable_regular_method_call(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Emits the PHP fatal terminator for an ordinary method call on null.
@@ -8444,6 +8487,17 @@ fn store_value_into_temp(
     }
 }
 
+/// Loads an owned hidden temp into SSA and clears the backing slot without releasing it.
+fn take_owned_temp(
+    ctx: &mut LoweringContext<'_, '_>,
+    temp_name: &str,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let value = ctx.load_local(temp_name, Some(span));
+    ctx.clear_owned_hidden_temp(temp_name, Some(span));
+    value
+}
+
 /// Chooses a merge temp type from contextual branch materialization and fallback metadata.
 fn branch_merge_result_type(
     ctx: &LoweringContext<'_, '_>,
@@ -8553,6 +8607,25 @@ fn coerce_value_for_temp(
 fn branch_to(ctx: &mut LoweringContext<'_, '_>, target: BlockId) {
     if !ctx.builder.insertion_block_is_terminated() {
         ctx.builder.terminate(Terminator::Br { target, args: Vec::new() });
+    }
+}
+
+/// Computes definitely initialized slots after a two-way expression split.
+fn merge_initialized_slots_for_expr(
+    split_initialized: &HashSet<LocalSlotId>,
+    then_initialized: HashSet<LocalSlotId>,
+    then_reachable: bool,
+    else_initialized: HashSet<LocalSlotId>,
+    else_reachable: bool,
+) -> HashSet<LocalSlotId> {
+    match (then_reachable, else_reachable) {
+        (true, true) => then_initialized
+            .intersection(&else_initialized)
+            .copied()
+            .collect(),
+        (true, false) => then_initialized,
+        (false, true) => else_initialized,
+        (false, false) => split_initialized.clone(),
     }
 }
 

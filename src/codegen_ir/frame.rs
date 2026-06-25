@@ -611,7 +611,7 @@ fn function_cleanup_locals(
 fn local_kind_needs_epilogue_cleanup(kind: LocalKind) -> bool {
     matches!(
         kind,
-        LocalKind::PhpLocal | LocalKind::HiddenTemp | LocalKind::NamedArgTemp
+        LocalKind::PhpLocal | LocalKind::HiddenTemp | LocalKind::OwnedTemp | LocalKind::NamedArgTemp
     )
 }
 

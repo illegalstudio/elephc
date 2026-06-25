@@ -771,6 +771,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         null
     }
 
+    /// Clears an owned hidden temp after its value has been loaded into SSA.
+    pub(crate) fn clear_owned_hidden_temp(&mut self, name: &str, span: Option<Span>) {
+        let Some(slot) = self.local_slots.get(name).copied() else {
+            return;
+        };
+        if self.builder.local_kind(slot) != LocalKind::OwnedTemp {
+            return;
+        }
+        self.emit_void(
+            Op::UnsetLocal,
+            Vec::new(),
+            Some(Immediate::LocalSlot(slot)),
+            Op::UnsetLocal.default_effects(),
+            span,
+        );
+    }
+
     /// Promotes an initialized local into a fallback ref-cell for by-reference foreach.
     pub(crate) fn promote_local_ref_cell(&mut self, name: &str, span: Option<Span>) {
         let slot = self.declare_local(name, self.local_type(name));
@@ -876,7 +893,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owning_mixed_string_cast(value.value) {
             return true;
         }
-        if self.value_is_owning_mixed_container_read(value.value) {
+        if self.value_is_owning_container_read(value.value) {
             return true;
         }
         if matches!(
@@ -979,12 +996,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.value_is_owning_temporary(value)
     }
 
-    /// Returns whether a Mixed container read now owns a caller reference.
-    fn value_is_owning_mixed_container_read(&self, value: ValueId) -> bool {
+    /// Returns whether a container read now owns a caller reference.
+    fn value_is_owning_container_read(&self, value: ValueId) -> bool {
         let php_type = self.builder.value_php_type(value);
-        matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        let php_type = php_type.codegen_repr();
+        let op = self.builder.value_defining_op(value);
+        (matches!(php_type, PhpType::Mixed | PhpType::Union(_))
+            || (php_type.is_refcounted() && php_type != PhpType::Str))
             && matches!(
-                self.builder.value_defining_op(value),
+                op,
                 Some(Op::ArrayGet | Op::HashGet)
             )
     }

@@ -1764,8 +1764,6 @@ fn value_string_coercion_needs_temp_cleanup(
             | PhpType::Float
             | PhpType::Bool
             | PhpType::TaggedScalar
-            | PhpType::Mixed
-            | PhpType::Union(_)
             | PhpType::Resource(_)
     ))
 }

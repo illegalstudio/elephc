@@ -21,7 +21,7 @@ use crate::codegen::context::{
 use crate::codegen::platform::Arch;
 use crate::intrinsics::{IntrinsicCall, IntrinsicCallKind};
 use crate::ir::{
-    BlockId, CmpPredicate, Function, Immediate, InstId, Instruction, LocalSlotId, Op, Ownership,
+    BlockId, CmpPredicate, Function, Immediate, InstId, Instruction, LocalKind, LocalSlotId, Op, Ownership,
     Terminator, ValueDef, ValueId,
 };
 use crate::names::{
@@ -5736,6 +5736,10 @@ fn lower_unset_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     let slot = expect_local_slot(inst)?;
     let offset = ctx.local_offset(slot)?;
     ctx.unmark_promoted_ref_cell(slot);
+    if ctx.local_kind(slot)? == LocalKind::OwnedTemp {
+        clear_local_slot_storage(ctx, slot, offset)?;
+        return Ok(());
+    }
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
@@ -5745,6 +5749,24 @@ fn lower_unset_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     if matches!(ctx.local_php_type(slot)?.codegen_repr(), PhpType::Str) {
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset - 8);
+    }
+    Ok(())
+}
+
+/// Zeroes a local slot after an owned hidden temp has been moved into SSA.
+fn clear_local_slot_storage(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    offset: usize,
+) -> Result<()> {
+    match ctx.local_php_type(slot)?.codegen_repr() {
+        PhpType::Str | PhpType::TaggedScalar => {
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset - 8);
+        }
+        _ => {
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        }
     }
     Ok(())
 }

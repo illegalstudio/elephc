@@ -16,7 +16,7 @@ use crate::codegen::{abi, emit_box_current_owned_value_as_mixed, emit_box_curren
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
-use crate::ir::{BlockId, DataId, Function, LocalSlotId, Module, Op, Ownership, ValueDef, ValueId};
+use crate::ir::{BlockId, DataId, Function, LocalKind, LocalSlotId, Module, Op, Ownership, ValueDef, ValueId};
 use crate::ir_passes::Allocation;
 use crate::types::PhpType;
 
@@ -174,6 +174,15 @@ impl<'a> FunctionContext<'a> {
             .locals
             .get(slot.as_raw() as usize)
             .map(|metadata| metadata.php_type.codegen_repr())
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
+    }
+
+    /// Returns the semantic role attached to a local slot.
+    pub(super) fn local_kind(&self, slot: LocalSlotId) -> Result<LocalKind> {
+        self.function
+            .locals
+            .get(slot.as_raw() as usize)
+            .map(|metadata| metadata.kind)
             .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
     }
 
@@ -458,6 +467,9 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns true when a value producer can leave an owned source consumed by Mixed boxing.
     pub(super) fn value_can_own_mixed_box_source(&self, value: ValueId) -> Result<bool> {
+        if self.value_php_type(value)?.codegen_repr() == PhpType::Str {
+            return self.value_is_heap_owned_string_for_mixed_box(value);
+        }
         let Some(value_ref) = self.function.value(value) else {
             return Err(CodegenIrError::missing_entry("value", value.as_raw()));
         };
@@ -471,14 +483,6 @@ impl<'a> FunctionContext<'a> {
         Ok(matches!(
             inst.op,
             Op::Acquire
-                | Op::StrPersist
-                | Op::IToStr
-                | Op::FToStr
-                | Op::BoolToStr
-                | Op::ResourceToStr
-                | Op::StrConcat
-                | Op::StrCharAt
-                | Op::StrInterpolate
                 | Op::ArrayNew
                 | Op::HashNew
                 | Op::ArrayToMixed
@@ -501,6 +505,38 @@ impl<'a> FunctionContext<'a> {
                 | Op::FunctionVariantCall
                 | Op::BuiltinCall
                 | Op::RuntimeCall
+                | Op::ExternCall
+                | Op::MethodCall
+                | Op::NullsafeMethodCall
+                | Op::StaticMethodCall
+                | Op::ClosureCall
+                | Op::CallableDescriptorInvoke
+                | Op::ExprCall
+                | Op::PipeCall
+                | Op::IteratorMethodCall
+                | Op::SplRuntimeCall
+                | Op::FiberRuntimeCall
+        ))
+    }
+
+    /// Returns true when a string producer leaves a heap-owned payload that Mixed boxing may consume.
+    fn value_is_heap_owned_string_for_mixed_box(&self, value: ValueId) -> Result<bool> {
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(false);
+        };
+        let inst = self
+            .function
+            .instruction(inst)
+            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        Ok(matches!(
+            inst.op,
+            Op::Acquire
+                | Op::StrPersist
+                | Op::Call
+                | Op::FunctionVariantCall
                 | Op::ExternCall
                 | Op::MethodCall
                 | Op::NullsafeMethodCall

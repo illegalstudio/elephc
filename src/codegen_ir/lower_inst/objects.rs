@@ -2445,10 +2445,13 @@ fn stdclass_class_id(ctx: &FunctionContext<'_>) -> Option<u64> {
         .map(|(_, class_info)| class_info.class_id)
 }
 
-/// Boxes a declared-property load so all Mixed receiver paths produce a Mixed cell.
+/// Boxes or retains a declared-property load so Mixed receiver paths produce owned Mixed cells.
 fn box_mixed_property_candidate_result(ctx: &mut FunctionContext<'_>, source_ty: &PhpType) {
-    if source_ty.codegen_repr() != PhpType::Mixed {
-        emit_box_current_value_as_mixed(ctx.emitter, &source_ty.codegen_repr());
+    let source_ty = source_ty.codegen_repr();
+    if source_ty == PhpType::Mixed {
+        abi::emit_incref_if_refcounted(ctx.emitter, &source_ty);
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
     }
 }
 
@@ -2568,7 +2571,7 @@ pub(super) fn lower_nullsafe_prop_get(
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }
     emit_property_load(ctx, &slot, base_reg)?;
-    emit_box_current_value_as_mixed(ctx.emitter, &slot.php_type.codegen_repr());
+    materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
     emit_boxed_null(ctx);
@@ -2823,13 +2826,18 @@ fn materialize_loaded_property_result(
     inst: &Instruction,
     source_ty: &PhpType,
 ) -> Result<()> {
+    let source_ty = source_ty.codegen_repr();
     match inst.result_php_type.codegen_repr() {
-        PhpType::Mixed if source_ty.codegen_repr() != PhpType::Mixed => {
-            emit_box_current_value_as_mixed(ctx.emitter, &source_ty.codegen_repr());
+        PhpType::Mixed if source_ty == PhpType::Mixed => {
+            abi::emit_incref_if_refcounted(ctx.emitter, &source_ty);
             Ok(())
         }
-        PhpType::TaggedScalar if source_ty.codegen_repr() != PhpType::TaggedScalar => {
-            super::coerce_loaded_value_to_tagged_scalar(ctx, source_ty)?;
+        PhpType::Mixed => {
+            emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+            Ok(())
+        }
+        PhpType::TaggedScalar if source_ty != PhpType::TaggedScalar => {
+            super::coerce_loaded_value_to_tagged_scalar(ctx, &source_ty)?;
             Ok(())
         }
         _ => Ok(()),

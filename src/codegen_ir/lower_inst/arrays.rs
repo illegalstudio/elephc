@@ -492,6 +492,9 @@ fn emit_array_get_in_bounds_aarch64(
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
             ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); // load the selected pointer-sized indexed-array element
+            if matches!(elem_ty, PhpType::Callable) {
+                abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
+            }
             if matches!(result_ty, PhpType::TaggedScalar) {
                 crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
             }
@@ -524,6 +527,7 @@ fn emit_array_get_in_bounds_aarch64(
         other if other.is_refcounted() => {
             ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach pointer payloads
             ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); // load the selected refcounted indexed-array element
+            abi::emit_incref_if_refcounted(ctx.emitter, other);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -550,6 +554,9 @@ fn emit_array_get_in_bounds_x86_64(
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
             ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); // load the selected pointer-sized indexed-array element
+            if matches!(elem_ty, PhpType::Callable) {
+                abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
+            }
             if matches!(result_ty, PhpType::TaggedScalar) {
                 crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
             }
@@ -582,6 +589,7 @@ fn emit_array_get_in_bounds_x86_64(
         other if other.is_refcounted() => {
             ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach pointer payloads
             ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); // load the selected refcounted indexed-array element
+            abi::emit_incref_if_refcounted(ctx.emitter, other);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(

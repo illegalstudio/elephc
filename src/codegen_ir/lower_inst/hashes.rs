@@ -855,6 +855,9 @@ fn emit_hash_get_success_aarch64(
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov x0, x1");                              // move the borrowed hash scalar payload into the standard integer result
+            if matches!(value_ty, PhpType::Callable) {
+                abi::emit_incref_if_refcounted(ctx.emitter, value_ty);
+            }
             if matches!(result_ty, PhpType::TaggedScalar) {
                 crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
             }
@@ -868,6 +871,7 @@ fn emit_hash_get_success_aarch64(
         }
         other if other.is_refcounted() => {
             ctx.emitter.instruction("mov x0, x1");                              // return the borrowed pointer-backed hash payload
+            abi::emit_incref_if_refcounted(ctx.emitter, other);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -888,6 +892,9 @@ fn emit_hash_get_success_x86_64(
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed hash scalar payload into the standard integer result
+            if matches!(value_ty, PhpType::Callable) {
+                abi::emit_incref_if_refcounted(ctx.emitter, value_ty);
+            }
             if matches!(result_ty, PhpType::TaggedScalar) {
                 crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
             }
@@ -904,6 +911,7 @@ fn emit_hash_get_success_x86_64(
         }
         other if other.is_refcounted() => {
             ctx.emitter.instruction("mov rax, rdi");                            // return the borrowed pointer-backed hash payload
+            abi::emit_incref_if_refcounted(ctx.emitter, other);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
