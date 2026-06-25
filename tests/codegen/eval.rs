@@ -7867,6 +7867,42 @@ abstract class EvalIfaceInheritedPropertyChild extends EvalIfaceInheritedPropert
     );
 }
 
+/// Verifies eval rejects PHP-forbidden callable/static type atoms by declaration position.
+#[test]
+fn test_eval_rejects_invalid_property_and_parameter_type_atoms() {
+    for source in [
+        r#"<?php
+eval('class EvalBadCallableProperty {
+    public callable $value;
+}');
+"#,
+        r#"<?php
+eval('interface EvalBadCallableInterfaceProperty {
+    public callable $value { get; }
+}');
+"#,
+        r#"<?php
+eval('class EvalBadCallablePromoted {
+    public function __construct(public callable $value) {}
+}');
+"#,
+        r#"<?php
+eval('function eval_bad_static_parameter(static $value) {}');
+"#,
+        r#"<?php
+eval('class EvalBadStaticPromoted {
+    public function __construct(public static $value) {}
+}');
+"#,
+    ] {
+        let err = compile_and_run_expect_failure(source);
+        assert!(
+            err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+            "stderr did not contain eval unsupported-construct diagnostic: {err}"
+        );
+    }
+}
+
 /// Verifies eval-declared abstract property hook contracts validate concrete subclasses.
 #[test]
 fn test_eval_declared_abstract_property_hook_contracts() {
