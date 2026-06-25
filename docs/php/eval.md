@@ -189,9 +189,10 @@ syntax, but requesting those arguments is a runtime fatal.
 Private parent properties shadowed by same-named child properties use separate
 runtime storage, so parent methods keep seeing the private parent value while
 child methods and public access see the child property.
-`ReflectionClass::getAttributes()`, `ReflectionMethod::getAttributes()`,
-`ReflectionProperty::getAttributes()`, `ReflectionClassConstant::getAttributes()`,
-and `ReflectionParameter::getAttributes()` expose eval-retained class, method,
+`ReflectionClass::getAttributes()`, `ReflectionEnum::getAttributes()`,
+`ReflectionMethod::getAttributes()`, `ReflectionProperty::getAttributes()`,
+`ReflectionClassConstant::getAttributes()`, and
+`ReflectionParameter::getAttributes()` expose eval-retained class, enum, method,
 property, class-constant, and method-parameter attributes for eval-declared
 class-like symbols and bridge-registered generated/AOT class-level, method,
 property, and class-constant attributes when their arguments fit the same
@@ -210,6 +211,10 @@ eval call site, and line numbers are one-based inside the evaluated fragment.
 `ReflectionClass` construction accepts class-name strings and object arguments;
 object arguments reflect the runtime class of eval-created or generated/AOT
 objects.
+`ReflectionEnum` construction accepts enum-name strings for eval-declared
+enums. It exposes `hasCase()`, `getCase()`, `getCases()`, `isBacked()`, and
+`getBackingType()` for eval enum metadata, returning `ReflectionEnumUnitCase`,
+`ReflectionEnumBackedCase`, and `ReflectionNamedType` objects where PHP does.
 `ReflectionMethod` construction accepts class-name strings and object
 arguments; object arguments resolve to the runtime class before method lookup.
 `ReflectionClass::getShortName()`,
@@ -492,8 +497,9 @@ shape; their `getName()` methods return the reflected constant or case name,
 case object, while `ReflectionEnumUnitCase::getValue()` and
 `ReflectionEnumBackedCase::getValue()` return the reflected enum-case object.
 `ReflectionEnumBackedCase::getBackingValue()` returns the scalar backing value,
-and `getDeclaringClass()` returns the declaring class or enum as a
-`ReflectionClass`. `ReflectionClassConstant::isEnumCase()` reports enum cases.
+`getDeclaringClass()` returns the declaring class or enum as a
+`ReflectionClass`, and `getEnum()` returns the declaring enum as a
+`ReflectionEnum`. `ReflectionClassConstant::isEnumCase()` reports enum cases.
 `ReflectionClassConstant`, `ReflectionEnumUnitCase`, and
 `ReflectionEnumBackedCase` expose `isDeprecated()`, `hasType()`, and
 `getType()` with PHP's current untyped defaults: `false`, `false`, and `null`.
@@ -699,7 +705,7 @@ a discarded temporary expression; destructor execution from runtime cycle
 collection is still outside the bridge. The main remaining class-system gaps are
 broader reflection APIs beyond the supported
 ReflectionClass/Function/Method/Parameter/Property/NamedType/UnionType/IntersectionType
-and attribute slice, Reflection type APIs beyond retained parameter, generated
+and Enum/attribute slice, Reflection type APIs beyond retained parameter, generated
 property, and function/method return metadata, broader
 parameter and generated property default-value materialization beyond scalar,
 null, empty-array, and supported object-valued parameter defaults during generated/AOT invocation,

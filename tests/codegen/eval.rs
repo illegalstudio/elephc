@@ -12183,6 +12183,58 @@ echo ReflectionEnumBackedCase::IS_FINAL;');
     );
 }
 
+/// Verifies ReflectionEnum methods work for enums declared inside eval.
+#[test]
+fn test_eval_reflection_enum_owner_methods() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('enum EvalBridgePure {
+    case Ready;
+    case Done;
+}
+enum EvalBridgeBacked: string {
+    case Ready = "ready";
+    case Done = "done";
+}
+$pure = new ReflectionEnum("EvalBridgePure");
+echo $pure->getName() . ":";
+echo ($pure->isBacked() ? "B" : "b") . ":";
+echo ($pure->getBackingType() === null ? "N" : "n") . ":";
+echo ($pure->hasCase("Ready") ? "R" : "r");
+echo ($pure->hasCase("Missing") ? "M" : "m") . ":";
+$case = $pure->getCase("Done");
+echo $case->getName() . ":";
+echo $case->getEnum()->getName() . ":";
+$cases = $pure->getCases();
+echo count($cases) . ":";
+echo $cases[0]->getName() . ":";
+echo $cases[1]->getEnum()->getName() . ":";
+$backed = new ReflectionEnum("EvalBridgeBacked");
+$type = $backed->getBackingType();
+echo ($backed->isBacked() ? "B" : "b") . ":";
+echo $type->getName() . ":";
+echo ($type->isBuiltin() ? "I" : "i") . ":";
+$backedCase = $backed->getCase("Ready");
+echo $backedCase->getName() . ":";
+echo $backedCase->getBackingValue() . ":";
+echo ($backedCase->getEnum()->isBacked() ? "E" : "e") . ":";
+$backedCases = $backed->getCases();
+echo count($backedCases) . ":";
+echo $backedCases[1]->getBackingValue() . ":";
+echo $backedCases[0]->getEnum()->getBackingType()->getName();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalBridgePure:b:N:Rm:Done:EvalBridgePure:2:Ready:EvalBridgePure:B:string:I:Ready:ready:E:2:done:string"
+    );
+}
+
 /// Verifies eval interface and trait constants work through the bridge.
 #[test]
 fn test_eval_declared_interface_and_trait_constants() {

@@ -3501,6 +3501,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     )? {
         return Ok(result);
     }
+    if let Some(result) = eval_reflection_class_basic_metadata_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
     if let Some(result) = eval_reflection_class_has_method_result(
         identity,
         method_name,
@@ -3520,6 +3529,16 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         return Ok(result);
     }
     if let Some(result) = eval_reflection_class_has_constant_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    if let Some(result) = eval_reflection_enum_methods_result(
+        object,
         identity,
         method_name,
         evaluated_args.clone(),
@@ -3682,6 +3701,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         return Ok(result);
     }
     if let Some(result) = eval_reflection_class_constant_to_string_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    if let Some(result) = eval_reflection_enum_case_get_enum_result(
         identity,
         method_name,
         evaluated_args.clone(),

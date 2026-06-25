@@ -1511,6 +1511,7 @@ fn known_dynamic_new_builtin_class_names() -> &'static [&'static str] {
         "RecursiveRegexIterator",
         "ReflectionAttribute",
         "ReflectionClass",
+        "ReflectionEnum",
         "ReflectionClassConstant",
         "ReflectionEnumBackedCase",
         "ReflectionEnumUnitCase",

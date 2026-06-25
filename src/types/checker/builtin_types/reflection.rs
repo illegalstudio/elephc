@@ -35,6 +35,7 @@ pub(crate) fn inject_builtin_reflection(
     for builtin_name in [
         "ReflectionAttribute",
         "ReflectionClass",
+        "ReflectionEnum",
         "ReflectionFunction",
         "ReflectionMethod",
         "ReflectionProperty",
@@ -119,6 +120,7 @@ pub(crate) fn inject_builtin_reflection(
         },
     );
     class_map.insert("ReflectionClass".to_string(), builtin_reflection_class());
+    class_map.insert("ReflectionEnum".to_string(), builtin_reflection_enum_class());
     class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
     class_map.insert(
         "ReflectionMethod".to_string(),
@@ -1520,7 +1522,7 @@ fn builtin_reflection_class() -> FlattenedClass {
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
-        is_final: true,
+        is_final: false,
         is_readonly_class: false,
         properties: vec![
             builtin_property(
@@ -1843,6 +1845,79 @@ fn builtin_reflection_class() -> FlattenedClass {
         used_traits: Vec::new(),
         trait_aliases: Vec::new(),
     }
+}
+
+/// Builds the synthetic `ReflectionEnum` class with flattened ReflectionClass members.
+fn builtin_reflection_enum_class() -> FlattenedClass {
+    let mut class = builtin_reflection_class();
+    class.name = "ReflectionEnum".to_string();
+    class
+        .methods
+        .retain(|method| reflection_enum_inherited_method_is_supported(&method.name));
+    class.properties.extend([
+        builtin_property(
+            "__case_names",
+            Visibility::Private,
+            Some(string_array_type()),
+            empty_array(),
+        ),
+        builtin_property(
+            "__cases",
+            Visibility::Private,
+            Some(array_type()),
+            empty_array(),
+        ),
+        builtin_property(
+            "__is_backed",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ),
+        builtin_property(
+            "__backing_type",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ),
+    ]);
+    class.methods.extend([
+        builtin_reflection_class_bool_method("isBacked", "__is_backed"),
+        builtin_reflection_class_mixed_method("getBackingType", "__backing_type"),
+    ]);
+    class
+}
+
+/// Returns whether a flattened ReflectionClass method is safe on ReflectionEnum.
+fn reflection_enum_inherited_method_is_supported(method_name: &str) -> bool {
+    matches!(
+        method_name.to_ascii_lowercase().as_str(),
+        "__construct"
+            | "getname"
+            | "getshortname"
+            | "getnamespacename"
+            | "innamespace"
+            | "isfinal"
+            | "isabstract"
+            | "isinterface"
+            | "istrait"
+            | "isenum"
+            | "isreadonly"
+            | "isanonymous"
+            | "isinstantiable"
+            | "iscloneable"
+            | "isiterable"
+            | "isiterateable"
+            | "isinternal"
+            | "isuserdefined"
+            | "getmodifiers"
+            | "getattributes"
+            | "getdoccomment"
+            | "getextensionname"
+            | "getextension"
+            | "getfilename"
+            | "getstartline"
+            | "getendline"
+    )
 }
 
 /// Returns the public modifier constants exposed by PHP's `ReflectionClass`.
@@ -4263,6 +4338,13 @@ fn add_reflection_member_flag_methods(
         class_name,
         "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
     ) {
+        properties.push(builtin_property(
+            "__enum",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        methods.push(builtin_reflection_class_mixed_method("getEnum", "__enum"));
         properties.push(builtin_property(
             "__value",
             Visibility::Private,

@@ -52,6 +52,7 @@ struct ReflectionOwnerMetadata {
     default_property_members: Vec<ReflectionDefaultPropertyMember>,
     static_property_members: Vec<ReflectionStaticPropertyMember>,
     constant_reflection_members: Vec<ReflectionListedMember>,
+    enum_case_members: Vec<ReflectionListedMember>,
     method_members: Vec<ReflectionListedMember>,
     property_members: Vec<ReflectionListedMember>,
     property_hook_members: Vec<(String, ReflectionListedMember)>,
@@ -99,6 +100,7 @@ struct ReflectionListedMember {
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgEntry>>>,
     constant_value: Option<ReflectionConstantValue>,
+    backing_value: Option<ReflectionConstantValue>,
     is_enum_case: bool,
     flags: ReflectionMemberFlags,
     modifiers: i64,
@@ -284,6 +286,7 @@ pub(super) fn is_reflection_owner_class(class_name: &str) -> bool {
             | "ReflectionProperty"
             | "ReflectionParameter"
             | "ReflectionClassConstant"
+            | "ReflectionEnum"
             | "ReflectionEnumUnitCase"
             | "ReflectionEnumBackedCase"
     )
@@ -331,8 +334,10 @@ fn emit_reflection_owner_object(
     )?;
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
         emit_reflection_string_property(ctx, reflected_name, 8, 16);
+        if matches!(class_name, "ReflectionClass" | "ReflectionEnum") {
+            emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;
+        }
         if class_name == "ReflectionClass" {
-            emit_reflection_class_name_parts(ctx, reflected_name)?;
             emit_reflection_string_array_property_by_name(
                 ctx,
                 "__interface_names",
@@ -391,12 +396,14 @@ fn emit_reflection_owner_object(
             )?;
             emit_reflection_member_array_property_by_name(
                 ctx,
+                "ReflectionClass",
                 "__reflection_constants",
                 "ReflectionClassConstant",
                 &metadata.constant_reflection_members,
             )?;
             emit_reflection_member_array_property_by_name(
                 ctx,
+                "ReflectionClass",
                 "__methods",
                 "ReflectionMethod",
                 &metadata.method_members,
@@ -405,6 +412,7 @@ fn emit_reflection_owner_object(
             emit_reflection_parent_class_property(ctx, metadata.parent_class_name.as_deref())?;
             emit_reflection_member_array_property_by_name(
                 ctx,
+                "ReflectionClass",
                 "__properties",
                 "ReflectionProperty",
                 &metadata.property_members,
@@ -412,6 +420,43 @@ fn emit_reflection_owner_object(
         } else if class_name == "ReflectionFunction" {
             let (_, short_name) = reflection_name_parts(reflected_name);
             emit_reflection_string_property_by_name(ctx, "__short_name", short_name)?;
+        }
+        if class_name == "ReflectionEnum" {
+            let case_names = metadata
+                .enum_case_members
+                .iter()
+                .map(|member| member.name.clone())
+                .collect::<Vec<_>>();
+            let case_class = if metadata.type_metadata.is_some() {
+                "ReflectionEnumBackedCase"
+            } else {
+                "ReflectionEnumUnitCase"
+            };
+            emit_reflection_owner_string_array_property_by_name(
+                ctx,
+                class_name,
+                "__case_names",
+                &case_names,
+            )?;
+            emit_reflection_member_array_property_by_name(
+                ctx,
+                "ReflectionEnum",
+                "__cases",
+                case_class,
+                &metadata.enum_case_members,
+            )?;
+            emit_reflection_owner_bool_property(
+                ctx,
+                class_name,
+                "__is_backed",
+                metadata.type_metadata.is_some(),
+            )?;
+            emit_reflection_owner_type_property_by_name(
+                ctx,
+                class_name,
+                "__backing_type",
+                metadata.type_metadata.as_ref(),
+            )?;
         }
         if class_name == "ReflectionFunction" {
             emit_reflection_function_name_parts(ctx, reflected_name)?;
@@ -421,28 +466,29 @@ fn emit_reflection_owner_object(
         }
     }
     emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
-    if class_name == "ReflectionClass" {
-        emit_reflection_bool_property(ctx, "__is_final", metadata.is_final)?;
-        emit_reflection_bool_property(ctx, "__is_abstract", metadata.is_abstract)?;
-        emit_reflection_bool_property(ctx, "__is_interface", metadata.is_interface)?;
-        emit_reflection_bool_property(ctx, "__is_trait", metadata.is_trait)?;
-        emit_reflection_bool_property(ctx, "__is_enum", metadata.is_enum)?;
-        emit_reflection_bool_property(ctx, "__is_readonly", metadata.is_readonly)?;
-        emit_reflection_bool_property(ctx, "__is_anonymous", metadata.is_anonymous)?;
-        emit_reflection_bool_property(ctx, "__is_instantiable", metadata.is_instantiable)?;
-        emit_reflection_bool_property(ctx, "__is_cloneable", metadata.is_cloneable)?;
-        emit_reflection_bool_property(ctx, "__is_iterable", metadata.is_iterable)?;
+    if matches!(class_name, "ReflectionClass" | "ReflectionEnum") {
+        emit_reflection_owner_bool_property(ctx, class_name, "__is_final", metadata.is_final)?;
+        emit_reflection_owner_bool_property(ctx, class_name, "__is_abstract", metadata.is_abstract)?;
+        emit_reflection_owner_bool_property(ctx, class_name, "__is_interface", metadata.is_interface)?;
+        emit_reflection_owner_bool_property(ctx, class_name, "__is_trait", metadata.is_trait)?;
+        emit_reflection_owner_bool_property(ctx, class_name, "__is_enum", metadata.is_enum)?;
+        emit_reflection_owner_bool_property(ctx, class_name, "__is_readonly", metadata.is_readonly)?;
+        emit_reflection_owner_bool_property(ctx, class_name, "__is_anonymous", metadata.is_anonymous)?;
+        emit_reflection_owner_bool_property(ctx, class_name, "__is_instantiable", metadata.is_instantiable)?;
+        emit_reflection_owner_bool_property(ctx, class_name, "__is_cloneable", metadata.is_cloneable)?;
+        emit_reflection_owner_bool_property(ctx, class_name, "__is_iterable", metadata.is_iterable)?;
         let is_internal = metadata
             .reflected_name
             .as_deref()
             .is_some_and(reflection_class_like_is_internal);
-        emit_reflection_bool_property(ctx, "__is_internal", is_internal)?;
-        emit_reflection_bool_property(
+        emit_reflection_owner_bool_property(ctx, class_name, "__is_internal", is_internal)?;
+        emit_reflection_owner_bool_property(
             ctx,
+            class_name,
             "__is_user_defined",
             metadata.reflected_name.is_some() && !is_internal,
         )?;
-        emit_reflection_int_property_by_name(ctx, "__modifiers", metadata.modifiers)?;
+        emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
     }
     if matches!(
         class_name,
@@ -457,6 +503,9 @@ fn emit_reflection_owner_object(
             class_name,
             metadata.parent_class_name.as_deref(),
         )?;
+        if matches!(class_name, "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase") {
+            emit_reflection_enum_property(ctx, class_name, metadata.parent_class_name.as_deref())?;
+        }
     }
     if matches!(class_name, "ReflectionFunction" | "ReflectionMethod") {
         let is_internal = reflection_function_or_method_is_internal(class_name, &metadata);
@@ -601,15 +650,26 @@ fn emit_reflection_int_property(
     abi::emit_store_to_address(ctx.emitter, scratch, object_reg, high_offset);
 }
 
-/// Stores namespace-aware name parts for a statically materialized ReflectionClass.
+/// Stores namespace-aware name parts for a statically materialized class-like reflector.
 fn emit_reflection_class_name_parts(
     ctx: &mut FunctionContext<'_>,
+    class_name: &str,
     reflected_name: &str,
 ) -> Result<()> {
     let (namespace_name, short_name) = reflection_name_parts(reflected_name);
-    emit_reflection_string_property_by_name(ctx, "__short_name", short_name)?;
-    emit_reflection_string_property_by_name(ctx, "__namespace_name", namespace_name)?;
-    emit_reflection_bool_property(ctx, "__in_namespace", !namespace_name.is_empty())?;
+    emit_reflection_owner_string_property_by_name(ctx, class_name, "__short_name", short_name)?;
+    emit_reflection_owner_string_property_by_name(
+        ctx,
+        class_name,
+        "__namespace_name",
+        namespace_name,
+    )?;
+    emit_reflection_owner_bool_property(
+        ctx,
+        class_name,
+        "__in_namespace",
+        !namespace_name.is_empty(),
+    )?;
     Ok(())
 }
 
@@ -680,6 +740,7 @@ fn reflection_owner_metadata(
 ) -> Result<ReflectionOwnerMetadata> {
     match class_name {
         "ReflectionClass" => reflection_class_metadata(ctx, inst),
+        "ReflectionEnum" => reflection_enum_metadata(ctx, inst),
         "ReflectionFunction" => reflection_function_metadata(ctx, inst),
         "ReflectionMethod" => reflection_method_metadata(ctx, inst),
         "ReflectionProperty" => reflection_property_metadata(ctx, inst),
@@ -704,6 +765,30 @@ fn reflection_class_metadata(
     reflection_class_metadata_for_name(ctx, &reflected_class)
 }
 
+/// Resolves `ReflectionEnum(enum)` metadata for a known enum name.
+fn reflection_enum_metadata(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<ReflectionOwnerMetadata> {
+    let Some(enum_operand) = inst.operands.first().copied() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let reflected_enum = const_string_or_class_operand(ctx, enum_operand, "ReflectionEnum")?;
+    let mut metadata = reflection_class_metadata_for_name(ctx, &reflected_enum)?;
+    let Some(enum_name) = metadata.reflected_name.as_deref() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let Some(enum_info) = ctx.module.enum_infos.get(enum_name) else {
+        return Ok(empty_reflection_metadata());
+    };
+    metadata.type_metadata = enum_info
+        .backing_type
+        .as_ref()
+        .and_then(reflection_named_type_metadata)
+        .map(ReflectionParameterTypeMetadata::Named);
+    Ok(metadata)
+}
+
 /// Resolves `ReflectionClass(name)` metadata for a known class-like name.
 fn reflection_class_metadata_for_name(
     ctx: &FunctionContext<'_>,
@@ -720,6 +805,11 @@ fn reflection_class_metadata_for_name(
         let static_property_members = reflection_class_static_property_members(class_name, info);
         let constant_reflection_members =
             reflection_class_constant_reflection_members(ctx, class_name, info)?;
+        let enum_case_members = if is_enum {
+            reflection_enum_case_members(ctx, class_name)
+        } else {
+            Vec::new()
+        };
         let method_members = reflection_class_method_members(ctx, class_name, info, &method_names)?;
         let property_members =
             reflection_class_property_members(ctx, class_name, info, &property_names);
@@ -743,6 +833,7 @@ fn reflection_class_metadata_for_name(
             default_property_members,
             static_property_members,
             constant_reflection_members,
+            enum_case_members,
             method_members,
             property_members,
             property_hook_members: Vec::new(),
@@ -810,6 +901,7 @@ fn reflection_class_metadata_for_name(
             default_property_members: Vec::new(),
             static_property_members: Vec::new(),
             constant_reflection_members,
+            enum_case_members: Vec::new(),
             method_members,
             property_members,
             property_hook_members: Vec::new(),
@@ -883,6 +975,7 @@ fn reflection_class_metadata_for_name(
             default_property_members: Vec::new(),
             static_property_members: Vec::new(),
             constant_reflection_members,
+            enum_case_members: Vec::new(),
             method_members,
             property_members,
             property_hook_members: Vec::new(),
@@ -933,6 +1026,37 @@ fn reflection_shallow_class_metadata_for_name(
     metadata.constant_names.clear();
     metadata.constant_members.clear();
     metadata.constant_reflection_members.clear();
+    metadata.enum_case_members.clear();
+    metadata.method_members.clear();
+    metadata.property_members.clear();
+    metadata.constructor_member = None;
+    metadata.parent_class_name = None;
+    Ok(metadata)
+}
+
+/// Resolves `ReflectionEnum` metadata for nested enum-case slots.
+fn reflection_enum_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    reflected_enum: &str,
+) -> Result<ReflectionOwnerMetadata> {
+    let mut metadata = reflection_class_metadata_for_name(ctx, reflected_enum)?;
+    let Some(enum_name) = metadata.reflected_name.as_deref() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let Some(enum_info) = ctx.module.enum_infos.get(enum_name) else {
+        return Ok(empty_reflection_metadata());
+    };
+    metadata.type_metadata = enum_info
+        .backing_type
+        .as_ref()
+        .and_then(reflection_named_type_metadata)
+        .map(ReflectionParameterTypeMetadata::Named);
+    metadata.method_names.clear();
+    metadata.property_names.clear();
+    metadata.constant_names.clear();
+    metadata.constant_members.clear();
+    metadata.constant_reflection_members.clear();
+    metadata.enum_case_members.clear();
     metadata.method_members.clear();
     metadata.property_members.clear();
     metadata.constructor_member = None;
@@ -1112,13 +1236,14 @@ fn reflection_method_owner_metadata(
         default_property_members: Vec::new(),
         static_property_members: Vec::new(),
         constant_reflection_members: Vec::new(),
+        enum_case_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
         property_hook_members: Vec::new(),
         constructor_member: None,
         parent_class_name: member.declaring_class_name,
         constant_value: member.constant_value,
-        backing_value: None,
+        backing_value: member.backing_value,
         is_enum_case: member.is_enum_case,
         parameter_members: member.parameters,
         type_metadata: member.type_metadata,
@@ -1191,6 +1316,7 @@ fn reflection_property_metadata(
                 default_property_members: Vec::new(),
                 static_property_members: Vec::new(),
                 constant_reflection_members: Vec::new(),
+                enum_case_members: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
                 property_hook_members,
@@ -1403,6 +1529,7 @@ fn reflection_class_constant_metadata(
             default_property_members: Vec::new(),
             static_property_members: Vec::new(),
             constant_reflection_members: Vec::new(),
+            enum_case_members: Vec::new(),
             method_members: Vec::new(),
             property_members: Vec::new(),
             property_hook_members: Vec::new(),
@@ -1480,6 +1607,7 @@ fn reflection_enum_case_metadata(
                 default_property_members: Vec::new(),
                 static_property_members: Vec::new(),
                 constant_reflection_members: Vec::new(),
+                enum_case_members: Vec::new(),
                 method_members: Vec::new(),
                 property_members: Vec::new(),
                 property_hook_members: Vec::new(),
@@ -1546,6 +1674,7 @@ fn reflection_class_constant_owner_metadata(
         default_property_members: Vec::new(),
         static_property_members: Vec::new(),
         constant_reflection_members: Vec::new(),
+        enum_case_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
         property_hook_members: Vec::new(),
@@ -2296,6 +2425,49 @@ fn reflection_class_constant_reflection_members(
     Ok(members)
 }
 
+/// Returns enum-case reflector members for `ReflectionEnum::getCases()`.
+fn reflection_enum_case_members(
+    ctx: &FunctionContext<'_>,
+    enum_name: &str,
+) -> Vec<ReflectionListedMember> {
+    let Some(enum_info) = ctx.module.enum_infos.get(enum_name) else {
+        return Vec::new();
+    };
+    enum_info
+        .cases
+        .iter()
+        .map(|case| ReflectionListedMember {
+            name: case.name.clone(),
+            declaring_class_name: Some(enum_name.to_string()),
+            attr_names: case.attribute_names.clone(),
+            attr_args: case.attribute_args.clone(),
+            constant_value: Some(ReflectionConstantValue::EnumCase {
+                enum_name: enum_name.to_string(),
+                case_name: case.name.clone(),
+            }),
+            backing_value: reflection_enum_case_backing_value(case),
+            is_enum_case: true,
+            flags: reflection_member_flags(
+                false,
+                &Visibility::Public,
+                false,
+                false,
+                false,
+                false,
+            ),
+            modifiers: reflection_class_constant_modifiers(&Visibility::Public, false),
+            type_metadata: None,
+            default_value: None,
+            property_hook_members: Vec::new(),
+            required_parameter_count: 0,
+            is_deprecated: false,
+            is_generator: false,
+            prototype_member: None,
+            parameters: Vec::new(),
+        })
+        .collect()
+}
+
 /// Returns constant-reflector objects for interface constants.
 fn reflection_interface_constant_reflection_members(
     ctx: &FunctionContext<'_>,
@@ -2398,6 +2570,7 @@ fn push_unique_constant_reflection_member(
         attr_names,
         attr_args,
         constant_value: Some(value),
+        backing_value: None,
         is_enum_case,
         flags: reflection_member_flags(false, &visibility, is_final, false, false, false),
         modifiers: reflection_class_constant_modifiers(&visibility, is_final),
@@ -2749,6 +2922,7 @@ fn reflection_class_method_member(
         attr_names,
         attr_args,
         constant_value: None,
+        backing_value: None,
         is_enum_case: false,
         flags,
         modifiers: reflection_method_modifiers_from_flags(flags),
@@ -2832,6 +3006,7 @@ fn reflection_interface_method_member(
         attr_names: Vec::new(),
         attr_args: Vec::new(),
         constant_value: None,
+        backing_value: None,
         is_enum_case: false,
         flags,
         modifiers: reflection_method_modifiers_from_flags(flags),
@@ -2911,6 +3086,7 @@ fn reflection_trait_method_member(
         attr_names: Vec::new(),
         attr_args: Vec::new(),
         constant_value: None,
+        backing_value: None,
         is_enum_case: false,
         flags,
         modifiers: reflection_method_modifiers_from_flags(flags),
@@ -2997,6 +3173,7 @@ fn reflection_class_property_member(
             .cloned()
             .unwrap_or_default(),
         constant_value: None,
+        backing_value: None,
         is_enum_case: false,
         flags,
         modifiers: reflection_property_modifiers_for_info(info, property_name)
@@ -3133,6 +3310,7 @@ fn reflection_property_hook_method_member(
         attr_names: Vec::new(),
         attr_args: Vec::new(),
         constant_value: None,
+        backing_value: None,
         is_enum_case: false,
         flags,
         modifiers: reflection_method_modifiers_from_flags(flags),
@@ -3320,6 +3498,7 @@ fn default_method_members(
             attr_names: Vec::new(),
             attr_args: Vec::new(),
             constant_value: None,
+            backing_value: None,
             is_enum_case: false,
             flags: reflection_member_flags(
                 false,
@@ -3363,6 +3542,7 @@ fn default_property_members(
             attr_names: Vec::new(),
             attr_args: Vec::new(),
             constant_value: None,
+            backing_value: None,
             is_enum_case: false,
             flags: reflection_member_flags(
                 false,
@@ -4379,6 +4559,7 @@ fn empty_reflection_metadata() -> ReflectionOwnerMetadata {
         default_property_members: Vec::new(),
         static_property_members: Vec::new(),
         constant_reflection_members: Vec::new(),
+        enum_case_members: Vec::new(),
         method_members: Vec::new(),
         property_members: Vec::new(),
         property_hook_members: Vec::new(),
@@ -4554,22 +4735,6 @@ fn emit_reflection_string_property(
     abi::emit_pop_reg(ctx.emitter, result_reg);
 }
 
-/// Writes a heap-persisted string into a named ReflectionClass property slot.
-fn emit_reflection_string_property_by_name(
-    ctx: &mut FunctionContext<'_>,
-    property_name: &str,
-    value: &str,
-) -> Result<()> {
-    let class_info = ctx
-        .module
-        .class_infos
-        .get("ReflectionClass")
-        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
-    let low_offset = reflection_property_offset(class_info, property_name)?;
-    emit_reflection_string_property(ctx, value, low_offset, low_offset + 8);
-    Ok(())
-}
-
 /// Writes a heap-persisted string into a named Reflection owner property slot.
 fn emit_reflection_owner_string_property_by_name(
     ctx: &mut FunctionContext<'_>,
@@ -4650,10 +4815,25 @@ fn emit_reflection_string_array_property_by_name(
     property_name: &str,
     names: &[String],
 ) -> Result<()> {
+    emit_reflection_owner_string_array_property_by_name(
+        ctx,
+        "ReflectionClass",
+        property_name,
+        names,
+    )
+}
+
+/// Replaces a Reflection owner private array slot with an indexed string array.
+fn emit_reflection_owner_string_array_property_by_name(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property_name: &str,
+    names: &[String],
+) -> Result<()> {
     let class_info = ctx
         .module
         .class_infos
-        .get("ReflectionClass")
+        .get(class_name)
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, property_name)?;
     let high_offset = low_offset + 8;
@@ -4806,9 +4986,10 @@ fn emit_reflection_static_property_array_property_by_name(
     Ok(())
 }
 
-/// Replaces a ReflectionClass private array slot with ReflectionMethod/Property objects.
+/// Replaces a reflection-owner private array slot with member reflector objects.
 fn emit_reflection_member_array_property_by_name(
     ctx: &mut FunctionContext<'_>,
+    owner_class_name: &str,
     property_name: &str,
     member_class_name: &str,
     members: &[ReflectionListedMember],
@@ -4816,7 +4997,7 @@ fn emit_reflection_member_array_property_by_name(
     let class_info = ctx
         .module
         .class_infos
-        .get("ReflectionClass")
+        .get(owner_class_name)
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, property_name)?;
     let high_offset = low_offset + 8;
@@ -5009,6 +5190,42 @@ fn emit_reflection_declaring_class_property(
     } else {
         abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    }
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
+    abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+    Ok(())
+}
+
+/// Replaces an enum-case reflector's private enum slot with `ReflectionEnum`.
+fn emit_reflection_enum_property(
+    ctx: &mut FunctionContext<'_>,
+    member_class_name: &str,
+    enum_name: Option<&str>,
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(member_class_name)
+        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+    let Some(low_offset) = class_info.property_offsets.get("__enum").copied() else {
+        return Ok(());
+    };
+    let high_offset = low_offset + 8;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    if let Some(enum_name) = enum_name {
+        let enum_metadata = reflection_enum_metadata_for_name(ctx, enum_name)?;
+        emit_reflection_owner_object(ctx, "ReflectionEnum", &enum_metadata)?;
+        emit_box_current_value_as_mixed(
+            ctx.emitter,
+            &PhpType::Object("ReflectionEnum".to_string()),
+        );
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
     }
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
@@ -5795,7 +6012,10 @@ fn emit_reflection_member_object(
             &property_string,
         )?;
     }
-    if member_class_name == "ReflectionClassConstant" {
+    if matches!(
+        member_class_name,
+        "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
         if let Some(value) = &member.constant_value {
             abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
             emit_reflection_constant_value_as_mixed(ctx, value);
@@ -5813,6 +6033,23 @@ fn emit_reflection_member_object(
             "__modifiers",
             member.modifiers,
         )?;
+    }
+    if member_class_name == "ReflectionEnumBackedCase" {
+        if let Some(value) = &member.backing_value {
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            emit_reflection_constant_value_as_mixed(ctx, value);
+            emit_reflection_owner_mixed_property_from_result(
+                ctx,
+                member_class_name,
+                "__backing_value",
+            )?;
+        }
+    }
+    if matches!(
+        member_class_name,
+        "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+    ) {
+        emit_reflection_enum_property(ctx, member_class_name, member.declaring_class_name.as_deref())?;
     }
     emit_reflection_member_flag_properties(ctx, member_class_name, member.flags)?;
     Ok(())
@@ -6143,13 +6380,23 @@ fn emit_reflection_owner_type_property(
     class_name: &str,
     type_metadata: Option<&ReflectionParameterTypeMetadata>,
 ) -> Result<()> {
+    emit_reflection_owner_type_property_by_name(ctx, class_name, "__type", type_metadata)
+}
+
+/// Writes one reflection owner's nullable type-like slot.
+fn emit_reflection_owner_type_property_by_name(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    property_name: &str,
+    type_metadata: Option<&ReflectionParameterTypeMetadata>,
+) -> Result<()> {
     let type_offset = {
         let class_info = ctx
             .module
             .class_infos
             .get(class_name)
             .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
-        reflection_property_offset(class_info, "__type")?
+        reflection_property_offset(class_info, property_name)?
     };
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
@@ -6579,24 +6826,6 @@ fn emit_reflection_owner_bool_property(
     let low_offset = reflection_property_offset(class_info, property_name)?;
     emit_reflection_int_property(ctx, i64::from(value), low_offset, low_offset + 8);
     Ok(())
-}
-
-/// Stores one boolean property on the current ReflectionClass object result.
-fn emit_reflection_bool_property(
-    ctx: &mut FunctionContext<'_>,
-    property_name: &str,
-    value: bool,
-) -> Result<()> {
-    emit_reflection_owner_bool_property(ctx, "ReflectionClass", property_name, value)
-}
-
-/// Stores one integer property on the current ReflectionClass object result.
-fn emit_reflection_int_property_by_name(
-    ctx: &mut FunctionContext<'_>,
-    property_name: &str,
-    value: i64,
-) -> Result<()> {
-    emit_reflection_owner_int_property(ctx, "ReflectionClass", property_name, value)
 }
 
 /// Stores one integer property on the current Reflection owner object result.

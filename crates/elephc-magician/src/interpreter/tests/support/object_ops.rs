@@ -639,6 +639,7 @@ impl FakeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let class_name = match owner_kind {
             EVAL_REFLECTION_OWNER_CLASS => "ReflectionClass",
+            EVAL_REFLECTION_OWNER_ENUM => "ReflectionEnum",
             EVAL_REFLECTION_OWNER_FUNCTION => "ReflectionFunction",
             EVAL_REFLECTION_OWNER_METHOD => "ReflectionMethod",
             EVAL_REFLECTION_OWNER_PROPERTY => "ReflectionProperty",
@@ -666,7 +667,10 @@ impl FakeOps {
         let is_anonymous = self.bool_value((flags & 2048) != 0)?;
         let modifiers_cell = self.int(modifiers as i64)?;
         let mut properties = vec![("__name".to_string(), name), ("__attrs".to_string(), attrs)];
-        if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
+        if matches!(
+            owner_kind,
+            EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_ENUM
+        ) {
             let (namespace_name, short_name) = reflection_name_parts(reflected_name);
             let has_namespace = !namespace_name.is_empty();
             let namespace_name = self.string(namespace_name)?;

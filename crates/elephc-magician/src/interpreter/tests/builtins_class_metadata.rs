@@ -3018,6 +3018,60 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionEnum exposes eval-declared enum cases and backing metadata.
+#[test]
+fn execute_program_reflects_eval_enum_owner_metadata() {
+    let program = parse_fragment(
+        br#"enum EvalReflectPure {
+    case Ready;
+    case Done;
+}
+enum EvalReflectBacked: string {
+    case Ready = "ready";
+    case Done = "done";
+}
+$pure = new ReflectionEnum("EvalReflectPure");
+echo $pure->getName(); echo ":";
+echo $pure->isEnum() ? "E" : "e"; echo ":";
+echo $pure->isBacked() ? "B" : "b"; echo ":";
+echo $pure->getBackingType() === null ? "N" : "n"; echo ":";
+echo $pure->hasCase("Ready") ? "R" : "r";
+echo $pure->hasCase("Missing") ? "M" : "m"; echo ":";
+$case = $pure->getCase("Done");
+echo $case->getName(); echo ":";
+echo $case->getEnum()->getName(); echo ":";
+$cases = $pure->getCases();
+echo count($cases); echo ":";
+echo $cases[0]->getName(); echo ":";
+echo $cases[1]->getEnum()->getName(); echo ":";
+$backed = new ReflectionEnum("EvalReflectBacked");
+$type = $backed->getBackingType();
+echo $backed->isBacked() ? "B" : "b"; echo ":";
+echo $type->getName(); echo ":";
+echo $type->isBuiltin() ? "I" : "i"; echo ":";
+$backed_case = $backed->getCase("Ready");
+echo $backed_case->getName(); echo ":";
+echo $backed_case->getBackingValue(); echo ":";
+echo $backed_case->getEnum()->isBacked() ? "E" : "e"; echo ":";
+$backed_cases = $backed->getCases();
+echo count($backed_cases); echo ":";
+echo $backed_cases[1]->getBackingValue(); echo ":";
+echo $backed_cases[0]->getEnum()->getBackingType()->getName();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "EvalReflectPure:E:b:N:Rm:Done:EvalReflectPure:2:Ready:EvalReflectPure:B:string:I:Ready:ready:E:2:done:string"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies unsupported attribute argument metadata remains name-visible but not materializable.
 #[test]
 fn execute_program_rejects_unsupported_class_attribute_args_metadata() {

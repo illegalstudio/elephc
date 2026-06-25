@@ -227,6 +227,9 @@ pub(in crate::interpreter) fn eval_reflection_owner_new_object(
         Some(EVAL_REFLECTION_OWNER_CLASS) => {
             eval_reflection_class_new(evaluated_args, context, values)
         }
+        Some(EVAL_REFLECTION_OWNER_ENUM) => {
+            eval_reflection_enum_new(evaluated_args, context, values)
+        }
         Some(EVAL_REFLECTION_OWNER_FUNCTION) => {
             eval_reflection_function_new(evaluated_args, context, values)
         }
@@ -403,6 +406,168 @@ pub(in crate::interpreter) fn eval_reflection_class_source_location_result(
     )
 }
 
+/// Handles eval-backed `ReflectionClass` scalar metadata methods.
+pub(in crate::interpreter) fn eval_reflection_class_basic_metadata_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) else {
+        return Ok(None);
+    };
+    let method_key = method_name.to_ascii_lowercase();
+    match method_key.as_str() {
+        "getname" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values.string(&metadata.resolved_name).map(Some)
+        }
+        "getshortname" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values
+                .string(&eval_reflection_short_name(&metadata.resolved_name))
+                .map(Some)
+        }
+        "getnamespacename" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values
+                .string(&eval_reflection_namespace_name(&metadata.resolved_name))
+                .map(Some)
+        }
+        "innamespace" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values
+                .bool_value(!eval_reflection_namespace_name(&metadata.resolved_name).is_empty())
+                .map(Some)
+        }
+        "getinterfacenames" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            eval_reflection_string_array_result(&metadata.interface_names, values).map(Some)
+        }
+        "gettraitnames" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            eval_reflection_string_array_result(&metadata.trait_names, values).map(Some)
+        }
+        "getparentclass" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            eval_reflection_related_class_result(
+                EVAL_REFLECTION_OWNER_CLASS,
+                metadata.parent_class_name.as_deref(),
+                true,
+                context,
+                values,
+            )
+            .map(Some)
+        }
+        "getconstructor" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            eval_reflection_constructor_object_result(
+                EVAL_REFLECTION_OWNER_CLASS,
+                &metadata.resolved_name,
+                true,
+                context,
+                values,
+            )
+            .map(Some)
+        }
+        "getmodifiers" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values.int(metadata.modifiers as i64).map(Some)
+        }
+        "isfinal" => eval_reflection_class_flag_result(
+            metadata.flags,
+            EVAL_REFLECTION_CLASS_FLAG_FINAL,
+            evaluated_args,
+            values,
+        ),
+        "isabstract" => eval_reflection_class_flag_result(
+            metadata.flags,
+            EVAL_REFLECTION_CLASS_FLAG_ABSTRACT,
+            evaluated_args,
+            values,
+        ),
+        "isinterface" => eval_reflection_class_flag_result(
+            metadata.flags,
+            EVAL_REFLECTION_CLASS_FLAG_INTERFACE,
+            evaluated_args,
+            values,
+        ),
+        "istrait" => eval_reflection_class_flag_result(
+            metadata.flags,
+            EVAL_REFLECTION_CLASS_FLAG_TRAIT,
+            evaluated_args,
+            values,
+        ),
+        "isenum" => eval_reflection_class_flag_result(
+            metadata.flags,
+            EVAL_REFLECTION_CLASS_FLAG_ENUM,
+            evaluated_args,
+            values,
+        ),
+        "isreadonly" => eval_reflection_class_flag_result(
+            metadata.flags,
+            EVAL_REFLECTION_CLASS_FLAG_READONLY,
+            evaluated_args,
+            values,
+        ),
+        "isanonymous" => eval_reflection_class_flag_result(
+            metadata.flags,
+            EVAL_REFLECTION_CLASS_FLAG_ANONYMOUS,
+            evaluated_args,
+            values,
+        ),
+        "isinstantiable" => eval_reflection_class_flag_result(
+            metadata.flags,
+            EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE,
+            evaluated_args,
+            values,
+        ),
+        "iscloneable" => eval_reflection_class_flag_result(
+            metadata.flags,
+            EVAL_REFLECTION_CLASS_FLAG_CLONEABLE,
+            evaluated_args,
+            values,
+        ),
+        "isiterable" | "isiterateable" => eval_reflection_class_flag_result(
+            metadata.flags,
+            EVAL_REFLECTION_CLASS_FLAG_ITERABLE,
+            evaluated_args,
+            values,
+        ),
+        "isinternal" => eval_reflection_class_flag_result(
+            metadata.flags,
+            EVAL_REFLECTION_CLASS_FLAG_INTERNAL,
+            evaluated_args,
+            values,
+        ),
+        "isuserdefined" => eval_reflection_class_flag_result(
+            metadata.flags,
+            EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED,
+            evaluated_args,
+            values,
+        ),
+        _ => Ok(None),
+    }
+}
+
+/// Returns one boolean ReflectionClass flag after validating a no-arg call.
+fn eval_reflection_class_flag_result(
+    flags: u64,
+    flag: u64,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    eval_reflection_bind_no_args(evaluated_args)?;
+    values.bool_value(flags & flag != 0).map(Some)
+}
+
 /// Handles eval-backed `ReflectionClass::hasMethod()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_has_method_result(
     identity: u64,
@@ -495,6 +660,94 @@ pub(in crate::interpreter) fn eval_reflection_class_has_constant_result(
     values
         .bool_value(constant_names.iter().any(|name| name == &constant_name))
         .map(Some)
+}
+
+/// Handles eval-backed `ReflectionEnum` methods that are not inherited from `ReflectionClass`.
+pub(in crate::interpreter) fn eval_reflection_enum_methods_result(
+    object: RuntimeCellHandle,
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !eval_reflection_object_has_class(object, "ReflectionEnum", values)? {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let Some(enum_name) = context.resolve_enum_name(&reflected_name) else {
+        return Ok(None);
+    };
+    match method_name.to_ascii_lowercase().as_str() {
+        "hascase" => {
+            let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
+            let requested_name = eval_reflection_string_arg(args[0], values)?;
+            let exists = context
+                .enum_decl(&enum_name)
+                .and_then(|enum_decl| enum_decl.case(&requested_name))
+                .is_some();
+            values.bool_value(exists).map(Some)
+        }
+        "getcase" => {
+            let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
+            let requested_name = eval_reflection_string_arg(args[0], values)?;
+            let owner_kind = eval_reflection_enum_case_owner_kind(&enum_name, context)?;
+            let result = eval_reflection_enum_case_object_result(
+                owner_kind,
+                &enum_name,
+                &requested_name,
+                context,
+                values,
+            )?;
+            Ok(Some(result))
+        }
+        "getcases" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            let (case_names, owner_kind) = {
+                let enum_decl = context.enum_decl(&enum_name).ok_or(EvalStatus::RuntimeFatal)?;
+                let case_names = enum_decl
+                    .cases()
+                    .iter()
+                    .map(|case| case.name().to_string())
+                    .collect::<Vec<_>>();
+                (case_names, eval_reflection_enum_case_owner_kind(&enum_name, context)?)
+            };
+            let mut result = values.array_new(case_names.len())?;
+            for (index, case_name) in case_names.iter().enumerate() {
+                let case_object = eval_reflection_enum_case_object_result(
+                    owner_kind, &enum_name, case_name, context, values,
+                )?;
+                let key = values.int(index as i64)?;
+                result = values.array_set(result, key, case_object)?;
+            }
+            Ok(Some(result))
+        }
+        "isbacked" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            let is_backed = context
+                .enum_decl(&enum_name)
+                .and_then(EvalEnum::backing_type)
+                .is_some();
+            values.bool_value(is_backed).map(Some)
+        }
+        "getbackingtype" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            let backing_type = context
+                .enum_decl(&enum_name)
+                .and_then(EvalEnum::backing_type);
+            let Some(backing_type) = backing_type else {
+                return values.null().map(Some);
+            };
+            let metadata = eval_reflection_enum_backing_type_metadata(backing_type);
+            eval_reflection_type_object_result(&metadata, values).map(Some)
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Handles eval-backed `ReflectionClass::getInterfaces()` and `getTraits()` calls.
@@ -1660,6 +1913,33 @@ pub(in crate::interpreter) fn eval_reflection_class_constant_to_string_result(
     values.string(&text).map(Some)
 }
 
+/// Handles `ReflectionEnumUnitCase::getEnum()` and `ReflectionEnumBackedCase::getEnum()`.
+pub(in crate::interpreter) fn eval_reflection_enum_case_get_enum_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("getEnum") {
+        return Ok(None);
+    }
+    eval_reflection_bind_no_args(evaluated_args)?;
+    let Some((declaring_class, _, owner_kind)) = context
+        .eval_reflection_class_constant(identity)
+        .map(|(class, constant, owner_kind)| (class.to_string(), constant.to_string(), owner_kind))
+    else {
+        return Ok(None);
+    };
+    if !matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
+    ) {
+        return Ok(None);
+    }
+    eval_reflection_enum_object_result(&declaring_class, context, values).map(Some)
+}
+
 /// Handles `ReflectionProperty::getRawValue()` and raw write calls.
 pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
     identity: u64,
@@ -2168,6 +2448,64 @@ fn eval_reflection_class_new(
         values,
     )
     .map(Some)
+}
+
+/// Builds an eval-backed `ReflectionEnum` object for a declared enum.
+fn eval_reflection_enum_new(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let args = bind_evaluated_function_args(&[String::from("class_name")], evaluated_args)?;
+    let class_name = eval_reflection_class_target_name(args[0], context, values)?;
+    let reflected_name = context
+        .resolve_enum_name(&class_name)
+        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    if context.enum_decl(&reflected_name).is_none() {
+        return if eval_reflection_class_like_exists(&reflected_name, context) {
+            Err(EvalStatus::RuntimeFatal)
+        } else {
+            Ok(None)
+        };
+    }
+    eval_reflection_enum_object_result(&reflected_name, context, values).map(Some)
+}
+
+/// Materializes one eval-backed `ReflectionEnum` owner object.
+fn eval_reflection_enum_object_result(
+    enum_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let reflected_name = context
+        .resolve_enum_name(enum_name)
+        .unwrap_or_else(|| enum_name.trim_start_matches('\\').to_string());
+    let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if !context.has_enum(&metadata.resolved_name) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_reflection_owner_object(
+        EVAL_REFLECTION_OWNER_ENUM,
+        &metadata.resolved_name,
+        &metadata.attributes,
+        &metadata.interface_names,
+        &metadata.trait_names,
+        &metadata.method_names,
+        &metadata.property_names,
+        metadata.parent_class_name.as_deref(),
+        &[],
+        None,
+        None,
+        metadata.flags,
+        metadata.modifiers,
+        0,
+        None,
+        None,
+        context,
+        values,
+    )
 }
 
 /// Resolves a ReflectionClass constructor target from a class-name string or object.
@@ -3212,28 +3550,54 @@ fn eval_reflection_enum_case_new(
     }
     let case_name = eval_reflection_string_arg(args[1], values)?;
     let declaring_class_name = enum_decl.name().to_string();
+    eval_reflection_enum_case_object_result(
+        owner_kind,
+        &declaring_class_name,
+        &case_name,
+        context,
+        values,
+    )
+    .map(Some)
+}
+
+/// Builds one eval-backed enum-case reflection owner object.
+fn eval_reflection_enum_case_object_result(
+    owner_kind: u64,
+    enum_name: &str,
+    case_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (declaring_class_name, attributes, is_backed) = {
+        let enum_decl = context.enum_decl(enum_name).ok_or(EvalStatus::RuntimeFatal)?;
+        let case = enum_decl.case(case_name).ok_or(EvalStatus::RuntimeFatal)?;
+        (
+            enum_decl.name().to_string(),
+            case.attributes().to_vec(),
+            enum_decl.backing_type().is_some(),
+        )
+    };
+    if owner_kind == EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE && !is_backed {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     let case_value = context
-        .enum_case(&declaring_class_name, &case_name)
+        .enum_case(&declaring_class_name, case_name)
         .ok_or(EvalStatus::RuntimeFatal)?;
     let backing_value = if owner_kind == EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE {
         Some(
             context
-                .enum_case_value(&declaring_class_name, &case_name)
+                .enum_case_value(&declaring_class_name, case_name)
                 .ok_or(EvalStatus::RuntimeFatal)?,
         )
     } else {
         None
     };
-    let attributes = enum_decl
-        .case(&case_name)
-        .map(|case| case.attributes().to_vec())
-        .ok_or(EvalStatus::RuntimeFatal)?;
     let flags = eval_reflection_member_flags(EvalVisibility::Public, false, false, false, false)
         | EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE;
     let modifiers = eval_reflection_class_constant_modifiers(EvalVisibility::Public, false);
     eval_reflection_owner_object(
         owner_kind,
-        &case_name,
+        case_name,
         &attributes,
         &[],
         &[],
@@ -3251,7 +3615,34 @@ fn eval_reflection_enum_case_new(
         context,
         values,
     )
-    .map(Some)
+}
+
+/// Selects the concrete enum-case reflector class for one enum.
+fn eval_reflection_enum_case_owner_kind(
+    enum_name: &str,
+    context: &ElephcEvalContext,
+) -> Result<u64, EvalStatus> {
+    let enum_decl = context.enum_decl(enum_name).ok_or(EvalStatus::RuntimeFatal)?;
+    Ok(if enum_decl.backing_type().is_some() {
+        EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
+    } else {
+        EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE
+    })
+}
+
+/// Builds `ReflectionNamedType` metadata for an enum backing type.
+fn eval_reflection_enum_backing_type_metadata(
+    backing_type: EvalEnumBackingType,
+) -> EvalReflectionParameterTypeMetadata {
+    let name = match backing_type {
+        EvalEnumBackingType::Int => "int",
+        EvalEnumBackingType::String => "string",
+    };
+    EvalReflectionParameterTypeMetadata {
+        kind: EvalReflectionParameterTypeKind::Named(eval_reflection_builtin_named_type(
+            name, false,
+        )),
+    }
 }
 
 /// Materializes one Reflection owner object and transfers the temporary attribute array.
@@ -3433,7 +3824,10 @@ fn eval_reflection_owner_object_with_members(
         backing_value_cell,
         constructor,
     )?;
-    if owner_kind == EVAL_REFLECTION_OWNER_CLASS {
+    if matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_ENUM
+    ) {
         let identity = values.object_identity(object)?;
         context.register_eval_reflection_class(identity, reflected_name);
     } else if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
@@ -3723,7 +4117,9 @@ fn eval_reflection_class_object_map_result(
 /// Maps a synthetic reflection owner kind to PHP's `Attribute::TARGET_*` bitmask.
 fn eval_reflection_attribute_target(owner_kind: u64) -> u64 {
     match owner_kind {
-        EVAL_REFLECTION_OWNER_CLASS => EVAL_REFLECTION_ATTRIBUTE_TARGET_CLASS,
+        EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_ENUM => {
+            EVAL_REFLECTION_ATTRIBUTE_TARGET_CLASS
+        }
         EVAL_REFLECTION_OWNER_FUNCTION => EVAL_REFLECTION_ATTRIBUTE_TARGET_FUNCTION,
         EVAL_REFLECTION_OWNER_METHOD => EVAL_REFLECTION_ATTRIBUTE_TARGET_METHOD,
         EVAL_REFLECTION_OWNER_PROPERTY => EVAL_REFLECTION_ATTRIBUTE_TARGET_PROPERTY,
@@ -4582,6 +4978,7 @@ fn eval_reflection_class_like_is_internal(class_name: &str) -> bool {
             | "reflectionattribute"
             | "reflectionclass"
             | "reflectionclassconstant"
+            | "reflectionenum"
             | "reflectionenumbackedcase"
             | "reflectionenumunitcase"
             | "reflectionexception"
@@ -7296,6 +7693,7 @@ fn reflection_owner_kind(class_name: &str) -> Option<u64> {
         .as_str()
     {
         "reflectionclass" => Some(EVAL_REFLECTION_OWNER_CLASS),
+        "reflectionenum" => Some(EVAL_REFLECTION_OWNER_ENUM),
         "reflectionfunction" => Some(EVAL_REFLECTION_OWNER_FUNCTION),
         "reflectionmethod" => Some(EVAL_REFLECTION_OWNER_METHOD),
         "reflectionproperty" => Some(EVAL_REFLECTION_OWNER_PROPERTY),

@@ -1106,6 +1106,7 @@ fn lower_builtin_reflection_methods(
     for class_name in [
         "ReflectionAttribute",
         "ReflectionClass",
+        "ReflectionEnum",
         "ReflectionClassConstant",
         "ReflectionEnumBackedCase",
         "ReflectionEnumUnitCase",
