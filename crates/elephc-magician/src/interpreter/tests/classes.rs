@@ -981,8 +981,20 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
             "private __toString",
         ),
         (
+            br#"class EvalBadToStringReturn { public function __toString(): int { return 1; } }"#.as_slice(),
+            "bad __toString return type",
+        ),
+        (
             br#"class EvalBadGet { protected function __get($name) { return "x"; } }"#.as_slice(),
             "protected __get",
+        ),
+        (
+            br#"class EvalBadIssetReturn { public function __isset($name): string { return "yes"; } }"#.as_slice(),
+            "bad __isset return type",
+        ),
+        (
+            br#"class EvalBadUnsetReturn { public function __unset($name): int { return 1; } }"#.as_slice(),
+            "bad __unset return type",
         ),
         (
             br#"class EvalBadCall { public function __call($name, ...$args) { return "x"; } }"#.as_slice(),
@@ -999,6 +1011,10 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
         (
             br#"class EvalBadClone { public static function __clone() {} }"#.as_slice(),
             "static __clone",
+        ),
+        (
+            br#"class EvalBadCloneReturn { public function __clone(): int {} }"#.as_slice(),
+            "bad __clone return type",
         ),
         (
             br#"class EvalBadDestruct { public static function __destruct() {} }"#.as_slice(),

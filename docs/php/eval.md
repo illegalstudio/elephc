@@ -168,7 +168,7 @@ Eval-declared objects in string contexts dispatch through public
 parameterless `__toString()` for `echo`, `print`, concatenation, `strval()`,
 callable `strval()` dispatch, and weak `string` parameter coercion. Classes
 with a compatible `__toString()` satisfy `Stringable` implicitly.
-Eval validates magic method staticness, visibility, and arity contracts for
+Eval validates magic method staticness, visibility, arity, and relevant declared return-type contracts for
 `__toString()`, `__get()`, `__set()`, `__isset()`, `__unset()`, `__call()`,
 `__callStatic()`, `__invoke()`, `__clone()`, `__destruct()`, and `__construct()`
 when dynamic classes or traits are declared.
@@ -673,7 +673,8 @@ bridge slice. By-reference parameters and broader parameter/return ABI
 shapes are still outside those bridge paths.
 
 Eval class support is still smaller than the full static class system. The main
-remaining class-system gaps are broader reflection APIs beyond the supported
+remaining class-system gaps are eval-declared `__destruct()` execution on
+dynamic-object release, broader reflection APIs beyond the supported
 ReflectionClass/Function/Method/Parameter/Property/NamedType/UnionType/IntersectionType
 and attribute slice, Reflection type APIs beyond retained parameter, generated
 property, and function/method return metadata, broader
@@ -684,7 +685,7 @@ object-valued generated defaults beyond the positional
 non-by-reference scalar/nullable-int/Mixed/array/iterable/object parameter slice plus scalar/nullable-int/Mixed/array/iterable/object returns and
 `__clone()` hooks. Generated/AOT method type
 metadata, by-reference and variadic parameter flags, and generated/AOT
-method/property/class-constant attributes are exposed for registered metadata slices, while
+class/method/property/class-constant attributes are exposed for registered metadata slices, while
 unsupported bridge shapes remain metadata-only rather than invocable through
 eval.
 

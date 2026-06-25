@@ -7371,19 +7371,38 @@ echo EvalMagicStaticBox::Hidden("C", name: "D");');
 /// Verifies eval rejects invalid magic method contracts during dynamic class declaration.
 #[test]
 fn test_eval_rejects_invalid_magic_method_contracts() {
-    let err = compile_and_run_expect_failure(
-        r#"<?php
-eval('class EvalInvalidMagic {
+    let cases = [
+        r#"eval('class EvalInvalidMagic {
     public function __call($method, ...$args) {
         return "bad";
     }
-}');
-"#,
-    );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}');"#,
+        r#"eval('class EvalInvalidToStringReturn {
+    public function __toString(): int {
+        return 1;
+    }
+}');"#,
+        r#"eval('class EvalInvalidIssetReturn {
+    public function __isset($name): string {
+        return "yes";
+    }
+}');"#,
+        r#"eval('class EvalInvalidUnsetReturn {
+    public function __unset($name): int {
+        return 1;
+    }
+}');"#,
+        r#"eval('class EvalInvalidCloneReturn {
+    public function __clone(): int {}
+}');"#,
+    ];
+    for source in cases {
+        let err = compile_and_run_expect_failure(&format!("<?php\n{source}\n"));
+        assert!(
+            err.contains("Fatal error: eval() runtime failed"),
+            "stderr did not contain eval runtime fatal diagnostic: {err}"
+        );
+    }
 }
 
 /// Verifies eval object-method callable arrays bind named arguments.
