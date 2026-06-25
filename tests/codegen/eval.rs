@@ -7398,6 +7398,18 @@ eval('readonly class EvalReadonlyStaticPropertyBox {
         "stderr did not contain eval runtime fatal diagnostic: {static_err}"
     );
 
+    let untyped_err = compile_and_run_expect_failure(
+        r#"<?php
+eval('readonly class EvalReadonlyUntypedPropertyBox {
+    public $id;
+}');
+"#,
+    );
+    assert!(
+        untyped_err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {untyped_err}"
+    );
+
     let err = compile_and_run_expect_failure(
         r#"<?php
 eval('readonly class EvalReadonlyClassFailBox {
