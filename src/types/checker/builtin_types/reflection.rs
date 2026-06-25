@@ -3639,6 +3639,16 @@ fn builtin_reflection_owner_class(
         name,
         "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
     ) {
+        properties.push(builtin_property(
+            "__string",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        methods.push(builtin_reflection_class_string_method(
+            "__toString",
+            "__string",
+        ));
         methods.push(builtin_reflection_constant_false_bool_method(
             "isDeprecated",
         ));

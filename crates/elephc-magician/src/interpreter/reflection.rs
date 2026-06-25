@@ -1625,6 +1625,41 @@ pub(in crate::interpreter) fn eval_reflection_property_to_string_result(
     values.string(&text).map(Some)
 }
 
+/// Handles eval-backed `ReflectionClassConstant` and enum-case `__toString()` calls.
+pub(in crate::interpreter) fn eval_reflection_class_constant_to_string_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("__toString") {
+        return Ok(None);
+    }
+    let Some((declaring_class, constant_name, owner_kind)) =
+        context
+            .eval_reflection_class_constant(identity)
+            .map(|(declaring_class, constant_name, owner_kind)| {
+                (
+                    declaring_class.to_string(),
+                    constant_name.to_string(),
+                    owner_kind,
+                )
+            })
+    else {
+        return Ok(None);
+    };
+    eval_reflection_bind_no_args(evaluated_args)?;
+    let text = eval_reflection_class_constant_to_string(
+        &declaring_class,
+        &constant_name,
+        owner_kind,
+        context,
+        values,
+    )?;
+    values.string(&text).map(Some)
+}
+
 /// Handles `ReflectionProperty::getRawValue()` and raw write calls.
 pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
     identity: u64,
@@ -3424,6 +3459,21 @@ fn eval_reflection_owner_object_with_members(
                 );
             }
         }
+    } else if matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_CLASS_CONSTANT
+            | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE
+            | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
+    ) {
+        if let Some(declaring_class) = parent_class_name {
+            let identity = values.object_identity(object)?;
+            context.register_eval_reflection_class_constant(
+                identity,
+                declaring_class,
+                reflected_name,
+                owner_kind,
+            );
+        }
     }
     values.release(attrs)?;
     values.release(interface_names_array)?;
@@ -4687,6 +4737,74 @@ fn eval_reflection_property_to_string(
             .unwrap_or_default()
     };
     format!("Property [ {}{} ]", parts.join(" "), default)
+}
+
+/// Formats one class constant or enum case like PHP's `ReflectionClassConstant::__toString()`.
+fn eval_reflection_class_constant_to_string(
+    declaring_class: &str,
+    constant_name: &str,
+    owner_kind: u64,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let (_, _, visibility, is_final, is_enum_case) =
+        eval_reflection_class_constant_metadata(declaring_class, constant_name, context, values)?
+            .ok_or(EvalStatus::RuntimeFatal)?;
+    let value = eval_reflection_constant_value(declaring_class, constant_name, context, values)?
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let mut parts = Vec::new();
+    if is_final {
+        parts.push(String::from("final"));
+    }
+    parts.push(eval_reflection_visibility_label(visibility).to_string());
+    parts.push(eval_reflection_class_constant_type_label(
+        declaring_class,
+        value,
+        is_enum_case
+            || matches!(
+                owner_kind,
+                EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
+            ),
+        values,
+    )?);
+    parts.push(constant_name.to_string());
+    let value = eval_reflection_class_constant_display_value(value, values)?;
+    Ok(format!("Constant [ {} ] {{ {} }}\n", parts.join(" "), value))
+}
+
+/// Returns the type label PHP prints for a reflected class constant value.
+fn eval_reflection_class_constant_type_label(
+    declaring_class: &str,
+    value: RuntimeCellHandle,
+    is_enum_case: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    if is_enum_case {
+        return Ok(declaring_class.trim_start_matches('\\').to_string());
+    }
+    Ok(match values.type_tag(value)? {
+        EVAL_TAG_INT => String::from("int"),
+        EVAL_TAG_STRING => String::from("string"),
+        EVAL_TAG_FLOAT => String::from("float"),
+        EVAL_TAG_BOOL => String::from("bool"),
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => String::from("array"),
+        EVAL_TAG_OBJECT => String::from("object"),
+        EVAL_TAG_NULL => String::from("null"),
+        _ => String::from("mixed"),
+    })
+}
+
+/// Returns the value display PHP prints inside ReflectionClassConstant braces.
+fn eval_reflection_class_constant_display_value(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    Ok(match values.type_tag(value)? {
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => String::from("Array"),
+        EVAL_TAG_OBJECT => String::from("Object"),
+        EVAL_TAG_NULL => String::new(),
+        _ => String::from_utf8_lossy(&values.string_bytes(value)?).into_owned(),
+    })
 }
 
 /// Returns PHP's lowercase label for one reflected visibility.

@@ -383,6 +383,7 @@ pub struct ElephcEvalContext {
     eval_reflection_methods: HashMap<u64, (String, String)>,
     eval_reflection_properties: HashMap<u64, (String, String)>,
     eval_dynamic_reflection_properties: HashSet<u64>,
+    eval_reflection_class_constants: HashMap<u64, (String, String, u64)>,
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
     class_stack: Vec<String>,
@@ -442,6 +443,7 @@ impl ElephcEvalContext {
             eval_reflection_methods: HashMap::new(),
             eval_reflection_properties: HashMap::new(),
             eval_dynamic_reflection_properties: HashSet::new(),
+            eval_reflection_class_constants: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
             class_stack: Vec::new(),
@@ -502,6 +504,7 @@ impl ElephcEvalContext {
             eval_reflection_methods: HashMap::new(),
             eval_reflection_properties: HashMap::new(),
             eval_dynamic_reflection_properties: HashSet::new(),
+            eval_reflection_class_constants: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
             class_stack: Vec::new(),
@@ -1130,6 +1133,31 @@ impl ElephcEvalContext {
     /// Returns whether a synthetic ReflectionProperty represents a dynamic property.
     pub fn eval_reflection_property_is_dynamic(&self, identity: u64) -> bool {
         self.eval_dynamic_reflection_properties.contains(&identity)
+    }
+
+    /// Records reflected class constant or enum case metadata for one synthetic object.
+    pub fn register_eval_reflection_class_constant(
+        &mut self,
+        identity: u64,
+        declaring_class: &str,
+        constant_name: &str,
+        owner_kind: u64,
+    ) {
+        self.eval_reflection_class_constants.insert(
+            identity,
+            (
+                declaring_class.trim_start_matches('\\').to_string(),
+                constant_name.to_string(),
+                owner_kind,
+            ),
+        );
+    }
+
+    /// Returns the declaring class, name, and reflection owner kind for a synthetic constant.
+    pub fn eval_reflection_class_constant(&self, identity: u64) -> Option<(&str, &str, u64)> {
+        self.eval_reflection_class_constants
+            .get(&identity)
+            .map(|(class, constant, owner_kind)| (class.as_str(), constant.as_str(), *owner_kind))
     }
 
     /// Returns eval-declared class metadata from parent to child for construction.
