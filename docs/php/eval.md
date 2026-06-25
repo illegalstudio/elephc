@@ -175,10 +175,11 @@ when dynamic classes or traits are declared.
 Member
 visibility is checked at runtime for eval-declared objects and
 static/class-constant accesses. Class-level attributes declared on eval classes,
-interfaces, traits, and enums are visible through `class_attribute_names()`,
-`class_attribute_args()`, and `class_get_attributes()` when their arguments are
-supported literal positional values (`string`, `int`, `bool`, `null`, or negated
-integer literals). `ReflectionAttribute::newInstance()` instantiates
+interfaces, traits, and enums, plus bridge-registered generated/AOT class-level
+attributes, are visible through `class_attribute_names()`,
+`class_attribute_args()`, and `class_get_attributes()` when their arguments fit
+the supported literal positional subset (`string`, `int`, `bool`, `null`, or
+negated integer literals). `ReflectionAttribute::newInstance()` instantiates
 eval-declared or bridge-supported generated/AOT attribute classes from those
 materialized attributes, and `ReflectionAttribute::getTarget()` /
 `isRepeated()` report the reflected owner target and same-owner repetition
@@ -189,10 +190,13 @@ Private parent properties shadowed by same-named child properties use separate
 runtime storage, so parent methods keep seeing the private parent value while
 child methods and public access see the child property.
 `ReflectionClass::getAttributes()`, `ReflectionMethod::getAttributes()`,
-`ReflectionProperty::getAttributes()`, and `ReflectionParameter::getAttributes()`
-expose eval-retained class, method, property, and method-parameter attributes
-for eval-declared class-like symbols when their arguments fit the same literal
-subset, and `getName()` returns the reflected class, member, or parameter name
+`ReflectionProperty::getAttributes()`, `ReflectionClassConstant::getAttributes()`,
+and `ReflectionParameter::getAttributes()` expose eval-retained class, method,
+property, class-constant, and method-parameter attributes for eval-declared
+class-like symbols and bridge-registered generated/AOT class-level, method,
+property, and class-constant attributes when their arguments fit the same
+literal subset, and `getName()` returns the reflected class, member, or
+parameter name
 for those owners. `ReflectionClass`, `ReflectionFunction`, `ReflectionMethod`,
 `ReflectionProperty`, `ReflectionClassConstant`, `ReflectionEnumUnitCase`, and
 `ReflectionEnumBackedCase` expose `getDocComment()` and report `false` because

@@ -25,6 +25,7 @@ pub(crate) const NATIVE_DEFAULT_EMPTY_ARRAY: u64 = 4;
 const NATIVE_MEMBER_ATTRIBUTE_METHOD: u8 = 0;
 const NATIVE_MEMBER_ATTRIBUTE_PROPERTY: u8 = 1;
 const NATIVE_MEMBER_ATTRIBUTE_CLASS_CONSTANT: u8 = 2;
+const NATIVE_MEMBER_ATTRIBUTE_CLASS: u8 = 3;
 const NATIVE_ATTRIBUTE_ARGS_UNSUPPORTED: u8 = 0;
 const NATIVE_ATTRIBUTE_ARGS_SUPPORTED: u8 = 1;
 const NATIVE_ATTRIBUTE_ARG_NULL: u8 = 0;
@@ -817,7 +818,7 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_default_string(
     .unwrap_or(0)
 }
 
-/// Registers one generated native PHP method/property attribute in an eval context.
+/// Registers one generated native PHP class/member attribute in an eval context.
 ///
 /// # Safety
 /// `ctx` must be a valid eval context handle. `record_ptr` must point to one
@@ -1633,23 +1634,35 @@ unsafe fn register_native_member_attribute_inner(
     let Some(record) = native_member_attribute_record_from_abi(record_ptr, record_len) else {
         return 0;
     };
-    let Some((class_name, member_name)) = split_method_key(&record.member_key) else {
-        return 0;
-    };
     match record.owner_kind {
-        NATIVE_MEMBER_ATTRIBUTE_METHOD => i32::from(context.define_native_method_attribute(
-            class_name,
-            member_name,
-            record.attribute,
-        )),
-        NATIVE_MEMBER_ATTRIBUTE_PROPERTY => i32::from(context.define_native_property_attribute(
-            class_name,
-            member_name,
-            record.attribute,
-        )),
-        NATIVE_MEMBER_ATTRIBUTE_CLASS_CONSTANT => i32::from(
-            context.define_native_constant_attribute(class_name, member_name, record.attribute),
-        ),
+        NATIVE_MEMBER_ATTRIBUTE_CLASS => {
+            i32::from(context.define_native_class_attribute(&record.member_key, record.attribute))
+        }
+        NATIVE_MEMBER_ATTRIBUTE_METHOD
+        | NATIVE_MEMBER_ATTRIBUTE_PROPERTY
+        | NATIVE_MEMBER_ATTRIBUTE_CLASS_CONSTANT => {
+            let Some((class_name, member_name)) = split_method_key(&record.member_key) else {
+                return 0;
+            };
+            match record.owner_kind {
+                NATIVE_MEMBER_ATTRIBUTE_METHOD => i32::from(context.define_native_method_attribute(
+                    class_name,
+                    member_name,
+                    record.attribute,
+                )),
+                NATIVE_MEMBER_ATTRIBUTE_PROPERTY => i32::from(
+                    context.define_native_property_attribute(class_name, member_name, record.attribute),
+                ),
+                NATIVE_MEMBER_ATTRIBUTE_CLASS_CONSTANT => {
+                    i32::from(context.define_native_constant_attribute(
+                        class_name,
+                        member_name,
+                        record.attribute,
+                    ))
+                }
+                _ => 0,
+            }
+        }
         _ => 0,
     }
 }

@@ -9048,6 +9048,51 @@ echo "E" . count($caseAttrs) . ":" . $caseAttrs[0]->getArguments()[0];
     );
 }
 
+/// Verifies eval class-attribute helpers expose generated/AOT class attributes.
+#[test]
+fn test_eval_reflection_class_exposes_aot_attributes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotClassAttr {
+    public string $name = "";
+    public int $value = 0;
+
+    public function __construct(string $name, int $value = 0) {
+        $this->name = $name;
+        $this->value = $value;
+    }
+
+    public function label(): string {
+        return $this->name . ":" . $this->value;
+    }
+}
+#[EvalAotClassAttr("class", 1), EvalAotClassAttr("again", 2)]
+class EvalAotClassAttrTarget {}
+echo eval('$names = class_attribute_names("EvalAotClassAttrTarget");
+echo count($names) . ":" . $names[0] . ":" . $names[1] . ":";
+$args = class_attribute_args("evalaotclassattrtarget", "EvalAotClassAttr");
+echo count($args) . ":" . $args[0] . ":" . $args[1] . ":";
+$attrs = class_get_attributes("EvalAotClassAttrTarget");
+echo count($attrs) . ":" . $attrs[0]->getName() . ":";
+echo ($attrs[0]->isRepeated() ? "R" : "r") . ":";
+echo $attrs[0]->getArguments()[0] . ":" . $attrs[0]->getArguments()[1] . ":";
+echo $attrs[0]->getTarget() . ":" . $attrs[0]->newInstance()->label() . ":";
+$refAttrs = (new ReflectionClass("EvalAotClassAttrTarget"))->getAttributes();
+echo count($refAttrs) . ":" . $refAttrs[1]->getArguments()[0] . ":";
+echo $refAttrs[1]->newInstance()->label();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "2:EvalAotClassAttr:EvalAotClassAttr:2:class:1:2:EvalAotClassAttr:R:class:1:1:class:1:2:again:again:2"
+    );
+}
+
 /// Verifies eval ReflectionAttribute::newInstance constructs generated/AOT attribute classes.
 #[test]
 fn test_eval_reflection_attribute_new_instance_constructs_aot_attribute() {

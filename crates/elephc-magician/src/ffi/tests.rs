@@ -732,6 +732,12 @@ fn register_native_member_attribute_records_metadata() {
         "Limit",
         Some(&[EvalAttributeArg::Int(100)]),
     );
+    let class_record = native_member_attribute_record(
+        3,
+        "KnownClass",
+        "Entity",
+        Some(&[EvalAttributeArg::String("model".to_string())]),
+    );
     let invalid_record = [99, 0, 0, 0, 0];
 
     let method_registered = unsafe {
@@ -753,6 +759,13 @@ fn register_native_member_attribute_records_metadata() {
             &mut ctx,
             constant_record.as_ptr(),
             constant_record.len() as u64,
+        )
+    };
+    let class_registered = unsafe {
+        __elephc_eval_register_native_member_attribute(
+            &mut ctx,
+            class_record.as_ptr(),
+            class_record.len() as u64,
         )
     };
     let invalid_registered = unsafe {
@@ -791,6 +804,14 @@ fn register_native_member_attribute_records_metadata() {
     assert_eq!(
         constant_attributes[0].args(),
         Some([EvalAttributeArg::Int(100)].as_slice())
+    );
+    assert_eq!(class_registered, 1);
+    let class_attributes = ctx.native_class_attributes("knownclass");
+    assert_eq!(class_attributes.len(), 1);
+    assert_eq!(class_attributes[0].name(), "Entity");
+    assert_eq!(
+        class_attributes[0].args(),
+        Some([EvalAttributeArg::String("model".to_string())].as_slice())
     );
     assert_eq!(invalid_registered, 0);
 }
