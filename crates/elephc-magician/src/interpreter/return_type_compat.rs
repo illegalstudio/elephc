@@ -1,15 +1,51 @@
 //! Purpose:
-//! Validates covariant return type compatibility for eval-declared methods.
-//! This keeps class/interface signature checks out of the statement dispatcher.
+//! Validates method type compatibility for eval-declared method signatures.
+//! This keeps class/interface parameter contravariance and return covariance
+//! checks out of the statement dispatcher.
 //!
 //! Called from:
 //! - `crate::interpreter::statements` while registering eval class-like declarations.
 //!
 //! Key details:
 //! - `self`, `parent`, and `static` are resolved relative to the declaration owner.
+//! - Parameter checks reverse the return-type relation because PHP parameters are contravariant.
 //! - Pending class declarations are checked before they are registered in the eval context.
 
 use super::*;
+
+/// Returns whether an implementation can accept every required declared parameter type.
+pub(super) fn method_parameter_type_signature_accepts(
+    implementation_types: &[Option<EvalParameterType>],
+    implementation_variadics: &[bool],
+    implementation_owner: &str,
+    required_types: &[Option<EvalParameterType>],
+    required_variadics: &[bool],
+    required_owner: &str,
+    required_param_count: usize,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+) -> bool {
+    (0..required_param_count).all(|position| {
+        let implementation_type = method_signature_effective_parameter_type(
+            implementation_types,
+            implementation_variadics,
+            position,
+        );
+        let required_type = method_signature_effective_parameter_type(
+            required_types,
+            required_variadics,
+            position,
+        );
+        eval_parameter_type_accepts(
+            implementation_type,
+            implementation_owner,
+            required_type,
+            required_owner,
+            pending_class,
+            context,
+        )
+    })
+}
 
 /// Returns whether a method preserves the required declared return type contract.
 pub(super) fn method_return_type_signature_accepts(
@@ -33,6 +69,45 @@ pub(super) fn method_return_type_signature_accepts(
             context,
         )
     })
+}
+
+/// Returns the parameter type that applies at one source-order argument position.
+fn method_signature_effective_parameter_type<'a>(
+    parameter_types: &'a [Option<EvalParameterType>],
+    variadics: &[bool],
+    position: usize,
+) -> Option<&'a EvalParameterType> {
+    if let Some(variadic_index) = variadics.iter().position(|is_variadic| *is_variadic) {
+        if position >= variadic_index {
+            return parameter_types
+                .get(variadic_index)
+                .and_then(Option::as_ref);
+        }
+    }
+    parameter_types.get(position).and_then(Option::as_ref)
+}
+
+/// Returns whether an implementation parameter type is a PHP contravariant supertype.
+fn eval_parameter_type_accepts(
+    implementation_type: Option<&EvalParameterType>,
+    implementation_owner: &str,
+    required_type: Option<&EvalParameterType>,
+    required_owner: &str,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+) -> bool {
+    match (implementation_type, required_type) {
+        (None, _) => true,
+        (Some(implementation_type), None) => eval_type_is_mixed(implementation_type),
+        (Some(implementation_type), Some(required_type)) => eval_return_type_accepts(
+            implementation_type,
+            implementation_owner,
+            required_type,
+            required_owner,
+            pending_class,
+            context,
+        ),
+    }
 }
 
 /// Returns whether `actual_type` is a covariant subtype of `expected_type`.
@@ -90,11 +165,13 @@ fn eval_return_type_accepts(
 /// Returns whether a return type can produce PHP null, including standalone `mixed`.
 fn eval_return_type_allows_null(return_type: &EvalParameterType) -> bool {
     return_type.allows_null()
-        || (!return_type.is_intersection()
-            && return_type
-                .variants()
-                .iter()
-                .any(|variant| matches!(variant, EvalParameterTypeVariant::Mixed)))
+        || eval_type_is_mixed(return_type)
+}
+
+/// Returns whether one retained type is PHP's standalone `mixed` atom.
+fn eval_type_is_mixed(parameter_type: &EvalParameterType) -> bool {
+    !parameter_type.is_intersection()
+        && matches!(parameter_type.variants(), [EvalParameterTypeVariant::Mixed])
 }
 
 /// Returns whether a return type is exactly PHP `never`.

@@ -1613,6 +1613,16 @@ fn class_method_signature_accepts(
         required.parameter_defaults(),
         required.parameter_is_by_ref(),
         required.parameter_is_variadic(),
+    ) && method_parameter_type_signature_accepts(
+        method.parameter_types(),
+        method.parameter_is_variadic(),
+        method_owner,
+        required.parameter_types(),
+        required.parameter_is_variadic(),
+        required_owner,
+        required.params().len(),
+        pending_class,
+        context,
     ) && method_return_type_signature_accepts(
         method.return_type(),
         method_owner,
@@ -1924,6 +1934,16 @@ fn class_method_satisfies_interface_signature(
         requirement.parameter_defaults(),
         requirement.parameter_is_by_ref(),
         requirement.parameter_is_variadic(),
+    ) && method_parameter_type_signature_accepts(
+        method.parameter_types(),
+        method.parameter_is_variadic(),
+        method_owner,
+        requirement.parameter_types(),
+        requirement.parameter_is_variadic(),
+        requirement_owner,
+        requirement.params().len(),
+        pending_class,
+        context,
     ) && method_return_type_signature_accepts(
         method.return_type(),
         method_owner,

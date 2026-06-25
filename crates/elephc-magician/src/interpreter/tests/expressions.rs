@@ -912,6 +912,84 @@ class EvalArityChild extends EvalArityBase {
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies eval accepts PHP-contravariant method parameter type overrides.
+#[test]
+fn execute_program_accepts_contravariant_method_parameter_type_overrides() {
+    let program = parse_fragment(
+        br#"class EvalParamBase {
+    public function anyInt(int $value) { return $value; }
+    public function maybeInt(int $value) { return $value; }
+    public function untypedInt(int $value) { return $value; }
+}
+class EvalParamChild extends EvalParamBase {
+    public function anyInt(mixed $value) { return $value . ":mixed"; }
+    public function maybeInt(?int $value) { return $value; }
+    public function untypedInt($value) { return $value; }
+}
+$child = new EvalParamChild();
+echo $child->anyInt(7); echo ":";
+echo $child->untypedInt("ok");
+return $child->maybeInt(null) === null;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "7:mixed:ok");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval rejects method parameter overrides that narrow PHP's accepted type set.
+#[test]
+fn execute_program_rejects_incompatible_method_parameter_type_overrides() {
+    let incompatible_type = parse_fragment(
+        br#"class EvalParamTypeBase {
+    public function read(int $value) { return $value; }
+}
+class EvalParamStringChild extends EvalParamTypeBase {
+    public function read(string $value) { return $value; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&incompatible_type, &mut scope, &mut values)
+        .expect_err("incompatible parameter override type should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let narrower_nullable = parse_fragment(
+        br#"class EvalParamNullableBase {
+    public function maybe(?int $value) { return $value; }
+}
+class EvalParamNonNullChild extends EvalParamNullableBase {
+    public function maybe(int $value) { return $value; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&narrower_nullable, &mut scope, &mut values)
+        .expect_err("narrower nullable parameter override type should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let untyped_to_typed = parse_fragment(
+        br#"class EvalParamUntypedBase {
+    public function read($value) { return $value; }
+}
+class EvalParamTypedChild extends EvalParamUntypedBase {
+    public function read(int $value) { return $value; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&untyped_to_typed, &mut scope, &mut values)
+        .expect_err("typed parameter override of untyped parent should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval accepts covariant method return type overrides.
 #[test]
 fn execute_program_accepts_covariant_method_return_type_overrides() {
@@ -1185,6 +1263,64 @@ class EvalWiderReturnImpl implements EvalNeedsStringReturn {
     let mut values = FakeOps::default();
     let err = execute_program(&wider_return, &mut scope, &mut values)
         .expect_err("wider interface return type should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies eval accepts PHP-contravariant parameter types for interface contracts.
+#[test]
+fn execute_program_accepts_contravariant_interface_method_parameter_types() {
+    let program = parse_fragment(
+        br#"interface EvalParamContract {
+    function read(int $value);
+}
+class EvalParamContractReader implements EvalParamContract {
+    public function read(mixed $value) {
+        return $value . ":ok";
+    }
+}
+$reader = new EvalParamContractReader();
+return $reader->read(8);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::String("8:ok".to_string()));
+}
+
+/// Verifies eval rejects interface implementations with incompatible parameter types.
+#[test]
+fn execute_program_rejects_incompatible_interface_method_parameter_types() {
+    let incompatible_type = parse_fragment(
+        br#"interface EvalParamStringContract {
+    function read(int $value);
+}
+class EvalParamStringReader implements EvalParamStringContract {
+    public function read(string $value) { return $value; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&incompatible_type, &mut scope, &mut values)
+        .expect_err("incompatible interface parameter type should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let untyped_to_typed = parse_fragment(
+        br#"interface EvalParamUntypedContract {
+    function read($value);
+}
+class EvalParamTypedReader implements EvalParamUntypedContract {
+    public function read(int $value) { return $value; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&untyped_to_typed, &mut scope, &mut values)
+        .expect_err("typed parameter implementation of untyped contract should fail");
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 

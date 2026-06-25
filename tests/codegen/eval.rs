@@ -6697,6 +6697,80 @@ class EvalReturnMixedChildBad extends EvalReturnNullableBase {
     );
 }
 
+/// Verifies eval-declared method overrides enforce contravariant parameter types.
+#[test]
+fn test_eval_declared_method_parameter_type_override_contracts() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalParamBase {
+    public function anyInt(int $value) { return $value; }
+    public function maybeInt(int $value) { return $value; }
+    public function untypedInt(int $value) { return $value; }
+}
+class EvalParamChild extends EvalParamBase {
+    public function anyInt(mixed $value) { return $value . ":mixed"; }
+    public function maybeInt(?int $value) { return $value; }
+    public function untypedInt($value) { return $value; }
+}
+$child = new EvalParamChild();
+echo $child->anyInt(7) . ":";
+echo $child->untypedInt("ok") . ":";
+echo $child->maybeInt(null) === null ? "null" : "bad";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "7:mixed:ok:null");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalParamTypeBase {
+    public function read(int $value) { return $value; }
+}
+class EvalParamStringChild extends EvalParamTypeBase {
+    public function read(string $value) { return $value; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalParamNullableBase {
+    public function maybe(?int $value) { return $value; }
+}
+class EvalParamNonNullChild extends EvalParamNullableBase {
+    public function maybe(int $value) { return $value; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalParamUntypedBase {
+    public function read($value) { return $value; }
+}
+class EvalParamTypedChild extends EvalParamUntypedBase {
+    public function read(int $value) { return $value; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared interface methods enforce covariant return types.
 #[test]
 fn test_eval_declared_interface_return_type_contracts() {
@@ -6752,6 +6826,61 @@ eval('interface EvalNeedsStringReturn {
 }
 class EvalWiderReturnImpl implements EvalNeedsStringReturn {
     public function read(): int|string { return "bad"; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval-declared interface methods enforce contravariant parameter types.
+#[test]
+fn test_eval_declared_interface_parameter_type_contracts() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalParamContract {
+    function read(int $value);
+}
+class EvalParamContractReader implements EvalParamContract {
+    public function read(mixed $value) {
+        return $value . ":ok";
+    }
+}
+$reader = new EvalParamContractReader();
+echo $reader->read(8);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "8:ok");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalParamStringContract {
+    function read(int $value);
+}
+class EvalParamStringReader implements EvalParamStringContract {
+    public function read(string $value) { return $value; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalParamUntypedContract {
+    function read($value);
+}
+class EvalParamTypedReader implements EvalParamUntypedContract {
+    public function read(int $value) { return $value; }
 }');
 "#,
     );

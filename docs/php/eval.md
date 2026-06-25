@@ -155,9 +155,10 @@ properties, static methods, static interface method contracts, class, interface,
 trait, and enum constants including `final` constants, class-level attributes,
 `ClassName::class` literals, magic method fallback through `__call()` and
 `__callStatic()`, and magic property fallback through `__get()` and `__set()`.
-Eval validates method override and interface method return types with PHP-style
-covariance for supported declared return type metadata, including nullable,
-union, `mixed`, `self`, `parent`, `static`, class, and interface return types.
+Eval validates method override and interface method parameter and return types
+with PHP-style parameter contravariance and return covariance for supported
+declared type metadata, including nullable, union, `mixed`, `self`, `parent`,
+`static`, class, and interface types.
 Eval-declared method calls also enforce declared return values at runtime, with
 weak scalar coercions and PHP-style handling for `void`, `never`, `self`,
 `parent`, and late-bound `static`.
