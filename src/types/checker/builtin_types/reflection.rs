@@ -134,7 +134,12 @@ pub(crate) fn inject_builtin_reflection(
             true,
             vec![
                 ("class_name", Some(TypeExpr::Str), None, false),
-                ("method_name", Some(TypeExpr::Str), None, false),
+                (
+                    "method_name",
+                    Some(TypeExpr::Nullable(Box::new(TypeExpr::Str))),
+                    null_expr(),
+                    false,
+                ),
             ],
         ),
     );

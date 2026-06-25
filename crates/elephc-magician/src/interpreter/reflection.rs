@@ -3181,6 +3181,25 @@ fn eval_reflection_method_target_parts(target: &str) -> Result<(String, String),
     Ok((class_name.to_string(), method_name.to_string()))
 }
 
+/// Extracts the deprecated one-argument `ReflectionMethod("Class::method")` target.
+fn eval_reflection_method_single_target_arg(
+    evaluated_args: Vec<EvaluatedCallArg>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut args = evaluated_args.into_iter();
+    let Some(arg) = args.next() else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if args.next().is_some() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if let Some(name) = arg.name.as_deref() {
+        if !matches!(name, "class_name" | "objectOrMethod") {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(arg.value)
+}
+
 /// Builds a `ReflectionMethod` object when the reflected method exists in eval or AOT metadata.
 fn eval_reflection_method_object_result_if_exists(
     class_name: &str,
@@ -3235,6 +3254,17 @@ fn eval_reflection_method_new(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if evaluated_args.len() == 1 {
+        let target = eval_reflection_method_single_target_arg(evaluated_args)?;
+        let target = eval_reflection_string_arg(target, values)?;
+        let (class_name, method_name) = eval_reflection_method_target_parts(&target)?;
+        return eval_reflection_method_object_result_if_exists(
+            &class_name,
+            &method_name,
+            context,
+            values,
+        );
+    }
     let args = bind_evaluated_function_args(
         &[String::from("class_name"), String::from("method_name")],
         evaluated_args,
