@@ -419,12 +419,13 @@ fn test_error_class_attribute_args_non_string_attr() {
     );
 }
 
-/// Verifies that `class_attribute_args()` on an attribute with named arguments reports
-/// "requested attribute uses argument metadata that is not supported yet".
+/// Verifies that `class_attribute_args()` on an attribute with unsupported named
+/// argument metadata reports "requested attribute uses argument metadata that is
+/// not supported yet".
 #[test]
-fn test_error_class_attribute_named_args_are_not_silently_dropped() {
+fn test_error_class_attribute_named_expression_args_are_not_silently_dropped() {
     expect_error(
-        "<?php #[Foo(name: \"Ada\")] class C {} class_attribute_args('C', 'Foo');",
+        "<?php #[Foo(name: 1 + 2)] class C {} class_attribute_args('C', 'Foo');",
         "requested attribute uses argument metadata that is not supported yet",
     );
 }
@@ -440,12 +441,12 @@ fn test_error_class_attribute_expression_args_are_not_silently_dropped() {
     );
 }
 
-/// Verifies that `class_get_attributes()` on a class with a float attribute argument
+/// Verifies that `class_get_attributes()` on a class with an array attribute argument
 /// reports "class has attribute argument metadata that is not supported yet".
 #[test]
-fn test_error_class_attribute_float_args_are_not_silently_dropped() {
+fn test_error_class_attribute_array_args_are_not_silently_dropped() {
     expect_error(
-        "<?php #[Foo(3.14)] class C {} class_get_attributes('C');",
+        "<?php #[Foo([1])] class C {} class_get_attributes('C');",
         "class has attribute argument metadata that is not supported yet",
     );
 }

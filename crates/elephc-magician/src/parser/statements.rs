@@ -2760,6 +2760,7 @@ fn eval_attribute_arg_from_expr(expr: &EvalExpr) -> Option<EvalAttributeArg> {
     match expr {
         EvalExpr::Const(EvalConst::String(value)) => Some(EvalAttributeArg::String(value.clone())),
         EvalExpr::Const(EvalConst::Int(value)) => Some(EvalAttributeArg::Int(*value)),
+        EvalExpr::Const(EvalConst::Float(value)) => Some(EvalAttributeArg::Float(value.to_bits())),
         EvalExpr::Const(EvalConst::Bool(value)) => Some(EvalAttributeArg::Bool(*value)),
         EvalExpr::Const(EvalConst::Null) => Some(EvalAttributeArg::Null),
         EvalExpr::Unary {
@@ -2768,6 +2769,9 @@ fn eval_attribute_arg_from_expr(expr: &EvalExpr) -> Option<EvalAttributeArg> {
         } => match expr.as_ref() {
             EvalExpr::Const(EvalConst::Int(value)) => {
                 Some(EvalAttributeArg::Int(value.wrapping_neg()))
+            }
+            EvalExpr::Const(EvalConst::Float(value)) => {
+                Some(EvalAttributeArg::Float((-*value).to_bits()))
             }
             _ => None,
         },

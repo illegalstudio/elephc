@@ -613,6 +613,43 @@ echo $args[2];
     assert_eq!(out, "3/kept,42,also-kept");
 }
 
+/// Verifies that float literal attribute args are preserved through class
+/// helpers, ReflectionAttribute arguments, and attribute instantiation.
+#[test]
+fn test_class_attribute_args_preserves_float_literals() {
+    let out = compile_and_run(
+        r#"<?php
+class FloatAttr {
+    public function __construct(public float $ratio, public float $named) {}
+}
+
+#[FloatAttr(1.5, named: -2.25)]
+class X {}
+
+$args = class_attribute_args('X', 'FloatAttr');
+echo count($args);
+echo ":";
+echo $args[0];
+echo ":";
+echo $args["named"];
+
+$attr = class_get_attributes('X')[0];
+$attrArgs = $attr->getArguments();
+echo ":";
+echo $attrArgs[0];
+echo ":";
+echo $attrArgs["named"];
+
+$instance = $attr->newInstance();
+echo ":";
+echo $instance->ratio;
+echo ":";
+echo $instance->named;
+"#,
+    );
+    assert_eq!(out, "2:1.5:-2.25:1.5:-2.25:1.5:-2.25");
+}
+
 /// Verifies that boolean (`true`, `false`) and `null` literal arguments are
 /// preserved by `class_attribute_args()` as strings. Booleans render as
 /// PHP echo would (true → "1", false → ""), null renders as empty string,

@@ -70,6 +70,10 @@ fn native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &EvalAttributeArg
             record.push(2);
             record.extend_from_slice(&value.to_le_bytes());
         }
+        EvalAttributeArg::Float(bits) => {
+            record.push(5);
+            record.extend_from_slice(&bits.to_le_bytes());
+        }
         EvalAttributeArg::String(value) => {
             record.push(3);
             native_member_attribute_push_string(record, value);
@@ -730,6 +734,7 @@ fn register_native_member_attribute_records_metadata() {
                 value: Box::new(EvalAttributeArg::String("/users".to_string())),
             },
             EvalAttributeArg::Int(7),
+            EvalAttributeArg::Float(1.5f64.to_bits()),
             EvalAttributeArg::Bool(true),
             EvalAttributeArg::Null,
         ]),
@@ -799,6 +804,7 @@ fn register_native_member_attribute_records_metadata() {
                     value: Box::new(EvalAttributeArg::String("/users".to_string())),
                 },
                 EvalAttributeArg::Int(7),
+                EvalAttributeArg::Float(1.5f64.to_bits()),
                 EvalAttributeArg::Bool(true),
                 EvalAttributeArg::Null,
             ]

@@ -260,18 +260,23 @@ fn emit_set_args_property_aarch64(
     layout: &ReflectionAttributeLayout,
     fail_label: &str,
 ) {
+    let args_ok_label = "__elephc_eval_reflection_attribute_args_ok";
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the boxed eval attribute-argument array
     emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject malformed null argument arrays
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the argument array tag and payload pointer
     emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("b.eq {}", args_ok_label));                    // accept indexed argument arrays from older eval paths
+    emitter.instruction("cmp x0, #5");                                          // runtime tag 5 means associative array
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array argument metadata
+    emitter.label(args_ok_label);
     emitter.instruction("str x1, [sp, #32]");                                   // save the unboxed argument array across incref
+    emitter.instruction("str x0, [sp, #56]");                                   // save the argument array tag for the object slot
     emitter.instruction("mov x0, x1");                                          // move the array payload into the incref argument register
     emitter.instruction("bl __rt_incref");                                      // retain the argument array for ReflectionAttribute ownership
     emitter.instruction("ldr x1, [sp, #32]");                                   // reload the retained argument array payload
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", layout.args_lo);
-    abi::emit_load_int_immediate(emitter, "x10", 4);
+    emitter.instruction("ldr x10, [sp, #56]");                                  // reload the original argument array tag
     abi::emit_store_to_address(emitter, "x10", "x9", layout.args_hi);
 }
 
@@ -281,19 +286,24 @@ fn emit_set_args_property_x86_64(
     layout: &ReflectionAttributeLayout,
     fail_label: &str,
 ) {
+    let args_ok_label = "__elephc_eval_reflection_attribute_args_ok_x";
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the boxed eval attribute-argument array
     emitter.instruction("test rax, rax");                                       // check whether the boxed argument array is null
     emitter.instruction(&format!("jz {}", fail_label));                         // reject malformed null argument arrays
     emitter.instruction("call __rt_mixed_unbox");                               // expose the argument array tag and payload pointer
     emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("je {}", args_ok_label));                      // accept indexed argument arrays from older eval paths
+    emitter.instruction("cmp rax, 5");                                          // runtime tag 5 means associative array
     emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array argument metadata
+    emitter.label(args_ok_label);
     emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // save the unboxed argument array across incref
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the argument array tag for the object slot
     emitter.instruction("mov rax, rdi");                                        // move the array payload into the incref argument register
     emitter.instruction("call __rt_incref");                                    // retain the argument array for ReflectionAttribute ownership
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the retained argument array payload
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", layout.args_lo);
-    abi::emit_load_int_immediate(emitter, "r11", 4);
+    emitter.instruction("mov r11, QWORD PTR [rbp - 64]");                       // reload the original argument array tag
     abi::emit_store_to_address(emitter, "r11", "r10", layout.args_hi);
 }
 

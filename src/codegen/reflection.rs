@@ -208,6 +208,7 @@ fn attr_arg_expr(arg: &AttrArgValue) -> Expr {
     let kind = match arg {
         AttrArgValue::Null => ExprKind::Null,
         AttrArgValue::Int(value) => ExprKind::IntLiteral(*value),
+        AttrArgValue::Float(bits) => ExprKind::FloatLiteral(f64::from_bits(*bits)),
         AttrArgValue::Bool(value) => ExprKind::BoolLiteral(*value),
         AttrArgValue::Str(value) => ExprKind::StringLiteral(value.clone()),
         AttrArgValue::Named { name, value } => ExprKind::NamedArg {
@@ -468,6 +469,11 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
             abi::emit_load_int_immediate(emitter, "x1", *value);
             emitter.instruction("mov x2, xzr");                                 // ints do not use the high word
         }
+        AttrArgValue::Float(bits) => {
+            emitter.instruction("mov x0, #2");                                  // runtime tag 2 = double payload
+            abi::emit_load_int_immediate(emitter, "x1", *bits as i64);
+            emitter.instruction("mov x2, xzr");                                 // doubles do not use the high word
+        }
         AttrArgValue::Bool(value) => {
             emitter.instruction("mov x0, #3");                                  // runtime tag 3 = boolean payload
             emitter.instruction(&format!("mov x1, #{}", *value as u64));        // x1 = 0 or 1
@@ -500,6 +506,11 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
             emitter.instruction("mov rax, 0");                                  // runtime tag 0 = integer payload
             abi::emit_load_int_immediate(emitter, "rdi", *value);
             emitter.instruction("xor rsi, rsi");                                // ints do not use the high word
+        }
+        AttrArgValue::Float(bits) => {
+            emitter.instruction("mov rax, 2");                                  // runtime tag 2 = double payload
+            abi::emit_load_int_immediate(emitter, "rdi", *bits as i64);
+            emitter.instruction("xor rsi, rsi");                                // doubles do not use the high word
         }
         AttrArgValue::Bool(value) => {
             emitter.instruction("mov rax, 3");                                  // runtime tag 3 = boolean payload

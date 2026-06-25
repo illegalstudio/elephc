@@ -558,6 +558,11 @@ fn emit_box_arg_aarch64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue) {
             abi::emit_load_int_immediate(ctx.emitter, "x1", *value);
             ctx.emitter.instruction("mov x2, xzr");                             // integer mixed payloads do not use the high word
         }
+        AttrArgValue::Float(bits) => {
+            ctx.emitter.instruction("mov x0, #2");                              // runtime tag 2 = double payload
+            abi::emit_load_int_immediate(ctx.emitter, "x1", *bits as i64);
+            ctx.emitter.instruction("mov x2, xzr");                             // double mixed payloads do not use the high word
+        }
         AttrArgValue::Bool(value) => {
             ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean payload
             ctx.emitter
@@ -588,6 +593,11 @@ fn emit_box_arg_x86_64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue) {
             ctx.emitter.instruction("mov rax, 0");                              // runtime tag 0 = integer payload
             ctx.emitter.instruction(&format!("mov rdi, {}", value));            // pass the captured integer as the mixed low word
             ctx.emitter.instruction("xor rsi, rsi");                            // integer mixed payloads do not use the high word
+        }
+        AttrArgValue::Float(bits) => {
+            ctx.emitter.instruction("mov rax, 2");                              // runtime tag 2 = double payload
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", *bits as i64);
+            ctx.emitter.instruction("xor rsi, rsi");                            // double mixed payloads do not use the high word
         }
         AttrArgValue::Bool(value) => {
             ctx.emitter.instruction("mov rax, 3");                              // runtime tag 3 = boolean payload

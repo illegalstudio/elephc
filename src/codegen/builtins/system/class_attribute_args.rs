@@ -1,5 +1,5 @@
 //! Purpose:
-//! Lowers `class_attribute_args()` calls into an indexed `array<mixed>` of
+//! Lowers `class_attribute_args()` calls into an `array<int|string, mixed>` of
 //! literal class-attribute arguments captured during schema construction.
 //!
 //! Called from:
@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Attribute matching is case-insensitive, and each captured scalar is boxed
-//!   into a mixed cell before being appended to the result array.
+//!   into a mixed cell before being inserted into the result array.
 
 use crate::codegen::abi;
 use crate::codegen::context::Context;
@@ -24,7 +24,7 @@ use crate::types::{AttrArgValue, PhpType};
 /// (non-literal args, missing class, or absent attribute) returns early with
 /// the same type so the caller can proceed.  `ctx` provides the class lookup
 /// via `ctx.classes`; attribute arguments are matched case-insensitively and
-/// then boxed into mixed cells and pushed onto a newly allocated indexed array.
+/// then boxed into mixed cells and inserted into a newly allocated PHP array.
 /// On x86_64 the result register is `rax`; on AArch64 it is `x0`.
 pub fn emit(
     _name: &str,
@@ -138,6 +138,11 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
             emitter.instruction(&format!("mov x1, #{}", value));                // x1 = int value (low word)
             emitter.instruction("mov x2, xzr");                                 // integer mixed payloads do not use the high word
         }
+        AttrArgValue::Float(bits) => {
+            emitter.instruction("mov x0, #2");                                  // runtime tag 2 = double payload
+            abi::emit_load_int_immediate(emitter, "x1", *bits as i64);
+            emitter.instruction("mov x2, xzr");                                 // double mixed payloads do not use the high word
+        }
         AttrArgValue::Bool(value) => {
             emitter.instruction("mov x0, #3");                                  // runtime tag 3 = boolean payload
             emitter.instruction(&format!("mov x1, #{}", *value as u64));        // x1 = 0 or 1 boolean low word
@@ -174,6 +179,11 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
             emitter.instruction("mov rax, 0");                                  // runtime tag 0 = integer payload
             emitter.instruction(&format!("mov rdi, {}", value));                // rdi = int value (low word)
             emitter.instruction("xor rsi, rsi");                                // integer mixed payloads do not use the high word
+        }
+        AttrArgValue::Float(bits) => {
+            emitter.instruction("mov rax, 2");                                  // runtime tag 2 = double payload
+            abi::emit_load_int_immediate(emitter, "rdi", *bits as i64);
+            emitter.instruction("xor rsi, rsi");                                // double mixed payloads do not use the high word
         }
         AttrArgValue::Bool(value) => {
             emitter.instruction("mov rax, 3");                                  // runtime tag 3 = boolean payload

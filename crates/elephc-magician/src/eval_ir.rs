@@ -429,6 +429,7 @@ impl EvalParameterType {
 pub enum EvalAttributeArg {
     String(String),
     Int(i64),
+    Float(u64),
     Bool(bool),
     Null,
     Named {

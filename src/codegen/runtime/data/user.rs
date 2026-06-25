@@ -468,13 +468,14 @@ pub(crate) fn emit_runtime_data_user(
     //
     //   tag 0 = int   (lo = i64 value,         hi = 0)
     //   tag 1 = str   (lo = .ascii label addr, hi = byte length)
+    //   tag 2 = float (lo = f64 bits,          hi = 0)
     //   tag 3 = bool  (lo = 0 or 1,            hi = 0)
     //   tag 8 = null  (lo = 0,                 hi = 0)
     //
     // Unsupported args are represented as absent metadata by
     // `collect_attribute_args`; reflection helpers reject queries that would
-    // need those payloads before codegen reaches this table. Float and other
-    // mixed-cell payloads are reserved for future iterations.
+    // need those payloads before codegen reaches this table. Other mixed-cell
+    // payloads are reserved for future iterations.
     if let Some(max_class_id) = max_class_id {
         let mut name_id = 0u64;
         let mut arg_str_id = 0u64;
@@ -521,6 +522,9 @@ pub(crate) fn emit_runtime_data_user(
                             }
                             crate::types::AttrArgValue::Int(value) => {
                                 arg_rows.push((0u64, format!("{}", *value as u64), 0u64));
+                            }
+                            crate::types::AttrArgValue::Float(bits) => {
+                                arg_rows.push((2u64, format!("{}", bits), 0u64));
                             }
                             crate::types::AttrArgValue::Bool(value) => {
                                 arg_rows.push((3u64, format!("{}", *value as u64), 0u64));

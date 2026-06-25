@@ -18,12 +18,13 @@ use super::{FunctionSig, PhpType};
 
 /// Compile-time attribute argument literal. Captures the subset of PHP
 /// attribute argument expressions that reflection helpers can currently
-/// materialize: strings, ints, bools, null, negative int literals, and named
-/// wrappers around those same literal values.
+/// materialize: strings, ints, floats, bools, null, negative numeric literals,
+/// and named wrappers around those same literal values.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AttrArgValue {
     Null,
     Int(i64),
+    Float(u64),
     Bool(bool),
     Str(String),
     Named {
@@ -97,10 +98,12 @@ fn collect_attribute_arg_value(expr: &Expr) -> Option<AttrArgValue> {
     match &expr.kind {
         ExprKind::StringLiteral(value) => Some(AttrArgValue::Str(value.clone())),
         ExprKind::IntLiteral(value) => Some(AttrArgValue::Int(*value)),
+        ExprKind::FloatLiteral(value) => Some(AttrArgValue::Float(value.to_bits())),
         ExprKind::BoolLiteral(value) => Some(AttrArgValue::Bool(*value)),
         ExprKind::Null => Some(AttrArgValue::Null),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(n) => Some(AttrArgValue::Int(n.wrapping_neg())),
+            ExprKind::FloatLiteral(n) => Some(AttrArgValue::Float((-*n).to_bits())),
             _ => None,
         },
         ExprKind::NamedArg { name, value } => {
