@@ -11247,9 +11247,18 @@ fn reflection_class_new_instance_reflected_class(
     let ExprKind::NewObject { class_name, args } = &object_expr.kind else {
         return None;
     };
-    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) != "reflectionclass" {
-        return None;
+    match php_symbol_key(class_name.as_str().trim_start_matches('\\')).as_str() {
+        "reflectionclass" => reflection_class_reflected_class_from_args(ctx, args),
+        "reflectionobject" => reflection_object_reflected_class_from_args(ctx, args),
+        _ => None,
     }
+}
+
+/// Resolves the target class from a static `ReflectionClass(...)` argument list.
+fn reflection_class_reflected_class_from_args(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<String> {
     let reflected_arg = reflection_class_constructor_class_arg(ctx, args)?;
     let raw_class_name = match &reflected_arg.kind {
         ExprKind::StringLiteral(value) => value.clone(),
@@ -11257,6 +11266,15 @@ fn reflection_class_new_instance_reflected_class(
         _ => return None,
     };
     resolve_known_class_name(ctx, &raw_class_name)
+}
+
+/// Resolves the target class from a static `ReflectionObject(...)` argument list.
+fn reflection_object_reflected_class_from_args(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<String> {
+    let object_arg = reflection_object_constructor_object_arg(ctx, args)?;
+    isset_object_expr_class(ctx, &object_arg).map(|(class_name, _)| class_name)
 }
 
 /// Resolves a reflected class from an inline constructor or tracked local receiver.
@@ -11288,6 +11306,42 @@ fn reflection_class_constructor_class_arg(
     let sig = ctx
         .classes
         .get("ReflectionClass")
+        .and_then(|class_info| class_info.methods.get("__construct"))?;
+    let call_span = args
+        .first()
+        .map(|arg| arg.span)
+        .unwrap_or_else(crate::span::Span::dummy);
+    let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+        sig,
+        &args,
+        call_span,
+        crate::types::call_args::regular_param_count(sig),
+        false,
+        true,
+        &assoc_spread_sources(ctx, &args),
+    )
+    .ok()?;
+    if plan.has_spread_args() {
+        return None;
+    }
+    planned_regular_arg_expr(plan.regular_args.first()?).cloned()
+}
+
+/// Returns the `ReflectionObject::__construct()` object argument after normalization.
+fn reflection_object_constructor_object_arg(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Expr> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    if !crate::types::call_args::has_named_args(&args) {
+        return args.first().cloned();
+    }
+    let sig = ctx
+        .classes
+        .get("ReflectionObject")
         .and_then(|class_info| class_info.methods.get("__construct"))?;
     let call_span = args
         .first()

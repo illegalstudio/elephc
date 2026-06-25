@@ -27,10 +27,12 @@ $object = new ReflectObjectConstructChild("I", "N");
 $ref = new ReflectionObject($object);
 $first = $ref->newInstance("A", "B");
 echo get_class($first) . ":";
-$second = $ref->newInstanceArgs(["X", "Y"]);
+$second = $ref->newInstanceArgs(["right" => "Y", "left" => "X"]);
 echo get_class($second) . ":";
-$third = $ref->newInstanceWithoutConstructor();
-echo get_class($third);
+$third = $ref->newInstance(right: "N", left: "M");
+echo get_class($third) . ":";
+$fourth = $ref->newInstanceWithoutConstructor();
+echo get_class($fourth);
 "#,
     );
     assert!(
@@ -40,6 +42,6 @@ echo get_class($third);
     );
     assert_eq!(
         out.stdout,
-        "IN|AB|ReflectObjectConstructChild:XY|ReflectObjectConstructChild:ReflectObjectConstructChild"
+        "IN|AB|ReflectObjectConstructChild:XY|ReflectObjectConstructChild:MN|ReflectObjectConstructChild:ReflectObjectConstructChild"
     );
 }
