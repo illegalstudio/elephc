@@ -18,6 +18,7 @@ mod eval_class_constant_helpers;
 mod eval_constructor_helpers;
 mod eval_method_helpers;
 mod eval_property_helpers;
+pub(crate) mod eval_ref_arg_helpers;
 mod eval_reflection_helpers;
 mod eval_reflection_owner_helpers;
 mod eval_static_property_helpers;

@@ -16,6 +16,7 @@ use std::path::Path;
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed};
+use crate::codegen_ir::eval_ref_arg_helpers::eval_signature_mixed_ref_params_supported;
 use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Op};
 use crate::names::{function_symbol, ir_global_symbol, php_symbol_key};
@@ -1012,7 +1013,7 @@ fn function_can_register_with_eval(function: &Function) -> bool {
 /// Returns true when eval can dispatch a native method through the generated bridge.
 fn method_signature_can_bridge_with_eval(signature: &FunctionSig) -> bool {
     signature.params.len() <= MAX_EVAL_NATIVE_METHOD_PARAMS
-        && signature.ref_params.iter().all(|is_ref| !*is_ref)
+        && eval_signature_mixed_ref_params_supported(signature)
         && signature
             .params
             .iter()
@@ -1023,7 +1024,7 @@ fn method_signature_can_bridge_with_eval(signature: &FunctionSig) -> bool {
 /// Returns true when eval can dispatch a native constructor through the generated bridge.
 fn constructor_signature_can_bridge_with_eval(signature: &FunctionSig) -> bool {
     signature.params.len() <= MAX_EVAL_NATIVE_METHOD_PARAMS
-        && signature.ref_params.iter().all(|is_ref| !*is_ref)
+        && eval_signature_mixed_ref_params_supported(signature)
         && signature
             .params
             .iter()

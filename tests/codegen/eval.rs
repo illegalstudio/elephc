@@ -5715,6 +5715,26 @@ echo (new EvalAotNamedMethodBox())->run();
     assert_eq!(out, "AB");
 }
 
+/// Verifies eval dispatches generated/AOT instance methods with untyped by-reference params.
+#[test]
+fn test_eval_fragment_dispatches_aot_instance_method_with_mixed_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotMixedRefMethodBox {
+    public function mutate(mixed &$value): void {
+        $value = $value + 5;
+    }
+}
+
+echo eval('$box = new EvalAotMixedRefMethodBox();
+$value = 10;
+$box->mutate($value);
+return $value;');
+"#,
+    );
+    assert_eq!(out, "15");
+}
+
 /// Verifies eval preserves string values passed through an untyped AOT method parameter.
 #[test]
 fn test_eval_fragment_dispatches_aot_instance_method_with_mixed_string_arg() {
@@ -5768,6 +5788,25 @@ eval('echo EvalAotNamedStaticBox::join(right: "D", left: "C");');
 "#,
     );
     assert_eq!(out, "CD");
+}
+
+/// Verifies eval dispatches generated/AOT static methods with untyped by-reference params.
+#[test]
+fn test_eval_fragment_dispatches_aot_static_method_with_mixed_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotMixedRefStaticBox {
+    public static function mutate(mixed &$value): void {
+        $value = $value + 7;
+    }
+}
+
+echo eval('$value = 20;
+EvalAotMixedRefStaticBox::mutate($value);
+return $value;');
+"#,
+    );
+    assert_eq!(out, "27");
 }
 
 /// Verifies eval binds named arguments before dispatching an AOT constructor.
@@ -12564,6 +12603,25 @@ echo eval('$box = new EvalDynamicNewOneArgCtor(11); return $box->x;');
 "#,
     );
     assert_eq!(out, "11");
+}
+
+/// Verifies eval dispatches generated/AOT constructors with untyped by-reference params.
+#[test]
+fn test_eval_dynamic_new_runs_constructor_with_mixed_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewMixedRefCtor {
+    public function __construct(mixed &$value) {
+        $value = $value + 9;
+    }
+}
+
+echo eval('$value = 30;
+$box = new EvalDynamicNewMixedRefCtor($value);
+return $value;');
+"#,
+    );
+    assert_eq!(out, "39");
 }
 
 /// Verifies eval object construction can call private AOT constructors from the declaring scope.
