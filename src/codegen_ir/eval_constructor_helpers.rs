@@ -10,7 +10,7 @@
 //!   knows constructor symbols and parameter ABI shapes.
 //! - Classes without constructors are treated as successful no-ops, matching PHP.
 //! - Constructors are bridged for scalar/Mixed/array/object arguments, including
-//!   generated variadic array slots and untyped/Mixed by-reference parameters.
+//!   generated variadic array slots and supported scalar/Mixed by-reference parameters.
 //! - Non-public constructors are accepted when the active eval class scope
 //!   satisfies PHP visibility.
 
@@ -26,10 +26,9 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, FunctionSig, PhpType};
 
 use super::eval_ref_arg_helpers::{
-    EvalMixedRefArgSlot, eval_abi_param_types_for_refs, eval_arg_temp_slot_size,
-    eval_mixed_ref_arg_slots, eval_normalized_ref_params,
-    eval_signature_mixed_ref_params_supported, emit_aarch64_write_back_mixed_ref_args,
-    emit_x86_64_write_back_mixed_ref_args,
+    EvalRefArgSlot, eval_abi_param_types_for_refs, eval_arg_temp_slot_size,
+    eval_normalized_ref_params, eval_ref_arg_slots, eval_signature_ref_params_supported,
+    emit_aarch64_write_back_ref_args, emit_x86_64_write_back_ref_args,
 };
 
 const MAX_EVAL_CONSTRUCTOR_ARGS: usize = 8;
@@ -199,7 +198,7 @@ fn constructor_visibility_supported(visibility: &Visibility) -> bool {
 /// Returns true for constructor signatures supported by this eval bridge slice.
 fn constructor_signature_supported(sig: &FunctionSig) -> bool {
     sig.params.len() <= MAX_EVAL_CONSTRUCTOR_ARGS
-        && eval_signature_mixed_ref_params_supported(sig)
+        && eval_signature_ref_params_supported(sig)
         && sig
             .params
             .iter()
@@ -564,7 +563,7 @@ fn emit_aarch64_constructor_body(
     abi::emit_call_label(emitter, &method_symbol(&slot.impl_class, "__construct"));
     abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
-    emit_aarch64_write_back_mixed_ref_args(
+    emit_aarch64_write_back_ref_args(
         emitter,
         &ref_slots,
         0,
@@ -600,7 +599,7 @@ fn emit_x86_64_constructor_body(
     abi::emit_call_label(emitter, &method_symbol(&slot.impl_class, "__construct"));
     abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
-    emit_x86_64_write_back_mixed_ref_args(
+    emit_x86_64_write_back_ref_args(
         emitter,
         &ref_slots,
         0,
@@ -694,8 +693,16 @@ fn emit_aarch64_prepare_constructor_args(
     emitter: &mut Emitter,
     slot: &EvalConstructorSlot,
     fail_label: &str,
-) -> (usize, Vec<EvalMixedRefArgSlot>) {
-    let ref_slots = emit_aarch64_constructor_mixed_ref_arg_cells(module, emitter, &slot.ref_params);
+) -> (usize, Vec<EvalRefArgSlot>) {
+    let body_label = constructor_body_label(module, slot);
+    let ref_slots = emit_aarch64_constructor_ref_arg_cells(
+        module,
+        emitter,
+        &slot.params,
+        &slot.ref_params,
+        &body_label,
+        fail_label,
+    );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("ldr x0, [sp, #16]");                                   // load the unboxed receiver as the first constructor argument
@@ -711,7 +718,7 @@ fn emit_aarch64_prepare_constructor_args(
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
             emit_aarch64_load_eval_arg(module, emitter, index);
-            let label_prefix = constructor_arg_label(module, slot, index);
+            let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_aarch64_cast_eval_arg(module, emitter, param_ty, &label_prefix, fail_label);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
@@ -735,8 +742,16 @@ fn emit_x86_64_prepare_constructor_args(
     emitter: &mut Emitter,
     slot: &EvalConstructorSlot,
     fail_label: &str,
-) -> (usize, Vec<EvalMixedRefArgSlot>) {
-    let ref_slots = emit_x86_64_constructor_mixed_ref_arg_cells(module, emitter, &slot.ref_params);
+) -> (usize, Vec<EvalRefArgSlot>) {
+    let body_label = constructor_body_label(module, slot);
+    let ref_slots = emit_x86_64_constructor_ref_arg_cells(
+        module,
+        emitter,
+        &slot.params,
+        &slot.ref_params,
+        &body_label,
+        fail_label,
+    );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the unboxed receiver as the first constructor argument
@@ -752,7 +767,7 @@ fn emit_x86_64_prepare_constructor_args(
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
             emit_x86_64_load_eval_arg(module, emitter, index);
-            let label_prefix = constructor_arg_label(module, slot, index);
+            let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_x86_64_cast_eval_arg(module, emitter, param_ty, &label_prefix, fail_label);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
@@ -786,35 +801,53 @@ fn materialize_constructor_args(
 }
 
 /// Prepares ARM64 stack cells for eval-supplied by-reference constructor arguments.
-fn emit_aarch64_constructor_mixed_ref_arg_cells(
+fn emit_aarch64_constructor_ref_arg_cells(
     module: &Module,
     emitter: &mut Emitter,
+    param_types: &[PhpType],
     ref_params: &[bool],
-) -> Vec<EvalMixedRefArgSlot> {
-    let ref_slots = eval_mixed_ref_arg_slots(ref_params);
+    label_prefix: &str,
+    fail_label: &str,
+) -> Vec<EvalRefArgSlot> {
+    let ref_slots = eval_ref_arg_slots(param_types, ref_params);
     for slot in &ref_slots {
         emit_aarch64_load_eval_arg(module, emitter, slot.param_index);
         emitter.instruction("ldr x0, [x29, #-16]");                             // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
-        emitter.instruction("ldr x0, [x29, #-16]");                             // seed the mutable by-reference Mixed slot with the original cell
-        abi::emit_push_result_value(emitter, &PhpType::Mixed);
+        if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
+            emitter.instruction("ldr x0, [x29, #-16]");                         // seed the mutable by-reference Mixed slot with the original cell
+            abi::emit_push_result_value(emitter, &PhpType::Mixed);
+        } else {
+            let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
+            emit_aarch64_cast_eval_arg(module, emitter, &slot.param_ty, &arg_label, fail_label);
+            abi::emit_push_result_value(emitter, &slot.param_ty);
+        }
     }
     ref_slots
 }
 
 /// Prepares x86_64 stack cells for eval-supplied by-reference constructor arguments.
-fn emit_x86_64_constructor_mixed_ref_arg_cells(
+fn emit_x86_64_constructor_ref_arg_cells(
     module: &Module,
     emitter: &mut Emitter,
+    param_types: &[PhpType],
     ref_params: &[bool],
-) -> Vec<EvalMixedRefArgSlot> {
-    let ref_slots = eval_mixed_ref_arg_slots(ref_params);
+    label_prefix: &str,
+    fail_label: &str,
+) -> Vec<EvalRefArgSlot> {
+    let ref_slots = eval_ref_arg_slots(param_types, ref_params);
     for slot in &ref_slots {
         emit_x86_64_load_eval_arg(module, emitter, slot.param_index);
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
-        emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // seed the mutable by-reference Mixed slot with the original cell
-        abi::emit_push_result_value(emitter, &PhpType::Mixed);
+        if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // seed the mutable by-reference Mixed slot with the original cell
+            abi::emit_push_result_value(emitter, &PhpType::Mixed);
+        } else {
+            let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
+            emit_x86_64_cast_eval_arg(module, emitter, &slot.param_ty, &arg_label, fail_label);
+            abi::emit_push_result_value(emitter, &slot.param_ty);
+        }
     }
     ref_slots
 }
@@ -1141,18 +1174,6 @@ fn grouped_slots(slots: &[EvalConstructorSlot]) -> BTreeMap<u64, Vec<&EvalConstr
             .push(slot);
     }
     grouped
-}
-
-/// Returns a label-safe constructor argument prefix for bridge-local branches.
-fn constructor_arg_label(module: &Module, slot: &EvalConstructorSlot, index: usize) -> String {
-    let suffix = match module.target.arch {
-        Arch::AArch64 => "",
-        Arch::X86_64 => "_x",
-    };
-    format!(
-        "__elephc_eval_constructor_{}_arg_{}{}",
-        slot.class_id, index, suffix
-    )
 }
 
 /// Returns a label-safe constructor body prefix for bridge-local writeback branches.

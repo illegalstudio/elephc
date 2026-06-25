@@ -5735,6 +5735,48 @@ return $value;');
     assert_eq!(out, "15");
 }
 
+/// Verifies eval dispatches generated/AOT instance methods with typed scalar by-reference params.
+#[test]
+fn test_eval_fragment_dispatches_aot_instance_method_with_typed_by_ref_args() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotTypedRefMethodBox {
+    public function mutate(int &$value, bool &$flag): void {
+        $value = $value + 5;
+        $flag = !$flag;
+    }
+}
+
+echo eval('$box = new EvalAotTypedRefMethodBox();
+$value = 10;
+$flag = true;
+$box->mutate($value, $flag);
+return $value . ":" . ($flag ? "T" : "F");');
+"#,
+    );
+    assert_eq!(out, "15:F");
+}
+
+/// Verifies eval writes nullable-int by-reference AOT method results back as boxed eval values.
+#[test]
+fn test_eval_fragment_dispatches_aot_nullable_int_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotNullableRefMethodBox {
+    public function clear(?int &$value): void {
+        $value = null;
+    }
+}
+
+echo eval('$box = new EvalAotNullableRefMethodBox();
+$value = 12;
+$box->clear($value);
+return $value === null ? "N" : "bad";');
+"#,
+    );
+    assert_eq!(out, "N");
+}
+
 /// Verifies eval preserves string values passed through an untyped AOT method parameter.
 #[test]
 fn test_eval_fragment_dispatches_aot_instance_method_with_mixed_string_arg() {
@@ -5807,6 +5849,25 @@ return $value;');
 "#,
     );
     assert_eq!(out, "27");
+}
+
+/// Verifies eval dispatches generated/AOT static methods with float by-reference params.
+#[test]
+fn test_eval_fragment_dispatches_aot_static_method_with_float_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotFloatRefStaticBox {
+    public static function mutate(float &$value): void {
+        $value = $value + 0.25;
+    }
+}
+
+echo eval('$value = 2.5;
+EvalAotFloatRefStaticBox::mutate($value);
+return $value;');
+"#,
+    );
+    assert_eq!(out, "2.75");
 }
 
 /// Verifies eval binds named arguments before dispatching an AOT constructor.
@@ -12622,6 +12683,25 @@ return $value;');
 "#,
     );
     assert_eq!(out, "39");
+}
+
+/// Verifies eval dispatches generated/AOT constructors with typed scalar by-reference params.
+#[test]
+fn test_eval_dynamic_new_runs_constructor_with_typed_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewTypedRefCtor {
+    public function __construct(int &$value) {
+        $value = $value + 11;
+    }
+}
+
+echo eval('$value = 40;
+$box = new EvalDynamicNewTypedRefCtor($value);
+return $value;');
+"#,
+    );
+    assert_eq!(out, "51");
 }
 
 /// Verifies eval object construction can call private AOT constructors from the declaring scope.

@@ -24,10 +24,9 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
 use super::eval_ref_arg_helpers::{
-    EvalMixedRefArgSlot, eval_abi_param_types_for_refs, eval_arg_temp_slot_size,
-    eval_mixed_ref_arg_slots, eval_normalized_ref_params,
-    eval_signature_mixed_ref_params_supported, emit_aarch64_write_back_mixed_ref_args,
-    emit_x86_64_write_back_mixed_ref_args,
+    EvalRefArgSlot, eval_abi_param_types_for_refs, eval_arg_temp_slot_size,
+    eval_normalized_ref_params, eval_ref_arg_slots, eval_signature_ref_params_supported,
+    emit_aarch64_write_back_ref_args, emit_x86_64_write_back_ref_args,
 };
 
 /// Method metadata needed by eval method-call bridge dispatch.
@@ -271,7 +270,7 @@ fn method_visibility_supported(visibility: &Visibility) -> bool {
 /// Returns true for method signatures supported by the eval bridge.
 fn method_signature_supported(sig: &crate::types::FunctionSig) -> bool {
     sig.params.len() <= MAX_EVAL_METHOD_ARGS
-        && eval_signature_mixed_ref_params_supported(sig)
+        && eval_signature_ref_params_supported(sig)
         && sig.params.iter().all(|(_, ty)| method_param_supported(ty))
 }
 
@@ -1154,12 +1153,17 @@ fn emit_aarch64_prepare_method_args(
     data: &mut DataSection,
     slot: &EvalMethodSlot,
     fail_label: &str,
-) -> (usize, Vec<EvalMixedRefArgSlot>) {
-    let ref_slots = emit_aarch64_mixed_ref_arg_cells(
+) -> (usize, Vec<EvalRefArgSlot>) {
+    let body_label = method_body_label(module, slot);
+    let ref_slots = emit_aarch64_ref_arg_cells(
         module,
         emitter,
+        data,
+        &slot.params,
         &slot.ref_params,
         24,
+        &body_label,
+        fail_label,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
@@ -1176,7 +1180,7 @@ fn emit_aarch64_prepare_method_args(
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
             emit_aarch64_load_eval_arg(module, emitter, index, 24);
-            let label_prefix = format!("{}_arg_{}", method_body_label(module, slot), index);
+            let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_aarch64_cast_eval_arg(module, emitter, data, param_ty, &label_prefix, fail_label);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
@@ -1201,12 +1205,17 @@ fn emit_aarch64_prepare_static_method_args(
     data: &mut DataSection,
     slot: &EvalStaticMethodSlot,
     fail_label: &str,
-) -> (usize, Vec<EvalMixedRefArgSlot>) {
-    let ref_slots = emit_aarch64_mixed_ref_arg_cells(
+) -> (usize, Vec<EvalRefArgSlot>) {
+    let body_label = static_method_body_label(module, slot);
+    let ref_slots = emit_aarch64_ref_arg_cells(
         module,
         emitter,
+        data,
+        &slot.params,
         &slot.ref_params,
         40,
+        &body_label,
+        fail_label,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     abi::emit_load_int_immediate(emitter, "x0", slot.class_id as i64);
@@ -1222,7 +1231,7 @@ fn emit_aarch64_prepare_static_method_args(
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
             emit_aarch64_load_eval_arg(module, emitter, index, 40);
-            let label_prefix = format!("{}_arg_{}", static_method_body_label(module, slot), index);
+            let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_aarch64_cast_eval_arg(module, emitter, data, param_ty, &label_prefix, fail_label);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
@@ -1238,8 +1247,17 @@ fn emit_x86_64_prepare_method_args(
     data: &mut DataSection,
     slot: &EvalMethodSlot,
     fail_label: &str,
-) -> (usize, Vec<EvalMixedRefArgSlot>) {
-    let ref_slots = emit_x86_64_mixed_ref_arg_cells(module, emitter, &slot.ref_params);
+) -> (usize, Vec<EvalRefArgSlot>) {
+    let body_label = method_body_label(module, slot);
+    let ref_slots = emit_x86_64_ref_arg_cells(
+        module,
+        emitter,
+        data,
+        &slot.params,
+        &slot.ref_params,
+        &body_label,
+        fail_label,
+    );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the unboxed receiver as the first method argument
@@ -1255,7 +1273,7 @@ fn emit_x86_64_prepare_method_args(
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
             emit_x86_64_load_eval_arg(module, emitter, index);
-            let label_prefix = format!("{}_arg_{}", method_body_label(module, slot), index);
+            let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_x86_64_cast_eval_arg(module, emitter, data, param_ty, &label_prefix, fail_label);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
@@ -1280,8 +1298,17 @@ fn emit_x86_64_prepare_static_method_args(
     data: &mut DataSection,
     slot: &EvalStaticMethodSlot,
     fail_label: &str,
-) -> (usize, Vec<EvalMixedRefArgSlot>) {
-    let ref_slots = emit_x86_64_mixed_ref_arg_cells(module, emitter, &slot.ref_params);
+) -> (usize, Vec<EvalRefArgSlot>) {
+    let body_label = static_method_body_label(module, slot);
+    let ref_slots = emit_x86_64_ref_arg_cells(
+        module,
+        emitter,
+        data,
+        &slot.params,
+        &slot.ref_params,
+        &body_label,
+        fail_label,
+    );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     abi::emit_load_int_immediate(emitter, "rax", slot.class_id as i64);
     abi::emit_push_result_value(emitter, &PhpType::Int);
@@ -1296,7 +1323,7 @@ fn emit_x86_64_prepare_static_method_args(
             abi::emit_push_result_value(emitter, &PhpType::Int);
         } else {
             emit_x86_64_load_eval_arg(module, emitter, index);
-            let label_prefix = format!("{}_arg_{}", static_method_body_label(module, slot), index);
+            let label_prefix = format!("{}_arg_{}", body_label, index);
             emit_x86_64_cast_eval_arg(module, emitter, data, param_ty, &label_prefix, fail_label);
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
@@ -1333,37 +1360,71 @@ fn materialize_static_method_args(
     abi::materialize_outgoing_args(emitter, &assignments)
 }
 
-/// Prepares ARM64 stack cells for eval-supplied by-reference Mixed arguments.
-fn emit_aarch64_mixed_ref_arg_cells(
+/// Prepares ARM64 stack cells for eval-supplied by-reference arguments.
+fn emit_aarch64_ref_arg_cells(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
+    param_types: &[PhpType],
     ref_params: &[bool],
     arg_array_frame_offset: usize,
-) -> Vec<EvalMixedRefArgSlot> {
-    let ref_slots = eval_mixed_ref_arg_slots(ref_params);
+    label_prefix: &str,
+    fail_label: &str,
+) -> Vec<EvalRefArgSlot> {
+    let ref_slots = eval_ref_arg_slots(param_types, ref_params);
     for slot in &ref_slots {
         emit_aarch64_load_eval_arg(module, emitter, slot.param_index, arg_array_frame_offset);
         emitter.instruction("ldr x0, [x29, #-16]");                             // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
-        emitter.instruction("ldr x0, [x29, #-16]");                             // seed the mutable by-reference Mixed slot with the original cell
-        abi::emit_push_result_value(emitter, &PhpType::Mixed);
+        if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
+            emitter.instruction("ldr x0, [x29, #-16]");                         // seed the mutable by-reference Mixed slot with the original cell
+            abi::emit_push_result_value(emitter, &PhpType::Mixed);
+        } else {
+            let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
+            emit_aarch64_cast_eval_arg(
+                module,
+                emitter,
+                data,
+                &slot.param_ty,
+                &arg_label,
+                fail_label,
+            );
+            abi::emit_push_result_value(emitter, &slot.param_ty);
+        }
     }
     ref_slots
 }
 
-/// Prepares x86_64 stack cells for eval-supplied by-reference Mixed arguments.
-fn emit_x86_64_mixed_ref_arg_cells(
+/// Prepares x86_64 stack cells for eval-supplied by-reference arguments.
+fn emit_x86_64_ref_arg_cells(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
+    param_types: &[PhpType],
     ref_params: &[bool],
-) -> Vec<EvalMixedRefArgSlot> {
-    let ref_slots = eval_mixed_ref_arg_slots(ref_params);
+    label_prefix: &str,
+    fail_label: &str,
+) -> Vec<EvalRefArgSlot> {
+    let ref_slots = eval_ref_arg_slots(param_types, ref_params);
     for slot in &ref_slots {
         emit_x86_64_load_eval_arg(module, emitter, slot.param_index);
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the original eval Mixed cell for by-reference writeback
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
-        emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // seed the mutable by-reference Mixed slot with the original cell
-        abi::emit_push_result_value(emitter, &PhpType::Mixed);
+        if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // seed the mutable by-reference Mixed slot with the original cell
+            abi::emit_push_result_value(emitter, &PhpType::Mixed);
+        } else {
+            let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
+            emit_x86_64_cast_eval_arg(
+                module,
+                emitter,
+                data,
+                &slot.param_ty,
+                &arg_label,
+                fail_label,
+            );
+            abi::emit_push_result_value(emitter, &slot.param_ty);
+        }
     }
     ref_slots
 }
@@ -1371,14 +1432,14 @@ fn emit_x86_64_mixed_ref_arg_cells(
 /// Preserves an ARM64 boxed return value while by-reference eval args are written back.
 fn preserve_result_and_write_back_aarch64_ref_args(
     emitter: &mut Emitter,
-    ref_slots: &[EvalMixedRefArgSlot],
+    ref_slots: &[EvalRefArgSlot],
     label_prefix: &str,
 ) {
     if ref_slots.is_empty() {
         return;
     }
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
-    emit_aarch64_write_back_mixed_ref_args(emitter, ref_slots, 16, label_prefix);
+    emit_aarch64_write_back_ref_args(emitter, ref_slots, 16, label_prefix);
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
 }
@@ -1386,14 +1447,14 @@ fn preserve_result_and_write_back_aarch64_ref_args(
 /// Preserves an x86_64 boxed return value while by-reference eval args are written back.
 fn preserve_result_and_write_back_x86_64_ref_args(
     emitter: &mut Emitter,
-    ref_slots: &[EvalMixedRefArgSlot],
+    ref_slots: &[EvalRefArgSlot],
     label_prefix: &str,
 ) {
     if ref_slots.is_empty() {
         return;
     }
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
-    emit_x86_64_write_back_mixed_ref_args(emitter, ref_slots, 16, label_prefix);
+    emit_x86_64_write_back_ref_args(emitter, ref_slots, 16, label_prefix);
     abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
 }
