@@ -5823,6 +5823,37 @@ return $afterAppend . ":" . count($items) . ":" . $items[0] . ":" . $items[1];')
     assert_eq!(out, "3:3:2:4:5");
 }
 
+/// Verifies eval dispatches generated/AOT instance methods with object by-reference params.
+#[test]
+fn test_eval_fragment_dispatches_aot_instance_method_with_object_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotObjectRefMethodPayload {
+    public int $value = 1;
+}
+
+class EvalAotObjectRefMethodBox {
+    public function mutate(EvalAotObjectRefMethodPayload &$payload): void {
+        $payload->value = 7;
+    }
+
+    public function replace(EvalAotObjectRefMethodPayload &$payload): void {
+        $payload = new EvalAotObjectRefMethodPayload();
+        $payload->value = 9;
+    }
+}
+
+echo eval('$box = new EvalAotObjectRefMethodBox();
+$payload = new EvalAotObjectRefMethodPayload();
+$box->mutate($payload);
+$afterMutate = $payload->value;
+$box->replace($payload);
+return $afterMutate . ":" . $payload->value;');
+"#,
+    );
+    assert_eq!(out, "7:9");
+}
+
 /// Verifies eval preserves string values passed through an untyped AOT method parameter.
 #[test]
 fn test_eval_fragment_dispatches_aot_instance_method_with_mixed_string_arg() {
@@ -5952,6 +5983,29 @@ return count($items) . ":" . $items[2];');
 "#,
     );
     assert_eq!(out, "3:8");
+}
+
+/// Verifies eval dispatches generated/AOT static methods with object by-reference params.
+#[test]
+fn test_eval_fragment_dispatches_aot_static_method_with_object_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotObjectRefStaticPayload {
+    public int $value = 2;
+}
+
+class EvalAotObjectRefStaticBox {
+    public static function mutate(EvalAotObjectRefStaticPayload &$payload): void {
+        $payload->value = 8;
+    }
+}
+
+echo eval('$payload = new EvalAotObjectRefStaticPayload();
+EvalAotObjectRefStaticBox::mutate($payload);
+return $payload->value;');
+"#,
+    );
+    assert_eq!(out, "8");
 }
 
 /// Verifies eval binds named arguments before dispatching an AOT constructor.
@@ -12824,6 +12878,30 @@ return count($items) . ":" . $items[0] . ":" . $items[1];');
 "#,
     );
     assert_eq!(out, "2:9:10");
+}
+
+/// Verifies eval dispatches generated/AOT constructors with object by-reference params.
+#[test]
+fn test_eval_dynamic_new_runs_constructor_with_object_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewObjectRefCtorPayload {
+    public int $value = 3;
+}
+
+class EvalDynamicNewObjectRefCtor {
+    public function __construct(EvalDynamicNewObjectRefCtorPayload &$payload) {
+        $payload = new EvalDynamicNewObjectRefCtorPayload();
+        $payload->value = 11;
+    }
+}
+
+echo eval('$payload = new EvalDynamicNewObjectRefCtorPayload();
+$box = new EvalDynamicNewObjectRefCtor($payload);
+return $payload->value;');
+"#,
+    );
+    assert_eq!(out, "11");
 }
 
 /// Verifies eval object construction can call private AOT constructors from the declaring scope.
