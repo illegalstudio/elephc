@@ -1,6 +1,6 @@
 //! Purpose:
 //! Emits user-assembly helpers that let libelephc-magician materialize
-//! ReflectionClass, ReflectionFunction, ReflectionMethod, ReflectionParameter,
+//! ReflectionClass, ReflectionObject, ReflectionFunction, ReflectionMethod, ReflectionParameter,
 //! ReflectionProperty, ReflectionClassConstant, ReflectionEnum*, and ReflectionType objects
 //! with private metadata slots populated from runtime eval declarations.
 //!
@@ -135,6 +135,7 @@ struct ReflectionOwnerLayout {
 /// Layouts for the Reflection owner classes eval can materialize.
 struct ReflectionOwnerLayouts {
     class: ReflectionOwnerLayout,
+    object_class: ReflectionOwnerLayout,
     enum_class: ReflectionOwnerLayout,
     function: ReflectionOwnerLayout,
     method: ReflectionOwnerLayout,
@@ -198,6 +199,7 @@ fn function_uses_eval(function: &Function) -> bool {
 fn reflection_owner_layouts(module: &Module) -> Option<ReflectionOwnerLayouts> {
     Some(ReflectionOwnerLayouts {
         class: reflection_owner_layout(module.class_infos.get("ReflectionClass")?, true)?,
+        object_class: reflection_owner_layout(module.class_infos.get("ReflectionObject")?, true)?,
         enum_class: reflection_owner_layout(module.class_infos.get("ReflectionEnum")?, true)?,
         function: reflection_owner_layout(module.class_infos.get("ReflectionFunction")?, true)?,
         method: reflection_owner_layout(module.class_infos.get("ReflectionMethod")?, true)?,
@@ -424,6 +426,7 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     let done_label = "__elephc_eval_reflection_owner_new_done";
     let box_label = "__elephc_eval_reflection_owner_new_box";
     let class_label = "__elephc_eval_reflection_owner_new_class";
+    let object_label = "__elephc_eval_reflection_owner_new_object";
     let enum_label = "__elephc_eval_reflection_owner_new_enum";
     let function_label = "__elephc_eval_reflection_owner_new_function";
     let method_label = "__elephc_eval_reflection_owner_new_method";
@@ -486,11 +489,22 @@ fn emit_reflection_owner_new_aarch64(emitter: &mut Emitter, layouts: &Reflection
     emitter.instruction(&format!("b.eq {}", function_label));                   // allocate a ReflectionFunction owner
     emitter.instruction("cmp x0, #11");                                         // owner kind 11 means ReflectionEnum
     emitter.instruction(&format!("b.eq {}", enum_label));                       // allocate a ReflectionEnum owner
+    emitter.instruction("cmp x0, #12");                                         // owner kind 12 means ReflectionObject
+    emitter.instruction(&format!("b.eq {}", object_label));                     // allocate a ReflectionObject owner
     emitter.instruction(&format!("b {}", fail_label));                          // reject unknown owner kinds
     emit_aarch64_owner_kind_body(
         emitter,
         class_label,
         &layouts.class,
+        true,
+        false,
+        fail_label,
+        box_label,
+    );
+    emit_aarch64_owner_kind_body(
+        emitter,
+        object_label,
+        &layouts.object_class,
         true,
         false,
         fail_label,
@@ -615,6 +629,7 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     let done_label = "__elephc_eval_reflection_owner_new_done_x";
     let box_label = "__elephc_eval_reflection_owner_new_box_x";
     let class_label = "__elephc_eval_reflection_owner_new_class_x";
+    let object_label = "__elephc_eval_reflection_owner_new_object_x";
     let enum_label = "__elephc_eval_reflection_owner_new_enum_x";
     let function_label = "__elephc_eval_reflection_owner_new_function_x";
     let method_label = "__elephc_eval_reflection_owner_new_method_x";
@@ -679,11 +694,22 @@ fn emit_reflection_owner_new_x86_64(emitter: &mut Emitter, layouts: &ReflectionO
     emitter.instruction(&format!("je {}", function_label));                     // allocate a ReflectionFunction owner
     emitter.instruction("cmp rdi, 11");                                         // owner kind 11 means ReflectionEnum
     emitter.instruction(&format!("je {}", enum_label));                         // allocate a ReflectionEnum owner
+    emitter.instruction("cmp rdi, 12");                                         // owner kind 12 means ReflectionObject
+    emitter.instruction(&format!("je {}", object_label));                       // allocate a ReflectionObject owner
     emitter.instruction(&format!("jmp {}", fail_label));                        // reject unknown owner kinds
     emit_x86_64_owner_kind_body(
         emitter,
         class_label,
         &layouts.class,
+        true,
+        false,
+        fail_label,
+        box_label,
+    );
+    emit_x86_64_owner_kind_body(
+        emitter,
+        object_label,
+        &layouts.object_class,
         true,
         false,
         fail_label,

@@ -234,6 +234,9 @@ impl Checker {
         if class_name == "ReflectionFunction" {
             return self.validate_reflection_function_constructor(&normalized_args, expr, env);
         }
+        if class_name == "ReflectionObject" {
+            return Ok(());
+        }
 
         let reflected_class =
             self.reflection_class_literal_arg(class_name, &normalized_args[0], env)?;
@@ -1114,13 +1117,14 @@ fn fiber_callable_array_parts(expr: &Expr) -> Option<(&Expr, &str)> {
 }
 
 /// Returns `true` if `class_name` is a reflection owner class
-/// (`ReflectionClass`, `ReflectionEnum`, `ReflectionMethod`, `ReflectionProperty`,
+/// (`ReflectionClass`, `ReflectionObject`, `ReflectionEnum`, `ReflectionMethod`, `ReflectionProperty`,
 /// `ReflectionParameter`, `ReflectionClassConstant`, `ReflectionEnumUnitCase`,
 /// `ReflectionEnumBackedCase`).
 fn is_reflection_owner_class(class_name: &str) -> bool {
     matches!(
         class_name,
         "ReflectionClass"
+            | "ReflectionObject"
             | "ReflectionEnum"
             | "ReflectionFunction"
             | "ReflectionMethod"

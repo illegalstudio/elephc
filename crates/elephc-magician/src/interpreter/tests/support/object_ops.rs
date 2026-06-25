@@ -639,6 +639,7 @@ impl FakeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let class_name = match owner_kind {
             EVAL_REFLECTION_OWNER_CLASS => "ReflectionClass",
+            EVAL_REFLECTION_OWNER_OBJECT => "ReflectionObject",
             EVAL_REFLECTION_OWNER_ENUM => "ReflectionEnum",
             EVAL_REFLECTION_OWNER_FUNCTION => "ReflectionFunction",
             EVAL_REFLECTION_OWNER_METHOD => "ReflectionMethod",
@@ -669,7 +670,9 @@ impl FakeOps {
         let mut properties = vec![("__name".to_string(), name), ("__attrs".to_string(), attrs)];
         if matches!(
             owner_kind,
-            EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_ENUM
+            EVAL_REFLECTION_OWNER_CLASS
+                | EVAL_REFLECTION_OWNER_OBJECT
+                | EVAL_REFLECTION_OWNER_ENUM
         ) {
             let (namespace_name, short_name) = reflection_name_parts(reflected_name);
             let has_namespace = !namespace_name.is_empty();
@@ -1400,6 +1403,11 @@ fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exclude_self: 
     }
     if class_name.eq_ignore_ascii_case("KnownClass")
         && target_class.eq_ignore_ascii_case("KnownInterface")
+    {
+        return true;
+    }
+    if class_name.eq_ignore_ascii_case("ReflectionObject")
+        && target_class.eq_ignore_ascii_case("ReflectionClass")
     {
         return true;
     }

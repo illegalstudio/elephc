@@ -3072,6 +3072,57 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionObject reflects the runtime class of an eval object instance.
+#[test]
+fn execute_program_reflection_object_reflects_eval_instances() {
+    let program = parse_fragment(
+        br#"class EvalReflectObjectBase {
+    public function inherited(): string {
+        return "base";
+    }
+}
+class EvalReflectObjectChild extends EvalReflectObjectBase {
+    public int $count = 3;
+}
+$ref = new ReflectionObject(new EvalReflectObjectChild());
+echo get_class($ref); echo ":";
+echo ($ref instanceof ReflectionObject) ? "O" : "o";
+echo ($ref instanceof ReflectionClass) ? "C" : "c"; echo ":";
+echo $ref->getName(); echo ":";
+echo $ref->getParentClass()->getName(); echo ":";
+echo $ref->hasMethod("inherited") ? "M" : "m";
+echo $ref->hasProperty("count") ? "P" : "p"; echo ":";
+$object = $ref->newInstanceWithoutConstructor();
+echo get_class($object);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "ReflectionObject:OC:EvalReflectObjectChild:EvalReflectObjectBase:MP:EvalReflectObjectChild"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies ReflectionObject rejects non-object constructor arguments.
+#[test]
+fn execute_program_reflection_object_rejects_non_objects() {
+    let program = parse_fragment(br#"new ReflectionObject("EvalReflectObjectChild");"#)
+        .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("ReflectionObject requires an object");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies unsupported attribute argument metadata remains name-visible but not materializable.
 #[test]
 fn execute_program_rejects_unsupported_class_attribute_args_metadata() {

@@ -718,6 +718,7 @@ fn seed_builtin_reflection_class_names(module: &Module, names: &mut HashSet<Stri
     for class_name in [
         "ReflectionAttribute",
         "ReflectionClass",
+        "ReflectionObject",
         "ReflectionEnum",
         "ReflectionClassConstant",
         "ReflectionEnumBackedCase",
