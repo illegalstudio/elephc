@@ -1480,6 +1480,15 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
             validate_magic_arity(method, 1)?;
             validate_magic_declared_return_type(method, MagicReturnType::Void)?;
         }
+        "__debuginfo" => {
+            validate_magic_non_static(method)?;
+            validate_magic_arity(method, 0)?;
+            validate_magic_declared_return_type(method, MagicReturnType::NullableArray)?;
+        }
+        "__set_state" => {
+            validate_magic_static(method)?;
+            validate_magic_arity(method, 1)?;
+        }
         "__invoke" => {
             validate_magic_non_static(method)?;
             validate_magic_public(method)?;
@@ -1506,6 +1515,7 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
 enum MagicReturnType {
     Array,
     Bool,
+    NullableArray,
     String,
     Void,
 }
@@ -1569,7 +1579,10 @@ fn magic_return_type_matches(
     return_type: &EvalParameterType,
     expected: MagicReturnType,
 ) -> bool {
-    if return_type.allows_null() || return_type.is_intersection() {
+    if return_type.is_intersection() {
+        return false;
+    }
+    if return_type.allows_null() && !matches!(expected, MagicReturnType::NullableArray) {
         return false;
     }
     let [variant] = return_type.variants() else {
@@ -1579,6 +1592,7 @@ fn magic_return_type_matches(
         (expected, variant),
         (MagicReturnType::Array, EvalParameterTypeVariant::Array)
             | (MagicReturnType::Bool, EvalParameterTypeVariant::Bool)
+            | (MagicReturnType::NullableArray, EvalParameterTypeVariant::Array)
             | (MagicReturnType::String, EvalParameterTypeVariant::String)
             | (MagicReturnType::Void, EvalParameterTypeVariant::Void)
     )

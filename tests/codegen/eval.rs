@@ -8297,6 +8297,14 @@ fn test_eval_rejects_invalid_magic_method_contracts() {
         r#"eval('class EvalInvalidUnserializeArity {
     public function __unserialize(): void {}
 }');"#,
+        r#"eval('class EvalInvalidDebugInfoReturn {
+    public function __debugInfo(): string {
+        return "x";
+    }
+}');"#,
+        r#"eval('class EvalInvalidSetStateInstance {
+    public function __set_state($data) {}
+}');"#,
         r#"eval('class EvalInvalidCloneReturn {
     public function __clone(): int {}
 }');"#,

@@ -1281,6 +1281,22 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
             "bad __unserialize return type",
         ),
         (
+            br#"class EvalBadDebugInfoReturn { public function __debugInfo(): string { return "x"; } }"#.as_slice(),
+            "bad __debugInfo return type",
+        ),
+        (
+            br#"class EvalBadDebugInfoStatic { public static function __debugInfo(): array { return []; } }"#.as_slice(),
+            "static __debugInfo",
+        ),
+        (
+            br#"class EvalBadSetStateInstance { public function __set_state($data) {} }"#.as_slice(),
+            "instance __set_state",
+        ),
+        (
+            br#"class EvalBadSetStateArity { public static function __set_state($data, $extra) {} }"#.as_slice(),
+            "bad __set_state arity",
+        ),
+        (
             br#"class EvalBadInvoke { private function __invoke() { return 1; } }"#.as_slice(),
             "private __invoke",
         ),
@@ -1309,6 +1325,27 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
 
         execute_program(&program, &mut scope, &mut values).expect_err(label);
     }
+}
+
+/// Verifies eval accepts PHP-compatible debug and set-state magic method contracts.
+#[test]
+fn execute_program_accepts_debug_and_set_state_magic_contracts() {
+    let program = parse_fragment(
+        br#"class EvalGoodDebugInfoMagic {
+    public function __debugInfo(): ?array { return null; }
+}
+class EvalGoodSetStateMagic {
+    public static function __set_state($data) {}
+}
+return class_exists("EvalGoodDebugInfoMagic") && class_exists("EvalGoodSetStateMagic");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies get-only property hooks reject writes outside a set accessor.
