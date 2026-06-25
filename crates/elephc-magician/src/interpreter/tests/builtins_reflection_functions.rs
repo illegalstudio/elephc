@@ -211,6 +211,34 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionFunction exposes eval static locals before and after execution.
+#[test]
+fn execute_program_reflection_function_reports_static_variables() {
+    let program = parse_fragment(
+        br#"function eval_reflect_static_vars() {
+    static $count = 1;
+    static $label = "fn";
+    $count = $count + 1;
+    return $count;
+}
+$ref = new ReflectionFunction("eval_reflect_static_vars");
+$before = $ref->getStaticVariables();
+echo $before["count"]; echo ":"; echo $before["label"]; echo ":";
+echo eval_reflect_static_vars(); echo ":";
+$after = $ref->getStaticVariables();
+echo $after["count"]; echo ":"; echo $after["label"];
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "1:fn:2:2:fn");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval-declared functions bind named, default, by-reference, and variadic arguments.
 #[test]
 fn execute_program_calls_eval_function_with_rich_argument_binding() {

@@ -989,36 +989,67 @@ pub(super) fn persist_static_locals(
     Ok(())
 }
 
-/// Returns the distinct static local names declared anywhere in an eval function body.
-pub(in crate::interpreter) fn static_var_names(body: &[EvalStmt]) -> Vec<String> {
-    let mut names = std::collections::HashSet::new();
-    collect_static_var_names(body, &mut names);
-    names.into_iter().collect()
+/// One source-order static local declaration and its initializer expression.
+#[derive(Clone)]
+pub(in crate::interpreter) struct EvalStaticVarInitializer {
+    pub name: String,
+    pub init: EvalExpr,
 }
 
-/// Recursively collects static local declaration names from eval statements.
-fn collect_static_var_names(body: &[EvalStmt], names: &mut std::collections::HashSet<String>) {
+/// Returns the distinct static local names declared anywhere in an eval function body.
+pub(in crate::interpreter) fn static_var_names(body: &[EvalStmt]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    visit_static_var_declarations(body, &mut seen, &mut |name, _| {
+        names.push(name.to_string());
+    });
+    names
+}
+
+/// Returns static local declarations and initializers in first-seen source order.
+pub(in crate::interpreter) fn static_var_initializers(
+    body: &[EvalStmt],
+) -> Vec<EvalStaticVarInitializer> {
+    let mut vars = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    visit_static_var_declarations(body, &mut seen, &mut |name, init| {
+        vars.push(EvalStaticVarInitializer {
+            name: name.to_string(),
+            init: init.clone(),
+        });
+    });
+    vars
+}
+
+/// Visits distinct static local declarations in first-seen source order.
+fn visit_static_var_declarations(
+    body: &[EvalStmt],
+    seen: &mut std::collections::HashSet<String>,
+    visitor: &mut impl FnMut(&str, &EvalExpr),
+) {
     for stmt in body {
         match stmt {
-            EvalStmt::StaticVar { name, .. } => {
-                names.insert(name.clone());
+            EvalStmt::StaticVar { name, init } => {
+                if seen.insert(name.clone()) {
+                    visitor(name, init);
+                }
             }
             EvalStmt::DoWhile { body, .. }
             | EvalStmt::Foreach { body, .. }
             | EvalStmt::For { body, .. }
-            | EvalStmt::While { body, .. } => collect_static_var_names(body, names),
+            | EvalStmt::While { body, .. } => visit_static_var_declarations(body, seen, visitor),
             EvalStmt::FunctionDecl { .. } => {}
             EvalStmt::If {
                 then_branch,
                 else_branch,
                 ..
             } => {
-                collect_static_var_names(then_branch, names);
-                collect_static_var_names(else_branch, names);
+                visit_static_var_declarations(then_branch, seen, visitor);
+                visit_static_var_declarations(else_branch, seen, visitor);
             }
             EvalStmt::Switch { cases, .. } => {
                 for case in cases {
-                    collect_static_var_names(&case.body, names);
+                    visit_static_var_declarations(&case.body, seen, visitor);
                 }
             }
             EvalStmt::Try {
@@ -1026,11 +1057,11 @@ fn collect_static_var_names(body: &[EvalStmt], names: &mut std::collections::Has
                 catches,
                 finally_body,
             } => {
-                collect_static_var_names(body, names);
+                visit_static_var_declarations(body, seen, visitor);
                 for catch in catches {
-                    collect_static_var_names(&catch.body, names);
+                    visit_static_var_declarations(&catch.body, seen, visitor);
                 }
-                collect_static_var_names(finally_body, names);
+                visit_static_var_declarations(finally_body, seen, visitor);
             }
             EvalStmt::ArrayAppendVar { .. }
             | EvalStmt::ArraySetVar { .. }

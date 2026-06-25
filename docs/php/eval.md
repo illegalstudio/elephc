@@ -228,6 +228,10 @@ and `getReturnType()` expose retained eval return type metadata for supported
 named, nullable, union, and intersection declarations, including `void` and
 `never` as builtin non-nullable named types.
 `ReflectionFunction::isDisabled()` reports `false` for eval-visible functions.
+`ReflectionFunction::getStaticVariables()` and
+`ReflectionMethod::getStaticVariables()` expose eval-declared static local
+variables, materializing initializer values before the first invocation and
+returning updated values after reflected or direct calls.
 `ReflectionFunction::getClosureUsedVariables()` and
 `ReflectionMethod::getClosureUsedVariables()` report empty arrays for supported
 non-closure reflectors.

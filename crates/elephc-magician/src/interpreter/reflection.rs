@@ -184,12 +184,17 @@ struct EvalReflectionNamedTypeMetadata {
 enum EvalReflectionFunctionMethodTarget {
     Function {
         name: String,
+        static_key: Option<String>,
+        static_variables: Vec<EvalStaticVarInitializer>,
         source_location: Option<EvalSourceLocation>,
         is_variadic: bool,
         return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     },
     Method {
+        declaring_class: Option<String>,
         name: String,
+        static_key: Option<String>,
+        static_variables: Vec<EvalStaticVarInitializer>,
         source_location: Option<EvalSourceLocation>,
         is_variadic: bool,
         return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
@@ -865,7 +870,7 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
     identity: u64,
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let Some(target) = eval_reflection_function_method_target(identity, context, values)? else {
@@ -940,6 +945,11 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
         "gettentativereturntype" => {
             eval_reflection_bind_no_args(evaluated_args)?;
             values.null().map(Some)
+        }
+        "getstaticvariables" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            eval_reflection_function_method_static_variables_result(&target, context, values)
+                .map(Some)
         }
         "getclosureusedvariables" => {
             eval_reflection_bind_no_args(evaluated_args)?;
@@ -6651,8 +6661,14 @@ fn eval_reflection_function_method_target(
         let return_type_metadata = function
             .and_then(EvalFunction::return_type)
             .and_then(eval_reflection_parameter_type_metadata);
+        let static_key = function.map(|function| function.name().to_string());
+        let static_variables = function
+            .map(|function| static_var_initializers(function.body()))
+            .unwrap_or_default();
         return Ok(Some(EvalReflectionFunctionMethodTarget::Function {
             name: name.to_string(),
+            static_key,
+            static_variables,
             source_location,
             is_variadic,
             return_type_metadata,
@@ -6681,12 +6697,153 @@ fn eval_reflection_function_method_target(
     });
     let source_location = method_metadata.as_ref().and_then(|method| method.source_location);
     let return_type_metadata = method_metadata.and_then(|method| method.return_type_metadata);
+    let static_method = eval_reflection_eval_method_static_target(declaring_class, method_name, context);
+    let declaring_class = static_method
+        .as_ref()
+        .map(|(declaring_class, _)| declaring_class.clone());
+    let static_key = static_method
+        .as_ref()
+        .map(|(declaring_class, method)| eval_method_static_local_key(declaring_class, method.name()));
+    let static_variables = static_method
+        .as_ref()
+        .map(|(_, method)| static_var_initializers(method.body()))
+        .unwrap_or_default();
     Ok(Some(EvalReflectionFunctionMethodTarget::Method {
+        declaring_class,
         name: method_name.to_string(),
+        static_key,
+        static_variables,
         source_location,
         is_variadic,
         return_type_metadata,
     }))
+}
+
+/// Returns an eval method body that can contribute ReflectionMethod static locals.
+fn eval_reflection_eval_method_static_target(
+    declaring_class: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<(String, EvalClassMethod)> {
+    if context.has_class(declaring_class) || context.has_enum(declaring_class) {
+        return context.class_method(declaring_class, method_name);
+    }
+    let trait_decl = context.trait_decl(declaring_class)?;
+    trait_decl
+        .methods()
+        .iter()
+        .find(|method| method.name().eq_ignore_ascii_case(method_name))
+        .map(|method| (trait_decl.name().to_string(), method.clone()))
+}
+
+/// Builds the static-local storage key shared by method execution and reflection.
+fn eval_method_static_local_key(class_name: &str, method_name: &str) -> String {
+    format!("{}::{}", class_name.trim_start_matches('\\'), method_name)
+}
+
+/// Builds the associative `getStaticVariables()` result for eval-backed reflection.
+fn eval_reflection_function_method_static_variables_result(
+    target: &EvalReflectionFunctionMethodTarget,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (Some(static_key), static_variables, declaring_class) =
+        eval_reflection_function_method_static_target(target)
+    else {
+        return values.array_new(0);
+    };
+    let mut result = values.assoc_new(static_variables.len())?;
+    for variable in static_variables {
+        let key = values.string(&variable.name)?;
+        let value = eval_reflection_static_local_value(
+            static_key,
+            variable,
+            declaring_class,
+            context,
+            values,
+        )?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
+/// Returns static-local storage details retained for a reflected eval function or method.
+fn eval_reflection_function_method_static_target(
+    target: &EvalReflectionFunctionMethodTarget,
+) -> (
+    Option<&str>,
+    &[EvalStaticVarInitializer],
+    Option<&str>,
+) {
+    match target {
+        EvalReflectionFunctionMethodTarget::Function {
+            static_key,
+            static_variables,
+            ..
+        } => (static_key.as_deref(), static_variables, None),
+        EvalReflectionFunctionMethodTarget::Method {
+            declaring_class,
+            static_key,
+            static_variables,
+            ..
+        } => (
+            static_key.as_deref(),
+            static_variables,
+            declaring_class.as_deref(),
+        ),
+    }
+}
+
+/// Returns the retained current static value or initializes it for reflection.
+fn eval_reflection_static_local_value(
+    static_key: &str,
+    variable: &EvalStaticVarInitializer,
+    declaring_class: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(value) = context.static_local(static_key, &variable.name) {
+        return values.retain(value);
+    }
+    let value = eval_reflection_static_local_initializer_value(
+        static_key,
+        &variable.init,
+        declaring_class,
+        context,
+        values,
+    )?;
+    if let Some(replaced) =
+        context.set_static_local(static_key.to_string(), variable.name.clone(), value)
+    {
+        values.release(replaced)?;
+    }
+    values.retain(value)
+}
+
+/// Evaluates a static-local initializer with PHP magic class/function context.
+fn eval_reflection_static_local_initializer_value(
+    static_key: &str,
+    init: &EvalExpr,
+    declaring_class: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(declaring_class) = declaring_class {
+        context.push_class_scope(declaring_class.to_string());
+        context.push_called_class_scope(declaring_class.to_string());
+    }
+    context.push_function(static_key.to_string());
+    let mut scope = ElephcEvalScope::new();
+    let result = eval_expr(init, context, &mut scope, values);
+    for cell in scope.drain_owned_cells() {
+        values.release(cell)?;
+    }
+    context.pop_function();
+    if declaring_class.is_some() {
+        context.pop_called_class_scope();
+        context.pop_class_scope();
+    }
+    result
 }
 
 /// Validates that a synthetic reflection metadata call received no arguments.

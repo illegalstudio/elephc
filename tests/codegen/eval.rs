@@ -11193,6 +11193,49 @@ echo count($method->getClosureUsedVariables());');
     );
 }
 
+/// Verifies eval ReflectionFunction/Method expose static local variables through the bridge.
+#[test]
+fn test_eval_reflection_function_and_method_static_variables() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('function eval_reflect_static_fn() {
+    static $count = 1;
+    static $label = "fn";
+    $count = $count + 1;
+    return $count;
+}
+class EvalReflectStaticMethodBase {
+    public function tick() {
+        static $count = 3;
+        static $label = "method";
+        $count = $count + 1;
+        return $count;
+    }
+}
+class EvalReflectStaticMethodChild extends EvalReflectStaticMethodBase {}
+$fn = new ReflectionFunction("eval_reflect_static_fn");
+$beforeFn = $fn->getStaticVariables();
+echo $beforeFn["count"] . ":" . $beforeFn["label"] . ":";
+echo eval_reflect_static_fn() . ":";
+$afterFn = $fn->getStaticVariables();
+echo $afterFn["count"] . ":" . $afterFn["label"] . "|";
+$object = new EvalReflectStaticMethodChild();
+$method = new ReflectionMethod("EvalReflectStaticMethodChild", "tick");
+$beforeMethod = $method->getStaticVariables();
+echo $beforeMethod["count"] . ":" . $beforeMethod["label"] . ":";
+echo $method->invoke($object) . ":";
+$afterMethod = $method->getStaticVariables();
+echo $afterMethod["count"] . ":" . $afterMethod["label"];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "1:fn:2:2:fn|3:method:4:4:method");
+}
+
 /// Verifies eval ReflectionMethod hasPrototype/getPrototype follow PHP inheritance rules.
 #[test]
 fn test_eval_reflection_method_reports_eval_prototypes() {

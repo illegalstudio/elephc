@@ -437,6 +437,38 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod exposes eval static locals using the declaring class key.
+#[test]
+fn execute_program_reflection_method_reports_static_variables() {
+    let program = parse_fragment(
+        br#"class EvalReflectMethodStaticBase {
+    public function tick() {
+        static $count = 3;
+        static $label = "method";
+        $count = $count + 1;
+        return $count;
+    }
+}
+class EvalReflectMethodStaticChild extends EvalReflectMethodStaticBase {}
+$object = new EvalReflectMethodStaticChild();
+$ref = new ReflectionMethod("EvalReflectMethodStaticChild", "tick");
+$before = $ref->getStaticVariables();
+echo $before["count"]; echo ":"; echo $before["label"]; echo ":";
+echo $ref->invoke($object); echo ":";
+$after = $ref->getStaticVariables();
+echo $after["count"]; echo ":"; echo $after["label"];
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "3:method:4:4:method");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionMethod exposes eval parent and interface prototypes.
 #[test]
 fn execute_program_reflection_method_reports_eval_prototypes() {
