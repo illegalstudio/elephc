@@ -223,8 +223,9 @@ same class metadata through a `ReflectionObject` instance. Its inherited
 helpers use the object's runtime class id. Straight-line `ReflectionObject`
 receivers built from statically typed objects also normalize named constructor
 arguments through the reflected constructor signature. Its inherited
-`getProperty()` and `getProperties()` include public dynamic properties from the
-reflected instance and mark those `ReflectionProperty` objects as dynamic.
+`hasProperty()`, `getProperty()`, and `getProperties()` include public dynamic
+properties from the reflected instance and mark those `ReflectionProperty`
+objects as dynamic.
 `ReflectionEnum` construction accepts enum-name strings for eval-declared
 enums. It exposes `hasCase()`, `getCase()`, `getCases()`, `isBacked()`, and
 `getBackingType()` for eval enum metadata, returning `ReflectionEnumUnitCase`,

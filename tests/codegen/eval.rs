@@ -11967,7 +11967,11 @@ $dynamic = $ref->getProperty("dynamic");
 echo ($dynamic->isDynamic() ? "D" : "d") . ":";
 echo $dynamic->getValue($object) . ":";
 echo count($ref->getProperties(ReflectionProperty::IS_PUBLIC)) . ":";
-echo count($ref->getProperties(ReflectionProperty::IS_STATIC));');
+echo count($ref->getProperties(ReflectionProperty::IS_STATIC)) . ":";
+echo $ref->hasProperty("dynamic") ? "H" : "h";
+echo $ref->hasProperty("declared") ? "D" : "d";
+echo $ref->hasProperty("missing") ? "M" : "m";
+echo (new ReflectionClass($object))->hasProperty("dynamic") ? "C" : "c";');
 "#,
     );
     assert!(
@@ -11975,7 +11979,7 @@ echo count($ref->getProperties(ReflectionProperty::IS_STATIC));');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "declared:d|dynamic:D|:D:value:2:0");
+    assert_eq!(out.stdout, "declared:d|dynamic:D|:D:value:2:0:HDmc");
 }
 
 /// Verifies eval Reflection origin metadata APIs are present on supported owners.

@@ -634,8 +634,9 @@ pub(in crate::interpreter) fn eval_reflection_class_has_method_result(
     values.bool_value(exists).map(Some)
 }
 
-/// Handles eval-backed `ReflectionClass::hasProperty()` calls.
+/// Handles eval-backed `ReflectionClass::hasProperty()` and inherited `ReflectionObject` calls.
 pub(in crate::interpreter) fn eval_reflection_class_has_property_result(
+    object: RuntimeCellHandle,
     identity: u64,
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
@@ -653,7 +654,7 @@ pub(in crate::interpreter) fn eval_reflection_class_has_property_result(
     };
     let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
     let property_name = eval_reflection_string_arg(args[0], values)?;
-    let exists =
+    let mut exists =
         if let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) {
             metadata
                 .property_names
@@ -668,6 +669,19 @@ pub(in crate::interpreter) fn eval_reflection_class_has_property_result(
             )?
             .is_some()
         };
+    if !exists {
+        if let Some(dynamic_object) =
+            eval_reflection_object_reflected_object(object, context, values)?
+        {
+            let dynamic_exists = eval_reflection_object_dynamic_property_exists(
+                dynamic_object,
+                &property_name,
+                values,
+            );
+            values.release(dynamic_object)?;
+            exists = dynamic_exists?;
+        }
+    }
     values.bool_value(exists).map(Some)
 }
 
