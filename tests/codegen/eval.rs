@@ -9329,6 +9329,28 @@ echo array_key_exists("typed", $defaults) ? "T" : "t";
     );
 }
 
+/// Verifies eval ReflectionProperty exposes generated/AOT non-empty array defaults.
+#[test]
+fn test_eval_reflection_property_exposes_aot_array_default_values() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectArrayPropertyDefaultTarget {
+    public $items = ["left" => "L", 2 => "R", "tail"];
+}
+echo eval('$property = new ReflectionProperty("EvalAotReflectArrayPropertyDefaultTarget", "items");
+$items = $property->getDefaultValue();
+$defaults = (new ReflectionClass("EvalAotReflectArrayPropertyDefaultTarget"))->getDefaultProperties();
+return $items["left"] . ":" . $items[2] . ":" . $items[3] . ":" . $defaults["items"]["left"];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "L:R:tail:L");
+}
+
 /// Verifies eval exposes generated/AOT member attributes through Reflection.
 #[test]
 fn test_eval_reflection_member_exposes_aot_attributes() {
@@ -9798,6 +9820,34 @@ return $obj->countItems();');
 "#,
     );
     assert_eq!(out, "0");
+}
+
+/// Verifies eval materializes generated/AOT non-empty array defaults during method dispatch.
+#[test]
+fn test_eval_aot_method_call_uses_array_default_values() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotArrayValueDefaultMethodTarget {
+    public function describe(array $items = [4, 5, 6]): string {
+        return $items[0] . ":" . $items[1] . ":" . $items[2];
+    }
+
+    public static function describeStatic(array $items = [7, 8, 9]): string {
+        return $items[0] . ":" . $items[1] . ":" . $items[2];
+    }
+}
+echo eval('$obj = new EvalAotArrayValueDefaultMethodTarget();
+$method = new ReflectionMethod("EvalAotArrayValueDefaultMethodTarget", "describe");
+$default = $method->getParameters()[0]->getDefaultValue();
+return $obj->describe() . ":" . EvalAotArrayValueDefaultMethodTarget::describeStatic() . ":" . $default[0] . $default[1] . $default[2];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "4:5:6:7:8:9:456");
 }
 
 /// Verifies eval materializes generated/AOT object defaults during method dispatch.
@@ -13202,6 +13252,24 @@ return $box->count;');
 "#,
     );
     assert_eq!(out, "0");
+}
+
+/// Verifies eval materializes generated/AOT non-empty array defaults during constructor dispatch.
+#[test]
+fn test_eval_dynamic_new_uses_constructor_array_default_values() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewArrayValueDefaultCtor {
+    public string $label = "";
+    public function __construct(array $items = [4, 5, 6]) {
+        $this->label = $items[0] . ":" . $items[1] . ":" . $items[2];
+    }
+}
+echo eval('$box = new EvalDynamicNewArrayValueDefaultCtor();
+return $box->label;');
+"#,
+    );
+    assert_eq!(out, "4:5:6");
 }
 
 /// Verifies eval materializes generated/AOT object defaults during constructor dispatch.

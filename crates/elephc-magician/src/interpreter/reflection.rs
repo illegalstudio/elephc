@@ -11,7 +11,10 @@
 //! - Generated/AOT targets use focused runtime hooks for supported point lookups.
 
 use super::*;
-use crate::context::NativeCallableObjectDefaultArg;
+use crate::context::{
+    NativeCallableArrayDefaultElement, NativeCallableArrayDefaultKey,
+    NativeCallableObjectDefaultArg,
+};
 use crate::eval_ir::EvalSourceLocation;
 
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
@@ -3365,6 +3368,12 @@ fn eval_reflection_native_callable_default_expr(default: &NativeCallableDefault)
         NativeCallableDefault::Float(value) => EvalExpr::Const(EvalConst::Float(*value)),
         NativeCallableDefault::String(value) => EvalExpr::Const(EvalConst::String(value.clone())),
         NativeCallableDefault::EmptyArray => EvalExpr::Array(Vec::new()),
+        NativeCallableDefault::Array(elements) => EvalExpr::Array(
+            elements
+                .iter()
+                .map(eval_reflection_native_callable_default_array_element)
+                .collect(),
+        ),
         NativeCallableDefault::Object { class_name, args } => EvalExpr::NewObject {
             class_name: class_name.clone(),
             args: args
@@ -3372,6 +3381,24 @@ fn eval_reflection_native_callable_default_expr(default: &NativeCallableDefault)
                 .map(eval_reflection_native_callable_default_arg)
                 .collect(),
         },
+    }
+}
+
+/// Converts one native array-default element into an eval array literal element.
+fn eval_reflection_native_callable_default_array_element(
+    element: &NativeCallableArrayDefaultElement,
+) -> EvalArrayElement {
+    let value = eval_reflection_native_callable_default_expr(&element.value);
+    match &element.key {
+        Some(NativeCallableArrayDefaultKey::Int(key)) => EvalArrayElement::KeyValue {
+            key: EvalExpr::Const(EvalConst::Int(*key)),
+            value,
+        },
+        Some(NativeCallableArrayDefaultKey::String(key)) => EvalArrayElement::KeyValue {
+            key: EvalExpr::Const(EvalConst::String(key.clone())),
+            value,
+        },
+        None => EvalArrayElement::Value(value),
     }
 }
 

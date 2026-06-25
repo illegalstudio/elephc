@@ -9,7 +9,10 @@
 //! - Scope writes flow through shared scope-cell helpers so global aliases and reference aliases stay coherent.
 
 use super::*;
-use crate::context::NativeCallableObjectDefaultArg;
+use crate::context::{
+    NativeCallableArrayDefaultElement, NativeCallableArrayDefaultKey,
+    NativeCallableObjectDefaultArg,
+};
 
 /// Executes statements in source order and propagates the first eval `return`.
 pub(in crate::interpreter) fn execute_statements(
@@ -5034,10 +5037,52 @@ fn materialize_native_callable_default(
         NativeCallableDefault::Float(value) => values.float(*value),
         NativeCallableDefault::String(value) => values.string(value),
         NativeCallableDefault::EmptyArray => values.array_new(0),
+        NativeCallableDefault::Array(elements) => {
+            materialize_native_callable_array_default(elements, context, values)
+        }
         NativeCallableDefault::Object { class_name, args } => {
             materialize_native_callable_object_default(class_name, args, context, values)
         }
     }
+}
+
+/// Allocates one array-valued native AOT parameter default with fresh element cells.
+fn materialize_native_callable_array_default(
+    elements: &[NativeCallableArrayDefaultElement],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let has_string_key = elements.iter().any(|element| {
+        matches!(
+            element.key,
+            Some(NativeCallableArrayDefaultKey::String(_))
+        )
+    });
+    let mut array = if has_string_key {
+        values.assoc_new(elements.len())?
+    } else {
+        values.array_new(elements.len())?
+    };
+    let mut next_auto_key = 0;
+    for element in elements {
+        let key = match &element.key {
+            Some(NativeCallableArrayDefaultKey::Int(value)) => {
+                if *value >= next_auto_key {
+                    next_auto_key = value.saturating_add(1);
+                }
+                values.int(*value)?
+            }
+            Some(NativeCallableArrayDefaultKey::String(value)) => values.string(value)?,
+            None => {
+                let key = values.int(next_auto_key)?;
+                next_auto_key = next_auto_key.saturating_add(1);
+                key
+            }
+        };
+        let value = materialize_native_callable_default(&element.value, context, values)?;
+        array = values.array_set(array, key, value)?;
+    }
+    Ok(array)
 }
 
 /// Allocates and constructs one object-valued native AOT parameter default.
