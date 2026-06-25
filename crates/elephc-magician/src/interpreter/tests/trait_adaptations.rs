@@ -104,6 +104,65 @@ return (new EvalAliasNoopBox())->source();"#,
     assert_eq!(values.get(result), FakeValue::String("T".to_string()));
 }
 
+/// Verifies traits can compose other eval traits before classes import them.
+#[test]
+fn execute_program_expands_eval_trait_used_by_trait() {
+    let program = parse_fragment(
+        br#"trait EvalNestedInner {
+    public const WORD = "in";
+    public function word() { return self::WORD; }
+}
+trait EvalNestedOuter {
+    use EvalNestedInner {
+        word as private hiddenWord;
+    }
+    public function read() { return $this->word() . $this->hiddenWord(); }
+}
+class EvalNestedBox {
+    use EvalNestedOuter;
+}
+$box = new EvalNestedBox();
+echo $box->read(); echo ":";
+$ref = new ReflectionClass("EvalNestedOuter");
+$traits = $ref->getTraitNames();
+echo count($traits); echo ":"; echo $traits[0]; echo ":";
+$aliases = $ref->getTraitAliases();
+echo $aliases["hiddenWord"]; echo ":";
+$uses = class_uses($box);
+echo count($uses); echo ":"; echo $uses["EvalNestedOuter"]; echo ":";
+return $box->word();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "inin:1:EvalNestedInner:EvalNestedInner::word:1:EvalNestedOuter:"
+    );
+    assert_eq!(values.get(result), FakeValue::String("in".to_string()));
+}
+
+/// Verifies trait-to-trait composition rejects missing inner traits.
+#[test]
+fn execute_program_rejects_missing_eval_trait_used_by_trait() {
+    let program = parse_fragment(
+        br#"trait EvalMissingNestedOuter {
+    use EvalMissingNestedInner;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("missing nested trait use should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies same-name trait aliases that change visibility remain composition fatals.
 #[test]
 fn execute_program_rejects_eval_trait_same_name_visibility_alias() {

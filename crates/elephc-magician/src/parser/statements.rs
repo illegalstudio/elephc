@@ -1183,6 +1183,8 @@ impl Parser {
         let name = self.qualify_name_in_current_namespace(name);
         self.advance();
         self.expect(TokenKind::LBrace)?;
+        let mut traits = Vec::new();
+        let mut trait_adaptations = Vec::new();
         let mut constants = Vec::new();
         let mut properties = Vec::new();
         let mut methods = Vec::new();
@@ -1195,13 +1197,26 @@ impl Parser {
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
-            self.parse_trait_member(&mut constants, &mut properties, &mut methods)?;
+            self.parse_trait_member(
+                &mut constants,
+                &mut properties,
+                &mut methods,
+                &mut traits,
+                &mut trait_adaptations,
+            )?;
         };
         self.consume_semicolon();
         Ok(vec![EvalStmt::TraitDecl(
-            EvalTrait::with_constants(name, constants, properties, methods)
-                .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
-                .with_attributes(attributes),
+            EvalTrait::with_constants_traits_adaptations(
+                name,
+                constants,
+                properties,
+                methods,
+                traits,
+                trait_adaptations,
+            )
+            .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
+            .with_attributes(attributes),
         )])
     }
 
@@ -1211,12 +1226,28 @@ impl Parser {
         constants: &mut Vec<EvalClassConstant>,
         properties: &mut Vec<EvalClassProperty>,
         methods: &mut Vec<EvalClassMethod>,
+        traits: &mut Vec<String>,
+        trait_adaptations: &mut Vec<EvalTraitAdaptation>,
     ) -> Result<(), EvalParseError> {
         let attributes = self.parse_optional_member_attributes()?;
         let (visibility, set_visibility, is_static, is_abstract, is_final, is_readonly) =
             self.parse_class_member_modifiers()?;
         if is_abstract && is_final {
             return Err(EvalParseError::UnsupportedConstruct);
+        }
+        if visibility.is_none()
+            && !is_static
+            && !is_abstract
+            && !is_final
+            && !is_readonly
+            && set_visibility.is_none()
+            && matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "use"))
+        {
+            if !attributes.is_empty() {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            self.parse_class_trait_use(traits, trait_adaptations)?;
+            return Ok(());
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
             if is_static || is_abstract || is_readonly || set_visibility.is_some() {

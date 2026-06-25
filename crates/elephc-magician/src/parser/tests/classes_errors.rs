@@ -1154,6 +1154,37 @@ class DynEvalUsesTrait {
         ]
     );
 }
+
+/// Verifies trait declarations can compose other traits with adaptations.
+#[test]
+fn parse_fragment_accepts_trait_use_inside_trait() {
+    let program = parse_fragment(
+        br#"trait DynEvalInnerTrait {
+    public function read() { return "inner"; }
+}
+trait DynEvalOuterTrait {
+    use DynEvalInnerTrait {
+        read as private hiddenRead;
+    }
+    public function expose() { return $this->hiddenRead(); }
+}"#,
+    )
+    .expect("fragment should parse");
+
+    let [_, EvalStmt::TraitDecl(trait_decl)] = program.statements() else {
+        panic!("second statement should be a trait declaration");
+    };
+    assert_eq!(trait_decl.traits(), &["DynEvalInnerTrait".to_string()]);
+    assert_eq!(
+        trait_decl.trait_adaptations(),
+        &[EvalTraitAdaptation::Alias {
+            trait_name: None,
+            method: "read".to_string(),
+            alias: Some("hiddenRead".to_string()),
+            visibility: Some(EvalVisibility::Private),
+        }]
+    );
+}
 /// Verifies malformed object construction reports an unexpected token.
 #[test]
 fn parse_fragment_rejects_new_without_class_name() {

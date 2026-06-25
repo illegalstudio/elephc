@@ -855,8 +855,12 @@ pub(in crate::interpreter) fn eval_reflection_class_get_trait_aliases_result(
     else {
         return Ok(None);
     };
-    eval_reflection_string_assoc_result(context.class_trait_aliases(&reflected_name), values)
-        .map(Some)
+    let aliases = if context.trait_decl(&reflected_name).is_some() {
+        context.trait_trait_aliases(&reflected_name)
+    } else {
+        context.class_trait_aliases(&reflected_name)
+    };
+    eval_reflection_string_assoc_result(aliases, values).map(Some)
 }
 
 /// Handles eval-backed `ReflectionClass::getConstant()` calls.
@@ -5373,7 +5377,7 @@ fn eval_reflection_class_like_attributes(
             source_location: trait_decl.source_location(),
             attributes: trait_decl.attributes().to_vec(),
             interface_names: Vec::new(),
-            trait_names: Vec::new(),
+            trait_names: context.trait_trait_names(trait_decl.name()),
             method_names: context.trait_method_names(trait_decl.name()),
             property_names: context.trait_property_names(trait_decl.name()),
             parent_class_name: None,

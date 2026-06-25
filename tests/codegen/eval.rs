@@ -7207,6 +7207,47 @@ echo $box->talk();');
     assert_eq!(out.stdout, "A:B:secret:A");
 }
 
+/// Verifies eval trait declarations can compose other eval traits.
+#[test]
+fn test_eval_declared_trait_uses_trait_composition() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('trait EvalNestedInner {
+    public const WORD = "in";
+    public function word() { return self::WORD; }
+}
+trait EvalNestedOuter {
+    use EvalNestedInner {
+        word as private hiddenWord;
+    }
+    public function read() { return $this->word() . $this->hiddenWord(); }
+}
+class EvalNestedBox {
+    use EvalNestedOuter;
+}
+$box = new EvalNestedBox();
+echo $box->read() . ":";
+$ref = new ReflectionClass("EvalNestedOuter");
+$traits = $ref->getTraitNames();
+echo count($traits) . ":" . $traits[0] . ":";
+$aliases = $ref->getTraitAliases();
+echo $aliases["hiddenWord"] . ":";
+$uses = class_uses($box);
+echo count($uses) . ":" . $uses["EvalNestedOuter"] . ":";
+echo $box->word();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "inin:1:EvalNestedInner:EvalNestedInner::word:1:EvalNestedOuter:in"
+    );
+}
+
 /// Verifies eval-declared trait visibility adaptations affect bridge access checks.
 #[test]
 fn test_eval_declared_trait_visibility_adaptation_fails() {

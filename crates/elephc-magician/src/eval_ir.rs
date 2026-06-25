@@ -1590,6 +1590,8 @@ pub struct EvalTrait {
     name: String,
     source_location: Option<EvalSourceLocation>,
     attributes: Vec<EvalAttribute>,
+    traits: Vec<String>,
+    trait_adaptations: Vec<EvalTraitAdaptation>,
     constants: Vec<EvalClassConstant>,
     properties: Vec<EvalClassProperty>,
     methods: Vec<EvalClassMethod>,
@@ -1600,6 +1602,8 @@ impl PartialEq for EvalTrait {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
             && self.attributes == other.attributes
+            && self.traits == other.traits
+            && self.trait_adaptations == other.trait_adaptations
             && self.constants == other.constants
             && self.properties == other.properties
             && self.methods == other.methods
@@ -1623,10 +1627,31 @@ impl EvalTrait {
         properties: Vec<EvalClassProperty>,
         methods: Vec<EvalClassMethod>,
     ) -> Self {
+        Self::with_constants_traits_adaptations(
+            name,
+            constants,
+            properties,
+            methods,
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    /// Creates a dynamic eval trait with trait uses, adaptations, constants, properties, and methods.
+    pub fn with_constants_traits_adaptations(
+        name: impl Into<String>,
+        constants: Vec<EvalClassConstant>,
+        properties: Vec<EvalClassProperty>,
+        methods: Vec<EvalClassMethod>,
+        traits: Vec<String>,
+        trait_adaptations: Vec<EvalTraitAdaptation>,
+    ) -> Self {
         Self {
             name: name.into(),
             source_location: None,
             attributes: Vec::new(),
+            traits,
+            trait_adaptations,
             constants,
             properties,
             methods,
@@ -1658,6 +1683,16 @@ impl EvalTrait {
     /// Returns attributes declared directly on this eval trait.
     pub fn attributes(&self) -> &[EvalAttribute] {
         &self.attributes
+    }
+
+    /// Returns trait names used directly by this eval trait.
+    pub fn traits(&self) -> &[String] {
+        &self.traits
+    }
+
+    /// Returns trait adaptations declared directly by this eval trait.
+    pub fn trait_adaptations(&self) -> &[EvalTraitAdaptation] {
+        &self.trait_adaptations
     }
 
     /// Returns constants declared directly by this eval trait.
