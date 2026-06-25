@@ -1072,6 +1072,9 @@ fn validate_eval_trait_adaptations(
                     if eval_used_trait_decl(class, context, suppressed).is_none() {
                         return Err(EvalStatus::RuntimeFatal);
                     }
+                    if same_eval_class_name(suppressed, trait_name) {
+                        return Err(EvalStatus::RuntimeFatal);
+                    }
                 }
             }
         }
