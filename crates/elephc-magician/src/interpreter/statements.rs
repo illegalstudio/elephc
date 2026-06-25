@@ -1219,7 +1219,16 @@ fn append_eval_trait_method_aliases(
             alias_method = alias_method.with_visibility_override(*visibility);
         }
         let key = alias_method.name().to_ascii_lowercase();
-        if class_method_names.contains(&key) || !trait_method_names.insert(key) {
+        if class_method_names.contains(&key) {
+            continue;
+        }
+        if trait_method_names.contains(&key)
+            && source_method.name().eq_ignore_ascii_case(alias)
+            && alias_method.visibility() == source_method.visibility()
+        {
+            continue;
+        }
+        if !trait_method_names.insert(key) {
             return Err(EvalStatus::RuntimeFatal);
         }
         methods.push(alias_method);
