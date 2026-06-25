@@ -50,6 +50,19 @@ impl FakeOps {
             _ => Err(EvalStatus::UnsupportedConstruct),
         }
     }
+    /// Returns whether one fake object property exists by name.
+    pub(super) fn runtime_property_is_initialized(
+        &self,
+        object: RuntimeCellHandle,
+        property: &str,
+    ) -> Result<bool, EvalStatus> {
+        match self.get(object) {
+            FakeValue::Object(properties) => {
+                Ok(properties.iter().any(|(name, _)| name == property))
+            }
+            _ => Err(EvalStatus::UnsupportedConstruct),
+        }
+    }
     /// Writes one fake object property by name.
     pub(super) fn runtime_property_set(
         &mut self,

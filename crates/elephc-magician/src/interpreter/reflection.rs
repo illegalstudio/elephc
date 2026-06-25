@@ -1353,7 +1353,7 @@ pub(in crate::interpreter) fn eval_reflection_property_set_value_result(
     values.null().map(Some)
 }
 
-/// Handles eval-backed `ReflectionProperty::isInitialized()` calls.
+/// Handles `ReflectionProperty::isInitialized()` calls for eval and generated/AOT properties.
 pub(in crate::interpreter) fn eval_reflection_property_is_initialized_result(
     identity: u64,
     method_name: &str,
@@ -1386,7 +1386,8 @@ pub(in crate::interpreter) fn eval_reflection_property_is_initialized_result(
         .and_then(|initialized| values.bool_value(initialized))
         .map(Some);
     }
-    let Some(member) = eval_reflection_property_metadata(&declaring_class, &property_name, context)
+    let Some(member) =
+        eval_reflection_reflected_property_metadata(&declaring_class, &property_name, context, values)?
     else {
         return Err(EvalStatus::RuntimeFatal);
     };
@@ -1395,22 +1396,38 @@ pub(in crate::interpreter) fn eval_reflection_property_is_initialized_result(
             .declaring_class_name
             .as_deref()
             .ok_or(EvalStatus::RuntimeFatal)?;
-        return values
-            .bool_value(
-                context
-                    .static_property(declaring_class, &property_name)
-                    .is_some(),
-            )
-            .map(Some);
+        let initialized = if eval_reflection_class_like_exists(declaring_class, context) {
+            context
+                .static_property(declaring_class, &property_name)
+                .is_some()
+        } else {
+            eval_reflection_aot_static_property_is_initialized(
+                declaring_class,
+                &property_name,
+                context,
+                values,
+            )?
+        };
+        return values.bool_value(initialized).map(Some);
     }
     let object = object.ok_or(EvalStatus::RuntimeFatal)?;
-    eval_reflection_instance_property_is_initialized(
-        &declaring_class,
-        &property_name,
-        object,
-        context,
-        values,
-    )
+    if eval_reflection_class_like_exists(&declaring_class, context) {
+        eval_reflection_instance_property_is_initialized(
+            &declaring_class,
+            &property_name,
+            object,
+            context,
+            values,
+        )
+    } else {
+        eval_reflection_aot_instance_property_is_initialized(
+            &declaring_class,
+            &property_name,
+            object,
+            context,
+            values,
+        )
+    }
     .and_then(|initialized| values.bool_value(initialized))
     .map(Some)
 }
@@ -5933,6 +5950,37 @@ fn eval_reflection_aot_instance_property_set_value(
     )?;
     eval_reflection_with_declaring_class_scope(declaring_class, context, || {
         values.property_set(object, property_name, value)
+    })
+}
+
+/// Checks one generated/AOT instance property initialization marker through ReflectionProperty.
+fn eval_reflection_aot_instance_property_is_initialized(
+    declaring_class: &str,
+    property_name: &str,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    eval_reflection_aot_instance_property_validate_object(
+        declaring_class,
+        object,
+        context,
+        values,
+    )?;
+    eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+        values.property_is_initialized(object, property_name)
+    })
+}
+
+/// Checks one generated/AOT static property initialization marker through ReflectionProperty.
+fn eval_reflection_aot_static_property_is_initialized(
+    declaring_class: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    eval_reflection_with_declaring_class_scope(declaring_class, context, || {
+        values.static_property_is_initialized(declaring_class, property_name)
     })
 }
 

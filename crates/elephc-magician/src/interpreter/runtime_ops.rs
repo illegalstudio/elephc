@@ -71,6 +71,13 @@ pub trait RuntimeValueOps {
         property: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Checks whether a generated/AOT instance property is initialized.
+    fn property_is_initialized(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+    ) -> Result<bool, EvalStatus>;
+
     /// Writes a named property on a runtime object held in a boxed Mixed cell.
     fn property_set(
         &mut self,
@@ -85,6 +92,13 @@ pub trait RuntimeValueOps {
         class_name: &str,
         property: &str,
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus>;
+
+    /// Checks whether a generated/AOT static property is initialized.
+    fn static_property_is_initialized(
+        &mut self,
+        class_name: &str,
+        property: &str,
+    ) -> Result<bool, EvalStatus>;
 
     /// Writes a generated/AOT static property through the generated bridge.
     fn static_property_set(

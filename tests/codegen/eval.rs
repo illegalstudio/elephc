@@ -10482,6 +10482,56 @@ echo $virtual->isInitialized($object) ? "V" : "v";');
     assert_eq!(out.stdout, "t:P:s:N:S:T:t:T:y:Y:V");
 }
 
+/// Verifies eval ReflectionProperty initialization checks bridge generated/AOT storage.
+#[test]
+fn test_eval_reflection_property_is_initialized_bridge_aot_storage() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectInitializedTarget {
+    public string $name = "Ada";
+    public int $typed;
+    private int $secret;
+    public static string $label = "ready";
+    public static int $staticTyped;
+    private static int $hidden;
+
+    public function reveal() {
+        return $this->secret . "," . self::$hidden;
+    }
+}
+$object = new EvalAotReflectInitializedTarget();
+echo eval('$name = new ReflectionProperty("EvalAotReflectInitializedTarget", "name");
+$typed = new ReflectionProperty("EvalAotReflectInitializedTarget", "typed");
+$secret = new ReflectionProperty("EvalAotReflectInitializedTarget", "secret");
+$label = new ReflectionProperty("EvalAotReflectInitializedTarget", "label");
+$staticTyped = new ReflectionProperty("EvalAotReflectInitializedTarget", "staticTyped");
+$hidden = new ReflectionProperty("EvalAotReflectInitializedTarget", "hidden");
+echo $name->isInitialized($object) ? "N:" : "n:";
+echo $typed->isInitialized($object) ? "T:" : "t:";
+echo $secret->isInitialized($object) ? "P:" : "p:";
+echo $label->isInitialized() ? "L:" : "l:";
+echo $staticTyped->isInitialized() ? "S:" : "s:";
+echo $hidden->isInitialized() ? "H:" : "h:";
+$typed->setValue($object, 5);
+$secret->setValue($object, 7);
+$staticTyped->setValue(11);
+$hidden->setValue(13);
+echo $typed->isInitialized($object) ? "T:" : "t:";
+echo $secret->isInitialized($object) ? "P:" : "p:";
+echo $staticTyped->isInitialized() ? "S:" : "s:";
+echo $hidden->isInitialized() ? "H:" : "h:";
+echo $object->reveal();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "N:t:p:L:s:h:T:P:S:H:7,13");
+}
+
 /// Verifies eval ReflectionProperty exposes property hook metadata and hook methods.
 #[test]
 fn test_eval_reflection_property_hook_metadata() {

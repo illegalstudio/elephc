@@ -18,6 +18,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::runtime_value_tag;
+use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::ir::{Function, LocalKind, Module};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
@@ -33,6 +34,7 @@ struct EvalPropertySlot {
     visibility: Visibility,
     offset: usize,
     ty: PhpType,
+    is_declared: bool,
 }
 
 /// Emits eval property helpers when any lowered function owns an eval context.
@@ -46,6 +48,7 @@ pub(super) fn emit_eval_property_helpers(
     }
     let slots = collect_eval_property_slots(module);
     emit_property_get_helper(module, emitter, data, &slots);
+    emit_property_is_initialized_helper(module, emitter, data, &slots);
     emit_property_set_helper(module, emitter, data, &slots);
 }
 
@@ -120,6 +123,7 @@ fn collect_class_property_slots(
             visibility: visibility.clone(),
             offset: 8 + index * 16,
             ty: ty.codegen_repr(),
+            is_declared: class_info.property_slot_is_declared(index, property),
         });
     }
 }
@@ -170,6 +174,22 @@ fn emit_property_get_helper(
     match module.target.arch {
         Arch::AArch64 => emit_property_get_aarch64(module, emitter, data, slots),
         Arch::X86_64 => emit_property_get_x86_64(module, emitter, data, slots),
+    }
+}
+
+/// Emits `__elephc_eval_value_property_is_initialized(Mixed*, name, len, scope, scope_len) -> bool`.
+fn emit_property_is_initialized_helper(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slots: &[EvalPropertySlot],
+) {
+    emitter.blank();
+    emitter.comment("--- eval bridge: user property initialization probe ---");
+    label_c_global(module, emitter, "__elephc_eval_value_property_is_initialized");
+    match module.target.arch {
+        Arch::AArch64 => emit_property_is_initialized_aarch64(module, emitter, data, slots),
+        Arch::X86_64 => emit_property_is_initialized_x86_64(module, emitter, data, slots),
     }
 }
 
@@ -269,6 +289,76 @@ fn emit_property_get_x86_64(
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed property value to Rust
+}
+
+/// Emits the ARM64 property-initialization helper body.
+fn emit_property_is_initialized_aarch64(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slots: &[EvalPropertySlot],
+) {
+    let fail_label = "__elephc_eval_value_property_is_initialized_fail";
+    let done_label = "__elephc_eval_value_property_is_initialized_done";
+    emitter.instruction("sub sp, sp, #80");                                     // reserve helper frame for saved inputs, object, scope, and fp/lr
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #64");                                    // establish a stable helper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // save the requested property-name pointer
+    emitter.instruction("str x2, [sp, #8]");                                    // save the requested property-name length
+    emitter.instruction("str x3, [sp, #32]");                                   // save the active eval class-scope pointer
+    emitter.instruction("str x4, [sp, #40]");                                   // save the active eval class-scope length
+    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // null Mixed receiver cannot have an initialized declared property
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
+    emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // non-object receivers cannot have initialized declared properties
+    emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for marker loads
+    emitter.instruction("ldr x9, [x1]");                                        // load the object's runtime class id
+    emit_aarch64_property_dispatch(module, emitter, data, slots, "is_initialized", fail_label);
+    emitter.instruction(&format!("b {}", fail_label));                          // no supported declared property matched the request
+    emit_aarch64_initialized_slot_bodies(module, emitter, slots, done_label);
+    emitter.label(fail_label);
+    emitter.instruction("mov x0, #0");                                          // report an initialization miss to Rust
+    emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after a miss
+    emitter.label(done_label);
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #80");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the initialization flag to Rust
+}
+
+/// Emits the x86_64 property-initialization helper body.
+fn emit_property_is_initialized_x86_64(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slots: &[EvalPropertySlot],
+) {
+    let fail_label = "__elephc_eval_value_property_is_initialized_fail_x";
+    let done_label = "__elephc_eval_value_property_is_initialized_done_x";
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for name, object, and scope
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the requested property-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the requested property-name length
+    emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // save the active eval class-scope pointer
+    emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // save the active eval class-scope length
+    emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver pointer is null
+    emitter.instruction(&format!("jz {}", fail_label));                         // null Mixed receiver cannot have an initialized declared property
+    emitter.instruction("mov rax, rdi");                                        // move the receiver into the mixed-unbox input register
+    emitter.instruction("call __rt_mixed_unbox");                               // expose receiver tag and object payload
+    emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means the Mixed receiver is an object
+    emitter.instruction(&format!("jne {}", fail_label));                        // non-object receivers cannot have initialized declared properties
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer for marker loads
+    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // load the object's runtime class id
+    emit_x86_64_property_dispatch(module, emitter, data, slots, "is_initialized", fail_label);
+    emitter.instruction(&format!("jmp {}", fail_label));                        // no supported declared property matched the request
+    emit_x86_64_initialized_slot_bodies(module, emitter, slots, done_label);
+    emitter.label(fail_label);
+    emitter.instruction("xor eax, eax");                                        // report an initialization miss to Rust
+    emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after a miss
+    emitter.label(done_label);
+    emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the initialization flag to Rust
 }
 
 /// Emits the ARM64 property-set helper body.
@@ -582,18 +672,18 @@ fn emit_x86_64_property_scope_check(
 /// Returns ARM64 stack offsets for the class-scope pointer and length.
 fn aarch64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" => (32, 40),
+        "get" | "is_initialized" => (32, 40),
         "set" => (40, 48),
-        _ => unreachable!("eval property helpers only use get/set modes"),
+        _ => unreachable!("eval property helpers only use get/set/is_initialized modes"),
     }
 }
 
 /// Returns x86_64 frame offsets for the class-scope pointer and length.
 fn x86_64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" => (40, 48),
+        "get" | "is_initialized" => (40, 48),
         "set" => (48, 56),
-        _ => unreachable!("eval property helpers only use get/set modes"),
+        _ => unreachable!("eval property helpers only use get/set/is_initialized modes"),
     }
 }
 
@@ -622,6 +712,34 @@ fn emit_x86_64_get_slot_bodies(
         emitter.label(&slot_body_label(module, slot, "get"));
         emit_x86_64_box_property_slot(emitter, slot);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the declared property value
+    }
+}
+
+/// Emits ARM64 property-initialization bodies for every bridge-supported property slot.
+fn emit_aarch64_initialized_slot_bodies(
+    module: &Module,
+    emitter: &mut Emitter,
+    slots: &[EvalPropertySlot],
+    done_label: &str,
+) {
+    for slot in slots {
+        emitter.label(&slot_body_label(module, slot, "is_initialized"));
+        emit_aarch64_property_initialized_flag(emitter, slot);
+        emitter.instruction(&format!("b {}", done_label));                      // return after materializing the initialization flag
+    }
+}
+
+/// Emits x86_64 property-initialization bodies for every bridge-supported property slot.
+fn emit_x86_64_initialized_slot_bodies(
+    module: &Module,
+    emitter: &mut Emitter,
+    slots: &[EvalPropertySlot],
+    done_label: &str,
+) {
+    for slot in slots {
+        emitter.label(&slot_body_label(module, slot, "is_initialized"));
+        emit_x86_64_property_initialized_flag(emitter, slot);
+        emitter.instruction(&format!("jmp {}", done_label));                    // return after materializing the initialization flag
     }
 }
 
@@ -657,6 +775,33 @@ fn emit_x86_64_set_slot_bodies(
         emitter.instruction("mov rax, 1");                                      // report a successful eval property write to Rust
         emitter.instruction(&format!("jmp {}", done_label));                    // return after storing the declared property value
     }
+}
+
+/// Emits an ARM64 boolean for one declared property's initialized state.
+fn emit_aarch64_property_initialized_flag(emitter: &mut Emitter, slot: &EvalPropertySlot) {
+    if !slot.is_declared {
+        emitter.instruction("mov x0, #1");                                      // non-typed declared properties are always initialized
+        return;
+    }
+    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the unboxed object pointer
+    emitter.instruction(&format!("ldr x11, [x10, #{}]", slot.offset + 8));      // load the typed-property initialization marker
+    abi::emit_load_int_immediate(emitter, "x12", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp x11, x12");                                        // compare the property marker against the uninitialized sentinel
+    emitter.instruction("cset x0, ne");                                         // materialize true when the instance property is initialized
+}
+
+/// Emits an x86_64 boolean for one declared property's initialized state.
+fn emit_x86_64_property_initialized_flag(emitter: &mut Emitter, slot: &EvalPropertySlot) {
+    if !slot.is_declared {
+        emitter.instruction("mov rax, 1");                                      // non-typed declared properties are always initialized
+        return;
+    }
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer
+    emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", slot.offset + 8)); // load the typed-property initialization marker
+    abi::emit_load_int_immediate(emitter, "r10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp rax, r10");                                        // compare the property marker against the uninitialized sentinel
+    emitter.instruction("setne al");                                            // materialize true when the instance property is initialized
+    emitter.instruction("movzx rax, al");                                       // widen the initialization flag into the return register
 }
 
 /// Boxes a property value loaded from an ARM64 object slot into a Mixed cell.
@@ -770,6 +915,7 @@ fn emit_aarch64_store_property_slot(
             emitter.instruction("bl __rt_mixed_cast_float");                    // coerce the eval value to a PHP float
             emitter.instruction("ldr x9, [sp, #16]");                           // reload the unboxed object pointer for the store
             emitter.instruction(&format!("str d0, [x9, #{}]", slot.offset));    // store the coerced float into the property slot
+            emit_aarch64_clear_scalar_property_marker(emitter, slot);
         }
         PhpType::Str => {
             emitter.instruction("ldr x0, [sp, #24]");                           // reload the boxed eval value for string coercion
@@ -813,6 +959,7 @@ fn emit_x86_64_store_property_slot(
             emitter.instruction("call __rt_mixed_cast_float");                  // coerce the eval value to a PHP float
             emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
             emitter.instruction(&format!("movsd QWORD PTR [r11 + {}], xmm0", slot.offset)); //store the coerced float into the property slot
+            emit_x86_64_clear_scalar_property_marker(emitter, slot);
         }
         PhpType::Str => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value for string coercion
@@ -851,6 +998,14 @@ fn emit_aarch64_store_cast_scalar(
     emitter.instruction(&format!("bl {}", helper));                             // coerce the eval value to the declared property type
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for the store
     emitter.instruction(&format!("str {}, [x9, #{}]", result_reg, slot.offset)); //store the coerced scalar into the property slot
+    emit_aarch64_clear_scalar_property_marker(emitter, slot);
+}
+
+/// Clears an ARM64 one-word scalar typed-property marker after a successful store.
+fn emit_aarch64_clear_scalar_property_marker(emitter: &mut Emitter, slot: &EvalPropertySlot) {
+    if slot.is_declared {
+        emitter.instruction(&format!("str xzr, [x9, #{}]", slot.offset + 8));   // clear the typed-property initialization marker
+    }
 }
 
 /// Stores a boxed eval value into an ARM64 nullable-int tagged-scalar property slot.
@@ -890,6 +1045,14 @@ fn emit_x86_64_store_cast_scalar(
     emitter.instruction(&format!("call {}", helper));                           // coerce the eval value to the declared property type
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the store
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], {}", slot.offset, result_reg)); //store the coerced scalar into the property slot
+    emit_x86_64_clear_scalar_property_marker(emitter, slot);
+}
+
+/// Clears an x86_64 one-word scalar typed-property marker after a successful store.
+fn emit_x86_64_clear_scalar_property_marker(emitter: &mut Emitter, slot: &EvalPropertySlot) {
+    if slot.is_declared {
+        emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)); // clear the typed-property initialization marker
+    }
 }
 
 /// Stores a boxed ARM64 eval heap value into an array-like property slot.

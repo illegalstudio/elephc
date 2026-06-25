@@ -49,6 +49,7 @@ pub(super) fn emit_eval_static_property_helpers(
     }
     let slots = collect_eval_static_property_slots(module);
     emit_static_property_get_helper(module, emitter, data, &slots);
+    emit_static_property_is_initialized_helper(module, emitter, data, &slots);
     emit_static_property_set_helper(module, emitter, data, &slots);
 }
 
@@ -177,6 +178,26 @@ fn emit_static_property_get_helper(
     }
 }
 
+/// Emits `__elephc_eval_value_static_property_is_initialized(class, name, scope, scope_len) -> bool`.
+fn emit_static_property_is_initialized_helper(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slots: &[EvalStaticPropertySlot],
+) {
+    emitter.blank();
+    emitter.comment("--- eval bridge: user static-property initialization probe ---");
+    label_c_global(
+        module,
+        emitter,
+        "__elephc_eval_value_static_property_is_initialized",
+    );
+    match module.target.arch {
+        Arch::AArch64 => emit_static_property_is_initialized_aarch64(module, emitter, data, slots),
+        Arch::X86_64 => emit_static_property_is_initialized_x86_64(module, emitter, data, slots),
+    }
+}
+
 /// Emits `__elephc_eval_value_static_property_set(class, name, Mixed*, scope, scope_len) -> bool`.
 fn emit_static_property_set_helper(
     module: &Module,
@@ -245,6 +266,60 @@ fn emit_static_property_get_x86_64(
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed static property value to Rust
+}
+
+/// Emits the ARM64 static-property-initialization helper body.
+fn emit_static_property_is_initialized_aarch64(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slots: &[EvalStaticPropertySlot],
+) {
+    let done_label = "__elephc_eval_value_static_property_is_initialized_done";
+    emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for class/property/scope slices and fp/lr
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
+    emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the requested class-name pointer
+    emitter.instruction("str x1, [sp, #8]");                                    // save the requested class-name length
+    emitter.instruction("str x2, [sp, #16]");                                   // save the requested property-name pointer
+    emitter.instruction("str x3, [sp, #24]");                                   // save the requested property-name length
+    emitter.instruction("str x4, [sp, #32]");                                   // save the active eval class-scope pointer
+    emitter.instruction("str x5, [sp, #40]");                                   // save the active eval class-scope length
+    emit_aarch64_static_property_dispatch(module, emitter, data, slots, "is_initialized");
+    emitter.instruction("mov x0, #0");                                          // report an initialization miss to Rust
+    emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after a miss
+    emit_aarch64_static_initialized_slot_bodies(module, emitter, slots, done_label);
+    emitter.label(done_label);
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
+    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the initialization flag to Rust
+}
+
+/// Emits the x86_64 static-property-initialization helper body.
+fn emit_static_property_is_initialized_x86_64(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    slots: &[EvalStaticPropertySlot],
+) {
+    let done_label = "__elephc_eval_value_static_property_is_initialized_done_x";
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for class, property, and scope slices
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested class-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested class-name length
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested property-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the requested property-name length
+    emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the active eval class-scope pointer
+    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the active eval class-scope length
+    emit_x86_64_static_property_dispatch(module, emitter, data, slots, "is_initialized");
+    emitter.instruction("xor eax, eax");                                        // report an initialization miss to Rust
+    emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after a miss
+    emit_x86_64_static_initialized_slot_bodies(module, emitter, slots, done_label);
+    emitter.label(done_label);
+    emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the initialization flag to Rust
 }
 
 /// Emits the ARM64 static-property set helper body.
@@ -491,18 +566,18 @@ fn emit_x86_64_static_property_scope_check(
 /// Returns ARM64 stack offsets for the class-scope pointer and length.
 fn aarch64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" => (32, 40),
+        "get" | "is_initialized" => (32, 40),
         "set" => (40, 48),
-        _ => unreachable!("eval static property helpers only use get/set modes"),
+        _ => unreachable!("eval static property helpers only use get/set/is_initialized modes"),
     }
 }
 
 /// Returns x86_64 frame offsets for the class-scope pointer and length.
 fn x86_64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" => (40, 48),
+        "get" | "is_initialized" => (40, 48),
         "set" => (48, 56),
-        _ => unreachable!("eval static property helpers only use get/set modes"),
+        _ => unreachable!("eval static property helpers only use get/set/is_initialized modes"),
     }
 }
 
@@ -533,6 +608,34 @@ fn emit_x86_64_get_slot_bodies(
         emit_x86_64_uninitialized_guard(emitter, slot, done_label);
         emit_x86_64_box_static_property_slot(emitter, slot);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the static property value
+    }
+}
+
+/// Emits ARM64 static-property-initialization bodies for every supported slot.
+fn emit_aarch64_static_initialized_slot_bodies(
+    module: &Module,
+    emitter: &mut Emitter,
+    slots: &[EvalStaticPropertySlot],
+    done_label: &str,
+) {
+    for slot in slots {
+        emitter.label(&slot_body_label(module, slot, "is_initialized"));
+        emit_aarch64_static_property_initialized_flag(emitter, slot);
+        emitter.instruction(&format!("b {}", done_label));                      // return after materializing the static initialization flag
+    }
+}
+
+/// Emits x86_64 static-property-initialization bodies for every supported slot.
+fn emit_x86_64_static_initialized_slot_bodies(
+    module: &Module,
+    emitter: &mut Emitter,
+    slots: &[EvalStaticPropertySlot],
+    done_label: &str,
+) {
+    for slot in slots {
+        emitter.label(&slot_body_label(module, slot, "is_initialized"));
+        emit_x86_64_static_property_initialized_flag(emitter, slot);
+        emitter.instruction(&format!("jmp {}", done_label));                    // return after materializing the static initialization flag
     }
 }
 
@@ -568,6 +671,37 @@ fn emit_x86_64_set_slot_bodies(
         emitter.instruction("mov rax, 1");                                      // report a successful eval static-property write to Rust
         emitter.instruction(&format!("jmp {}", done_label));                    // return after storing the static property value
     }
+}
+
+/// Emits an ARM64 boolean for one static property's initialized state.
+fn emit_aarch64_static_property_initialized_flag(
+    emitter: &mut Emitter,
+    slot: &EvalStaticPropertySlot,
+) {
+    if !slot.is_declared {
+        emitter.instruction("mov x0, #1");                                      // non-typed declared static properties are always initialized
+        return;
+    }
+    abi::emit_load_symbol_to_reg(emitter, "x10", &slot.symbol, 8);
+    abi::emit_load_int_immediate(emitter, "x11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp x10, x11");                                        // compare the static property marker against the uninitialized sentinel
+    emitter.instruction("cset x0, ne");                                         // materialize true when the static property is initialized
+}
+
+/// Emits an x86_64 boolean for one static property's initialized state.
+fn emit_x86_64_static_property_initialized_flag(
+    emitter: &mut Emitter,
+    slot: &EvalStaticPropertySlot,
+) {
+    if !slot.is_declared {
+        emitter.instruction("mov rax, 1");                                      // non-typed declared static properties are always initialized
+        return;
+    }
+    abi::emit_load_symbol_to_reg(emitter, "r10", &slot.symbol, 8);
+    abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp r10, r11");                                        // compare the static property marker against the uninitialized sentinel
+    emitter.instruction("setne al");                                            // materialize true when the static property is initialized
+    emitter.instruction("movzx rax, al");                                       // widen the initialization flag into the return register
 }
 
 /// Emits an ARM64 uninitialized typed-static-property guard before boxing.

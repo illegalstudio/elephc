@@ -74,6 +74,14 @@ impl RuntimeValueOps for FakeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_property_get(object, property)
     }
+    /// Checks whether one fake object property exists by name.
+    fn property_is_initialized(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+    ) -> Result<bool, EvalStatus> {
+        self.runtime_property_is_initialized(object, property)
+    }
     /// Writes one fake object property by name.
     fn property_set(
         &mut self,
@@ -90,6 +98,14 @@ impl RuntimeValueOps for FakeOps {
         _property: &str,
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
         Ok(None)
+    }
+    /// Reports no fake AOT static property initialization match.
+    fn static_property_is_initialized(
+        &mut self,
+        _class_name: &str,
+        _property: &str,
+    ) -> Result<bool, EvalStatus> {
+        Ok(false)
     }
     /// Reports a failed fake AOT static property write.
     fn static_property_set(

@@ -426,9 +426,10 @@ property metadata. `isDynamic()` reports `false` for supported
 declared properties and `true` for public dynamic object properties
 materialized with `new ReflectionProperty($object, $property_name)`.
 `ReflectionProperty::isDefault()` is the inverse for those supported dynamic
-properties. `isInitialized()` tracks eval-backed instance and static property
-storage, including typed properties without defaults, unset properties, virtual
-property hooks, and public dynamic properties on the inspected object.
+properties. `isInitialized()` tracks eval-backed and bridge-supported
+generated/AOT instance and static property storage, including typed properties
+without defaults, unset eval properties, virtual property hooks, and public
+dynamic properties on the inspected object.
 `ReflectionProperty::hasType()`, `getType()`, and `getSettableType()` expose
 retained property type metadata through `ReflectionNamedType`,
 `ReflectionUnionType`, and `ReflectionIntersectionType` where eval has retained

@@ -106,6 +106,25 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         })
     }
 
+    /// Checks an AOT instance property initialization marker through the generated helper.
+    fn property_is_initialized(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+    ) -> Result<bool, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let initialized = unsafe {
+            __elephc_eval_value_property_is_initialized(
+                object.as_ptr(),
+                property.as_ptr(),
+                property.len() as u64,
+                scope_ptr,
+                scope_len,
+            )
+        };
+        Ok(initialized != 0)
+    }
+
     /// Writes a boxed Mixed object property through the generated user helper.
     fn property_set(
         &mut self,
@@ -153,6 +172,26 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         } else {
             Ok(Some(RuntimeCellHandle::from_raw(ptr)))
         }
+    }
+
+    /// Checks an AOT static property initialization marker through the generated helper.
+    fn static_property_is_initialized(
+        &mut self,
+        class_name: &str,
+        property: &str,
+    ) -> Result<bool, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let initialized = unsafe {
+            __elephc_eval_value_static_property_is_initialized(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+                property.as_ptr(),
+                property.len() as u64,
+                scope_ptr,
+                scope_len,
+            )
+        };
+        Ok(initialized != 0)
     }
 
     /// Writes an AOT static property through the generated user helper.
