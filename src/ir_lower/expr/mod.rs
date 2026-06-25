@@ -12496,11 +12496,7 @@ fn is_reflection_class_new_instance_call(
     if php_symbol_key(method) != "newinstance" {
         return false;
     }
-    let object_ty = ctx.builder.value_php_type(object);
-    let Some((class_name, false)) = singular_object_class(&object_ty) else {
-        return false;
-    };
-    php_symbol_key(class_name.trim_start_matches('\\')) == "reflectionclass"
+    is_reflection_class_construction_receiver(ctx, object)
 }
 
 /// Returns true when a method call targets `ReflectionClass::newInstanceArgs()`.
@@ -12512,11 +12508,7 @@ fn is_reflection_class_new_instance_args_call(
     if php_symbol_key(method) != "newinstanceargs" {
         return false;
     }
-    let object_ty = ctx.builder.value_php_type(object);
-    let Some((class_name, false)) = singular_object_class(&object_ty) else {
-        return false;
-    };
-    php_symbol_key(class_name.trim_start_matches('\\')) == "reflectionclass"
+    is_reflection_class_construction_receiver(ctx, object)
 }
 
 /// Returns true when a method call targets `ReflectionClass::newInstanceWithoutConstructor()`.
@@ -12528,11 +12520,22 @@ fn is_reflection_class_new_instance_without_constructor_call(
     if php_symbol_key(method) != "newinstancewithoutconstructor" {
         return false;
     }
+    is_reflection_class_construction_receiver(ctx, object)
+}
+
+/// Returns true when a receiver can use ReflectionClass construction helper lowering.
+fn is_reflection_class_construction_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    object: ValueId,
+) -> bool {
     let object_ty = ctx.builder.value_php_type(object);
     let Some((class_name, false)) = singular_object_class(&object_ty) else {
         return false;
     };
-    php_symbol_key(class_name.trim_start_matches('\\')) == "reflectionclass"
+    matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "reflectionclass" | "reflectionobject"
+    )
 }
 
 /// Emits the PHP fatal terminator for an ordinary method call on null.
