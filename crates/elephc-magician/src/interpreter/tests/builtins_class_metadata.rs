@@ -1885,6 +1885,34 @@ return true;"##,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionParameter formats retained eval parameter metadata through `__toString()`.
+#[test]
+fn execute_program_reflection_parameter_to_string() {
+    let program = parse_fragment(
+        br#"class EvalReflectParameterStringTarget {
+    const LABEL = "L";
+    public function run(string $name, int $count = 3, $label = self::LABEL, &...$items) {}
+}
+$params = (new ReflectionMethod("EvalReflectParameterStringTarget", "run"))->getParameters();
+foreach ($params as $param) {
+    echo $param->__toString();
+    echo "|";
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Parameter #0 [ <required> string $name ]|Parameter #1 [ <optional> int $count = 3 ]|Parameter #2 [ <optional> $label = self::LABEL ]|Parameter #3 [ <optional> &...$items ]|"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionMethod exposes eval-declared return type metadata.
 #[test]
 fn execute_program_reflection_method_reports_return_type_metadata() {

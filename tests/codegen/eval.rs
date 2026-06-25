@@ -10808,6 +10808,33 @@ echo $unionType;
     );
 }
 
+/// Verifies eval ReflectionParameter stringifies retained parameter metadata.
+#[test]
+fn test_eval_reflection_parameter_to_string() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectParameterStringTarget {
+    const LABEL = "L";
+    public function run(string $name, int $count = 3, $label = self::LABEL, &...$items) {}
+}
+$params = (new ReflectionMethod("EvalReflectParameterStringTarget", "run"))->getParameters();
+foreach ($params as $param) {
+    echo $param->__toString();
+    echo "|";
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Parameter #0 [ <required> string $name ]|Parameter #1 [ <optional> int $count = 3 ]|Parameter #2 [ <optional> $label = self::LABEL ]|Parameter #3 [ <optional> &...$items ]|"
+    );
+}
+
 /// Verifies eval ReflectionParameter::getClass() reports retained object type metadata.
 #[test]
 fn test_eval_reflection_parameter_get_class_reports_named_object_type() {

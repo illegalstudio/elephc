@@ -3779,6 +3779,7 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
         builtin_reflection_class_bool_method("isCallable", "__is_callable_type"),
         builtin_reflection_class_mixed_method("getType", "__type"),
         builtin_reflection_class_mixed_method("getClass", "__class"),
+        builtin_reflection_class_string_method("__toString", "__name"),
         builtin_reflection_owner_get_attributes_method(),
         builtin_reflection_class_bool_method("isDefaultValueAvailable", "__has_default_value"),
         builtin_reflection_parameter_is_default_value_constant_method(),
@@ -4869,6 +4870,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
             }
             if class_name == "ReflectionParameter" {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
+                }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getPosition")) {
                     sig.return_type = PhpType::Int;
                 }
