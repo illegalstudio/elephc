@@ -8279,6 +8279,11 @@ fn test_eval_rejects_invalid_magic_method_contracts() {
         return "yes";
     }
 }');"#,
+        r#"eval('class EvalInvalidGetByRef {
+    public function __get(&$name) {
+        return "x";
+    }
+}');"#,
         r#"eval('class EvalInvalidUnsetReturn {
     public function __unset($name): int {
         return 1;

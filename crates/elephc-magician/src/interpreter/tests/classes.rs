@@ -1245,6 +1245,10 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
             "protected __get",
         ),
         (
+            br#"class EvalBadGetByRef { public function __get(&$name) { return "x"; } }"#.as_slice(),
+            "by-ref __get",
+        ),
+        (
             br#"class EvalBadIssetReturn { public function __isset($name): string { return "yes"; } }"#.as_slice(),
             "bad __isset return type",
         ),

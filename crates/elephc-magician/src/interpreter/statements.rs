@@ -1438,7 +1438,11 @@ fn validate_eval_magic_methods(methods: &[EvalClassMethod]) -> Result<(), EvalSt
 
 /// Validates staticness, visibility, arity, and declared return type for one eval magic method.
 fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus> {
-    match method.name().to_ascii_lowercase().as_str() {
+    let name = method.name().to_ascii_lowercase();
+    if is_validated_eval_magic_method(&name) {
+        validate_magic_no_by_ref_params(method)?;
+    }
+    match name.as_str() {
         "__tostring" => {
             validate_magic_non_static(method)?;
             validate_magic_public(method)?;
@@ -1516,6 +1520,30 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
     Ok(())
 }
 
+/// Returns whether eval knows PHP declaration-time rules for this magic method.
+fn is_validated_eval_magic_method(name: &str) -> bool {
+    matches!(
+        name,
+        "__tostring"
+            | "__get"
+            | "__isset"
+            | "__unset"
+            | "__set"
+            | "__call"
+            | "__callstatic"
+            | "__sleep"
+            | "__serialize"
+            | "__wakeup"
+            | "__unserialize"
+            | "__debuginfo"
+            | "__set_state"
+            | "__invoke"
+            | "__clone"
+            | "__destruct"
+            | "__construct"
+    )
+}
+
 /// Magic method return types that eval can validate from retained declarations.
 #[derive(Clone, Copy)]
 enum MagicReturnType {
@@ -1563,6 +1591,19 @@ fn validate_magic_arity(method: &EvalClassMethod, expected: usize) -> Result<(),
         Ok(())
     } else {
         Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Rejects by-reference parameters on PHP magic methods.
+fn validate_magic_no_by_ref_params(method: &EvalClassMethod) -> Result<(), EvalStatus> {
+    if method
+        .parameter_is_by_ref()
+        .iter()
+        .any(|is_by_ref| *is_by_ref)
+    {
+        Err(EvalStatus::RuntimeFatal)
+    } else {
+        Ok(())
     }
 }
 
