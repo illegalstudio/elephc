@@ -754,15 +754,37 @@ fn validate_eval_enum_case_declarations(enum_decl: &EvalEnum) -> Result<(), Eval
 /// Validates enum method declarations that PHP reserves or forbids on enums.
 fn validate_eval_enum_method_declarations(enum_decl: &EvalEnum) -> Result<(), EvalStatus> {
     for method in enum_decl.methods() {
-        if method.name().eq_ignore_ascii_case("__construct")
-            || method.name().eq_ignore_ascii_case("cases")
+        if method.name().eq_ignore_ascii_case("cases")
             || method.name().eq_ignore_ascii_case("from")
             || method.name().eq_ignore_ascii_case("tryFrom")
+            || is_forbidden_eval_enum_magic_method(method.name())
         {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
     Ok(())
+}
+
+/// Returns whether PHP forbids this magic method name inside enum declarations.
+fn is_forbidden_eval_enum_magic_method(name: &str) -> bool {
+    [
+        "__construct",
+        "__destruct",
+        "__clone",
+        "__get",
+        "__set",
+        "__isset",
+        "__unset",
+        "__sleep",
+        "__wakeup",
+        "__serialize",
+        "__unserialize",
+        "__toString",
+        "__debugInfo",
+        "__set_state",
+    ]
+    .iter()
+    .any(|method| name.eq_ignore_ascii_case(method))
 }
 
 /// Initializes enum singleton case objects for a newly declared eval enum.

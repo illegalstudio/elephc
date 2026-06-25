@@ -594,8 +594,9 @@ eval-declared classes. Pure and backed enum cases are singleton objects,
 values. `EnumName::from()` misses throw a catchable `ValueError`, while
 `EnumName::tryFrom()` misses return `null`. Enums can implement eval-declared
 or generated interfaces and can use their own instance/static methods and class
-constants. Direct `new EnumName()` and property writes to enum cases are
-rejected.
+constants. Eval rejects enum declarations that redeclare reserved enum methods
+or PHP-forbidden enum magic methods. Direct `new EnumName()` and property writes
+to enum cases are rejected.
 
 Public declared property reads/writes through `$this->property` from native
 methods are bridged to eval. Protected and private declared property

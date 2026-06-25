@@ -6469,6 +6469,23 @@ try {
     );
 }
 
+/// Verifies eval-declared enums reject magic methods PHP forbids on enums.
+#[test]
+fn test_eval_fragment_rejects_forbidden_enum_magic_method() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('enum EvalDynBadMagic {
+    case Ready;
+    public function __destruct() {}
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval `is_a()` and `is_subclass_of()` use generated AOT relation metadata.
 #[test]
 fn test_eval_fragment_is_a_relation_probes_aot_metadata() {

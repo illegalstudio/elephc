@@ -11,6 +11,17 @@
 use super::super::*;
 use super::support::*;
 
+/// Executes an eval enum fragment and asserts it fails during runtime validation.
+fn assert_invalid_enum_fragment(source: &[u8], message: &str) {
+    let program = parse_fragment(source).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values).expect_err(message);
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies pure eval enums expose singleton cases and class-like introspection.
 #[test]
 fn execute_program_declares_pure_eval_enum_cases() {
@@ -121,33 +132,56 @@ return EvalSuit::fallback() === EvalSuit::Hearts;"#,
 /// Verifies eval rejects enum members that conflict with PHP enum rules.
 #[test]
 fn execute_program_rejects_invalid_eval_enum_members() {
-    let program = parse_fragment(
+    assert_invalid_enum_fragment(
         br#"enum EvalInvalidEnum {
     case Ready;
     public const Ready = 1;
 }"#,
-    )
-    .expect("parse eval fragment");
-    let mut scope = ElephcEvalScope::new();
-    let mut values = FakeOps::default();
+        "case and constant name collision should fail",
+    );
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("case and constant name collision should fail");
-
-    assert_eq!(err, EvalStatus::RuntimeFatal);
-
-    let program = parse_fragment(
+    assert_invalid_enum_fragment(
         br#"enum EvalInvalidEnumMethod {
     case Ready;
     public static function cases() { return []; }
 }"#,
+        "reserved enum method should fail",
+    );
+
+    assert_invalid_enum_fragment(
+        br#"enum EvalInvalidEnumMagicMethod {
+    case Ready;
+    public function __destruct() {}
+}"#,
+        "forbidden enum magic method should fail",
+    );
+
+    assert_invalid_enum_fragment(
+        br#"enum EvalInvalidEnumMagicMethodCase {
+    case Ready;
+    public function __GET($name) {}
+}"#,
+        "forbidden enum magic method lookup should be case-insensitive",
+    );
+}
+
+/// Verifies eval allows the enum magic methods PHP permits.
+#[test]
+fn execute_program_allows_supported_eval_enum_magic_methods() {
+    let program = parse_fragment(
+        br#"enum EvalAllowedEnumMagic {
+    case Ready;
+    public function __call($name, $arguments) { return $name; }
+    public static function __callStatic($name, $arguments) { return $name; }
+    public function __invoke() { return "invoke"; }
+}
+return enum_exists("EvalAllowedEnumMagic");"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("reserved enum method should fail");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
