@@ -14,4 +14,4 @@ mod scan;
 mod token;
 
 pub(crate) use scan::tokenize;
-pub(crate) use token::TokenKind;
+pub(crate) use token::{Token, TokenKind};

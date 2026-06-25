@@ -185,6 +185,32 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionFunction reports eval source file and line metadata.
+#[test]
+fn execute_program_reflection_function_reports_source_location() {
+    let program = parse_fragment(
+        br#"function eval_reflect_source_fn() {
+    return 1;
+}
+$ref = new ReflectionFunction("eval_reflect_source_fn");
+echo $ref->getFileName(); echo ":";
+echo $ref->getStartLine(); echo ":";
+echo $ref->getEndLine();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    context.set_call_site("/tmp/eval-source.php", "/tmp", 17);
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("execute eval ir");
+
+    assert_eq!(values.output, "/tmp/eval-source.php(17) : eval()'d code:1:3");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval-declared functions bind named, default, by-reference, and variadic arguments.
 #[test]
 fn execute_program_calls_eval_function_with_rich_argument_binding() {

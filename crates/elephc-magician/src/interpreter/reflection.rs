@@ -11,6 +11,7 @@
 //! - Generated/AOT targets use focused runtime hooks for supported point lookups.
 
 use super::*;
+use crate::eval_ir::EvalSourceLocation;
 
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
 const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
@@ -60,6 +61,7 @@ const EVAL_REFLECTION_NAMED_TYPE_FLAG_BUILTIN: u64 = 2;
 /// Eval metadata needed to materialize one `ReflectionClass` owner object.
 struct EvalReflectionClassMetadata {
     resolved_name: String,
+    source_location: Option<EvalSourceLocation>,
     attributes: Vec<EvalAttribute>,
     flags: u64,
     modifiers: u64,
@@ -73,6 +75,7 @@ struct EvalReflectionClassMetadata {
 /// Eval metadata needed to materialize one `ReflectionMethod` or `ReflectionProperty` owner object.
 struct EvalReflectionMemberMetadata {
     declaring_class_name: Option<String>,
+    source_location: Option<EvalSourceLocation>,
     attributes: Vec<EvalAttribute>,
     visibility: EvalVisibility,
     is_static: bool,
@@ -181,11 +184,13 @@ struct EvalReflectionNamedTypeMetadata {
 enum EvalReflectionFunctionMethodTarget {
     Function {
         name: String,
+        source_location: Option<EvalSourceLocation>,
         is_variadic: bool,
         return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     },
     Method {
         name: String,
+        source_location: Option<EvalSourceLocation>,
         is_variadic: bool,
         return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     },
@@ -360,6 +365,35 @@ pub(in crate::interpreter) fn eval_reflection_class_is_instance_result(
     let result = dynamic_object_is_a(object, &reflected_name, false, context, values)?
         .map_or_else(|| values.object_is_a(object, &reflected_name, false), Ok)?;
     values.bool_value(result).map(Some)
+}
+
+/// Handles eval-backed `ReflectionClass` source-location metadata calls.
+pub(in crate::interpreter) fn eval_reflection_class_source_location_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let method_key = method_name.to_ascii_lowercase();
+    if !matches!(
+        method_key.as_str(),
+        "getfilename" | "getstartline" | "getendline"
+    ) {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context.eval_reflection_class_name(identity) else {
+        return Ok(None);
+    };
+    let source_location = eval_reflection_class_like_attributes(reflected_name, context)
+        .and_then(|metadata| metadata.source_location);
+    eval_reflection_source_location_result(
+        method_key.as_str(),
+        source_location,
+        evaluated_args,
+        context,
+        values,
+    )
 }
 
 /// Handles eval-backed `ReflectionClass::hasMethod()` calls.
@@ -856,6 +890,15 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
             values
                 .bool_value(!eval_reflection_function_method_namespace_name(&target).is_empty())
                 .map(Some)
+        }
+        "getfilename" | "getstartline" | "getendline" => {
+            eval_reflection_source_location_result(
+                method_key.as_str(),
+                eval_reflection_function_method_source_location(&target),
+                evaluated_args,
+                context,
+                values,
+            )
         }
         "isinternal"
         | "isclosure"
@@ -2610,6 +2653,7 @@ fn eval_reflection_object_dynamic_property_exists(
 fn eval_reflection_dynamic_property_metadata(class_name: &str) -> EvalReflectionMemberMetadata {
     EvalReflectionMemberMetadata {
         declaring_class_name: Some(class_name.trim_start_matches('\\').to_string()),
+        source_location: None,
         attributes: Vec::new(),
         visibility: EvalVisibility::Public,
         is_static: false,
@@ -2739,6 +2783,7 @@ fn eval_reflection_aot_method_metadata(
         .and_then(eval_reflection_parameter_type_metadata);
     EvalReflectionMemberMetadata {
         declaring_class_name: Some(class_name.trim_start_matches('\\').to_string()),
+        source_location: None,
         attributes,
         visibility,
         is_static: flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0,
@@ -3011,6 +3056,7 @@ fn eval_reflection_aot_property_metadata(
     }
     EvalReflectionMemberMetadata {
         declaring_class_name: Some(class_name.trim_start_matches('\\').to_string()),
+        source_location: None,
         attributes,
         visibility,
         is_static,
@@ -4270,6 +4316,7 @@ fn eval_reflection_class_like_attributes(
         );
         return Some(EvalReflectionClassMetadata {
             resolved_name: class.name().trim_start_matches('\\').to_string(),
+            source_location: class.source_location(),
             attributes: class.attributes().to_vec(),
             interface_names: context.class_interface_names(class.name()),
             trait_names: context.class_trait_names(class.name()),
@@ -4283,6 +4330,7 @@ fn eval_reflection_class_like_attributes(
     if let Some(interface) = context.interface(name) {
         return Some(EvalReflectionClassMetadata {
             resolved_name: interface.name().trim_start_matches('\\').to_string(),
+            source_location: interface.source_location(),
             attributes: interface.attributes().to_vec(),
             interface_names: context.interface_parent_names(interface.name()),
             trait_names: Vec::new(),
@@ -4296,6 +4344,7 @@ fn eval_reflection_class_like_attributes(
     if let Some(trait_decl) = context.trait_decl(name) {
         return Some(EvalReflectionClassMetadata {
             resolved_name: trait_decl.name().trim_start_matches('\\').to_string(),
+            source_location: trait_decl.source_location(),
             attributes: trait_decl.attributes().to_vec(),
             interface_names: Vec::new(),
             trait_names: Vec::new(),
@@ -4310,6 +4359,7 @@ fn eval_reflection_class_like_attributes(
         .enum_decl(name)
         .map(|enum_decl| EvalReflectionClassMetadata {
             resolved_name: enum_decl.name().trim_start_matches('\\').to_string(),
+            source_location: enum_decl.source_location(),
             attributes: enum_decl.attributes().to_vec(),
             interface_names: context.class_interface_names(enum_decl.name()),
             trait_names: Vec::new(),
@@ -4925,6 +4975,7 @@ fn eval_reflection_method_metadata(
                 );
                 EvalReflectionMemberMetadata {
                     declaring_class_name: Some(declaring_class),
+                    source_location: method.source_location(),
                     attributes: method.attributes().to_vec(),
                     visibility: method.visibility(),
                     is_static: method.is_static(),
@@ -4988,6 +5039,7 @@ fn eval_reflection_method_metadata(
                 );
                 EvalReflectionMemberMetadata {
                     declaring_class_name: Some(class_name.to_string()),
+                    source_location: method.source_location(),
                     attributes: method.attributes().to_vec(),
                     visibility: EvalVisibility::Public,
                     is_static: method.is_static(),
@@ -5053,6 +5105,7 @@ fn eval_reflection_method_metadata(
                 );
                 EvalReflectionMemberMetadata {
                     declaring_class_name: Some(trait_decl.name().to_string()),
+                    source_location: method.source_location(),
                     attributes: method.attributes().to_vec(),
                     visibility: method.visibility(),
                     is_static: method.is_static(),
@@ -5089,6 +5142,7 @@ fn eval_reflection_property_metadata(
                 let default_value = eval_reflection_property_default_value(&property);
                 EvalReflectionMemberMetadata {
                     declaring_class_name: Some(declaring_class),
+                    source_location: None,
                     attributes: property.attributes().to_vec(),
                     visibility: property.visibility(),
                     is_static: property.is_static(),
@@ -5124,6 +5178,7 @@ fn eval_reflection_property_metadata(
             .find(|property| property.name() == property_name)
             .map(|property| EvalReflectionMemberMetadata {
                 declaring_class_name: Some(class_name.to_string()),
+                source_location: None,
                 attributes: property.attributes().to_vec(),
                 visibility: EvalVisibility::Public,
                 is_static: false,
@@ -5159,6 +5214,7 @@ fn eval_reflection_property_metadata(
                 let default_value = eval_reflection_property_default_value(property);
                 EvalReflectionMemberMetadata {
                     declaring_class_name: Some(trait_decl.name().to_string()),
+                    source_location: None,
                     attributes: property.attributes().to_vec(),
                     visibility: property.visibility(),
                     is_static: property.is_static(),
@@ -5565,6 +5621,7 @@ fn eval_reflection_property_hook_method_metadata(
     let required_parameter_count = parameters.len();
     EvalReflectionMemberMetadata {
         declaring_class_name: Some(declaring_class.to_string()),
+        source_location: None,
         attributes: Vec::new(),
         visibility: property.visibility(),
         is_static: false,
@@ -6590,11 +6647,13 @@ fn eval_reflection_function_method_target(
         let function = context.function(&name.to_ascii_lowercase());
         let is_variadic = function
             .is_some_and(|function| function.parameter_is_variadic().iter().any(|flag| *flag));
+        let source_location = function.and_then(EvalFunction::source_location);
         let return_type_metadata = function
             .and_then(EvalFunction::return_type)
             .and_then(eval_reflection_parameter_type_metadata);
         return Ok(Some(EvalReflectionFunctionMethodTarget::Function {
             name: name.to_string(),
+            source_location,
             is_variadic,
             return_type_metadata,
         }));
@@ -6620,9 +6679,11 @@ fn eval_reflection_function_method_target(
             .iter()
             .any(|parameter| parameter.is_variadic)
     });
+    let source_location = method_metadata.as_ref().and_then(|method| method.source_location);
     let return_type_metadata = method_metadata.and_then(|method| method.return_type_metadata);
     Ok(Some(EvalReflectionFunctionMethodTarget::Method {
         name: method_name.to_string(),
+        source_location,
         is_variadic,
         return_type_metadata,
     }))
@@ -6643,6 +6704,26 @@ fn eval_reflection_false_metadata_result(
     values.bool_value(false).map(Some)
 }
 
+/// Returns source file or line metadata for eval-backed reflection objects.
+fn eval_reflection_source_location_result(
+    method_key: &str,
+    source_location: Option<EvalSourceLocation>,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    eval_reflection_bind_no_args(evaluated_args)?;
+    let Some(source_location) = source_location else {
+        return values.bool_value(false).map(Some);
+    };
+    match method_key {
+        "getfilename" => values.string(&context.eval_file_magic()).map(Some),
+        "getstartline" => values.int(source_location.start_line()).map(Some),
+        "getendline" => values.int(source_location.end_line()).map(Some),
+        _ => Ok(None),
+    }
+}
+
 /// Returns PHP's short name for a ReflectionFunction or ReflectionMethod target.
 fn eval_reflection_function_method_short_name(
     target: &EvalReflectionFunctionMethodTarget,
@@ -6652,6 +6733,20 @@ fn eval_reflection_function_method_short_name(
             eval_reflection_short_name(name)
         }
         EvalReflectionFunctionMethodTarget::Method { name, .. } => name.clone(),
+    }
+}
+
+/// Returns eval-fragment source metadata for a ReflectionFunction or ReflectionMethod target.
+fn eval_reflection_function_method_source_location(
+    target: &EvalReflectionFunctionMethodTarget,
+) -> Option<EvalSourceLocation> {
+    match target {
+        EvalReflectionFunctionMethodTarget::Function {
+            source_location, ..
+        }
+        | EvalReflectionFunctionMethodTarget::Method {
+            source_location, ..
+        } => *source_location,
     }
 }
 

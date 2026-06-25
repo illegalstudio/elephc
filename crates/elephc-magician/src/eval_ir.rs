@@ -43,6 +43,38 @@ impl EvalProgram {
     }
 }
 
+/// One source range inside the current eval fragment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvalSourceLocation {
+    start_line: i64,
+    end_line: i64,
+}
+
+impl EvalSourceLocation {
+    /// Creates a source range using one-based eval-fragment line numbers.
+    pub const fn new(start_line: i64, end_line: i64) -> Self {
+        Self {
+            start_line,
+            end_line,
+        }
+    }
+
+    /// Creates a single-line source range.
+    pub const fn single_line(line: i64) -> Self {
+        Self::new(line, line)
+    }
+
+    /// Returns the one-based line where the declaration starts.
+    pub const fn start_line(&self) -> i64 {
+        self.start_line
+    }
+
+    /// Returns the one-based line where the declaration ends.
+    pub const fn end_line(&self) -> i64 {
+        self.end_line
+    }
+}
+
 /// Dynamic eval statements that operate on a materialized activation scope.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalStmt {
@@ -80,6 +112,7 @@ pub enum EvalStmt {
     },
     FunctionDecl {
         name: String,
+        source_location: Option<EvalSourceLocation>,
         attributes: Vec<EvalAttribute>,
         params: Vec<String>,
         parameter_attributes: Vec<Vec<EvalAttribute>>,
@@ -163,9 +196,10 @@ pub struct EvalCatch {
 }
 
 /// Runtime user function declared by an eval fragment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct EvalFunction {
     name: String,
+    source_location: Option<EvalSourceLocation>,
     attributes: Vec<EvalAttribute>,
     params: Vec<String>,
     parameter_attributes: Vec<Vec<EvalAttribute>>,
@@ -175,6 +209,22 @@ pub struct EvalFunction {
     parameter_is_variadic: Vec<bool>,
     return_type: Option<EvalParameterType>,
     body: Vec<EvalStmt>,
+}
+
+impl PartialEq for EvalFunction {
+    /// Compares function metadata while ignoring retained source-location decoration.
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.attributes == other.attributes
+            && self.params == other.params
+            && self.parameter_attributes == other.parameter_attributes
+            && self.parameter_types == other.parameter_types
+            && self.parameter_defaults == other.parameter_defaults
+            && self.parameter_is_by_ref == other.parameter_is_by_ref
+            && self.parameter_is_variadic == other.parameter_is_variadic
+            && self.return_type == other.return_type
+            && self.body == other.body
+    }
 }
 
 impl EvalFunction {
@@ -187,6 +237,7 @@ impl EvalFunction {
         let parameter_is_variadic = vec![false; params.len()];
         Self {
             name: name.into(),
+            source_location: None,
             attributes: Vec::new(),
             params,
             parameter_attributes,
@@ -197,6 +248,12 @@ impl EvalFunction {
             return_type: None,
             body,
         }
+    }
+
+    /// Returns a copy of this function with source-location metadata attached.
+    pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
+        self.source_location = Some(source_location);
+        self
     }
 
     /// Returns a copy of this function with declaration attributes attached.
@@ -247,6 +304,11 @@ impl EvalFunction {
     /// Returns the original source spelling of this eval-declared function name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns eval-fragment source-location metadata, when retained.
+    pub const fn source_location(&self) -> Option<EvalSourceLocation> {
+        self.source_location
     }
 
     /// Returns attributes declared directly on this eval function.
@@ -399,15 +461,29 @@ impl EvalAttribute {
 }
 
 /// Runtime enum declared by an eval fragment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct EvalEnum {
     name: String,
+    source_location: Option<EvalSourceLocation>,
     backing_type: Option<EvalEnumBackingType>,
     interfaces: Vec<String>,
     attributes: Vec<EvalAttribute>,
     cases: Vec<EvalEnumCase>,
     constants: Vec<EvalClassConstant>,
     methods: Vec<EvalClassMethod>,
+}
+
+impl PartialEq for EvalEnum {
+    /// Compares enum metadata while ignoring retained source-location decoration.
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.backing_type == other.backing_type
+            && self.interfaces == other.interfaces
+            && self.attributes == other.attributes
+            && self.cases == other.cases
+            && self.constants == other.constants
+            && self.methods == other.methods
+    }
 }
 
 impl EvalEnum {
@@ -438,6 +514,7 @@ impl EvalEnum {
     ) -> Self {
         Self {
             name: name.into(),
+            source_location: None,
             backing_type,
             interfaces,
             attributes: Vec::new(),
@@ -445,6 +522,12 @@ impl EvalEnum {
             constants,
             methods,
         }
+    }
+
+    /// Returns a copy of this enum with source-location metadata attached.
+    pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
+        self.source_location = Some(source_location);
+        self
     }
 
     /// Returns a copy of this enum with class-like attributes attached.
@@ -456,6 +539,11 @@ impl EvalEnum {
     /// Returns the original source spelling of this eval-declared enum name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns eval-fragment source-location metadata, when retained.
+    pub const fn source_location(&self) -> Option<EvalSourceLocation> {
+        self.source_location
     }
 
     /// Returns the optional scalar backing type for this enum.
@@ -507,6 +595,7 @@ impl EvalEnum {
             self.methods.clone(),
         )
         .with_attributes(self.attributes.clone())
+        .with_source_location_option(self.source_location)
     }
 }
 
@@ -558,14 +647,27 @@ impl EvalEnumCase {
 }
 
 /// Runtime interface declared by an eval fragment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct EvalInterface {
     name: String,
+    source_location: Option<EvalSourceLocation>,
     parents: Vec<String>,
     attributes: Vec<EvalAttribute>,
     constants: Vec<EvalClassConstant>,
     properties: Vec<EvalInterfaceProperty>,
     methods: Vec<EvalInterfaceMethod>,
+}
+
+impl PartialEq for EvalInterface {
+    /// Compares interface metadata while ignoring retained source-location decoration.
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.parents == other.parents
+            && self.attributes == other.attributes
+            && self.constants == other.constants
+            && self.properties == other.properties
+            && self.methods == other.methods
+    }
 }
 
 impl EvalInterface {
@@ -598,12 +700,19 @@ impl EvalInterface {
     ) -> Self {
         Self {
             name: name.into(),
+            source_location: None,
             parents,
             attributes: Vec::new(),
             constants,
             properties,
             methods,
         }
+    }
+
+    /// Returns a copy of this interface with source-location metadata attached.
+    pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
+        self.source_location = Some(source_location);
+        self
     }
 
     /// Returns a copy of this interface with class-like attributes attached.
@@ -615,6 +724,11 @@ impl EvalInterface {
     /// Returns the original source spelling of this eval-declared interface name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns eval-fragment source-location metadata, when retained.
+    pub const fn source_location(&self) -> Option<EvalSourceLocation> {
+        self.source_location
     }
 
     /// Returns interface names extended directly by this eval interface.
@@ -783,9 +897,10 @@ const fn eval_visibility_rank(visibility: EvalVisibility) -> u8 {
 }
 
 /// Method signature metadata for a runtime eval interface.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct EvalInterfaceMethod {
     name: String,
+    source_location: Option<EvalSourceLocation>,
     attributes: Vec<EvalAttribute>,
     is_static: bool,
     params: Vec<String>,
@@ -796,6 +911,23 @@ pub struct EvalInterfaceMethod {
     parameter_is_by_ref: Vec<bool>,
     parameter_is_variadic: Vec<bool>,
     return_type: Option<EvalParameterType>,
+}
+
+impl PartialEq for EvalInterfaceMethod {
+    /// Compares interface method metadata while ignoring retained source-location decoration.
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.attributes == other.attributes
+            && self.is_static == other.is_static
+            && self.params == other.params
+            && self.parameter_attributes == other.parameter_attributes
+            && self.parameter_has_types == other.parameter_has_types
+            && self.parameter_types == other.parameter_types
+            && self.parameter_defaults == other.parameter_defaults
+            && self.parameter_is_by_ref == other.parameter_is_by_ref
+            && self.parameter_is_variadic == other.parameter_is_variadic
+            && self.return_type == other.return_type
+    }
 }
 
 impl EvalInterfaceMethod {
@@ -809,6 +941,7 @@ impl EvalInterfaceMethod {
         let parameter_is_variadic = vec![false; params.len()];
         Self {
             name: name.into(),
+            source_location: None,
             attributes: Vec::new(),
             is_static: false,
             params,
@@ -820,6 +953,12 @@ impl EvalInterfaceMethod {
             parameter_is_variadic,
             return_type: None,
         }
+    }
+
+    /// Returns a copy of this interface method with source-location metadata attached.
+    pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
+        self.source_location = Some(source_location);
+        self
     }
 
     /// Returns a copy of this interface method with its static modifier flag set.
@@ -885,6 +1024,11 @@ impl EvalInterfaceMethod {
         &self.name
     }
 
+    /// Returns eval-fragment source-location metadata, when retained.
+    pub const fn source_location(&self) -> Option<EvalSourceLocation> {
+        self.source_location
+    }
+
     /// Returns attributes declared directly on this interface method.
     pub fn attributes(&self) -> &[EvalAttribute] {
         &self.attributes
@@ -937,9 +1081,10 @@ impl EvalInterfaceMethod {
 }
 
 /// Runtime class declared by an eval fragment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct EvalClass {
     name: String,
+    source_location: Option<EvalSourceLocation>,
     is_abstract: bool,
     is_final: bool,
     is_readonly_class: bool,
@@ -952,6 +1097,25 @@ pub struct EvalClass {
     constants: Vec<EvalClassConstant>,
     properties: Vec<EvalClassProperty>,
     methods: Vec<EvalClassMethod>,
+}
+
+impl PartialEq for EvalClass {
+    /// Compares class metadata while ignoring retained source-location decoration.
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.is_abstract == other.is_abstract
+            && self.is_final == other.is_final
+            && self.is_readonly_class == other.is_readonly_class
+            && self.is_anonymous == other.is_anonymous
+            && self.parent == other.parent
+            && self.interfaces == other.interfaces
+            && self.attributes == other.attributes
+            && self.traits == other.traits
+            && self.trait_adaptations == other.trait_adaptations
+            && self.constants == other.constants
+            && self.properties == other.properties
+            && self.methods == other.methods
+    }
 }
 
 impl EvalClass {
@@ -1169,6 +1333,7 @@ impl EvalClass {
     ) -> Self {
         Self {
             name: name.into(),
+            source_location: None,
             is_abstract,
             is_final,
             is_readonly_class,
@@ -1182,6 +1347,21 @@ impl EvalClass {
             properties,
             methods,
         }
+    }
+
+    /// Returns a copy of this class with source-location metadata attached.
+    pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
+        self.source_location = Some(source_location);
+        self
+    }
+
+    /// Returns a copy of this class with optional source-location metadata attached.
+    pub const fn with_source_location_option(
+        mut self,
+        source_location: Option<EvalSourceLocation>,
+    ) -> Self {
+        self.source_location = source_location;
+        self
     }
 
     /// Returns a copy of this class with class-like attributes attached.
@@ -1211,6 +1391,11 @@ impl EvalClass {
     /// Returns the original source spelling of this eval-declared class name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns eval-fragment source-location metadata, when retained.
+    pub const fn source_location(&self) -> Option<EvalSourceLocation> {
+        self.source_location
     }
 
     /// Returns whether this eval-declared class was declared `abstract`.
@@ -1378,13 +1563,25 @@ impl EvalClassConstant {
 }
 
 /// Runtime trait declared by an eval fragment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct EvalTrait {
     name: String,
+    source_location: Option<EvalSourceLocation>,
     attributes: Vec<EvalAttribute>,
     constants: Vec<EvalClassConstant>,
     properties: Vec<EvalClassProperty>,
     methods: Vec<EvalClassMethod>,
+}
+
+impl PartialEq for EvalTrait {
+    /// Compares trait metadata while ignoring retained source-location decoration.
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.attributes == other.attributes
+            && self.constants == other.constants
+            && self.properties == other.properties
+            && self.methods == other.methods
+    }
 }
 
 impl EvalTrait {
@@ -1406,11 +1603,18 @@ impl EvalTrait {
     ) -> Self {
         Self {
             name: name.into(),
+            source_location: None,
             attributes: Vec::new(),
             constants,
             properties,
             methods,
         }
+    }
+
+    /// Returns a copy of this trait with source-location metadata attached.
+    pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
+        self.source_location = Some(source_location);
+        self
     }
 
     /// Returns a copy of this trait with class-like attributes attached.
@@ -1422,6 +1626,11 @@ impl EvalTrait {
     /// Returns the original source spelling of this eval-declared trait name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns eval-fragment source-location metadata, when retained.
+    pub const fn source_location(&self) -> Option<EvalSourceLocation> {
+        self.source_location
     }
 
     /// Returns attributes declared directly on this eval trait.
@@ -1694,9 +1903,10 @@ pub enum EvalVisibility {
 }
 
 /// Public method metadata for a runtime eval class.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct EvalClassMethod {
     name: String,
+    source_location: Option<EvalSourceLocation>,
     attributes: Vec<EvalAttribute>,
     visibility: EvalVisibility,
     is_static: bool,
@@ -1711,6 +1921,27 @@ pub struct EvalClassMethod {
     parameter_is_variadic: Vec<bool>,
     return_type: Option<EvalParameterType>,
     body: Vec<EvalStmt>,
+}
+
+impl PartialEq for EvalClassMethod {
+    /// Compares class method metadata while ignoring retained source-location decoration.
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.attributes == other.attributes
+            && self.visibility == other.visibility
+            && self.is_static == other.is_static
+            && self.is_abstract == other.is_abstract
+            && self.is_final == other.is_final
+            && self.params == other.params
+            && self.parameter_attributes == other.parameter_attributes
+            && self.parameter_has_types == other.parameter_has_types
+            && self.parameter_types == other.parameter_types
+            && self.parameter_defaults == other.parameter_defaults
+            && self.parameter_is_by_ref == other.parameter_is_by_ref
+            && self.parameter_is_variadic == other.parameter_is_variadic
+            && self.return_type == other.return_type
+            && self.body == other.body
+    }
 }
 
 impl EvalClassMethod {
@@ -1756,6 +1987,7 @@ impl EvalClassMethod {
         let parameter_is_variadic = vec![false; params.len()];
         Self {
             name: name.into(),
+            source_location: None,
             attributes: Vec::new(),
             visibility,
             is_static,
@@ -1773,9 +2005,20 @@ impl EvalClassMethod {
         }
     }
 
+    /// Returns a copy of this method with source-location metadata attached.
+    pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
+        self.source_location = Some(source_location);
+        self
+    }
+
     /// Returns the PHP-visible method name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns eval-fragment source-location metadata, when retained.
+    pub const fn source_location(&self) -> Option<EvalSourceLocation> {
+        self.source_location
     }
 
     /// Returns a copy of this method with declaration attributes attached.

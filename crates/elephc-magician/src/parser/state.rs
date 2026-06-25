@@ -14,7 +14,7 @@
 use super::cursor::split_first_name_segment;
 use crate::errors::EvalParseError;
 use crate::eval_ir::EvalProgram;
-use crate::lexer::TokenKind;
+use crate::lexer::{Token, TokenKind};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -23,6 +23,7 @@ static ANONYMOUS_CLASS_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// Parses tokenized eval fragments into EvalIR.
 pub(super) struct Parser {
     pub(super) tokens: Vec<TokenKind>,
+    pub(super) token_lines: Vec<i64>,
     pub(super) pos: usize,
     pub(super) source_len: usize,
     pub(super) namespace: String,
@@ -99,9 +100,12 @@ impl NamespaceImports {
 
 impl Parser {
     /// Creates a parser over tokens produced from a source fragment.
-    pub(super) fn new(tokens: Vec<TokenKind>, source_len: usize) -> Self {
+    pub(super) fn new(tokens: Vec<Token>, source_len: usize) -> Self {
+        let token_lines = tokens.iter().map(Token::line).collect();
+        let tokens = tokens.into_iter().map(Token::into_kind).collect();
         Self {
             tokens,
+            token_lines,
             pos: 0,
             source_len,
             namespace: String::new(),

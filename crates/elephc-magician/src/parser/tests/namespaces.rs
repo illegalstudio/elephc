@@ -18,6 +18,7 @@ fn parse_fragment_accepts_function_declaration_source() {
         program.statements(),
         &[EvalStmt::FunctionDecl {
             name: "dyn".to_string(),
+            source_location: Some(EvalSourceLocation::single_line(1)),
             attributes: Vec::new(),
             params: vec!["x".to_string()],
             parameter_attributes: vec![Vec::new()],
@@ -48,6 +49,7 @@ return dyn();"#,
         &[
             EvalStmt::FunctionDecl {
                 name: "Eval\\Ns\\dyn".to_string(),
+                source_location: Some(EvalSourceLocation::single_line(2)),
                 attributes: Vec::new(),
                 params: Vec::new(),
                 parameter_attributes: Vec::new(),
@@ -240,6 +242,7 @@ function dyn() { return alias(); }"#,
         program.statements(),
         &[EvalStmt::FunctionDecl {
             name: "Eval\\UseNs\\dyn".to_string(),
+            source_location: Some(EvalSourceLocation::single_line(3)),
             attributes: Vec::new(),
             params: Vec::new(),
             parameter_attributes: Vec::new(),

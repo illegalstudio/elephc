@@ -203,6 +203,10 @@ for those owners. `ReflectionClass`, `ReflectionFunction`, `ReflectionMethod`,
 eval does not retain docblock text. `ReflectionClass`, `ReflectionFunction`,
 and `ReflectionMethod` expose `getExtensionName()` and `getExtension()` and
 report `false` / `null` for eval-declared user symbols.
+`ReflectionClass`, `ReflectionFunction`, and `ReflectionMethod` expose
+`getFileName()`, `getStartLine()`, and `getEndLine()` for parser-backed eval
+declarations. File names use PHP's synthetic eval file format from the current
+eval call site, and line numbers are one-based inside the evaluated fragment.
 `ReflectionClass` construction accepts class-name strings and object arguments;
 object arguments reflect the runtime class of eval-created or generated/AOT
 objects.

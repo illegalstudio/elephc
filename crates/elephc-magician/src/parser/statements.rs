@@ -16,7 +16,8 @@ use crate::eval_ir::{
     EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst, EvalEnum,
     EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalInstanceOfTarget, EvalInterface,
     EvalInterfaceMethod, EvalInterfaceProperty, EvalParameterType, EvalParameterTypeVariant,
-    EvalStmt, EvalSwitchCase, EvalTrait, EvalTraitAdaptation, EvalUnaryOp, EvalVisibility,
+    EvalSourceLocation, EvalStmt, EvalSwitchCase, EvalTrait, EvalTraitAdaptation, EvalUnaryOp,
+    EvalVisibility,
 };
 use crate::lexer::TokenKind;
 
@@ -34,6 +35,7 @@ pub(super) struct ParsedMethodParams {
 
 /// Class-body members collected while parsing a named or anonymous eval class.
 struct ParsedClassBody {
+    source_end_line: i64,
     constants: Vec<EvalClassConstant>,
     properties: Vec<EvalClassProperty>,
     methods: Vec<EvalClassMethod>,
@@ -370,6 +372,7 @@ impl Parser {
         if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "class")) {
             return Err(EvalParseError::UnsupportedConstruct);
         }
+        let source_start_line = self.current_line();
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -379,6 +382,7 @@ impl Parser {
         let parent = self.parse_class_parent_clause()?;
         let interfaces = self.parse_class_interface_clause()?;
         let body = self.parse_class_body_members(is_readonly_class)?;
+        let source_location = EvalSourceLocation::new(source_start_line, body.source_end_line);
         self.consume_semicolon();
         Ok(vec![EvalStmt::ClassDecl(
             EvalClass::with_class_modifiers_traits_adaptations_and_constants(
@@ -394,6 +398,7 @@ impl Parser {
                 body.properties,
                 body.methods,
             )
+            .with_source_location(source_location)
             .with_attributes(attributes),
         )])
     }
@@ -406,6 +411,7 @@ impl Parser {
         if !matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "class")) {
             return Err(EvalParseError::UnsupportedConstruct);
         }
+        let source_start_line = self.current_line();
         self.advance();
         let args = if matches!(self.current(), TokenKind::LParen) {
             self.parse_call_args()?
@@ -415,6 +421,7 @@ impl Parser {
         let parent = self.parse_class_parent_clause()?;
         let interfaces = self.parse_class_interface_clause()?;
         let body = self.parse_class_body_members(is_readonly_class)?;
+        let source_location = EvalSourceLocation::new(source_start_line, body.source_end_line);
         let name = next_anonymous_class_name();
         let class = EvalClass::with_class_modifiers_traits_adaptations_and_constants(
             name,
@@ -429,6 +436,7 @@ impl Parser {
             body.properties,
             body.methods,
         )
+        .with_source_location(source_location)
         .with_anonymous();
         Ok(EvalExpr::NewAnonymousClass { class, args })
     }
@@ -444,7 +452,19 @@ impl Parser {
         let mut methods = Vec::new();
         let mut traits = Vec::new();
         let mut trait_adaptations = Vec::new();
-        while !self.consume(TokenKind::RBrace) {
+        loop {
+            if matches!(self.current(), TokenKind::RBrace) {
+                let source_end_line = self.current_line();
+                self.advance();
+                return Ok(ParsedClassBody {
+                    source_end_line,
+                    constants,
+                    properties,
+                    methods,
+                    traits,
+                    trait_adaptations,
+                });
+            }
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
@@ -457,13 +477,6 @@ impl Parser {
                 &mut trait_adaptations,
             )?;
         }
-        Ok(ParsedClassBody {
-            constants,
-            properties,
-            methods,
-            traits,
-            trait_adaptations,
-        })
     }
 
     /// Parses class-level `abstract`, `final`, and `readonly` modifiers before `class`.
@@ -893,6 +906,7 @@ impl Parser {
         is_abstract: bool,
         is_final: bool,
     ) -> Result<(EvalClassMethod, Vec<EvalClassProperty>), EvalParseError> {
+        let source_start_line = self.current_line();
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -914,16 +928,18 @@ impl Parser {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         let return_type = self.parse_optional_return_type()?;
-        let body = if is_abstract {
+        let (body, source_end_line) = if is_abstract {
+            let source_end_line = self.current_line();
             self.expect_semicolon()?;
-            Vec::new()
+            (Vec::new(), source_end_line)
         } else {
-            let body = self.parse_block()?;
-            if promoted_assignments.is_empty() {
+            let (body, source_end_line) = self.parse_block_with_end_line()?;
+            let body = if promoted_assignments.is_empty() {
                 body
             } else {
                 promoted_assignments.into_iter().chain(body).collect()
-            }
+            };
+            (body, source_end_line)
         };
         Ok((
             EvalClassMethod::with_visibility_and_modifiers(
@@ -935,6 +951,7 @@ impl Parser {
                 params,
                 body,
             )
+            .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
             .with_parameter_types(parameter_types)
             .with_parameter_attributes(parameter_attributes)
             .with_parameter_defaults(parameter_defaults)
@@ -1084,22 +1101,24 @@ impl Parser {
         if !is_get && !is_set {
             return Err(EvalParseError::UnsupportedConstruct);
         }
+        let source_start_line = self.current_line();
         self.advance();
         let params = if is_set {
             vec![self.parse_property_set_hook_param()?]
         } else {
             Vec::new()
         };
-        let body = match self.current() {
+        let (body, source_end_line) = match self.current() {
             TokenKind::Semicolon => return Err(EvalParseError::UnsupportedConstruct),
             TokenKind::FatArrow if is_get => {
                 self.advance();
                 let expr = self.parse_expr()?;
+                let source_end_line = self.current_line();
                 self.expect_semicolon()?;
-                vec![EvalStmt::Return(Some(expr))]
+                (vec![EvalStmt::Return(Some(expr))], source_end_line)
             }
             TokenKind::FatArrow => return Err(EvalParseError::UnsupportedConstruct),
-            TokenKind::LBrace => self.parse_block()?,
+            TokenKind::LBrace => self.parse_block_with_end_line()?,
             _ => return Err(EvalParseError::UnexpectedToken),
         };
         let method_name = if is_get {
@@ -1117,7 +1136,8 @@ impl Parser {
                 false,
                 params,
                 body,
-            ),
+            )
+            .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line)),
         ))
     }
 
@@ -1146,6 +1166,7 @@ impl Parser {
         &mut self,
         attributes: Vec<EvalAttribute>,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let source_start_line = self.current_line();
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -1156,15 +1177,21 @@ impl Parser {
         let mut constants = Vec::new();
         let mut properties = Vec::new();
         let mut methods = Vec::new();
-        while !self.consume(TokenKind::RBrace) {
+        let source_end_line = loop {
+            if matches!(self.current(), TokenKind::RBrace) {
+                let source_end_line = self.current_line();
+                self.advance();
+                break source_end_line;
+            }
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
             self.parse_trait_member(&mut constants, &mut properties, &mut methods)?;
-        }
+        };
         self.consume_semicolon();
         Ok(vec![EvalStmt::TraitDecl(
             EvalTrait::with_constants(name, constants, properties, methods)
+                .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
                 .with_attributes(attributes),
         )])
     }
@@ -1234,6 +1261,7 @@ impl Parser {
         &mut self,
         attributes: Vec<EvalAttribute>,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let source_start_line = self.current_line();
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -1246,15 +1274,21 @@ impl Parser {
         let mut cases = Vec::new();
         let mut constants = Vec::new();
         let mut methods = Vec::new();
-        while !self.consume(TokenKind::RBrace) {
+        let source_end_line = loop {
+            if matches!(self.current(), TokenKind::RBrace) {
+                let source_end_line = self.current_line();
+                self.advance();
+                break source_end_line;
+            }
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
             self.parse_enum_member(&mut cases, &mut constants, &mut methods)?;
-        }
+        };
         self.consume_semicolon();
         Ok(vec![EvalStmt::EnumDecl(
             EvalEnum::with_members(name, backing_type, interfaces, cases, constants, methods)
+                .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
                 .with_attributes(attributes),
         )])
     }
@@ -1353,6 +1387,7 @@ impl Parser {
         &mut self,
         attributes: Vec<EvalAttribute>,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let source_start_line = self.current_line();
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -1364,17 +1399,23 @@ impl Parser {
         let mut constants = Vec::new();
         let mut properties = Vec::new();
         let mut methods = Vec::new();
-        while !self.consume(TokenKind::RBrace) {
+        let source_end_line = loop {
+            if matches!(self.current(), TokenKind::RBrace) {
+                let source_end_line = self.current_line();
+                self.advance();
+                break source_end_line;
+            }
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
             self.parse_interface_member(&mut constants, &mut properties, &mut methods)?;
-        }
+        };
         self.consume_semicolon();
         Ok(vec![EvalStmt::InterfaceDecl(
             EvalInterface::with_constants_and_properties(
                 name, parents, constants, properties, methods,
             )
+            .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
             .with_attributes(attributes),
         )])
     }
@@ -1492,6 +1533,7 @@ impl Parser {
         &mut self,
         is_static: bool,
     ) -> Result<EvalInterfaceMethod, EvalParseError> {
+        let source_start_line = self.current_line();
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -1513,8 +1555,10 @@ impl Parser {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         let return_type = self.parse_optional_return_type()?;
+        let source_end_line = self.current_line();
         self.expect_semicolon()?;
         Ok(EvalInterfaceMethod::new(name, params)
+            .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
             .with_static(is_static)
             .with_parameter_types(parameter_types)
             .with_parameter_attributes(parameter_attributes)
@@ -1620,6 +1664,7 @@ impl Parser {
         &mut self,
         attributes: Vec<EvalAttribute>,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let source_start_line = self.current_line();
         self.advance();
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -1641,9 +1686,10 @@ impl Parser {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         let return_type = self.parse_optional_return_type()?;
-        let body = self.parse_block()?;
+        let (body, source_end_line) = self.parse_block_with_end_line()?;
         Ok(vec![EvalStmt::FunctionDecl {
             name,
+            source_location: Some(EvalSourceLocation::new(source_start_line, source_end_line)),
             attributes,
             params,
             parameter_attributes,
@@ -2558,6 +2604,14 @@ impl Parser {
         self.parse_nested_block_contents()
     }
 
+    /// Parses a brace-delimited statement block and returns the closing-brace line.
+    pub(super) fn parse_block_with_end_line(
+        &mut self,
+    ) -> Result<(Vec<EvalStmt>, i64), EvalParseError> {
+        self.expect(TokenKind::LBrace)?;
+        self.parse_nested_block_contents_with_end_line()
+    }
+
     /// Parses one nested statement where import declarations are not legal.
     pub(super) fn parse_nested_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         let previous = std::mem::replace(&mut self.allow_use_imports, false);
@@ -2574,6 +2628,16 @@ impl Parser {
         result
     }
 
+    /// Parses a nested block and returns the closing-brace line.
+    pub(super) fn parse_nested_block_contents_with_end_line(
+        &mut self,
+    ) -> Result<(Vec<EvalStmt>, i64), EvalParseError> {
+        let previous = std::mem::replace(&mut self.allow_use_imports, false);
+        let result = self.parse_block_contents_with_end_line();
+        self.allow_use_imports = previous;
+        result
+    }
+
     /// Parses statements until the closing brace for the current block.
     pub(super) fn parse_block_contents(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         let mut statements = Vec::new();
@@ -2585,6 +2649,22 @@ impl Parser {
         }
         self.expect(TokenKind::RBrace)?;
         Ok(statements)
+    }
+
+    /// Parses statements until the closing brace and returns that brace's line.
+    pub(super) fn parse_block_contents_with_end_line(
+        &mut self,
+    ) -> Result<(Vec<EvalStmt>, i64), EvalParseError> {
+        let mut statements = Vec::new();
+        while !matches!(self.current(), TokenKind::RBrace) {
+            if matches!(self.current(), TokenKind::Eof) {
+                return Err(EvalParseError::UnexpectedEof);
+            }
+            statements.extend(self.parse_stmt()?);
+        }
+        let source_end_line = self.current_line();
+        self.expect(TokenKind::RBrace)?;
+        Ok((statements, source_end_line))
     }
 }
 

@@ -52,6 +52,11 @@ impl Parser {
         self.tokens.get(self.pos).unwrap_or(&TokenKind::Eof)
     }
 
+    /// Returns the line attached to the current token.
+    pub(super) fn current_line(&self) -> i64 {
+        self.token_lines.get(self.pos).copied().unwrap_or(1)
+    }
+
     /// Returns the next token without advancing.
     pub(super) fn peek(&self) -> &TokenKind {
         self.tokens.get(self.pos + 1).unwrap_or(&TokenKind::Eof)

@@ -362,6 +362,45 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass and ReflectionMethod report eval source-location metadata.
+#[test]
+fn execute_program_reflection_class_and_method_report_source_location() {
+    let program = parse_fragment(
+        br#"class EvalReflectSource {
+    public function run() {
+        return 1;
+    }
+}
+interface EvalReflectSourceIface {
+    public function iface();
+}
+$class = new ReflectionClass("EvalReflectSource");
+$method = new ReflectionMethod("EvalReflectSource", "run");
+$iface = new ReflectionClass("EvalReflectSourceIface");
+$ifaceMethod = new ReflectionMethod("EvalReflectSourceIface", "iface");
+echo $class->getFileName(); echo ":";
+echo $class->getStartLine(); echo ":"; echo $class->getEndLine(); echo ":";
+echo $method->getStartLine(); echo ":"; echo $method->getEndLine(); echo ":";
+echo $iface->getStartLine(); echo ":"; echo $iface->getEndLine(); echo ":";
+echo $ifaceMethod->getStartLine(); echo ":"; echo $ifaceMethod->getEndLine();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    context.set_call_site("/tmp/eval-class-source.php", "/tmp", 23);
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "/tmp/eval-class-source.php(23) : eval()'d code:1:5:2:4:6:8:7:7"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionMethod exposes PHP-compatible name and origin predicate metadata.
 #[test]
 fn execute_program_reflection_method_reports_name_and_origin_predicates() {

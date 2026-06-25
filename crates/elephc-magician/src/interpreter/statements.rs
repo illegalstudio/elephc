@@ -99,6 +99,7 @@ pub(in crate::interpreter) fn execute_stmt(
         ),
         EvalStmt::FunctionDecl {
             name,
+            source_location,
             attributes,
             params,
             parameter_attributes,
@@ -110,18 +111,19 @@ pub(in crate::interpreter) fn execute_stmt(
             body,
         } => {
             let key = name.to_ascii_lowercase();
+            let mut function = EvalFunction::new(name.clone(), params.clone(), body.clone())
+                .with_attributes(attributes.clone())
+                .with_parameter_attributes(parameter_attributes.clone())
+                .with_parameter_types(parameter_types.clone())
+                .with_parameter_defaults(parameter_defaults.clone())
+                .with_parameter_by_ref_flags(parameter_is_by_ref.clone())
+                .with_parameter_variadic_flags(parameter_is_variadic.clone())
+                .with_return_type(return_type.clone());
+            if let Some(source_location) = source_location {
+                function = function.with_source_location(*source_location);
+            }
             context
-                .define_function(
-                    key,
-                    EvalFunction::new(name.clone(), params.clone(), body.clone())
-                        .with_attributes(attributes.clone())
-                        .with_parameter_attributes(parameter_attributes.clone())
-                        .with_parameter_types(parameter_types.clone())
-                        .with_parameter_defaults(parameter_defaults.clone())
-                        .with_parameter_by_ref_flags(parameter_is_by_ref.clone())
-                        .with_parameter_variadic_flags(parameter_is_variadic.clone())
-                        .with_return_type(return_type.clone()),
-                )
+                .define_function(key, function)
                 .map_err(|_| EvalStatus::RuntimeFatal)?;
             Ok(EvalControl::None)
         }
@@ -3479,6 +3481,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         return Ok(result);
     }
     if let Some(result) = eval_reflection_class_is_instance_result(
+        identity,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
+    if let Some(result) = eval_reflection_class_source_location_result(
         identity,
         method_name,
         evaluated_args.clone(),
