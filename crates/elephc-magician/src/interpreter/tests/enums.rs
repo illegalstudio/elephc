@@ -129,6 +129,37 @@ return EvalSuit::fallback() === EvalSuit::Hearts;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval enum interfaces can inherit PHP's native enum marker interfaces.
+#[test]
+fn execute_program_allows_eval_enum_marker_interface_inheritance() {
+    let program = parse_fragment(
+        br#"interface EvalUnitMarker extends UnitEnum {}
+interface EvalBackedMarker extends BackedEnum {}
+enum EvalMarkedUnit implements EvalUnitMarker {
+    case Ready;
+}
+enum EvalMarkedBacked: string implements EvalBackedMarker {
+    case Ready = "ready";
+}
+echo interface_exists("UnitEnum") ? "U" : "u"; echo ":";
+echo interface_exists("BackedEnum") ? "B" : "b"; echo ":";
+echo is_a(EvalMarkedUnit::Ready, "EvalUnitMarker") ? "unit" : "bad"; echo ":";
+echo is_a(EvalMarkedBacked::Ready, "EvalBackedMarker") ? "backed" : "bad"; echo ":";
+return EvalMarkedBacked::Ready->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "U:B:unit:backed:");
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("ready".to_string())
+    );
+}
+
 /// Verifies eval rejects enum members that conflict with PHP enum rules.
 #[test]
 fn execute_program_rejects_invalid_eval_enum_members() {
@@ -162,6 +193,34 @@ fn execute_program_rejects_invalid_eval_enum_members() {
     public function __GET($name) {}
 }"#,
         "forbidden enum magic method lookup should be case-insensitive",
+    );
+
+    assert_invalid_enum_fragment(
+        br#"enum EvalInvalidExplicitUnitEnum implements UnitEnum {
+    case Ready;
+}"#,
+        "enum cannot explicitly implement UnitEnum",
+    );
+
+    assert_invalid_enum_fragment(
+        br#"enum EvalInvalidExplicitBackedEnum: string implements BackedEnum {
+    case Ready = "ready";
+}"#,
+        "enum cannot explicitly implement BackedEnum",
+    );
+
+    assert_invalid_enum_fragment(
+        br#"interface EvalBackedMarker extends BackedEnum {}
+enum EvalInvalidPureBackedMarker implements EvalBackedMarker {
+    case Ready;
+}"#,
+        "pure enum cannot implement BackedEnum through a marker",
+    );
+
+    assert_invalid_enum_fragment(
+        br#"interface EvalUnitMarker extends UnitEnum {}
+class EvalInvalidUnitEnumClass implements EvalUnitMarker {}"#,
+        "non-enum class cannot implement UnitEnum through a marker",
     );
 }
 

@@ -232,7 +232,7 @@ pub(in crate::interpreter) fn eval_class_alias_result(
     if alias.is_empty()
         || context.resolve_class_like_name(&alias).is_some()
         || values.class_exists(&alias)?
-        || values.interface_exists(&alias)?
+        || eval_runtime_interface_exists(&alias, values)?
         || values.trait_exists(&alias)?
         || values.enum_exists(&alias)?
     {
@@ -244,7 +244,7 @@ pub(in crate::interpreter) fn eval_class_alias_result(
         context.define_external_enum_alias(&class, &alias)
     } else if values.class_exists(&class)? {
         context.define_external_class_alias(&class, &alias)
-    } else if values.interface_exists(&class)? {
+    } else if eval_runtime_interface_exists(&class, values)? {
         context.define_external_interface_alias(&class, &alias)
     } else if values.trait_exists(&class)? {
         context.define_external_trait_alias(&class, &alias)
@@ -355,7 +355,7 @@ pub(in crate::interpreter) fn eval_interface_exists_name(
     let name = values.string_bytes(name)?;
     let name = String::from_utf8(name).map_err(|_| EvalStatus::RuntimeFatal)?;
     let name = name.trim_start_matches('\\');
-    Ok(context.has_interface(name) || values.interface_exists(name)?)
+    Ok(context.has_interface(name) || eval_runtime_interface_exists(name, values)?)
 }
 
 /// Evaluates `trait_exists(...)` and `enum_exists(...)` against generated metadata.

@@ -309,7 +309,7 @@ pub(in crate::interpreter) fn eval_reflection_class_implements_interface_result(
     }
     let result = if eval_reflection_class_like_exists(&reflected_name, context) {
         eval_reflection_class_implements_interface_name(&reflected_name, &interface_name, context)
-    } else if values.interface_exists(&reflected_name)? {
+    } else if eval_runtime_interface_exists(&reflected_name, values)? {
         eval_reflection_same_class_like_name(&reflected_name, &interface_name)
     } else {
         let reflected_class = values.string(&reflected_name)?;
@@ -341,7 +341,7 @@ pub(in crate::interpreter) fn eval_reflection_class_is_subclass_of_result(
     let target_name = eval_reflection_string_arg(args[0], values)?;
     if !eval_reflection_class_like_exists(&target_name, context)
         && !values.class_exists(&target_name)?
-        && !values.interface_exists(&target_name)?
+        && !eval_runtime_interface_exists(&target_name, values)?
         && !values.trait_exists(&target_name)?
         && !values.enum_exists(&target_name)?
     {
@@ -2836,7 +2836,7 @@ fn eval_reflection_aot_class_flags(
 ) -> Result<Option<(u64, u64)>, EvalStatus> {
     let runtime_class_name = class_name.trim_start_matches('\\');
     let is_class = values.class_exists(runtime_class_name)?;
-    let is_interface = values.interface_exists(runtime_class_name)?;
+    let is_interface = eval_runtime_interface_exists(runtime_class_name, values)?;
     let is_trait = values.trait_exists(runtime_class_name)?;
     let is_enum = values.enum_exists(runtime_class_name)?;
     if !(is_class || is_interface || is_trait || is_enum) {
@@ -6275,7 +6275,7 @@ fn eval_reflection_interface_exists(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    Ok(context.has_interface(name) || values.interface_exists(name)?)
+    Ok(context.has_interface(name) || eval_runtime_interface_exists(name, values)?)
 }
 
 /// Returns true when one name exists as a non-interface class-like symbol.

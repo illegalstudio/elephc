@@ -6388,12 +6388,15 @@ eval('echo interface_exists("EvalInterfaceExistsProbe") ? "Y" : "N";
 echo interface_exists("evalinterfaceexistsprobe") ? "Y" : "N";
 echo interface_exists("\EvalInterfaceExistsProbe") ? "Y" : "N";
 echo interface_exists("EvalInterfaceExistsImpl") ? "Y" : "N";
+echo interface_exists("UnitEnum") ? "U" : "u";
+echo interface_exists("BackedEnum") ? "B" : "b";
+echo class_exists("UnitEnum") ? "C" : "c";
 echo call_user_func("interface_exists", "EvalInterfaceExistsProbe") ? "Y" : "N";
 echo call_user_func_array("interface_exists", ["autoload" => false, "interface" => "\EvalInterfaceExistsProbe"]) ? "Y" : "N";
 echo function_exists("interface_exists");');
 "#,
     );
-    assert_eq!(out, "YYYNYY1");
+    assert_eq!(out, "YYYNUBcYY1");
 }
 
 /// Verifies eval `trait_exists()` and `enum_exists()` probe generated AOT metadata.
@@ -6445,6 +6448,52 @@ echo is_a(EvalDynColor::Red, "EvalDynLabel") ? "I" : "i";');
 "#,
     );
     assert_eq!(out, "EC2Gcolor:Green:gFNI");
+}
+
+/// Verifies eval enums support user interfaces derived from PHP enum marker interfaces.
+#[test]
+fn test_eval_declared_enum_marker_interface_inheritance() {
+    let out = compile_and_run(
+        r#"<?php
+eval('interface EvalDynUnitMarker extends UnitEnum {}
+interface EvalDynBackedMarker extends BackedEnum {}
+enum EvalDynMarkedUnit implements EvalDynUnitMarker {
+    case Ready;
+}
+enum EvalDynMarkedBacked: string implements EvalDynBackedMarker {
+    case Ready = "ready";
+}
+echo is_a(EvalDynMarkedUnit::Ready, "EvalDynUnitMarker") ? "U" : "u";
+echo is_a(EvalDynMarkedBacked::Ready, "EvalDynBackedMarker") ? "B" : "b";
+echo EvalDynMarkedBacked::Ready->value;');
+"#,
+    );
+    assert_eq!(out, "UBready");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('enum EvalDynExplicitUnitEnum implements UnitEnum {
+    case Ready;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalDynBackedMarkerBad extends BackedEnum {}
+enum EvalDynPureBackedMarker implements EvalDynBackedMarkerBad {
+    case Ready;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
 }
 
 /// Verifies eval enum `from()` misses throw catchable `ValueError` objects.
@@ -14157,6 +14206,9 @@ echo interface_exists("EvalAliasIfaceCopy") ? "IE" : "ie"; echo ":";
 echo class_exists("EvalAliasIfaceCopy") ? "bad" : "IC"; echo ":";
 echo is_a("EvalAliasIfaceCopy", "EvalAliasIface", true) ? "II" : "ii"; echo ":";
 echo (new ReflectionClass("EvalAliasIfaceCopy"))->isInterface() ? "IR" : "ir"; echo ":";
+echo class_alias("UnitEnum", "EvalAliasUnitEnum") ? "U" : "u"; echo ":";
+echo interface_exists("EvalAliasUnitEnum") ? "UE" : "ue"; echo ":";
+echo class_exists("EvalAliasUnitEnum") ? "bad" : "UC"; echo ":";
 echo class_alias("EvalAliasTrait", "EvalAliasTraitCopy") ? "T" : "t"; echo ":";
 echo trait_exists("EvalAliasTraitCopy") ? "TE" : "te"; echo ":";
 echo class_exists("EvalAliasTraitCopy") ? "bad" : "TC"; echo ":";
@@ -14175,7 +14227,7 @@ return count(get_declared_traits());');
     );
     assert_eq!(
         out,
-        "I:IE:IC:II:IR:T:TE:TC:TI:E:EE:EC:EvalAliasEnum:ready:C:CE:2:1:1"
+        "I:IE:IC:II:IR:U:UE:UC:T:TE:TC:TI:E:EE:EC:EvalAliasEnum:ready:C:CE:2:1:1"
     );
 }
 
