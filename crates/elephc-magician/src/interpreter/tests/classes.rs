@@ -1253,6 +1253,10 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
             "bad __unset return type",
         ),
         (
+            br#"class EvalBadSetReturn { public function __set($name, $value): int { return 1; } }"#.as_slice(),
+            "bad __set return type",
+        ),
+        (
             br#"class EvalBadCall { public function __call($name, ...$args) { return "x"; } }"#.as_slice(),
             "variadic __call",
         ),
