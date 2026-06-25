@@ -10532,6 +10532,36 @@ echo $object->reveal();
     assert_eq!(out.stdout, "N:t:p:L:s:h:T:P:S:H:7,13");
 }
 
+/// Verifies eval ReflectionProperty getValue rejects uninitialized generated/AOT typed storage.
+#[test]
+fn test_eval_reflection_property_get_value_rejects_uninitialized_aot_storage() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectUninitializedGetTarget {
+    public string $name = "Ada";
+    public int $typed;
+}
+$object = new EvalAotReflectUninitializedGetTarget();
+echo eval('$name = new ReflectionProperty("EvalAotReflectUninitializedGetTarget", "name");
+$typed = new ReflectionProperty("EvalAotReflectUninitializedGetTarget", "typed");
+echo $name->getValue($object) . ":";
+echo $typed->getValue($object);
+');
+"#,
+    );
+    assert!(
+        !out.success,
+        "program unexpectedly succeeded: stdout={:?}",
+        out.stdout
+    );
+    assert_eq!(out.stdout, "Ada:");
+    assert!(
+        out.stderr.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {}",
+        out.stderr
+    );
+}
+
 /// Verifies eval ReflectionProperty exposes property hook metadata and hook methods.
 #[test]
 fn test_eval_reflection_property_hook_metadata() {

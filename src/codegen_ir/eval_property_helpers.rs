@@ -696,6 +696,7 @@ fn emit_aarch64_get_slot_bodies(
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "get"));
+        emit_aarch64_uninitialized_property_get_guard(emitter, slot, done_label);
         emit_aarch64_box_property_slot(emitter, slot);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the declared property value
     }
@@ -710,6 +711,7 @@ fn emit_x86_64_get_slot_bodies(
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "get"));
+        emit_x86_64_uninitialized_property_get_guard(emitter, slot, done_label);
         emit_x86_64_box_property_slot(emitter, slot);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the declared property value
     }
@@ -802,6 +804,52 @@ fn emit_x86_64_property_initialized_flag(emitter: &mut Emitter, slot: &EvalPrope
     emitter.instruction("cmp rax, r10");                                        // compare the property marker against the uninitialized sentinel
     emitter.instruction("setne al");                                            // materialize true when the instance property is initialized
     emitter.instruction("movzx rax, al");                                       // widen the initialization flag into the return register
+}
+
+/// Emits an ARM64 typed-property guard before boxing an eval bridge property read.
+fn emit_aarch64_uninitialized_property_get_guard(
+    emitter: &mut Emitter,
+    slot: &EvalPropertySlot,
+    done_label: &str,
+) {
+    if !slot.is_declared {
+        return;
+    }
+    let initialized_label = format!(
+        "{}_initialized",
+        label_fragment(&slot_body_label_raw(slot, "get"))
+    );
+    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the unboxed object pointer for marker inspection
+    emitter.instruction(&format!("ldr x11, [x10, #{}]", slot.offset + 8));      // load the typed-property initialization marker
+    abi::emit_load_int_immediate(emitter, "x12", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp x11, x12");                                        // compare the property marker against the uninitialized sentinel
+    emitter.instruction(&format!("b.ne {}", initialized_label));                // continue boxing once the instance property is initialized
+    emitter.instruction("mov x0, xzr");                                         // report uninitialized property reads as bridge failures
+    emitter.instruction(&format!("b {}", done_label));                          // return the failure to Rust without boxing storage
+    emitter.label(&initialized_label);
+}
+
+/// Emits an x86_64 typed-property guard before boxing an eval bridge property read.
+fn emit_x86_64_uninitialized_property_get_guard(
+    emitter: &mut Emitter,
+    slot: &EvalPropertySlot,
+    done_label: &str,
+) {
+    if !slot.is_declared {
+        return;
+    }
+    let initialized_label = format!(
+        "{}_initialized_x",
+        label_fragment(&slot_body_label_raw(slot, "get"))
+    );
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for marker inspection
+    emitter.instruction(&format!("mov rax, QWORD PTR [r10 + {}]", slot.offset + 8)); // load the typed-property initialization marker
+    abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp rax, r11");                                        // compare the property marker against the uninitialized sentinel
+    emitter.instruction(&format!("jne {}", initialized_label));                 // continue boxing once the instance property is initialized
+    emitter.instruction("xor eax, eax");                                        // report uninitialized property reads as bridge failures
+    emitter.instruction(&format!("jmp {}", done_label));                        // return the failure to Rust without boxing storage
+    emitter.label(&initialized_label);
 }
 
 /// Boxes a property value loaded from an ARM64 object slot into a Mixed cell.
