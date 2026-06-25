@@ -123,10 +123,40 @@ pub enum NativeCallableDefault {
     Float(f64),
     String(String),
     EmptyArray,
+    Array(Vec<NativeCallableArrayDefaultElement>),
     Object {
         class_name: String,
         args: Vec<NativeCallableObjectDefaultArg>,
     },
+}
+
+/// One element in an array-valued native AOT callable default.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeCallableArrayDefaultElement {
+    pub key: Option<NativeCallableArrayDefaultKey>,
+    pub value: NativeCallableDefault,
+}
+
+impl NativeCallableArrayDefaultElement {
+    /// Creates one auto-indexed element for an array-valued default.
+    pub fn positional(value: NativeCallableDefault) -> Self {
+        Self { key: None, value }
+    }
+
+    /// Creates one explicitly keyed element for an array-valued default.
+    pub fn keyed(key: NativeCallableArrayDefaultKey, value: NativeCallableDefault) -> Self {
+        Self {
+            key: Some(key),
+            value,
+        }
+    }
+}
+
+/// Static PHP array key retained for an array-valued native AOT callable default.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NativeCallableArrayDefaultKey {
+    Int(i64),
+    String(String),
 }
 
 /// Constructor argument for an object-valued native AOT callable default.
