@@ -10550,6 +10550,38 @@ echo $aot->invoke(new EvalAotReflectCreateMethodTarget());');
     );
 }
 
+/// Verifies eval ReflectionMethod accepts PHP's deprecated one-string constructor target.
+#[test]
+fn test_eval_reflection_method_accepts_single_method_string() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectCtorMethodTarget {
+    public function aotRun() { return "aot"; }
+}
+$aot = new ReflectionMethod("EvalAotReflectCtorMethodTarget::aotrun");
+echo $aot->getDeclaringClass()->getName() . ":";
+echo $aot->getName() . ":";
+echo $aot->invoke(new EvalAotReflectCtorMethodTarget()) . "|";
+eval('class EvalReflectCtorMethodTarget {
+    public function MiXeDCase() { return "ok"; }
+}
+$ref = new ReflectionMethod(objectOrMethod: "EvalReflectCtorMethodTarget::mixedcase");
+echo $ref->getDeclaringClass()->getName() . ":";
+echo $ref->getName() . ":";
+echo $ref->invoke(new EvalReflectCtorMethodTarget());');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalAotReflectCtorMethodTarget:aotrun:aot|EvalReflectCtorMethodTarget:MiXeDCase:ok"
+    );
+}
+
 /// Verifies eval-declared final properties cannot be redeclared by subclasses.
 #[test]
 fn test_eval_declared_final_property_override_fails() {

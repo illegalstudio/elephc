@@ -8283,6 +8283,20 @@ fn lower_new_object(
             );
         }
     }
+    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionmethod" {
+        if let Some(operands) = lower_reflection_method_constructor_operands(ctx, args) {
+            let php_type = PhpType::Object(class_name.as_str().to_string());
+            let data = ctx.intern_class_name(class_name.as_str());
+            return ctx.emit_value(
+                Op::ObjectNew,
+                operands,
+                Some(Immediate::Data(data)),
+                php_type,
+                Op::ObjectNew.default_effects(),
+                Some(expr.span),
+            );
+        }
+    }
     let sig = constructor_signature(ctx, class_name).cloned();
     let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
     let php_type = PhpType::Object(class_name.as_str().to_string());
@@ -8324,6 +8338,18 @@ fn lower_reflection_class_constructor_operands(
         Some(reflected_arg.span),
     );
     Some(vec![value.value])
+}
+
+/// Lowers direct `ReflectionMethod` constructor operands to literal class and method names.
+fn lower_reflection_method_constructor_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Vec<ValueId>> {
+    let (class_arg, method_arg) = reflection_method_constructor_regular_args(ctx, args)?;
+    Some(vec![
+        lower_expr(ctx, &class_arg).value,
+        lower_expr(ctx, &method_arg).value,
+    ])
 }
 
 /// Lowers PHP `clone $object` to a shallow object-copy opcode and optional `__clone()` hook.
@@ -10717,6 +10743,9 @@ fn reflection_method_constructor_regular_args(
     if args.iter().any(is_spread_arg) {
         return None;
     }
+    if args.len() == 1 {
+        return reflection_method_constructor_single_target(ctx, &args[0]);
+    }
     if !crate::types::call_args::has_named_args(&args) {
         return match args.as_slice() {
             [class_arg, method_arg] => Some((class_arg.clone(), method_arg.clone())),
@@ -10747,6 +10776,32 @@ fn reflection_method_constructor_regular_args(
     let class_arg = planned_regular_arg_expr(plan.regular_args.first()?)?.clone();
     let method_arg = planned_regular_arg_expr(plan.regular_args.get(1)?)?.clone();
     Some((class_arg, method_arg))
+}
+
+/// Splits deprecated `ReflectionMethod("Class::method")` constructor syntax.
+fn reflection_method_constructor_single_target(
+    ctx: &LoweringContext<'_, '_>,
+    arg: &Expr,
+) -> Option<(Expr, Expr)> {
+    let arg = match &arg.kind {
+        ExprKind::NamedArg { name, value } if name == "class_name" => value.as_ref(),
+        ExprKind::NamedArg { name, value } if name == "objectOrMethod" => value.as_ref(),
+        ExprKind::NamedArg { .. } => return None,
+        _ => arg,
+    };
+    let ExprKind::StringLiteral(target) = &arg.kind else {
+        return None;
+    };
+    let (raw_class_name, raw_method_name) = target.rsplit_once("::")?;
+    if raw_class_name.is_empty() || raw_method_name.is_empty() {
+        return None;
+    }
+    let class_name = resolve_known_class_name(ctx, raw_class_name)?;
+    let method_name = resolve_known_class_method_name(ctx, &class_name, raw_method_name)?;
+    Some((
+        Expr::new(ExprKind::StringLiteral(class_name), arg.span),
+        Expr::new(ExprKind::StringLiteral(method_name), arg.span),
+    ))
 }
 
 /// Lowers `ReflectionClass::getStaticProperties()` to a live static-property map.

@@ -229,6 +229,8 @@ enums. It exposes `hasCase()`, `getCase()`, `getCases()`, `isBacked()`, and
 `ReflectionEnumBackedCase`, and `ReflectionNamedType` objects where PHP does.
 `ReflectionMethod` construction accepts class-name strings and object
 arguments; object arguments resolve to the runtime class before method lookup.
+It also accepts PHP's deprecated one-argument `ClassName::method` string form
+for eval-visible and generated/AOT methods.
 `ReflectionMethod::createFromMethodName()` accepts `ClassName::method` strings
 for eval-visible and generated/AOT methods and returns retained method
 metadata equivalent to direct `ReflectionMethod` construction.

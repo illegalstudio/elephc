@@ -207,6 +207,9 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
+        if class_name == "ReflectionMethod" && args.len() == 1 {
+            return self.validate_reflection_method_constructor_from_method_name(args, expr, env);
+        }
         let sig = self
             .classes
             .get(class_name)
@@ -294,6 +297,77 @@ impl Checker {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Validates deprecated `new ReflectionMethod("Class::method")` calls.
+    fn validate_reflection_method_constructor_from_method_name(
+        &mut self,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let arg = match &args[0].kind {
+            ExprKind::NamedArg { name, value } if name == "class_name" => value.as_ref(),
+            ExprKind::NamedArg { name, value } if name == "objectOrMethod" => value.as_ref(),
+            ExprKind::NamedArg { name, .. } => {
+                return Err(CompileError::new(
+                    args[0].span,
+                    &format!(
+                        "Constructor 'ReflectionMethod::__construct' has no parameter ${}",
+                        name
+                    ),
+                ));
+            }
+            _ => &args[0],
+        };
+        let (class_name, method_name) = self.reflection_method_name_literal_arg(arg, env)?;
+        self.validate_reflection_method_attrs(&class_name, &method_name, expr)
+    }
+
+    /// Extracts a literal `ClassName::methodName` target for `ReflectionMethod`.
+    fn reflection_method_name_literal_arg(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(String, String), CompileError> {
+        let arg_ty = self.infer_type(arg, env)?;
+        if !matches!(arg_ty.codegen_repr(), PhpType::Str) {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionMethod::__construct() first argument must be a string method name",
+            ));
+        }
+        let ExprKind::StringLiteral(target) = &arg.kind else {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionMethod::__construct() requires a string literal method name (dynamic lookup is not yet supported)",
+            ));
+        };
+        let Some((raw_class_name, method_name)) = target.rsplit_once("::") else {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionMethod::__construct() one-argument form requires ClassName::method",
+            ));
+        };
+        if raw_class_name.is_empty() || method_name.is_empty() {
+            return Err(CompileError::new(
+                arg.span,
+                "ReflectionMethod::__construct() one-argument form requires ClassName::method",
+            ));
+        }
+        let class_name = self
+            .resolve_reflection_class_name(raw_class_name)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                CompileError::new(
+                    arg.span,
+                    &format!(
+                        "ReflectionMethod::__construct(): undefined class '{}'",
+                        raw_class_name
+                    ),
+                )
+            })?;
+        Ok((class_name, method_name.to_string()))
     }
 
     /// Validates `new ReflectionFunction(function)` for supported static function metadata.
