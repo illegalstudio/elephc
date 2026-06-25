@@ -7204,6 +7204,39 @@ $box->replace(8);');
         "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
 
+    let dynamic_err = compile_and_run_expect_failure(
+        r#"<?php
+eval('readonly class EvalReadonlyClassDynamicFailBox {
+    public int $id;
+    public function __construct($id) { $this->id = $id; }
+}
+$box = new EvalReadonlyClassDynamicFailBox(7);
+$box->dynamic = 8;');
+"#,
+    );
+    assert!(
+        dynamic_err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {dynamic_err}"
+    );
+
+    let magic = compile_and_run_capture(
+        r#"<?php
+eval('readonly class EvalReadonlyClassMagicSetBox {
+    public function __set($name, $value) {
+        echo $name . ":" . $value;
+    }
+}
+$box = new EvalReadonlyClassMagicSetBox();
+$box->dynamic = 8;');
+"#,
+    );
+    assert!(
+        magic.success,
+        "program failed: stdout={:?} stderr={}",
+        magic.stdout, magic.stderr
+    );
+    assert_eq!(magic.stdout, "dynamic:8");
+
     let parent_err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalReadonlyClassBase {}

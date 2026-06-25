@@ -543,8 +543,10 @@ route through inherited hooks, while access from the accessor itself uses the
 raw backing slot. `readonly` eval properties may be assigned from the
 constructor of the declaring class and later writes fail as eval runtime fatals.
 A `readonly class` makes instance properties readonly implicitly while leaving
-static properties mutable. `self::`, `parent::`, and late-bound `static::` work
-for supported static members, class constants, and class-name literals.
+static properties mutable. Missing-property writes can still dispatch through
+`__set()`, but readonly classes reject actual dynamic property creation.
+`self::`, `parent::`, and late-bound `static::` work for supported static
+members, class constants, and class-name literals.
 
 Eval object construction can allocate eval-declared classes, `stdClass`, and
 emitted AOT classes visible through runtime class metadata. Missing class names

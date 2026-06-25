@@ -2154,6 +2154,7 @@ pub(in crate::interpreter) fn eval_property_set_result(
     if context.has_enum(&object_class_name) {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let class_is_readonly = class.is_readonly_class();
     let mut storage_property_name = property_name.to_string();
     let mut declared_property_found = false;
     if let Some((declaring_class, property)) =
@@ -2220,6 +2221,9 @@ pub(in crate::interpreter) fn eval_property_set_result(
         )?
     {
         return Ok(());
+    }
+    if !declared_property_found && class_is_readonly {
+        return Err(EvalStatus::RuntimeFatal);
     }
     if let Some(target) = context
         .dynamic_property_alias(identity, &storage_property_name)

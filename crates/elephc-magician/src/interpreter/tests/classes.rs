@@ -358,6 +358,50 @@ $box->replace(12);"#,
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies readonly classes reject dynamic property creation when no magic setter handles it.
+#[test]
+fn execute_program_rejects_readonly_class_dynamic_property_creation() {
+    let program = parse_fragment(
+        br#"readonly class EvalReadonlyDynamicFailBox {
+    public int $id;
+    public function __construct($id) { $this->id = $id; }
+}
+$box = new EvalReadonlyDynamicFailBox(11);
+$box->dynamic = 12;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("readonly class dynamic property creation should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies readonly classes may still handle missing property writes through `__set()`.
+#[test]
+fn execute_program_allows_readonly_class_magic_set_for_missing_properties() {
+    let program = parse_fragment(
+        br#"readonly class EvalReadonlyMagicSetBox {
+    public function __set($name, $value) {
+        echo $name; echo ":"; echo $value;
+    }
+}
+$box = new EvalReadonlyMagicSetBox();
+$box->dynamic = 12;
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "dynamic:12");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies readonly class static properties remain mutable.
 #[test]
 fn execute_program_allows_readonly_class_static_property_mutation() {
