@@ -212,8 +212,9 @@ eval call site, and line numbers are one-based inside the evaluated fragment.
 `ReflectionClass` construction accepts class-name strings and object arguments;
 object arguments reflect the runtime class of eval-created or generated/AOT
 objects. `ReflectionObject` construction accepts object arguments and exposes the
-same class metadata and inherited construction helpers through a
-`ReflectionObject` instance.
+same class metadata through a `ReflectionObject` instance. Its inherited
+positional `newInstance()`, positional `newInstanceArgs()`, and
+`newInstanceWithoutConstructor()` helpers use the object's runtime class id.
 `ReflectionEnum` construction accepts enum-name strings for eval-declared
 enums. It exposes `hasCase()`, `getCase()`, `getCases()`, `isBacked()`, and
 `getBackingType()` for eval enum metadata, returning `ReflectionEnumUnitCase`,

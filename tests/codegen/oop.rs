@@ -47,3 +47,5 @@ mod reflection_properties;
 mod reflection_functions;
 #[path = "oop/reflection_methods.rs"]
 mod reflection_methods;
+#[path = "oop/reflection_construction.rs"]
+mod reflection_construction;

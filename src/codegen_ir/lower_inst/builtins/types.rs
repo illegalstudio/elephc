@@ -345,20 +345,17 @@ pub(super) fn lower_class_name_lookup(
             ctx.load_value_to_result(value)?;
             emit_dynamic_object_class_name(ctx, name);
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.load_value_to_result(value)?;
+            emit_mixed_object_class_name(ctx, name);
+        }
         PhpType::Str if name == "get_parent_class" => {
             let class_name = const_string_operand(ctx, value)?;
             let parent = parent_of(ctx, &class_name);
             emit_string_result(ctx, parent.as_bytes());
         }
-        other => {
+        _ => {
             ctx.load_value_to_result(value)?;
-            if matches!(other, PhpType::Mixed | PhpType::Union(_)) {
-                return Err(CodegenIrError::unsupported(format!(
-                    "{} for PHP type {:?}",
-                    name,
-                    other
-                )));
-            }
             emit_string_result(ctx, b"");
         }
     }
@@ -451,6 +448,34 @@ fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
         Arch::AArch64 => emit_dynamic_object_class_name_aarch64(ctx, name, &empty_label, &done_label),
         Arch::X86_64 => emit_dynamic_object_class_name_x86_64(ctx, name, &empty_label, &done_label),
     }
+}
+
+/// Emits class-name lookup for a boxed Mixed value that may contain an object.
+fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
+    let empty_label = ctx.next_label("get_class_mixed_empty");
+    let done_label = ctx.next_label("get_class_mixed_done");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                              // require a boxed object payload for class-name lookup
+            ctx.emitter
+                .instruction(&format!("b.ne {}", empty_label));                 // non-object Mixed payloads produce an empty class name
+            ctx.emitter.instruction("mov x0, x1");                              // expose the unboxed object pointer to the object lookup path
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // require a boxed object payload for class-name lookup
+            ctx.emitter
+                .instruction(&format!("jne {}", empty_label));                  // non-object Mixed payloads produce an empty class name
+            ctx.emitter.instruction("mov rax, rdi");                            // expose the unboxed object pointer to the object lookup path
+        }
+    }
+    emit_dynamic_object_class_name(ctx, name);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&empty_label);
+    emit_string_result(ctx, b"");
+
+    ctx.emitter.label(&done_label);
 }
 
 /// Emits AArch64 runtime object class-name lookup for `get_class()` and `get_parent_class()`.
