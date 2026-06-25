@@ -127,6 +127,67 @@ class EvalAliasVisibilityBox {
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies trait adaptations reject missing trait or method targets.
+#[test]
+fn execute_program_rejects_invalid_eval_trait_adaptation_targets() {
+    let missing_method = parse_fragment(
+        br#"trait EvalAdaptMissingMethod {
+    public function source() { return "T"; }
+}
+class EvalAdaptMissingMethodBox {
+    use EvalAdaptMissingMethod {
+        EvalAdaptMissingMethod::missing insteadof EvalAdaptMissingMethod;
+    }
+}"#,
+    )
+    .expect("parse missing method adaptation");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&missing_method, &mut scope, &mut values)
+        .expect_err("missing adaptation method should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let missing_trait = parse_fragment(
+        br#"trait EvalAdaptMissingTrait {
+    public function source() { return "T"; }
+}
+class EvalAdaptMissingTraitBox {
+    use EvalAdaptMissingTrait {
+        EvalAdaptMissingTrait::source insteadof EvalAdaptNotUsedTrait;
+    }
+}"#,
+    )
+    .expect("parse missing trait adaptation");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&missing_trait, &mut scope, &mut values)
+        .expect_err("missing adaptation trait should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let missing_unqualified_alias = parse_fragment(
+        br#"trait EvalAdaptMissingAlias {
+    public function source() { return "T"; }
+}
+class EvalAdaptMissingAliasBox {
+    use EvalAdaptMissingAlias {
+        missing as alias;
+    }
+}"#,
+    )
+    .expect("parse missing unqualified alias");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&missing_unqualified_alias, &mut scope, &mut values)
+        .expect_err("missing unqualified alias method should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies unresolved same-name trait methods remain a declaration-time fatal.
 #[test]
 fn execute_program_rejects_unresolved_eval_trait_method_conflict() {

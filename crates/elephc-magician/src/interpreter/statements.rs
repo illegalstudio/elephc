@@ -992,6 +992,7 @@ fn expand_eval_class_traits(
     if class.traits().is_empty() {
         return Ok(class.clone());
     }
+    validate_eval_trait_adaptations(class, context)?;
     let class_method_names = class_method_name_set(class);
     let mut trait_method_names = std::collections::HashSet::new();
     let mut trait_properties = std::collections::HashMap::new();
@@ -1044,6 +1045,84 @@ fn expand_eval_class_traits(
         expanded = expanded.with_anonymous();
     }
     Ok(expanded)
+}
+
+/// Validates that trait adaptations reference used traits and existing methods.
+fn validate_eval_trait_adaptations(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    for adaptation in class.trait_adaptations() {
+        match adaptation {
+            EvalTraitAdaptation::Alias {
+                trait_name, method, ..
+            } => {
+                validate_eval_trait_adaptation_method(class, context, trait_name.as_deref(), method)?
+            }
+            EvalTraitAdaptation::InsteadOf {
+                trait_name,
+                method,
+                instead_of,
+            } => {
+                let Some(trait_name) = trait_name.as_deref() else {
+                    return Err(EvalStatus::RuntimeFatal);
+                };
+                validate_eval_trait_adaptation_method(class, context, Some(trait_name), method)?;
+                for suppressed in instead_of {
+                    if eval_used_trait_decl(class, context, suppressed).is_none() {
+                        return Err(EvalStatus::RuntimeFatal);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates one adaptation method target, allowing unqualified alias targets.
+fn validate_eval_trait_adaptation_method(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+    trait_name: Option<&str>,
+    method: &str,
+) -> Result<(), EvalStatus> {
+    if let Some(trait_name) = trait_name {
+        let Some(trait_decl) = eval_used_trait_decl(class, context, trait_name) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        return trait_has_method(trait_decl, method)
+            .then_some(())
+            .ok_or(EvalStatus::RuntimeFatal);
+    }
+    class
+        .traits()
+        .iter()
+        .filter_map(|trait_name| context.trait_decl(trait_name))
+        .any(|trait_decl| trait_has_method(trait_decl, method))
+        .then_some(())
+        .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Returns a trait declaration only when the pending class directly uses that trait.
+fn eval_used_trait_decl<'a>(
+    class: &EvalClass,
+    context: &'a ElephcEvalContext,
+    trait_name: &str,
+) -> Option<&'a EvalTrait> {
+    class
+        .traits()
+        .iter()
+        .any(|used_trait| same_eval_class_name(used_trait, trait_name))
+        .then(|| context.trait_decl(trait_name))
+        .flatten()
+}
+
+/// Returns whether a trait declares a method by PHP case-insensitive method name.
+fn trait_has_method(trait_decl: &EvalTrait, method: &str) -> bool {
+    trait_decl
+        .methods()
+        .iter()
+        .any(|trait_method| trait_method.name().eq_ignore_ascii_case(method))
 }
 
 /// Returns case-insensitive method names declared directly by a pending class.
