@@ -1311,6 +1311,8 @@ impl Parser {
         let backing_type = self.parse_enum_backing_type()?;
         let interfaces = self.parse_class_interface_clause()?;
         self.expect(TokenKind::LBrace)?;
+        let mut traits = Vec::new();
+        let mut trait_adaptations = Vec::new();
         let mut cases = Vec::new();
         let mut constants = Vec::new();
         let mut methods = Vec::new();
@@ -1323,13 +1325,28 @@ impl Parser {
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
-            self.parse_enum_member(&mut cases, &mut constants, &mut methods)?;
+            self.parse_enum_member(
+                &mut cases,
+                &mut constants,
+                &mut methods,
+                &mut traits,
+                &mut trait_adaptations,
+            )?;
         };
         self.consume_semicolon();
         Ok(vec![EvalStmt::EnumDecl(
-            EvalEnum::with_members(name, backing_type, interfaces, cases, constants, methods)
-                .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
-                .with_attributes(attributes),
+            EvalEnum::with_members_traits_adaptations(
+                name,
+                backing_type,
+                interfaces,
+                cases,
+                constants,
+                methods,
+                traits,
+                trait_adaptations,
+            )
+            .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
+            .with_attributes(attributes),
         )])
     }
 
@@ -1360,6 +1377,8 @@ impl Parser {
         cases: &mut Vec<EvalEnumCase>,
         constants: &mut Vec<EvalClassConstant>,
         methods: &mut Vec<EvalClassMethod>,
+        traits: &mut Vec<String>,
+        trait_adaptations: &mut Vec<EvalTraitAdaptation>,
     ) -> Result<(), EvalParseError> {
         let attributes = self.parse_optional_member_attributes()?;
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "case")) {
@@ -1370,6 +1389,17 @@ impl Parser {
             self.parse_class_member_modifiers()?;
         if is_abstract || is_readonly || set_visibility.is_some() {
             return Err(EvalParseError::UnsupportedConstruct);
+        }
+        if visibility.is_none()
+            && !is_static
+            && !is_final
+            && matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "use"))
+        {
+            if !attributes.is_empty() {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            self.parse_class_trait_use(traits, trait_adaptations)?;
+            return Ok(());
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
             if is_static {

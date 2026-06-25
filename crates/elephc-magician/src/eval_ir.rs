@@ -492,6 +492,8 @@ pub struct EvalEnum {
     backing_type: Option<EvalEnumBackingType>,
     interfaces: Vec<String>,
     attributes: Vec<EvalAttribute>,
+    traits: Vec<String>,
+    trait_adaptations: Vec<EvalTraitAdaptation>,
     cases: Vec<EvalEnumCase>,
     constants: Vec<EvalClassConstant>,
     methods: Vec<EvalClassMethod>,
@@ -504,6 +506,8 @@ impl PartialEq for EvalEnum {
             && self.backing_type == other.backing_type
             && self.interfaces == other.interfaces
             && self.attributes == other.attributes
+            && self.traits == other.traits
+            && self.trait_adaptations == other.trait_adaptations
             && self.cases == other.cases
             && self.constants == other.constants
             && self.methods == other.methods
@@ -536,12 +540,37 @@ impl EvalEnum {
         constants: Vec<EvalClassConstant>,
         methods: Vec<EvalClassMethod>,
     ) -> Self {
+        Self::with_members_traits_adaptations(
+            name,
+            backing_type,
+            interfaces,
+            cases,
+            constants,
+            methods,
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    /// Creates a dynamic eval enum with traits, adaptations, cases, constants, and methods.
+    pub fn with_members_traits_adaptations(
+        name: impl Into<String>,
+        backing_type: Option<EvalEnumBackingType>,
+        interfaces: Vec<String>,
+        cases: Vec<EvalEnumCase>,
+        constants: Vec<EvalClassConstant>,
+        methods: Vec<EvalClassMethod>,
+        traits: Vec<String>,
+        trait_adaptations: Vec<EvalTraitAdaptation>,
+    ) -> Self {
         Self {
             name: name.into(),
             source_location: None,
             backing_type,
             interfaces,
             attributes: Vec::new(),
+            traits,
+            trait_adaptations,
             cases,
             constants,
             methods,
@@ -585,6 +614,16 @@ impl EvalEnum {
         &self.attributes
     }
 
+    /// Returns trait names used directly by this eval enum.
+    pub fn traits(&self) -> &[String] {
+        &self.traits
+    }
+
+    /// Returns trait adaptations declared directly by this eval enum.
+    pub fn trait_adaptations(&self) -> &[EvalTraitAdaptation] {
+        &self.trait_adaptations
+    }
+
     /// Returns cases declared directly by this eval enum.
     pub fn cases(&self) -> &[EvalEnumCase] {
         &self.cases
@@ -607,13 +646,14 @@ impl EvalEnum {
 
     /// Builds class-shaped metadata used for enum method and relation dispatch.
     pub fn as_class_metadata(&self) -> EvalClass {
-        EvalClass::with_modifiers_traits_and_constants(
+        EvalClass::with_modifiers_traits_adaptations_and_constants(
             self.name.clone(),
             false,
             true,
             None,
             self.interfaces.clone(),
-            Vec::new(),
+            self.traits.clone(),
+            self.trait_adaptations.clone(),
             self.constants.clone(),
             Vec::new(),
             self.methods.clone(),

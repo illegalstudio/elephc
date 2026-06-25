@@ -5392,7 +5392,7 @@ fn eval_reflection_class_like_attributes(
             source_location: enum_decl.source_location(),
             attributes: enum_decl.attributes().to_vec(),
             interface_names: context.class_interface_names(enum_decl.name()),
-            trait_names: Vec::new(),
+            trait_names: context.class_trait_names(enum_decl.name()),
             method_names: context.class_method_names(enum_decl.name()),
             property_names: context.class_property_names(enum_decl.name()),
             parent_class_name: None,

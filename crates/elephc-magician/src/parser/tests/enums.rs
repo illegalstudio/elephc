@@ -76,3 +76,31 @@ fn parse_fragment_accepts_backed_enum_members() {
         ))]
     );
 }
+
+/// Verifies enum declarations retain trait uses and adaptations.
+#[test]
+fn parse_fragment_accepts_enum_trait_use() {
+    let program = parse_fragment(
+        br#"enum EvalTraitEnum {
+    use EvalEnumTrait {
+        label as private hiddenLabel;
+    }
+    case Ready;
+}"#,
+    )
+    .expect("parse eval enum with trait use");
+
+    let [EvalStmt::EnumDecl(enum_decl)] = program.statements() else {
+        panic!("fragment should contain one enum declaration");
+    };
+    assert_eq!(enum_decl.traits(), &["EvalEnumTrait".to_string()]);
+    assert_eq!(
+        enum_decl.trait_adaptations(),
+        &[EvalTraitAdaptation::Alias {
+            trait_name: None,
+            method: "label".to_string(),
+            alias: Some("hiddenLabel".to_string()),
+            visibility: Some(EvalVisibility::Private),
+        }]
+    );
+}
