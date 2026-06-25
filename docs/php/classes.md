@@ -1036,7 +1036,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 
 | Reflection method | Supported constructor | Description |
 |---|---|---|
-| `ReflectionObject::*` inherited class metadata methods | `new ReflectionObject($object)` | Return the same reflected class metadata as `ReflectionClass`, with the reflected class taken from the object's runtime class id |
+| `ReflectionObject::*` inherited class metadata and construction methods | `new ReflectionObject($object)` | Use the same reflected class metadata and construction helpers as `ReflectionClass`, with the reflected class taken from the object's runtime class id |
 | `ReflectionClass::getName()` | `new ReflectionClass($class_name)` | Return the resolved class-like name |
 | `ReflectionClass::getShortName()` | `new ReflectionClass($class_name)` | Return the class-like name after the final namespace separator |
 | `ReflectionClass::getNamespaceName()` | `new ReflectionClass($class_name)` | Return the namespace portion of the reflected class-like name |
