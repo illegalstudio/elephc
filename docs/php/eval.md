@@ -672,9 +672,12 @@ non-by-reference scalar/nullable-int/Mixed/array/iterable/object parameter
 bridge slice. By-reference parameters and broader parameter/return ABI
 shapes are still outside those bridge paths.
 
-Eval class support is still smaller than the full static class system. The main
-remaining class-system gaps are eval-declared `__destruct()` execution on
-dynamic-object release, broader reflection APIs beyond the supported
+Eval class support is still smaller than the full static class system.
+Eval-declared `__destruct()` hooks run when an eval-owned dynamic object reaches
+final release through ordinary eval statement execution, such as `unset($obj)` or
+a discarded temporary expression; destructor execution from runtime cycle
+collection is still outside the bridge. The main remaining class-system gaps are
+broader reflection APIs beyond the supported
 ReflectionClass/Function/Method/Parameter/Property/NamedType/UnionType/IntersectionType
 and attribute slice, Reflection type APIs beyond retained parameter, generated
 property, and function/method return metadata, broader

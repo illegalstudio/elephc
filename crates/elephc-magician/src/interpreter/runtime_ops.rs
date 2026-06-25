@@ -310,6 +310,12 @@ pub trait RuntimeValueOps {
     /// Returns the unboxed object payload pointer used for PHP object identity.
     fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus>;
 
+    /// Returns the object identity that would be freed by releasing this owned cell, if any.
+    fn final_object_identity_for_release(
+        &mut self,
+        value: RuntimeCellHandle,
+    ) -> Result<Option<u64>, EvalStatus>;
+
     /// Releases one owned runtime cell that is no longer held by the eval scope.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
 
