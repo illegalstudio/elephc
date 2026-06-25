@@ -7200,6 +7200,50 @@ class EvalTraitMissingConcrete {
     );
 }
 
+/// Verifies eval-declared trait property conflicts follow PHP compatibility rules.
+#[test]
+fn test_eval_declared_trait_property_conflict_rules() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('trait EvalTraitPropCompatA {
+    public int $value;
+}
+trait EvalTraitPropCompatB {
+    public int $value;
+}
+class EvalTraitPropCompatBox {
+    use EvalTraitPropCompatA, EvalTraitPropCompatB;
+    public int $value;
+    public function __construct($value) { $this->value = $value; }
+}
+$box = new EvalTraitPropCompatBox(9);
+echo $box->value;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "9");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('trait EvalTraitPropBad {
+    public int $value;
+}
+class EvalTraitPropBadBox {
+    use EvalTraitPropBad;
+    public string $value;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared private/protected members are usable from valid class scopes.
 #[test]
 fn test_eval_declared_private_and_protected_members() {

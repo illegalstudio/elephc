@@ -993,10 +993,9 @@ fn expand_eval_class_traits(
         return Ok(class.clone());
     }
     let class_method_names = class_method_name_set(class);
-    let class_property_names = class_property_name_set(class);
     let class_constant_names = class_constant_name_set(class);
     let mut trait_method_names = std::collections::HashSet::new();
-    let mut trait_property_names = std::collections::HashSet::new();
+    let mut trait_properties = std::collections::HashMap::new();
     let mut trait_constant_names = std::collections::HashSet::new();
     let mut constants = Vec::new();
     let mut properties = Vec::new();
@@ -1013,8 +1012,8 @@ fn expand_eval_class_traits(
         )?;
         append_eval_trait_properties(
             trait_decl,
-            &class_property_names,
-            &mut trait_property_names,
+            class.properties(),
+            &mut trait_properties,
             &mut properties,
         )?;
         append_eval_trait_methods(
@@ -1066,15 +1065,6 @@ fn class_constant_name_set(class: &EvalClass) -> std::collections::HashSet<Strin
         .collect()
 }
 
-/// Returns property names declared directly by a pending class.
-fn class_property_name_set(class: &EvalClass) -> std::collections::HashSet<String> {
-    class
-        .properties()
-        .iter()
-        .map(|property| property.name().to_string())
-        .collect()
-}
-
 /// Appends trait constants unless the class provides a same-name constant.
 fn append_eval_trait_constants(
     trait_decl: &EvalTrait,
@@ -1097,23 +1087,54 @@ fn append_eval_trait_constants(
     Ok(())
 }
 
-/// Appends trait properties unless the class provides a same-name property.
+/// Appends trait properties while enforcing PHP-compatible same-name conflicts.
 fn append_eval_trait_properties(
     trait_decl: &EvalTrait,
-    class_property_names: &std::collections::HashSet<String>,
-    trait_property_names: &mut std::collections::HashSet<String>,
+    class_properties: &[EvalClassProperty],
+    trait_properties: &mut std::collections::HashMap<String, EvalClassProperty>,
     properties: &mut Vec<EvalClassProperty>,
 ) -> Result<(), EvalStatus> {
     for property in trait_decl.properties() {
-        if class_property_names.contains(property.name()) {
+        if let Some(class_property) = class_properties
+            .iter()
+            .find(|class_property| class_property.name() == property.name())
+        {
+            validate_eval_trait_property_compatibility(class_property, property)?;
             continue;
         }
-        if !trait_property_names.insert(property.name().to_string()) {
-            return Err(EvalStatus::RuntimeFatal);
+        if let Some(existing) = trait_properties.get(property.name()) {
+            validate_eval_trait_property_compatibility(existing, property)?;
+            continue;
         }
+        trait_properties.insert(property.name().to_string(), property.clone());
         properties.push(property.clone());
     }
     Ok(())
+}
+
+/// Validates that a same-name trait property definition is compatible with PHP composition.
+fn validate_eval_trait_property_compatibility(
+    existing: &EvalClassProperty,
+    incoming: &EvalClassProperty,
+) -> Result<(), EvalStatus> {
+    if existing.visibility() == incoming.visibility()
+        && existing.set_visibility() == incoming.set_visibility()
+        && existing.is_static() == incoming.is_static()
+        && existing.is_final() == incoming.is_final()
+        && existing.is_readonly() == incoming.is_readonly()
+        && existing.is_abstract() == incoming.is_abstract()
+        && existing.has_get_hook() == incoming.has_get_hook()
+        && existing.has_set_hook() == incoming.has_set_hook()
+        && existing.requires_get_hook() == incoming.requires_get_hook()
+        && existing.requires_set_hook() == incoming.requires_set_hook()
+        && existing.is_virtual() == incoming.is_virtual()
+        && existing.property_type() == incoming.property_type()
+        && existing.default() == incoming.default()
+    {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
 }
 
 /// Appends trait methods unless the class provides a same-name method.

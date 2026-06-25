@@ -94,3 +94,72 @@ class EvalConflictBox {
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
+
+/// Verifies compatible same-name trait properties are deduplicated during composition.
+#[test]
+fn execute_program_allows_compatible_eval_trait_property_conflicts() {
+    let program = parse_fragment(
+        br#"trait EvalCompatibleTraitPropA {
+    public int $value;
+}
+trait EvalCompatibleTraitPropB {
+    public int $value;
+}
+class EvalCompatibleTraitPropBox {
+    use EvalCompatibleTraitPropA, EvalCompatibleTraitPropB;
+    public int $value;
+    public function __construct($value) { $this->value = $value; }
+}
+$box = new EvalCompatibleTraitPropBox(7);
+return $box->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Int(7));
+}
+
+/// Verifies incompatible same-name class and trait properties fail like PHP.
+#[test]
+fn execute_program_rejects_incompatible_eval_trait_property_conflicts() {
+    let class_conflict = parse_fragment(
+        br#"trait EvalClassTraitPropConflict {
+    public int $value;
+}
+class EvalClassTraitPropConflictBox {
+    use EvalClassTraitPropConflict;
+    public string $value;
+}"#,
+    )
+    .expect("parse class/trait property conflict");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&class_conflict, &mut scope, &mut values)
+        .expect_err("incompatible class/trait property should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let trait_conflict = parse_fragment(
+        br#"trait EvalTraitPropConflictA {
+    public int $value;
+}
+trait EvalTraitPropConflictB {
+    public string $value;
+}
+class EvalTraitPropConflictBox {
+    use EvalTraitPropConflictA, EvalTraitPropConflictB;
+}"#,
+    )
+    .expect("parse trait/trait property conflict");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&trait_conflict, &mut scope, &mut values)
+        .expect_err("incompatible trait/trait property should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
