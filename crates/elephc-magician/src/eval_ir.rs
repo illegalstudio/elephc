@@ -1400,13 +1400,11 @@ impl EvalClass {
         self
     }
 
-    /// Marks all instance properties readonly when this metadata represents a `readonly class`.
-    pub fn with_readonly_instance_properties(mut self) -> Self {
+    /// Marks all properties readonly when this metadata represents a `readonly class`.
+    pub fn with_readonly_properties(mut self) -> Self {
         if self.is_readonly_class {
             for property in &mut self.properties {
-                if !property.is_static {
-                    property.is_readonly = true;
-                }
+                property.is_readonly = true;
             }
         }
         self

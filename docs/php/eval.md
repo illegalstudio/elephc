@@ -551,9 +551,9 @@ Concrete property hooks are lowered to eval accessor methods; reads and writes
 route through inherited hooks, while access from the accessor itself uses the
 raw backing slot. `readonly` eval properties may be assigned from the
 constructor of the declaring class and later writes fail as eval runtime fatals.
-A `readonly class` makes instance properties readonly implicitly while leaving
-static properties mutable. Missing-property writes can still dispatch through
-`__set()`, but readonly classes reject actual dynamic property creation.
+A `readonly class` makes declared properties readonly implicitly, so static
+properties are rejected like PHP. Missing-property writes can still dispatch
+through `__set()`, but readonly classes reject actual dynamic property creation.
 PHP's global `#[AllowDynamicProperties]` marker is rejected on eval-declared
 readonly classes.
 `self::`, `parent::`, and late-bound `static::` work for supported static

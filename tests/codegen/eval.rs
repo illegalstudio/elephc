@@ -7370,15 +7370,13 @@ fn test_eval_declared_readonly_class_rules() {
         r#"<?php
 eval('readonly class EvalReadonlyClassBox {
     public int $id;
-    public static int $count = 1;
     public function __construct($id) { $this->id = $id; }
     public function id() { return $this->id; }
 }
 readonly class EvalReadonlyClassChild extends EvalReadonlyClassBox {}
 $box = new EvalReadonlyClassBox(7);
 $child = new EvalReadonlyClassChild(9);
-EvalReadonlyClassBox::$count = 5;
-echo $box->id() . ":" . EvalReadonlyClassBox::$count . ":" . $child->id();');
+echo $box->id() . ":" . $child->id();');
 "#,
     );
     assert!(
@@ -7386,7 +7384,19 @@ echo $box->id() . ":" . EvalReadonlyClassBox::$count . ":" . $child->id();');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "7:5:9");
+    assert_eq!(out.stdout, "7:9");
+
+    let static_err = compile_and_run_expect_failure(
+        r#"<?php
+eval('readonly class EvalReadonlyStaticPropertyBox {
+    public static int $count = 1;
+}');
+"#,
+    );
+    assert!(
+        static_err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {static_err}"
+    );
 
     let err = compile_and_run_expect_failure(
         r#"<?php
