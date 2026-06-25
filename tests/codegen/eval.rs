@@ -7252,6 +7252,27 @@ class EvalAdaptMissingMethodBox {
     );
 }
 
+/// Verifies eval-declared `insteadof` rejects excluding the selected trait itself.
+#[test]
+fn test_eval_declared_trait_insteadof_self_exclusion_fails() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('trait EvalAdaptSelfExcluded {
+    public function source() { return "T"; }
+}
+class EvalAdaptSelfExcludedBox {
+    use EvalAdaptSelfExcluded {
+        EvalAdaptSelfExcluded::source insteadof EvalAdaptSelfExcluded;
+    }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared trait abstract methods must be implemented by concrete classes.
 #[test]
 fn test_eval_declared_trait_abstract_method_requirement_fails() {

@@ -168,6 +168,25 @@ class EvalAdaptMissingTraitBox {
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
 
+    let self_exclusion = parse_fragment(
+        br#"trait EvalAdaptSelfExcluded {
+    public function source() { return "T"; }
+}
+class EvalAdaptSelfExcludedBox {
+    use EvalAdaptSelfExcluded {
+        EvalAdaptSelfExcluded::source insteadof EvalAdaptSelfExcluded;
+    }
+}"#,
+    )
+    .expect("parse self-excluded trait adaptation");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&self_exclusion, &mut scope, &mut values)
+        .expect_err("self-excluded adaptation trait should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
     let missing_unqualified_alias = parse_fragment(
         br#"trait EvalAdaptMissingAlias {
     public function source() { return "T"; }
