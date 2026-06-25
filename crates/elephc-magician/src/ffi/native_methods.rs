@@ -37,6 +37,7 @@ const NATIVE_ATTRIBUTE_ARG_FLOAT: u8 = 5;
 const NATIVE_ATTRIBUTE_ARG_ARRAY: u8 = 6;
 const NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
+const NATIVE_OBJECT_DEFAULT_ARG_OBJECT: u8 = 2;
 const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = 8;
 
 #[derive(Clone, Copy)]
@@ -1818,16 +1819,25 @@ unsafe fn native_callable_object_default(
     let len = usize::try_from(spec_len).ok()?;
     let bytes = (!spec_ptr.is_null()).then(|| std::slice::from_raw_parts(spec_ptr, len))?;
     let mut offset = 0;
-    let class_name = native_attribute_take_string(bytes, &mut offset)?;
-    let arg_count = usize::from(native_attribute_take_u8(bytes, &mut offset)?);
+    let default = native_callable_object_default_from_bytes(bytes, &mut offset)?;
+    (offset == bytes.len()).then_some(default)
+}
+
+/// Decodes an object-valued native callable default from a generated binary spec slice.
+fn native_callable_object_default_from_bytes(
+    bytes: &[u8],
+    offset: &mut usize,
+) -> Option<NativeCallableDefault> {
+    let class_name = native_attribute_take_string(bytes, offset)?;
+    let arg_count = usize::from(native_attribute_take_u8(bytes, offset)?);
     if arg_count > MAX_NATIVE_OBJECT_DEFAULT_ARGS {
         return None;
     }
     let mut args = Vec::with_capacity(arg_count);
     for _ in 0..arg_count {
-        args.push(native_callable_object_default_arg(bytes, &mut offset)?);
+        args.push(native_callable_object_default_arg(bytes, offset)?);
     }
-    (offset == bytes.len()).then_some(NativeCallableDefault::Object { class_name, args })
+    Some(NativeCallableDefault::Object { class_name, args })
 }
 
 /// Decodes one object-default constructor argument from a generated binary spec.
@@ -1844,6 +1854,7 @@ fn native_callable_object_default_arg(
         NATIVE_OBJECT_DEFAULT_ARG_STRING => {
             native_attribute_take_string(bytes, offset).map(NativeCallableDefault::String)
         }
+        NATIVE_OBJECT_DEFAULT_ARG_OBJECT => native_callable_object_default_from_bytes(bytes, offset),
         _ => None,
     }
 }

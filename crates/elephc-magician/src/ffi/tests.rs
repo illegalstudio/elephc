@@ -26,6 +26,15 @@ use crate::eval_ir::{EvalAttributeArg, EvalParameterTypeVariant};
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 use std::ffi::c_void;
 
+const TEST_NATIVE_DEFAULT_NULL: u64 = 0;
+const TEST_NATIVE_DEFAULT_BOOL: u64 = 1;
+const TEST_NATIVE_DEFAULT_INT: u64 = 2;
+const TEST_NATIVE_DEFAULT_FLOAT: u64 = 3;
+const TEST_NATIVE_DEFAULT_EMPTY_ARRAY: u64 = 4;
+const TEST_NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
+const TEST_NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
+const TEST_NATIVE_OBJECT_DEFAULT_ARG_OBJECT: u8 = 2;
+
 /// Test native invoker placeholder used only to validate ABI registration.
 unsafe extern "C" fn fake_native_invoker(
     _descriptor: *mut c_void,
@@ -97,6 +106,53 @@ fn native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &EvalAttributeArg
 fn native_member_attribute_push_string(record: &mut Vec<u8>, value: &str) {
     record.extend_from_slice(&(value.len() as u32).to_le_bytes());
     record.extend_from_slice(value.as_bytes());
+}
+
+/// Builds one object-valued native parameter default ABI record for registration tests.
+fn native_object_default_record(class_name: &str, args: &[NativeCallableDefault]) -> Vec<u8> {
+    let mut record = Vec::new();
+    native_member_attribute_push_string(&mut record, class_name);
+    record.push(args.len() as u8);
+    for arg in args {
+        native_object_default_push_arg(&mut record, arg);
+    }
+    record
+}
+
+/// Appends one object-default constructor argument to a native parameter default record.
+fn native_object_default_push_arg(record: &mut Vec<u8>, arg: &NativeCallableDefault) {
+    match arg {
+        NativeCallableDefault::Null => {
+            native_object_default_push_scalar(record, TEST_NATIVE_DEFAULT_NULL, 0)
+        }
+        NativeCallableDefault::Bool(value) => {
+            native_object_default_push_scalar(record, TEST_NATIVE_DEFAULT_BOOL, u64::from(*value))
+        }
+        NativeCallableDefault::Int(value) => {
+            native_object_default_push_scalar(record, TEST_NATIVE_DEFAULT_INT, *value as u64)
+        }
+        NativeCallableDefault::Float(value) => {
+            native_object_default_push_scalar(record, TEST_NATIVE_DEFAULT_FLOAT, value.to_bits())
+        }
+        NativeCallableDefault::String(value) => {
+            record.push(TEST_NATIVE_OBJECT_DEFAULT_ARG_STRING);
+            native_member_attribute_push_string(record, value);
+        }
+        NativeCallableDefault::EmptyArray => {
+            native_object_default_push_scalar(record, TEST_NATIVE_DEFAULT_EMPTY_ARRAY, 0)
+        }
+        NativeCallableDefault::Object { class_name, args } => {
+            record.push(TEST_NATIVE_OBJECT_DEFAULT_ARG_OBJECT);
+            record.extend_from_slice(&native_object_default_record(class_name, args));
+        }
+    }
+}
+
+/// Appends one scalar object-default constructor argument to a native parameter default record.
+fn native_object_default_push_scalar(record: &mut Vec<u8>, kind: u64, payload: u64) {
+    record.push(TEST_NATIVE_OBJECT_DEFAULT_ARG_SCALAR);
+    record.extend_from_slice(&kind.to_le_bytes());
+    record.extend_from_slice(&payload.to_le_bytes());
 }
 
 /// Verifies the exported version entry point reports the crate ABI constant.
@@ -608,6 +664,45 @@ fn register_native_methods_record_signature_metadata() {
             .expect("constructor metadata")
             .param_default(0),
         Some(&NativeCallableDefault::Bool(true))
+    );
+}
+
+/// Verifies native AOT object defaults can carry nested object constructor args.
+#[test]
+fn register_native_object_default_decodes_nested_objects() {
+    let mut ctx = ElephcEvalContext::new();
+    let class = b"KnownClass";
+    let nested_args = vec![NativeCallableDefault::Object {
+        class_name: "InnerDefault".to_string(),
+        args: vec![NativeCallableDefault::String("leaf".to_string())],
+    }];
+    let expected_default = NativeCallableDefault::Object {
+        class_name: "OuterDefault".to_string(),
+        args: nested_args.clone(),
+    };
+    let spec = native_object_default_record("OuterDefault", &nested_args);
+
+    let constructor_registered = unsafe {
+        __elephc_eval_register_native_constructor(&mut ctx, class.as_ptr(), class.len() as u64, 1)
+    };
+    let default_registered = unsafe {
+        __elephc_eval_register_native_constructor_param_default_object(
+            &mut ctx,
+            class.as_ptr(),
+            class.len() as u64,
+            0,
+            spec.as_ptr(),
+            spec.len() as u64,
+        )
+    };
+
+    assert_eq!(constructor_registered, 1);
+    assert_eq!(default_registered, 1);
+    assert_eq!(
+        ctx.native_constructor_signature("knownclass")
+            .expect("constructor metadata")
+            .param_default(0),
+        Some(&expected_default)
     );
 }
 

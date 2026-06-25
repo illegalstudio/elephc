@@ -72,6 +72,7 @@ const NATIVE_ATTRIBUTE_ARG_FLOAT: u8 = 5;
 const NATIVE_ATTRIBUTE_ARG_ARRAY: u8 = 6;
 const NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
+const NATIVE_OBJECT_DEFAULT_ARG_OBJECT: u8 = 2;
 const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = 8;
 
 /// Local slot metadata needed for conservative eval scope synchronization.
@@ -1241,7 +1242,7 @@ fn eval_native_object_default(expr: &Expr) -> Option<EvalNativeCallableDefault> 
     }
     let mut default_args = Vec::with_capacity(args.len());
     for arg in args {
-        default_args.push(eval_native_literal_default(arg)?);
+        default_args.push(eval_native_callable_default(arg)?);
     }
     Some(EvalNativeCallableDefault::Object {
         class_name: class_name.as_canonical(),
@@ -1309,7 +1310,10 @@ fn encode_eval_native_object_default_arg(bytes: &mut Vec<u8>, default: &EvalNati
             bytes.push(NATIVE_OBJECT_DEFAULT_ARG_STRING);
             encode_eval_native_default_string(bytes, value);
         }
-        EvalNativeCallableDefault::Object { .. } => {}
+        EvalNativeCallableDefault::Object { .. } => {
+            bytes.push(NATIVE_OBJECT_DEFAULT_ARG_OBJECT);
+            bytes.extend_from_slice(&encode_eval_native_object_default(default));
+        }
     }
 }
 
