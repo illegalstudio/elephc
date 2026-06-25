@@ -7890,6 +7890,17 @@ eval('class EvalBadCallablePromoted {
 eval('function eval_bad_static_parameter(static $value) {}');
 "#,
         r#"<?php
+eval('function eval_bad_self_return(): self {}');
+"#,
+        r#"<?php
+eval('function eval_bad_static_return(): static {}');
+"#,
+        r#"<?php
+eval('class EvalBadStaticMethodParam {
+    public function read(static $value) {}
+}');
+"#,
+        r#"<?php
 eval('class EvalBadStaticPromoted {
     public function __construct(public static $value) {}
 }');

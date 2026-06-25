@@ -46,9 +46,11 @@ struct ParsedClassBody {
 /// Type-declaration position controls PHP-only atoms such as `void`, `static`, and `callable`.
 #[derive(Clone, Copy)]
 enum EvalTypePosition {
-    Parameter,
+    FunctionParameter,
+    MethodParameter,
     Property,
-    Return,
+    FunctionReturn,
+    MethodReturn,
 }
 
 impl Parser {
@@ -930,11 +932,11 @@ impl Parser {
             parameter_is_variadic,
             promoted_properties,
             promoted_assignments,
-        } = self.parse_method_params(&name)?;
+        } = self.parse_method_params(&name, true)?;
         if !promoted_properties.is_empty() && (is_abstract || is_static) {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        let return_type = self.parse_optional_return_type()?;
+        let return_type = self.parse_optional_return_type(EvalTypePosition::MethodReturn)?;
         let (body, source_end_line) = if is_abstract {
             let source_end_line = self.current_line();
             self.expect_semicolon()?;
@@ -1557,11 +1559,11 @@ impl Parser {
             parameter_is_variadic,
             promoted_properties,
             promoted_assignments,
-        } = self.parse_method_params(&name)?;
+        } = self.parse_method_params(&name, true)?;
         if !promoted_properties.is_empty() || !promoted_assignments.is_empty() {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        let return_type = self.parse_optional_return_type()?;
+        let return_type = self.parse_optional_return_type(EvalTypePosition::MethodReturn)?;
         let source_end_line = self.current_line();
         self.expect_semicolon()?;
         Ok(EvalInterfaceMethod::new(name, params)
@@ -1694,11 +1696,11 @@ impl Parser {
             parameter_is_variadic,
             promoted_properties,
             promoted_assignments,
-        } = self.parse_method_params("")?;
+        } = self.parse_method_params("", false)?;
         if !promoted_properties.is_empty() || !promoted_assignments.is_empty() {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        let return_type = self.parse_optional_return_type()?;
+        let return_type = self.parse_optional_return_type(EvalTypePosition::FunctionReturn)?;
         let (body, source_end_line) = self.parse_block_with_end_line()?;
         Ok(vec![EvalStmt::FunctionDecl {
             name,
@@ -2002,6 +2004,7 @@ impl Parser {
     pub(super) fn parse_method_params(
         &mut self,
         method_name: &str,
+        allow_class_scope_types: bool,
     ) -> Result<ParsedMethodParams, EvalParseError> {
         let mut params = Vec::new();
         let mut parameter_attributes = Vec::new();
@@ -2032,7 +2035,12 @@ impl Parser {
             let param_type = if promotion.is_some() {
                 self.parse_optional_promoted_property_type()?
             } else {
-                self.parse_optional_parameter_type()?
+                let position = if allow_class_scope_types {
+                    EvalTypePosition::MethodParameter
+                } else {
+                    EvalTypePosition::FunctionParameter
+                };
+                self.parse_optional_parameter_type(position)?
             };
             let is_by_ref = self.consume(TokenKind::Ampersand);
             let is_variadic = self.consume(TokenKind::Ellipsis);
@@ -2170,6 +2178,7 @@ impl Parser {
     /// Consumes a supported method parameter type and returns retained metadata.
     fn parse_optional_parameter_type(
         &mut self,
+        position: EvalTypePosition,
     ) -> Result<Option<EvalParameterType>, EvalParseError> {
         if matches!(
             self.current(),
@@ -2177,15 +2186,18 @@ impl Parser {
         ) {
             return Ok(None);
         }
-        self.parse_type_decl(EvalTypePosition::Parameter)
+        self.parse_type_decl(position)
     }
 
     /// Consumes a supported function or method return type after `:`.
-    fn parse_optional_return_type(&mut self) -> Result<Option<EvalParameterType>, EvalParseError> {
+    fn parse_optional_return_type(
+        &mut self,
+        position: EvalTypePosition,
+    ) -> Result<Option<EvalParameterType>, EvalParseError> {
         if !self.consume(TokenKind::Colon) {
             return Ok(None);
         }
-        self.parse_type_decl(EvalTypePosition::Return)
+        self.parse_type_decl(position)
     }
 
     /// Parses one PHP type declaration and returns retained eval metadata.
@@ -2278,20 +2290,24 @@ impl Parser {
                 "int" => Some(EvalParameterTypeVariant::Int),
                 "iterable" => Some(EvalParameterTypeVariant::Iterable),
                 "mixed" => Some(EvalParameterTypeVariant::Mixed),
-                "never" if matches!(position, EvalTypePosition::Return) => {
+                "never" if type_position_allows_return_only_atoms(position) => {
                     Some(EvalParameterTypeVariant::Never)
                 }
                 "null" => return Ok(None),
                 "object" => Some(EvalParameterTypeVariant::Object),
                 "string" => Some(EvalParameterTypeVariant::String),
-                "void" if matches!(position, EvalTypePosition::Return) => {
+                "void" if type_position_allows_return_only_atoms(position) => {
                     Some(EvalParameterTypeVariant::Void)
                 }
                 "void" | "never" => return Err(EvalParseError::UnsupportedConstruct),
-                "static" if !matches!(position, EvalTypePosition::Return) => {
+                "static" if matches!(position, EvalTypePosition::MethodReturn) => {
+                    Some(EvalParameterTypeVariant::Class(lower.to_string()))
+                }
+                "static" => return Err(EvalParseError::UnsupportedConstruct),
+                "self" | "parent" if !type_position_allows_class_scope_atoms(position) => {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
-                "self" | "parent" | "static" => {
+                "self" | "parent" => {
                     Some(EvalParameterTypeVariant::Class(lower.to_string()))
                 }
                 _ => None,
@@ -2776,6 +2792,22 @@ fn type_variants_contain_standalone_return_only_atoms(
             EvalParameterTypeVariant::Never | EvalParameterTypeVariant::Void
         )
     })
+}
+
+/// Returns whether the type position accepts standalone return-only atoms.
+fn type_position_allows_return_only_atoms(position: EvalTypePosition) -> bool {
+    matches!(
+        position,
+        EvalTypePosition::FunctionReturn | EvalTypePosition::MethodReturn
+    )
+}
+
+/// Returns whether `self` and `parent` are legal in this type position.
+fn type_position_allows_class_scope_atoms(position: EvalTypePosition) -> bool {
+    !matches!(
+        position,
+        EvalTypePosition::FunctionParameter | EvalTypePosition::FunctionReturn
+    )
 }
 
 /// Returns whether a class-like receiver is legal in a compile-time method default.
