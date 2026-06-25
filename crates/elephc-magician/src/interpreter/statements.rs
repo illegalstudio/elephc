@@ -1483,6 +1483,9 @@ fn validate_eval_declared_properties(class: &EvalClass) -> Result<(), EvalStatus
         if property.is_final() && property.visibility() == EvalVisibility::Private {
             return Err(EvalStatus::RuntimeFatal);
         }
+        if property.is_readonly() && property.property_type().is_none() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
         if property.is_readonly() && property.default().is_some() {
             return Err(EvalStatus::RuntimeFatal);
         }

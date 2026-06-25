@@ -313,6 +313,38 @@ $box->replace(8);"#,
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies readonly eval properties must declare a type like PHP requires.
+#[test]
+fn execute_program_rejects_untyped_readonly_properties() {
+    let explicit = parse_fragment(
+        br#"class EvalReadonlyUntypedBox {
+    public readonly $value;
+}"#,
+    )
+    .expect("parse explicit readonly property");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&explicit, &mut scope, &mut values)
+        .expect_err("explicit readonly property without type should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let readonly_class = parse_fragment(
+        br#"readonly class EvalReadonlyClassUntypedBox {
+    public $value;
+}"#,
+    )
+    .expect("parse readonly class property");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&readonly_class, &mut scope, &mut values)
+        .expect_err("readonly class property without type should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies readonly classes make instance properties readonly implicitly.
 #[test]
 fn execute_program_initializes_readonly_class_property_in_constructor() {
