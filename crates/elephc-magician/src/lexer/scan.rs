@@ -10,12 +10,12 @@
 //! - Comments and whitespace advance line metadata for `__LINE__`.
 //! - Unterminated strings or block comments return parse errors before grammar parsing.
 
-use super::TokenKind;
+use super::{Token, TokenKind};
 use crate::errors::EvalParseError;
 use crate::eval_ir::EvalMagicConst;
 
 /// Tokenizes a complete source fragment and appends an EOF sentinel.
-pub(crate) fn tokenize(source: &str) -> Result<Vec<TokenKind>, EvalParseError> {
+pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, EvalParseError> {
     Lexer::new(source).tokenize()
 }
 
@@ -37,11 +37,11 @@ impl<'a> Lexer<'a> {
     }
 
     /// Tokenizes the complete source and appends an EOF sentinel.
-    fn tokenize(mut self) -> Result<Vec<TokenKind>, EvalParseError> {
+    fn tokenize(mut self) -> Result<Vec<Token>, EvalParseError> {
         let mut tokens = Vec::new();
         loop {
             let token = self.next_token()?;
-            let done = token == TokenKind::Eof;
+            let done = *token.kind() == TokenKind::Eof;
             tokens.push(token);
             if done {
                 break;
@@ -51,13 +51,13 @@ impl<'a> Lexer<'a> {
     }
 
     /// Reads the next token from the source.
-    fn next_token(&mut self) -> Result<TokenKind, EvalParseError> {
+    fn next_token(&mut self) -> Result<Token, EvalParseError> {
         self.skip_trivia()?;
         let Some(ch) = self.peek_char() else {
-            return Ok(TokenKind::Eof);
+            return Ok(Token::new(TokenKind::Eof, self.line));
         };
         let line = self.line;
-        match ch {
+        let kind = match ch {
             '$' => self.lex_variable(),
             '\'' | '"' => self.lex_string(ch),
             '0'..='9' => self.lex_number(),
@@ -307,7 +307,8 @@ impl<'a> Lexer<'a> {
                 Ok(magic_const_token(&ident, line).unwrap_or(TokenKind::Ident(ident)))
             }
             _ => Err(EvalParseError::UnexpectedToken),
-        }
+        }?;
+        Ok(Token::new(kind, line))
     }
 
     /// Reads a `$name` token.

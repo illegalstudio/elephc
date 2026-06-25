@@ -12,6 +12,35 @@
 
 use crate::eval_ir::EvalMagicConst;
 
+/// One token plus its eval-fragment source line.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Token {
+    kind: TokenKind,
+    line: i64,
+}
+
+impl Token {
+    /// Creates one token at the given eval-fragment line.
+    pub(crate) const fn new(kind: TokenKind, line: i64) -> Self {
+        Self { kind, line }
+    }
+
+    /// Returns the parser-visible token kind.
+    pub(crate) fn kind(&self) -> &TokenKind {
+        &self.kind
+    }
+
+    /// Consumes the token and returns its parser-visible kind.
+    pub(crate) fn into_kind(self) -> TokenKind {
+        self.kind
+    }
+
+    /// Returns the one-based eval-fragment line where this token starts.
+    pub(crate) const fn line(&self) -> i64 {
+        self.line
+    }
+}
+
 /// Token kinds used by the initial eval fragment parser.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum TokenKind {

@@ -7644,6 +7644,31 @@ echo $propertyAttrs[0]->getArguments()[0] . ":" . $propertyAttrs[0]->newInstance
     );
 }
 
+/// Verifies eval ReflectionClass/Method/Function expose source-location metadata.
+#[test]
+fn test_eval_reflection_source_locations() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalReflectSourceE2E {
+    public function run() {
+        return 1;
+    }
+}
+function eval_reflect_source_e2e() {
+    return 1;
+}
+$class = new ReflectionClass("EvalReflectSourceE2E");
+$method = new ReflectionMethod("EvalReflectSourceE2E", "run");
+$function = new ReflectionFunction("eval_reflect_source_e2e");
+echo $class->getFileName() === false ? "f" : "F"; echo ":";
+echo $class->getStartLine(); echo ":"; echo $class->getEndLine(); echo ":";
+echo $method->getStartLine(); echo ":"; echo $method->getEndLine(); echo ":";
+echo $function->getStartLine(); echo ":"; echo $function->getEndLine();');
+"#,
+    );
+    assert_eq!(out, "F:1:5:2:4:6:8");
+}
+
 /// Verifies eval ReflectionAttribute exposes owner target and repetition metadata.
 #[test]
 fn test_eval_reflection_attribute_target_and_repetition() {
