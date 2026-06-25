@@ -6890,6 +6890,60 @@ class EvalParamTypedReader implements EvalParamUntypedContract {
     );
 }
 
+/// Verifies eval-declared abstract classes validate declared interface method signatures.
+#[test]
+fn test_eval_declared_abstract_interface_method_contracts() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('interface EvalAbstractIfaceDeferred {
+    function read(int $value): int;
+}
+abstract class EvalAbstractIfaceDeferredBase implements EvalAbstractIfaceDeferred {}
+abstract class EvalAbstractIfaceDeferredTyped implements EvalAbstractIfaceDeferred {
+    abstract public function read(mixed $value): int;
+}
+echo "ok";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "ok");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalAbstractIfaceParam {
+    function read(int $value);
+}
+abstract class EvalAbstractIfaceParamBase implements EvalAbstractIfaceParam {
+    abstract public function read(string $value);
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalInheritedIfaceMethod {
+    function read(int $value);
+}
+abstract class EvalInheritedIfaceMethodBase {
+    public function read(string $value) {}
+}
+abstract class EvalInheritedIfaceMethodChild extends EvalInheritedIfaceMethodBase implements EvalInheritedIfaceMethod {}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared methods enforce declared return values at runtime.
 #[test]
 fn test_eval_declared_method_return_type_values() {
@@ -7584,6 +7638,52 @@ class EvalIfaceHookReadOnlyBox implements EvalIfaceHookSetContract {
         get => 42;
     }
 }');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalIfaceGetInt {
+    public int $value { get; }
+}
+abstract class EvalIfaceGetWideBad implements EvalIfaceGetInt {
+    abstract public int|string $value { get; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalIfaceSetWide {
+    public int|string $value { set; }
+}
+abstract class EvalIfaceSetNarrowBad implements EvalIfaceSetWide {
+    abstract public int $value { set; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalIfaceInheritedGet {
+    public int $value { get; }
+}
+abstract class EvalIfaceInheritedPropertyBase {
+    public string $value = "bad";
+}
+abstract class EvalIfaceInheritedPropertyChild extends EvalIfaceInheritedPropertyBase implements EvalIfaceInheritedGet {}');
 "#,
     );
     assert!(

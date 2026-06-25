@@ -1371,6 +1371,94 @@ return $box->value;"#,
     assert_eq!(values.get(result), FakeValue::String("Grace".to_string()));
 }
 
+/// Verifies interface property hook types are checked on abstract and concrete classes.
+#[test]
+fn execute_program_validates_interface_property_hook_types() {
+    let valid_program = parse_fragment(
+        br#"interface EvalIfaceGetWide {
+    public int|string $value { get; }
+}
+interface EvalIfaceSetNarrow {
+    public int $slot { set; }
+}
+abstract class EvalIfacePropertyDeferred implements EvalIfaceGetWide {}
+abstract class EvalIfacePropertyGood implements EvalIfaceGetWide, EvalIfaceSetNarrow {
+    abstract public int $value { get; }
+    abstract public int|string $slot { set; }
+}
+class EvalIfacePropertyConcrete implements EvalIfaceGetWide {
+    public int $value = 4;
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&valid_program, &mut scope, &mut values).expect("execute eval ir");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+
+    let bad_abstract_get = parse_fragment(
+        br#"interface EvalIfaceGetInt {
+    public int $value { get; }
+}
+abstract class EvalIfaceGetWideBad implements EvalIfaceGetInt {
+    abstract public int|string $value { get; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&bad_abstract_get, &mut scope, &mut values)
+        .expect_err("wider abstract get property type should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let bad_abstract_set = parse_fragment(
+        br#"interface EvalIfaceSetWide {
+    public int|string $value { set; }
+}
+abstract class EvalIfaceSetNarrowBad implements EvalIfaceSetWide {
+    abstract public int $value { set; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&bad_abstract_set, &mut scope, &mut values)
+        .expect_err("narrower abstract set property type should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let bad_concrete_get = parse_fragment(
+        br#"interface EvalIfaceConcreteGetInt {
+    public int $value { get; }
+}
+class EvalIfaceConcreteGetWideBad implements EvalIfaceConcreteGetInt {
+    public int|string $value = 4;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&bad_concrete_get, &mut scope, &mut values)
+        .expect_err("wider concrete get property type should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let bad_inherited_property = parse_fragment(
+        br#"interface EvalIfaceInheritedGet {
+    public int $value { get; }
+}
+abstract class EvalIfaceInheritedPropertyBase {
+    public string $value = "bad";
+}
+abstract class EvalIfaceInheritedPropertyChild extends EvalIfaceInheritedPropertyBase implements EvalIfaceInheritedGet {}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&bad_inherited_property, &mut scope, &mut values)
+        .expect_err("inherited incompatible interface property should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies a get-only hook cannot satisfy a writable eval interface contract.
 #[test]
 fn execute_program_rejects_get_only_hook_for_interface_set_contract() {

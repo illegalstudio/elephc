@@ -1266,6 +1266,78 @@ class EvalWiderReturnImpl implements EvalNeedsStringReturn {
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies abstract eval classes must keep declared interface method signatures compatible.
+#[test]
+fn execute_program_rejects_incompatible_abstract_interface_method_declarations() {
+    let bad_abstract_param = parse_fragment(
+        br#"interface EvalAbstractIfaceParam {
+    function read(int $value);
+}
+abstract class EvalAbstractIfaceParamBase implements EvalAbstractIfaceParam {
+    abstract public function read(string $value);
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&bad_abstract_param, &mut scope, &mut values)
+        .expect_err("abstract interface method parameter type should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let bad_abstract_return = parse_fragment(
+        br#"interface EvalAbstractIfaceReturn {
+    function read(): int;
+}
+abstract class EvalAbstractIfaceReturnBase implements EvalAbstractIfaceReturn {
+    abstract public function read(): string;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&bad_abstract_return, &mut scope, &mut values)
+        .expect_err("abstract interface method return type should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let bad_inherited_method = parse_fragment(
+        br#"interface EvalInheritedIfaceMethod {
+    function read(int $value);
+}
+abstract class EvalInheritedIfaceMethodBase {
+    public function read(string $value) {}
+}
+abstract class EvalInheritedIfaceMethodChild extends EvalInheritedIfaceMethodBase implements EvalInheritedIfaceMethod {}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&bad_inherited_method, &mut scope, &mut values)
+        .expect_err("inherited incompatible interface method should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies abstract eval classes may defer missing compatible interface methods.
+#[test]
+fn execute_program_accepts_deferred_abstract_interface_method_declarations() {
+    let program = parse_fragment(
+        br#"interface EvalAbstractIfaceDeferred {
+    function read(int $value): int;
+}
+abstract class EvalAbstractIfaceDeferredBase implements EvalAbstractIfaceDeferred {}
+abstract class EvalAbstractIfaceDeferredTyped implements EvalAbstractIfaceDeferred {
+    abstract public function read(mixed $value): int;
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval accepts PHP-contravariant parameter types for interface contracts.
 #[test]
 fn execute_program_accepts_contravariant_interface_method_parameter_types() {

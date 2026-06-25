@@ -637,6 +637,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
             return Err(EvalStatus::RuntimeFatal);
         }
     }
+    validate_declared_class_interface_members(class, context)?;
     if !class.is_abstract() {
         validate_concrete_class_requirements(class, context)?;
     }
@@ -1597,6 +1598,94 @@ fn constant_visibility_rank(visibility: EvalVisibility) -> u8 {
     }
 }
 
+/// Validates declared or inherited class members that already cover eval interface contracts.
+fn validate_declared_class_interface_members(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    for interface in pending_class_interface_names(class, context) {
+        if !context.has_interface(&interface) {
+            continue;
+        }
+        validate_declared_class_interface_methods(class, &interface, context)?;
+        validate_declared_class_interface_properties(class, &interface, context)?;
+    }
+    Ok(())
+}
+
+/// Validates class methods present for an eval interface, even on abstract classes.
+fn validate_declared_class_interface_methods(
+    class: &EvalClass,
+    interface_name: &str,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    for (requirement_owner, requirement) in
+        context.interface_method_requirements_with_owners(interface_name)
+    {
+        let Some((declaring_class, method)) =
+            pending_class_method(class, requirement.name(), context)
+        else {
+            continue;
+        };
+        if method.visibility() != EvalVisibility::Public
+            || method.is_static() != requirement.is_static()
+            || !class_method_satisfies_interface_signature(
+                &method,
+                &declaring_class,
+                &requirement,
+                &requirement_owner,
+                Some(class),
+                context,
+            )
+        {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
+}
+
+/// Validates class properties present for an eval interface, even on abstract classes.
+fn validate_declared_class_interface_properties(
+    class: &EvalClass,
+    interface_name: &str,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    for (requirement_owner, requirement) in
+        context.interface_property_requirements_with_owners(interface_name)
+    {
+        let Some((declaring_class, property)) =
+            pending_class_property_with_owner(class, requirement.name(), context)
+        else {
+            continue;
+        };
+        if !class_property_can_cover_interface_contract(
+            &property,
+            &declaring_class,
+            &requirement,
+            &requirement_owner,
+            Some(class),
+            context,
+        ) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
+}
+
+/// Returns a method from a pending class or one of its already registered parents.
+fn pending_class_method(
+    class: &EvalClass,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<(String, EvalClassMethod)> {
+    if let Some(method) = class.method(method_name) {
+        return Some((class.name().to_string(), method.clone()));
+    }
+    class
+        .parent()
+        .and_then(|parent| context.class_method(parent, method_name))
+}
+
 /// Validates one method declaration against inherited eval method metadata.
 fn validate_method_parent_override(
     class: &EvalClass,
@@ -1915,8 +2004,10 @@ fn validate_class_implements_eval_interface(
             return Err(EvalStatus::RuntimeFatal);
         }
     }
-    for requirement in context.interface_property_requirements(interface_name) {
-        if !class_has_interface_property(class, &requirement, context) {
+    for (requirement_owner, requirement) in
+        context.interface_property_requirements_with_owners(interface_name)
+    {
+        if !class_has_interface_property(class, &requirement_owner, &requirement, context) {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -1997,6 +2088,91 @@ fn class_method_satisfies_interface_signature(
         pending_class,
         context,
     )
+}
+
+/// Returns whether one class property is compatible with one interface property contract.
+fn class_property_can_cover_interface_contract(
+    property: &EvalClassProperty,
+    property_owner: &str,
+    requirement: &EvalInterfaceProperty,
+    requirement_owner: &str,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+) -> bool {
+    if property.visibility() != EvalVisibility::Public || property.is_static() {
+        return false;
+    }
+    if !class_property_type_satisfies_interface_contract(
+        property.property_type(),
+        property_owner,
+        requirement,
+        requirement_owner,
+        pending_class,
+        context,
+    ) {
+        return false;
+    }
+    if requirement.requires_get() && !class_property_supports_interface_get(property) {
+        return false;
+    }
+    if requirement.requires_set() {
+        return requirement.set_visibility() != Some(EvalVisibility::Private)
+            && property_visibility_rank(property.write_visibility())
+                >= property_visibility_rank(requirement.write_visibility())
+            && class_property_supports_interface_set(property);
+    }
+    requirement.requires_get()
+}
+
+/// Returns whether one property type is compatible with interface get/set hook signatures.
+fn class_property_type_satisfies_interface_contract(
+    property_type: Option<&EvalParameterType>,
+    property_owner: &str,
+    requirement: &EvalInterfaceProperty,
+    requirement_owner: &str,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+) -> bool {
+    if requirement.requires_get()
+        && !method_return_type_signature_accepts(
+            property_type,
+            property_owner,
+            requirement.property_type(),
+            requirement_owner,
+            pending_class,
+            context,
+        )
+    {
+        return false;
+    }
+    if requirement.requires_set() {
+        let property_types = vec![property_type.cloned()];
+        let requirement_types = vec![requirement.property_type().cloned()];
+        return method_parameter_type_signature_accepts(
+            &property_types,
+            &[],
+            property_owner,
+            &requirement_types,
+            &[],
+            requirement_owner,
+            1,
+            pending_class,
+            context,
+        );
+    }
+    true
+}
+
+/// Returns whether one property can satisfy an interface `get` hook.
+fn class_property_supports_interface_get(property: &EvalClassProperty) -> bool {
+    property.has_get_hook() || property.requires_get_hook() || !property.is_virtual()
+}
+
+/// Returns whether one property can satisfy an interface `set` hook.
+fn class_property_supports_interface_set(property: &EvalClassProperty) -> bool {
+    property.has_set_hook()
+        || property.requires_set_hook()
+        || (!property.is_virtual() && !property.is_readonly())
 }
 
 /// Returns whether an implementing method accepts the full required arity range.
@@ -2097,44 +2273,41 @@ fn method_signature_max_arity(param_count: usize, variadics: &[bool]) -> Option<
 /// Returns whether a class or its eval parents satisfy one interface property contract.
 fn class_has_interface_property(
     class: &EvalClass,
+    requirement_owner: &str,
     requirement: &EvalInterfaceProperty,
     context: &ElephcEvalContext,
 ) -> bool {
-    pending_class_property(class, requirement.name(), context).is_some_and(|property| {
-        if property.is_abstract()
-            || property.visibility() != EvalVisibility::Public
-            || property.is_static()
-        {
-            return false;
-        }
-        if requirement.requires_set() {
-            return requirement.set_visibility() != Some(EvalVisibility::Private)
-                && property_visibility_rank(property.write_visibility())
-                    >= property_visibility_rank(requirement.write_visibility())
-                && (property.has_set_hook()
-                    || (!property.has_get_hook() && !property.is_readonly()));
-        }
-        requirement.requires_get()
-    })
+    pending_class_property_with_owner(class, requirement.name(), context).is_some_and(
+        |(declaring_class, property)| {
+            !property.is_abstract()
+                && class_property_can_cover_interface_contract(
+                    &property,
+                    &declaring_class,
+                    requirement,
+                    requirement_owner,
+                    Some(class),
+                    context,
+                )
+        },
+    )
 }
 
 /// Returns a property from a pending class or one of its already registered parents.
-fn pending_class_property(
+fn pending_class_property_with_owner(
     class: &EvalClass,
     property_name: &str,
     context: &ElephcEvalContext,
-) -> Option<EvalClassProperty> {
+) -> Option<(String, EvalClassProperty)> {
     if let Some(property) = class
         .properties()
         .iter()
         .find(|property| property.name() == property_name)
     {
-        return Some(property.clone());
+        return Some((class.name().to_string(), property.clone()));
     }
     class
         .parent()
         .and_then(|parent| context.class_property(parent, property_name))
-        .map(|(_, property)| property)
 }
 
 /// Reads one object property while enforcing eval-declared member visibility.
