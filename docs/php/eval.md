@@ -456,7 +456,8 @@ public/protected/private visibility like PHP reflection, route concrete eval
 property hooks through their accessors, and still reject readonly writes.
 `ReflectionProperty::getRawValue()` and `setRawValue()` are supported for
 eval-declared backed instance properties, including backed property hooks, and
-bypass concrete property hook accessors. Virtual property hooks reject raw
+for bridge-supported generated/AOT instance properties. Raw access bypasses
+concrete eval property hook accessors. Virtual property hooks reject raw
 access like PHP. `ReflectionProperty::isLazy()` reports `false` for
 eval-declared properties because eval does not implement lazy properties;
 `skipLazyInitialization()` is a no-op for supported non-static backed

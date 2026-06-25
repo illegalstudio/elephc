@@ -1532,7 +1532,7 @@ pub(in crate::interpreter) fn eval_reflection_property_to_string_result(
     values.string(&text).map(Some)
 }
 
-/// Handles eval-backed `ReflectionProperty::getRawValue()` and raw write calls.
+/// Handles `ReflectionProperty::getRawValue()` and raw write calls.
 pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
     identity: u64,
     method_name: &str,
@@ -1561,13 +1561,23 @@ pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
             )
             .map(Some);
         }
-        return eval_reflection_instance_property_get_raw_value(
-            &declaring_class,
-            &property_name,
-            object,
-            context,
-            values,
-        )
+        return if eval_reflection_class_like_exists(&declaring_class, context) {
+            eval_reflection_instance_property_get_raw_value(
+                &declaring_class,
+                &property_name,
+                object,
+                context,
+                values,
+            )
+        } else {
+            eval_reflection_aot_instance_property_get_value(
+                &declaring_class,
+                &property_name,
+                object,
+                context,
+                values,
+            )
+        }
         .map(Some);
     }
     if method_name.eq_ignore_ascii_case("setRawValue")
@@ -1585,14 +1595,25 @@ pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
             )?;
             return values.null().map(Some);
         }
-        eval_reflection_instance_property_set_raw_value(
-            &declaring_class,
-            &property_name,
-            object,
-            value,
-            context,
-            values,
-        )?;
+        if eval_reflection_class_like_exists(&declaring_class, context) {
+            eval_reflection_instance_property_set_raw_value(
+                &declaring_class,
+                &property_name,
+                object,
+                value,
+                context,
+                values,
+            )?;
+        } else {
+            eval_reflection_aot_instance_property_set_value(
+                &declaring_class,
+                &property_name,
+                object,
+                value,
+                context,
+                values,
+            )?;
+        }
         return values.null().map(Some);
     }
     Ok(None)

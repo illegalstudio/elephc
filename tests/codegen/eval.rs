@@ -10562,6 +10562,42 @@ echo $typed->getValue($object);
     );
 }
 
+/// Verifies eval ReflectionProperty raw APIs bridge generated/AOT instance storage.
+#[test]
+fn test_eval_reflection_property_raw_value_apis_bridge_aot_storage() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectRawPropertyTarget {
+    public string $name = "Ada";
+    private int $secret = 3;
+    public int $typed;
+
+    public function reveal() {
+        return $this->secret . ":" . $this->typed;
+    }
+}
+$object = new EvalAotReflectRawPropertyTarget();
+echo eval('$name = new ReflectionProperty("EvalAotReflectRawPropertyTarget", "name");
+$secret = new ReflectionProperty("EvalAotReflectRawPropertyTarget", "secret");
+$typed = new ReflectionProperty("EvalAotReflectRawPropertyTarget", "typed");
+echo $name->getRawValue($object) . ":";
+$name->setRawValue($object, "Grace");
+echo $object->name . ":";
+echo $secret->getRawValue($object) . ":";
+$secret->setRawValue($object, 9);
+$typed->setRawValueWithoutLazyInitialization(object: $object, value: 11);
+echo $object->reveal();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Ada:Grace:3:9:11");
+}
+
 /// Verifies eval ReflectionProperty exposes property hook metadata and hook methods.
 #[test]
 fn test_eval_reflection_property_hook_metadata() {
