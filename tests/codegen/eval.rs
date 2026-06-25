@@ -8294,6 +8294,9 @@ fn test_eval_rejects_invalid_magic_method_contracts() {
         return 1;
     }
 }');"#,
+        r#"eval('class EvalInvalidCallArgsType {
+    public function __call(string $name, string $args) {}
+}');"#,
         r#"eval('class EvalInvalidSleepReturn {
     public function __sleep(): string {
         return "x";

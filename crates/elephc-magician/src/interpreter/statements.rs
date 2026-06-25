@@ -1465,12 +1465,15 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
             validate_magic_arity(method, 2)?;
             if method.name().eq_ignore_ascii_case("__set") {
                 validate_magic_declared_return_type(method, MagicReturnType::Void)?;
+            } else {
+                validate_magic_declared_param_type(method, 1, MagicParamType::Array)?;
             }
         }
         "__callstatic" => {
             validate_magic_static(method)?;
             validate_magic_public(method)?;
             validate_magic_arity(method, 2)?;
+            validate_magic_declared_param_type(method, 1, MagicParamType::Array)?;
         }
         "__sleep" | "__serialize" => {
             validate_magic_non_static(method)?;
@@ -1485,6 +1488,7 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
         "__unserialize" => {
             validate_magic_non_static(method)?;
             validate_magic_arity(method, 1)?;
+            validate_magic_declared_param_type(method, 0, MagicParamType::Array)?;
             validate_magic_declared_return_type(method, MagicReturnType::Void)?;
         }
         "__debuginfo" => {
@@ -1495,6 +1499,7 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
         "__set_state" => {
             validate_magic_static(method)?;
             validate_magic_arity(method, 1)?;
+            validate_magic_declared_param_type(method, 0, MagicParamType::Array)?;
         }
         "__invoke" => {
             validate_magic_non_static(method)?;
@@ -1554,6 +1559,12 @@ enum MagicReturnType {
     Void,
 }
 
+/// Magic method parameter types that eval can validate from retained declarations.
+#[derive(Clone, Copy)]
+enum MagicParamType {
+    Array,
+}
+
 /// Rejects static declarations for magic methods that must be instance methods.
 fn validate_magic_non_static(method: &EvalClassMethod) -> Result<(), EvalStatus> {
     if method.is_static() {
@@ -1605,6 +1616,36 @@ fn validate_magic_no_by_ref_params(method: &EvalClassMethod) -> Result<(), EvalS
     } else {
         Ok(())
     }
+}
+
+/// Rejects incompatible explicit parameter types on PHP magic methods.
+fn validate_magic_declared_param_type(
+    method: &EvalClassMethod,
+    position: usize,
+    expected: MagicParamType,
+) -> Result<(), EvalStatus> {
+    let Some(Some(parameter_type)) = method.parameter_types().get(position) else {
+        return Ok(());
+    };
+    if magic_param_type_matches(parameter_type, expected) {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Returns whether one retained eval parameter type is exactly the expected magic atom.
+fn magic_param_type_matches(
+    parameter_type: &EvalParameterType,
+    expected: MagicParamType,
+) -> bool {
+    if parameter_type.allows_null() || parameter_type.is_intersection() {
+        return false;
+    }
+    let [variant] = parameter_type.variants() else {
+        return false;
+    };
+    matches!((expected, variant), (MagicParamType::Array, EvalParameterTypeVariant::Array))
 }
 
 /// Rejects PHP magic methods that cannot declare any return type.
