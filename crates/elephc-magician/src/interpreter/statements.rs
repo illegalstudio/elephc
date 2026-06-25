@@ -1459,6 +1459,9 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
             validate_magic_non_static(method)?;
             validate_magic_public(method)?;
             validate_magic_arity(method, 2)?;
+            if method.name().eq_ignore_ascii_case("__set") {
+                validate_magic_declared_return_type(method, MagicReturnType::Void)?;
+            }
         }
         "__callstatic" => {
             validate_magic_static(method)?;
