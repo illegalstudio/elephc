@@ -26,6 +26,7 @@ use crate::ir::{
     Ownership, ValueDef, ValueId,
 };
 use crate::types::PhpType;
+use std::collections::HashMap;
 
 /// Lowers one EIR instruction by id. Loads operands, computes the result on the
 /// WASM operand stack, and stores it into the result value's local(s). Unsupported
@@ -208,11 +209,27 @@ pub(super) fn data_immediate(inst: &Instruction) -> Result<DataId> {
 
 /// Lowers `Op::Call` to a direct WebAssembly call of a user function.
 ///
-/// The callee is named by an `Immediate::Data` index into the module's
-/// function-name pool; arguments are pushed in source order (matching the callee's
-/// declared parameter locals), then `call $fn_<name>` is emitted. A produced result
-/// is stored; if the call's result is discarded, the callee's return values are
-/// dropped so the WASM operand stack stays balanced.
+/// The callee is named by an `Immediate::Data` index into the module's function-name
+/// pool. Non-by-ref arguments are pushed in source order (matching the callee's value
+/// parameter locals). By-ref free-function parameters (P7c0b) are materialized
+/// backend-side into a 16-byte ref cell whose pointer is passed as the callee's single
+/// i32 parameter, then the cell's final value is written back into the caller's local
+/// after the call. This mirrors the native `materialize_ref_arg_address` architecture
+/// (backend-side temp cell + writeback) and leaves EIR and native untouched.
+///
+/// By-ref arg materialization (caller side), per operand:
+/// - Already-ref-bound operand (`LoadRefCell(slot)`): the caller's local is already
+///   cell-backed (from a prior `=&`/foreach), so its existing cell pointer is passed and
+///   shared with the callee — no temp cell, no writeback, no free (the caller's owner
+///   epilogue releases the cell).
+/// - Fresh local (`LoadLocal(slot)`): a temp cell is heap-allocated and the slot's value
+///   is retained into it (persist for strings, incref for refcounted containers and
+///   callable descriptors, plain store for scalars/tagged), then the cell pointer is
+///   passed. After the call the cell's final value is acquired into the slot and the
+///   cell is freed. Cells are grouped by source slot so `f(&$x, &$x)` shares one cell
+///   (PHP aliasing, including cross-param reads).
+/// - Any other operand (literals, property reads, temporaries) is rejected with a clean
+///   diagnostic (non-local by-ref deferred).
 fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let data_id = data_immediate(inst)?;
     let name = ctx
@@ -222,21 +239,42 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         .get(data_id.as_raw() as usize)
         .cloned()
         .ok_or_else(|| WasmError::Unsupported(format!("call: unknown function data {:?}", data_id)))?;
+    let symbol = wasm_fn_symbol(&name);
 
-    // Arity of the callee's WASM result, to balance the stack when the result is unused.
-    let return_arity = ctx
-        .module
-        .functions
-        .iter()
-        .find(|f| f.name == name)
+    // Resolve the callee once and snapshot the by-ref param flags into owned data, so no
+    // `&Function` borrow is held across the mutable `ctx` calls below. Reject a by-ref
+    // variadic parameter up front (out of scope for P7c0b).
+    let callee = ctx.module.functions.iter().find(|f| f.name == name);
+    let return_arity = callee
         .map(|f| WasmRepr::val_types(f.return_type).len())
         .unwrap_or(0);
-
-    for &arg in &inst.operands {
-        ctx.emit_load_value(arg)?;
+    let by_ref_params: Vec<bool> = callee
+        .map(|f| f.params.iter().map(|p| p.by_ref).collect())
+        .unwrap_or_default();
+    if let Some(f) = callee {
+        if f.params.iter().any(|p| p.by_ref && p.variadic) {
+            return Err(WasmError::Unsupported(
+                "by-ref variadic parameter (P7c0b)".to_string(),
+            ));
+        }
     }
+
+    // Pre-call pass: push each argument. By-ref params materialize a cell pointer (a temp
+    // cell for a fresh local, the shared pointer for an already-ref-bound local); all
+    // other args are pushed unchanged.
+    let mut temp_cells: Vec<TempCell> = Vec::new();
+    let mut slot_to_cell: HashMap<u32, usize> = HashMap::new();
+    for (i, &arg) in inst.operands.iter().enumerate() {
+        let is_by_ref = i < by_ref_params.len() && by_ref_params[i];
+        if is_by_ref {
+            push_by_ref_arg(ctx, arg, &mut temp_cells, &mut slot_to_cell)?;
+        } else {
+            ctx.emit_load_value(arg)?;
+        }
+    }
+
     ctx.fb
-        .ins(&format!("call ${}", wasm_fn_symbol(&name)), &format!("call {}", name));
+        .ins(&format!("call ${}", symbol), &format!("call {}", name));
 
     if let Some(r) = inst.result {
         ctx.emit_store_value(r)?;
@@ -245,6 +283,267 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb.ins("drop", "discard unused call result");
         }
     }
+
+    // Post-call pass: write each temp cell's final value back into its source slot and
+    // free the cell. Refcount-balanced for both read-only and mutated cases (see
+    // `writeback_temp_cell`).
+    for cell in &temp_cells {
+        writeback_temp_cell(ctx, cell)?;
+    }
+
+    Ok(())
+}
+
+/// A temp ref cell synthesized for a by-ref argument whose source is a fresh local.
+///
+/// One cell per unique source slot (grouped, so `f(&$x, &$x)` shares it). The cell holds
+/// a retained copy of the slot's pre-call value; after the call `writeback_temp_cell`
+/// acquires the cell's final value into the slot and releases the cell.
+struct TempCell {
+    /// The source slot raw id (the caller's local that the cell mirrors).
+    slot_raw: u32,
+    /// The i32 local holding the 16-byte cell pointer.
+    ptr_local: String,
+}
+
+/// The source of a by-ref argument, resolved by introspecting the operand's defining
+/// instruction.
+enum ByRefSource {
+    /// The operand is `LoadRefCell(slot)`: the caller's local is already ref-bound (from
+    /// a prior `=&`/foreach), so the existing cell pointer is shared with the callee.
+    AlreadyRefBound(u32),
+    /// The operand is `LoadLocal(slot)`: a fresh local to mirror into a temp cell.
+    FreshLocal(LocalSlotId),
+    /// Anything else (literals, property reads, temporaries, block params): non-local
+    /// by-ref, currently rejected with a clean diagnostic.
+    NonLocal,
+}
+
+/// Introspects a by-ref operand's defining instruction to classify its source.
+///
+/// EIR routes a ref-bound slot read through `LoadRefCell`; a plain local read is
+/// `LoadLocal`. Any other defining instruction (or a block-parameter definition) means
+/// the argument is not a local, so by-ref is unsupported (clean diagnostic). This keeps
+/// the ABI agreement — only a local's storage can be safely mirrored into / shared as a
+/// cell — enforced at the lowering edge.
+fn resolve_by_ref_source(ctx: &FnCtx, arg: ValueId) -> Result<ByRefSource> {
+    let val = ctx
+        .function
+        .value(arg)
+        .ok_or_else(|| WasmError::Unsupported(format!("by-ref arg {:?} has no value", arg)))?;
+    let inst_id = match val.def {
+        ValueDef::Instruction { inst, .. } => inst,
+        _ => return Ok(ByRefSource::NonLocal),
+    };
+    let def = ctx
+        .function
+        .instruction(inst_id)
+        .ok_or_else(|| WasmError::Unsupported(format!("by-ref arg {:?} def missing", arg)))?;
+    Ok(match (def.op, &def.immediate) {
+        (Op::LoadRefCell, Some(Immediate::LocalSlot(slot))) => {
+            ByRefSource::AlreadyRefBound(slot.as_raw())
+        }
+        (Op::LoadLocal, Some(Immediate::LocalSlot(slot))) => ByRefSource::FreshLocal(*slot),
+        _ => ByRefSource::NonLocal,
+    })
+}
+
+/// Returns the `codegen_repr` payload `PhpType` of a local slot.
+///
+/// Drives the retain kind (Callable special-case) and the cell's payload release in
+/// `emit_ref_cell_release_seq` (`needs_payload_release`).
+fn slot_payload_type(ctx: &FnCtx, slot: LocalSlotId) -> Result<PhpType> {
+    let local = ctx
+        .function
+        .locals
+        .get(slot.as_raw() as usize)
+        .ok_or_else(|| WasmError::Unsupported(format!("slot {:?} has no local metadata", slot)))?;
+    Ok(local.php_type.codegen_repr())
+}
+
+/// Pushes one by-ref argument's cell pointer onto the WASM operand stack.
+///
+/// For an already-ref-bound local the existing cell pointer is reused (no temp cell, no
+/// writeback). For a fresh local a temp cell is synthesized and recorded, grouped by
+/// source slot so repeated occurrences of the same slot share one cell (PHP aliasing,
+/// including cross-param reads). Non-local operands are rejected.
+fn push_by_ref_arg(
+    ctx: &mut FnCtx,
+    arg: ValueId,
+    temp_cells: &mut Vec<TempCell>,
+    slot_to_cell: &mut HashMap<u32, usize>,
+) -> Result<()> {
+    match resolve_by_ref_source(ctx, arg)? {
+        ByRefSource::AlreadyRefBound(slot_raw) => {
+            let ptr = ctx.ref_cell_ptr(slot_raw)?.to_string();
+            ctx.fb.ins(
+                &format!("local.get {}", ptr),
+                "by-ref arg: existing ref-cell pointer",
+            );
+        }
+        ByRefSource::FreshLocal(slot) => {
+            let slot_raw = slot.as_raw();
+            if let Some(&idx) = slot_to_cell.get(&slot_raw) {
+                ctx.fb.ins(
+                    &format!("local.get {}", temp_cells[idx].ptr_local),
+                    "by-ref arg: shared temp cell (slot grouping)",
+                );
+            } else {
+                let cell = synthesize_temp_cell(ctx, slot)?;
+                ctx.fb.ins(
+                    &format!("local.get {}", cell.ptr_local),
+                    "by-ref arg: temp cell pointer",
+                );
+                slot_to_cell.insert(slot_raw, temp_cells.len());
+                temp_cells.push(cell);
+            }
+        }
+        ByRefSource::NonLocal => {
+            return Err(WasmError::Unsupported(
+                "by-ref arg is not a local (P7c0b non-local by-ref deferred)".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Synthesizes a temp ref cell mirroring a fresh local's current value.
+///
+/// Allocates a 16-byte cell and retains the slot's value into it (persist for strings,
+/// incref for refcounted containers and callable descriptors, plain store for scalars
+/// and tagged values), reusing the promote path's `retain_and_store_slot_value`. The
+/// slot's own locals are left untouched (read-only): the writeback later releases the
+/// slot's old value, so the slot and the cell each hold an independent reference.
+fn synthesize_temp_cell(ctx: &mut FnCtx, slot: LocalSlotId) -> Result<TempCell> {
+    let slot_repr = ctx.slot_repr(slot)?.clone();
+    let payload = slot_payload_type(ctx, slot)?;
+    let ptr_local = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins("i32.const 16", "temp ref cell size (16 bytes)");
+    ctx.fb.ins("call $__rt_heap_alloc", "allocate the temp ref cell");
+    ctx.fb
+        .ins(&format!("local.set {}", ptr_local), "temp cell pointer");
+    super::refcell::retain_and_store_slot_value(ctx, &ptr_local, &slot_repr, &payload)?;
+    Ok(TempCell {
+        slot_raw: slot.as_raw(),
+        ptr_local,
+    })
+}
+
+/// Writes a temp cell's final value back into its source slot and frees the cell.
+///
+/// Per-slot sequence (refcount-balanced for both read-only and mutated cases):
+/// 1. Load the cell's final value (the callee may have mutated it) and retain an owned
+///    copy — persist for strings, incref for refcounted containers and callable
+///    descriptors, no-op for scalars/tagged — so the slot owns a fresh reference.
+/// 2. Release the slot's old (pre-call) value (`release_old_slot_value`), which reads the
+///    slot's still-untouched locals.
+/// 3. Store the retained value into the slot's locals.
+/// 4. Release the cell (`emit_ref_cell_release_seq`: decref the cell's payload by kind,
+///    free the 16-byte block).
+///
+/// Refcount trace (refcounted container, in-place mutation): synth increfs V (R+1,
+/// cell+S); writeback increfs V (R+2), releases S old (R+1), stores (S owns 1), releases
+/// cell (R). Net: S owns V, refcount R restored. Replacement case: the callee's
+/// `store_local` releases the cell's old V and moves its new value into the cell;
+/// writeback increfs the new value, releases S's old V (freed at zero), stores the new
+/// value, releases the cell (S owns it). Strings use copy-on-acquire (persist to own,
+/// `__rt_heap_free_safe` to release) since the runtime frees kind-1 blocks
+/// unconditionally, so the slot must own its own copy rather than share the cell's
+/// pointer. Scalars carry no refcount; steps 1/2 are no-ops and only the bits move.
+fn writeback_temp_cell(ctx: &mut FnCtx, cell: &TempCell) -> Result<()> {
+    let ptr_local = cell.ptr_local.clone();
+    let slot = LocalSlotId::from_raw(cell.slot_raw);
+    let payload = slot_payload_type(ctx, slot)?;
+    let slot_repr = ctx.slot_repr(slot)?.clone();
+
+    // Steps 1-3: load + retain + release-old + store, per representation. The release-old
+    // runs before the store so the retained copy is not freed as the "old" value.
+    match &slot_repr {
+        WasmRepr::I64(slot_local) => {
+            let tmp = ctx.fresh_temp(ValType::I64);
+            ctx.fb.ins(&format!("local.get {}", ptr_local), "cell address");
+            ctx.fb.ins("i64.load offset=0", "load final value @ cell+0");
+            ctx.fb.ins(&format!("local.set {}", tmp), "capture final value");
+            if payload == PhpType::Callable {
+                ctx.fb.ins(&format!("local.get {}", tmp), "descriptor to retain");
+                ctx.fb.ins("i32.wrap_i64", "narrow the descriptor pointer to i32");
+                ctx.fb.ins("call $__rt_incref", "retain the descriptor for the slot");
+            }
+            super::refcell::release_old_slot_value(ctx, &slot_repr, &payload)?;
+            ctx.fb.ins(&format!("local.get {}", tmp), "retained value");
+            ctx.fb.ins(&format!("local.set {}", slot_local), "store into the slot");
+        }
+        WasmRepr::F64(slot_local) => {
+            let tmp = ctx.fresh_temp(ValType::F64);
+            ctx.fb.ins(&format!("local.get {}", ptr_local), "cell address");
+            ctx.fb.ins("f64.load offset=0", "load final float @ cell+0");
+            ctx.fb.ins(&format!("local.set {}", tmp), "capture final float");
+            super::refcell::release_old_slot_value(ctx, &slot_repr, &payload)?;
+            ctx.fb.ins(&format!("local.get {}", tmp), "retained float");
+            ctx.fb.ins(&format!("local.set {}", slot_local), "store into the slot");
+        }
+        WasmRepr::Ptr(slot_local) => {
+            let tmp = ctx.fresh_temp(ValType::I32);
+            ctx.fb.ins(&format!("local.get {}", ptr_local), "cell address");
+            ctx.fb.ins("i32.load offset=0", "load final pointer @ cell+0");
+            ctx.fb.ins(&format!("local.set {}", tmp), "capture final pointer");
+            ctx.fb.ins(&format!("local.get {}", tmp), "container to retain");
+            ctx.fb.ins("call $__rt_incref", "retain the container for the slot");
+            super::refcell::release_old_slot_value(ctx, &slot_repr, &payload)?;
+            ctx.fb.ins(&format!("local.get {}", tmp), "retained pointer");
+            ctx.fb.ins(&format!("local.set {}", slot_local), "store into the slot");
+        }
+        WasmRepr::Str { ptr, len } => {
+            let tmp_ptr = ctx.fresh_temp(ValType::I32);
+            let tmp_len = ctx.fresh_temp(ValType::I64);
+            ctx.fb.ins(&format!("local.get {}", ptr_local), "cell address");
+            ctx.fb.ins("i32.load offset=0", "load final string ptr @ cell+0");
+            ctx.fb.ins(&format!("local.set {}", tmp_ptr), "capture final string ptr");
+            ctx.fb.ins(&format!("local.get {}", ptr_local), "cell address");
+            ctx.fb.ins("i64.load offset=8", "load final length @ cell+8");
+            ctx.fb.ins(&format!("local.set {}", tmp_len), "capture final length");
+            // Retain via persist: an owned heap copy safe for the slot (strings use
+            // copy-on-acquire; the runtime frees kind-1 blocks unconditionally, so the
+            // slot must own its own copy rather than share the cell's pointer).
+            ctx.fb.ins(&format!("local.get {}", tmp_ptr), "source string pointer");
+            ctx.fb.ins(&format!("local.get {}", tmp_len), "source string length");
+            ctx.fb.ins("call $__rt_str_persist", "persist an owned copy for the slot");
+            let new_len = ctx.fresh_temp(ValType::I64);
+            let new_ptr = ctx.fresh_temp(ValType::I32);
+            ctx.fb.ins(&format!("local.set {}", new_len), "owned string length");
+            ctx.fb.ins(&format!("local.set {}", new_ptr), "owned string pointer");
+            super::refcell::release_old_slot_value(ctx, &slot_repr, &payload)?;
+            ctx.fb.ins(&format!("local.get {}", new_ptr), "owned string pointer");
+            ctx.fb.ins(&format!("local.set {}", ptr), "store ptr into the slot");
+            ctx.fb.ins(&format!("local.get {}", new_len), "owned string length");
+            ctx.fb.ins(&format!("local.set {}", len), "store len into the slot");
+        }
+        WasmRepr::Tagged {
+            payload: pay_local,
+            tag: tag_local,
+        } => {
+            let tmp_pay = ctx.fresh_temp(ValType::I64);
+            let tmp_tag = ctx.fresh_temp(ValType::I32);
+            ctx.fb.ins(&format!("local.get {}", ptr_local), "cell address");
+            ctx.fb.ins("i64.load offset=0", "load final payload @ cell+0");
+            ctx.fb.ins(&format!("local.set {}", tmp_pay), "capture final payload");
+            ctx.fb.ins(&format!("local.get {}", ptr_local), "cell address");
+            ctx.fb.ins("i64.load offset=8", "load final tag @ cell+8");
+            ctx.fb.ins("i32.wrap_i64", "narrow the tag to i32");
+            ctx.fb.ins(&format!("local.set {}", tmp_tag), "capture final tag");
+            super::refcell::release_old_slot_value(ctx, &slot_repr, &payload)?;
+            ctx.fb.ins(&format!("local.get {}", tmp_pay), "retained payload");
+            ctx.fb.ins(&format!("local.set {}", pay_local), "store payload into the slot");
+            ctx.fb.ins(&format!("local.get {}", tmp_tag), "retained tag");
+            ctx.fb.ins(&format!("local.set {}", tag_local), "store tag into the slot");
+        }
+        WasmRepr::Void => {
+            return Err(WasmError::Unsupported("by-ref void slot".to_string()));
+        }
+    }
+
+    // Step 4: release the cell (payload by kind + free the 16-byte block).
+    super::refcell::emit_ref_cell_release_seq(ctx, &ptr_local, &payload)?;
     Ok(())
 }
 

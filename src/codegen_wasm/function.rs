@@ -37,11 +37,16 @@ use crate::ir::{Function, InstId, LocalSlotId, Module, Terminator};
 /// Steps:
 /// 1. Choose internal name and export.
 /// 2. Create `FuncBuilder`.
-/// 3. Declare params (non-main only) and result types.
+/// 3. Declare params (non-main only) and result types. By-ref params (`p.by_ref`)
+///    are declared as a single i32 cell pointer (`WasmRepr::Ptr`) rather than their
+///    value type: pointer-ness is a caller/callee ABI agreement, and the callee body
+///    reads/writes the value through it via `LoadRefCell`/`StoreRefCell`.
 /// 4. Declare state local `$__state`.
 /// 5. Declare local slots (params share locals with slots 0..params.len()).
 /// 6. Declare SSA value locals.
-/// 7. Build `FnCtx`, emit the entry-state prologue, emit the dispatch loop.
+/// 7. Build `FnCtx`, register by-ref param slots in `ref_cell_ptrs` (the callee
+///    borrows the caller's cell — no owner is recorded), emit the entry-state
+///    prologue, emit the dispatch loop.
 ///
 /// `str_literals` is the module-wide string-literal layout (indexed by `DataId`),
 /// used by `ConstStr` lowering to address the data segments. `closure_tag_ptrs`
@@ -72,17 +77,18 @@ pub fn lower_function(
     let mut param_reprs: Vec<WasmRepr> = Vec::new();
     if !is_main {
         for (i, p) in function.params.iter().enumerate() {
-            if p.by_ref {
-                // By-ref free-function parameters require the caller to heap-alloc a
-                // ref cell AND the caller's local to become ref-bound after the call
-                // (an EIR-level concept the backend cannot do alone). That is the
-                // P7c0b cross-backend deliverable; until then, reject cleanly so a
-                // PHP `function f(&$x)` surfaces a diagnostic instead of miscompiling.
-                return Err(WasmError::Unsupported(
-                    "by-ref free-function parameter (P7c0b)".to_string(),
-                ));
-            }
-            let repr = declare_param(&mut fb, &format!("p{}", i), p.ir_type);
+            let repr = if p.by_ref {
+                // A by-ref free-function parameter is a single i32 carrying the caller's
+                // ref-cell pointer (P7c0b). The callee body reads/writes the value through
+                // it via `LoadRefCell`/`StoreRefCell`, which look the pointer up in
+                // `ref_cell_ptrs` (registered in the prologue below). The value type is
+                // NOT declared as a local here: pointer-ness is a caller/callee ABI
+                // agreement, not a value slot, so the slot's `WasmRepr` is `Ptr`.
+                let ptr = fb.param(&format!("p{}", i), ValType::I32);
+                WasmRepr::Ptr(ptr)
+            } else {
+                declare_param(&mut fb, &format!("p{}", i), p.ir_type)
+            };
             param_reprs.push(repr);
         }
         for ty in WasmRepr::val_types(function.return_type) {
@@ -129,6 +135,25 @@ pub fn lower_function(
         ref_cell_ptrs: std::collections::HashMap::new(),
         ref_cell_owners: Vec::new(),
     };
+
+    // Register by-ref parameter slots in `ref_cell_ptrs` so the callee body's
+    // `LoadRefCell`/`StoreRefCell` recover the caller-supplied cell pointer. The callee
+    // borrows the caller's cell (no owner recorded): only the caller releases it — via
+    // the temp-cell writeback for fresh locals, or the caller's existing owner for an
+    // already-ref-bound local. Mirrors the native frame-address borrow.
+    if !is_main {
+        for (i, p) in function.params.iter().enumerate() {
+            if p.by_ref {
+                let slot_raw = LocalSlotId::from_raw(i as u32).as_raw();
+                match &param_reprs[i] {
+                    WasmRepr::Ptr(ptr_local) => {
+                        ctx.register_ref_cell_ptr(slot_raw, ptr_local.clone());
+                    }
+                    _ => unreachable!("by-ref param {} must be declared as Ptr", i),
+                }
+            }
+        }
+    }
 
     // Prologue: capture this frame's concat-buffer baseline, then set the initial
     // dispatch state. (For non-main, params and their slots share locals, so no

@@ -133,7 +133,6 @@ impl<'a> FnCtx<'a> {
     ///
     /// Returns `Ok(&WasmRepr)` if found, or `Err(WasmError::Unsupported)` if the
     /// slot has no corresponding local (should not happen for valid EIR).
-    #[allow(dead_code)]
     pub(super) fn slot_repr(&self, s: LocalSlotId) -> Result<&WasmRepr> {
         self.slot_locals
             .get(&s.as_raw())

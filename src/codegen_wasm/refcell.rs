@@ -271,7 +271,7 @@ pub(super) fn lower_promote_local_ref_cell(ctx: &mut FnCtx, inst: &Instruction) 
 /// pointer, net +1 ref for the cell); scalars and tagged scalars need no retain.
 /// The retained value is stored via the typed cell-store helper, reading it from the
 /// slot's value locals (which the retain leaves untouched for non-string types).
-fn retain_and_store_slot_value(
+pub(super) fn retain_and_store_slot_value(
     ctx: &mut FnCtx,
     rc: &str,
     slot_repr: &WasmRepr,
@@ -336,7 +336,11 @@ fn retain_and_store_slot_value(
 /// containers drop the old reference via `__rt_decref_any`; scalars and tagged scalars
 /// own nothing. Reads the old value from the slot's value locals (untouched by retain
 /// except for strings, where the original pointer is still there).
-fn release_old_slot_value(ctx: &mut FnCtx, slot_repr: &WasmRepr, payload: &PhpType) -> Result<()> {
+pub(super) fn release_old_slot_value(
+    ctx: &mut FnCtx,
+    slot_repr: &WasmRepr,
+    payload: &PhpType,
+) -> Result<()> {
     match slot_repr {
         WasmRepr::I64(local) => {
             if *payload == PhpType::Callable {
