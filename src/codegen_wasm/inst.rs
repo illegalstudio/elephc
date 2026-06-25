@@ -114,6 +114,12 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ClosureNew => super::closures::lower_closure_new(ctx, &inst),
         Op::ClosureCall => super::closures::lower_closure_call(ctx, &inst),
         Op::ClosureCapture => super::closures::lower_closure_capture(ctx, &inst),
+        Op::LoadRefCell => super::refcell::lower_load_ref_cell(ctx, &inst),
+        Op::StoreRefCell => super::refcell::lower_store_ref_cell(ctx, &inst),
+        Op::PromoteLocalRefCell => super::refcell::lower_promote_local_ref_cell(ctx, &inst),
+        Op::AliasLocalRefCell => super::refcell::lower_alias_local_ref_cell(ctx, &inst),
+        Op::ReleaseLocalRefCell => super::refcell::lower_release_local_ref_cell(ctx, &inst),
+        Op::IterCurrentValueRef => super::refcell::lower_iter_current_value_ref(ctx, &inst),
         other => Err(WasmError::Unsupported(format!("op {:?}", other))),
     }
 }

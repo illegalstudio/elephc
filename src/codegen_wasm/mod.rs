@@ -33,6 +33,7 @@ mod methods;
 mod mixed;
 mod objects;
 mod refcount;
+mod refcell;
 mod runtime;
 mod values;
 mod wat;
@@ -1541,6 +1542,652 @@ mod tests {
 
         if let Some(out) = run_main(&module) {
             assert_eq!(out, "101");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // P7c0a: by-reference local ref-cell ops (end-to-end through real generate()).
+    // Each test hand-builds the EIR that `lower_ref_assign` / `lower_foreach`
+    // produce for a PHP `=&` alias or a `foreach &$item`, exercising the actual
+    // ref-cell lowering in `refcell.rs` (Promote/Alias/Load/Store/Release +
+    // IterCurrentValueRef) and the Return owner-release epilogue.
+    // -------------------------------------------------------------------------
+
+    /// `$b = 5; $a =& $b; $b = 10; echo $a;` echoes "10". Promotes `$b` into a
+    /// 16-byte heap cell holding 5, aliases `$a` to the same cell pointer, stores
+    /// 10 through the owner `$b`, then loads through the alias `$a`. Exercises the
+    /// I64 single-word cell store/load, alias pointer copy, and the Int epilogue
+    /// (free the cell, no payload release).
+    #[test]
+    fn ref_cell_alias_int_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        let slot_b = f.add_local(Some("b".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        let owner_b = f.add_local(Some("b\x00owner".to_string()), IrType::I64, PhpType::Int, LocalKind::RefCell);
+        let slot_a = f.add_local(Some("a".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+
+            // $b = 5
+            let c5 = b.emit_const_i64(5);
+            b.emit_store_local(slot_b, c5);
+
+            // $a =& $b  (promote $b into a ref cell, then alias $a onto it)
+            let _ = b.emit(
+                Op::PromoteLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair { first: slot_b, second: owner_b }),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            let _ = b.emit(
+                Op::AliasLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair { first: slot_a, second: slot_b }),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+
+            // $b = 10  (store through the owner slot's cell pointer)
+            let c10 = b.emit_const_i64(10);
+            let _ = b.emit(
+                Op::StoreRefCell,
+                vec![c10],
+                Some(Immediate::LocalSlot(slot_b)),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+
+            // echo $a  (load through the alias slot's cell pointer)
+            let a = b
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot_a)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![a],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "10");
+        }
+    }
+
+    /// `$a = 1; $b =& $a; $b = 2; echo $a;` echoes "2". The store goes through the
+    /// alias `$b` and the load through the owner `$a` — the reverse direction of
+    /// `ref_cell_alias_int_e2e` — confirming both slots dereference the same cell.
+    #[test]
+    fn ref_cell_alias_target_store_int_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        let slot_a = f.add_local(Some("a".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        let owner_a = f.add_local(Some("a\x00owner".to_string()), IrType::I64, PhpType::Int, LocalKind::RefCell);
+        let slot_b = f.add_local(Some("b".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+
+            // $a = 1
+            let c1 = b.emit_const_i64(1);
+            b.emit_store_local(slot_a, c1);
+
+            // $b =& $a
+            let _ = b.emit(
+                Op::PromoteLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair { first: slot_a, second: owner_a }),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            let _ = b.emit(
+                Op::AliasLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair { first: slot_b, second: slot_a }),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+
+            // $b = 2  (store through the alias)
+            let c2 = b.emit_const_i64(2);
+            let _ = b.emit(
+                Op::StoreRefCell,
+                vec![c2],
+                Some(Immediate::LocalSlot(slot_b)),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+
+            // echo $a  (load through the owner)
+            let a = b
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot_a)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![a],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "2");
+        }
+    }
+
+    /// `$s = "hi"; $t =& $s; echo $t;` echoes "hi". Promotes `$s` (persisting the
+    /// literal to an owned heap copy stored in the cell at @0 ptr / @8 len), aliases
+    /// `$t`, then loads the two-word Str cell back through `$t` and echoes it.
+    /// Exercises the Str cell store (promote) and load, and the Str epilogue
+    /// (decref the owned string payload, then free the cell).
+    #[test]
+    fn ref_cell_alias_string_load_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let hi = module.data.intern_string("hi");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        let slot_s = f.add_local(Some("s".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+        let owner_s = f.add_local(Some("s\x00owner".to_string()), IrType::Str, PhpType::Str, LocalKind::RefCell);
+        let slot_t = f.add_local(Some("t".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+
+            // $s = "hi"
+            let s_val = b.emit_const_str(hi);
+            b.emit_store_local(slot_s, s_val);
+
+            // $t =& $s
+            let _ = b.emit(
+                Op::PromoteLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair { first: slot_s, second: owner_s }),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+            let _ = b.emit(
+                Op::AliasLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair { first: slot_t, second: slot_s }),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+
+            // echo $t  (load the two-word Str cell: ptr @0, len @8)
+            let t = b
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot_t)),
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![t],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "hi");
+        }
+    }
+
+    /// `$s = "x"; $t =& $s; $s = "y"; echo $t;` echoes "y". Mirrors the real
+    /// `store_local` lowering for a ref-bound string: load the old cell payload,
+    /// release it, acquire the new literal to an owned copy, then store through the
+    /// cell pointer (@0 ptr / @8 len). Exercises Str `StoreRefCell` and the balanced
+    /// old-payload release so no string leaks across the reassign.
+    #[test]
+    fn ref_cell_alias_string_store_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let x = module.data.intern_string("x");
+        let y = module.data.intern_string("y");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        let slot_s = f.add_local(Some("s".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+        let owner_s = f.add_local(Some("s\x00owner".to_string()), IrType::Str, PhpType::Str, LocalKind::RefCell);
+        let slot_t = f.add_local(Some("t".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+
+            // $s = "x"
+            let s_val = b.emit_const_str(x);
+            b.emit_store_local(slot_s, s_val);
+
+            // $t =& $s
+            let _ = b.emit(
+                Op::PromoteLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair { first: slot_s, second: owner_s }),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+            let _ = b.emit(
+                Op::AliasLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair { first: slot_t, second: slot_s }),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+
+            // $s = "y": load the old cell payload, release it, acquire the new
+            // literal, store through the cell pointer.
+            let old = b
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot_s)),
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::Release,
+                vec![old],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let new_literal = b.emit_const_str(y);
+            let new_owned = b
+                .emit(
+                    Op::Acquire,
+                    vec![new_literal],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::StoreRefCell,
+                vec![new_owned],
+                Some(Immediate::LocalSlot(slot_s)),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+
+            // echo $t
+            let t = b
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot_t)),
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![t],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "y");
+        }
+    }
+
+    /// `foreach ([10,20,30] as &$item) { $item *= 10; } echo $arr[0],$arr[1],$arr[2];`
+    /// echoes "100200300". Builds the canonical by-ref foreach CFG: IterStart with
+    /// the by-ref flag, a header running IterNext into a CondBr, a body that binds
+    /// `$item` to the current element address (`IterCurrentValueRef`), loads it,
+    /// multiplies by 10, and stores it back in place (`StoreRefCell`), then an exit
+    /// that reads the mutated elements via ArrayGet and echoes them. Exercises the
+    /// indexed-array element-address binding and in-place 8-byte element mutation.
+    #[test]
+    fn ref_cell_foreach_ref_int_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        let slot_item = f.add_local(Some("item".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            let header = b.create_named_block("header", Vec::new());
+            let body = b.create_named_block("body", Vec::new());
+            let exit = b.create_named_block("exit", Vec::new());
+            b.set_entry(entry);
+
+            b.position_at_end(entry);
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(3)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            for v in [10_i64, 20, 30] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![arr, c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let iter = b
+                .emit(
+                    Op::IterStart,
+                    vec![arr],
+                    Some(Immediate::Bool(true)),
+                    IrType::Heap(IrHeapKind::Iterable),
+                    PhpType::Iterable,
+                    Ownership::Borrowed,
+                )
+                .unwrap();
+            b.terminate(Terminator::Br {
+                target: header,
+                args: Vec::new(),
+            });
+
+            b.position_at_end(header);
+            let has_next = b
+                .emit(Op::IterNext, vec![iter], None, IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::CondBr {
+                cond: has_next,
+                then_target: body,
+                then_args: Vec::new(),
+                else_target: exit,
+                else_args: Vec::new(),
+            });
+
+            b.position_at_end(body);
+            // Bind $item to the current element's in-place address (borrow).
+            let _ = b.emit(
+                Op::IterCurrentValueRef,
+                vec![iter],
+                Some(Immediate::LocalSlot(slot_item)),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            // $item *= 10: load the element, multiply, store it back in place.
+            let item = b
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot_item)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let ten = b.emit_const_i64(10);
+            let product = b
+                .emit(
+                    Op::IMul,
+                    vec![item, ten],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::StoreRefCell,
+                vec![product],
+                Some(Immediate::LocalSlot(slot_item)),
+                IrType::Void,
+                PhpType::Int,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Br {
+                target: header,
+                args: Vec::new(),
+            });
+
+            b.position_at_end(exit);
+            for i in [0_i64, 1, 2] {
+                let idx = b.emit_const_i64(i);
+                let g = b
+                    .emit(
+                        Op::ArrayGet,
+                        vec![arr, idx],
+                        None,
+                        IrType::I64,
+                        PhpType::Int,
+                        Ownership::NonHeap,
+                    )
+                    .unwrap();
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![g],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "100200300");
+        }
+    }
+
+    /// `foreach (["aa","bb"] as &$w) { $w = "X"; } echo $arr[0], $arr[1];` echoes "XX".
+    /// This is the highest-risk @8-gating path: string elements live in 16-byte slots
+    /// (ptr @0, len @8), so `IterCurrentValueRef` MUST use `elem_size = 16` for Str, and
+    /// `StoreRefCell` MUST write both @0 and @8. If either regressed (elem_size 8, or
+    /// Str dropping the @8 write), element 0's @8 len would land in element 1's @0 ptr
+    /// slot and the readback would corrupt rather than echo "XX". The body mirrors the
+    /// real `store_local` for a ref-bound Str: load the old element, release it, acquire
+    /// the new literal to an owned copy, store it back in place.
+    #[test]
+    fn ref_cell_foreach_ref_string_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let aa = module.data.intern_string("aa");
+        let bb = module.data.intern_string("bb");
+        let xx = module.data.intern_string("X");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        let slot_w = f.add_local(Some("w".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            let header = b.create_named_block("header", Vec::new());
+            let body = b.create_named_block("body", Vec::new());
+            let exit = b.create_named_block("exit", Vec::new());
+            b.set_entry(entry);
+
+            b.position_at_end(entry);
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Str)),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            for lit in [aa, bb] {
+                let s = b.emit_const_str(lit);
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![arr, s],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let iter = b
+                .emit(
+                    Op::IterStart,
+                    vec![arr],
+                    Some(Immediate::Bool(true)),
+                    IrType::Heap(IrHeapKind::Iterable),
+                    PhpType::Iterable,
+                    Ownership::Borrowed,
+                )
+                .unwrap();
+            b.terminate(Terminator::Br {
+                target: header,
+                args: Vec::new(),
+            });
+
+            b.position_at_end(header);
+            let has_next = b
+                .emit(Op::IterNext, vec![iter], None, IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::CondBr {
+                cond: has_next,
+                then_target: body,
+                then_args: Vec::new(),
+                else_target: exit,
+                else_args: Vec::new(),
+            });
+
+            b.position_at_end(body);
+            // Bind $w to the current 16-byte string element slot (borrow).
+            let _ = b.emit(
+                Op::IterCurrentValueRef,
+                vec![iter],
+                Some(Immediate::LocalSlot(slot_w)),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+            // $w = "X": load the old element, release it, acquire the new literal,
+            // store the owned copy back into the 16-byte slot (ptr @0, len @8).
+            let old = b
+                .emit(
+                    Op::LoadRefCell,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot_w)),
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::Release,
+                vec![old],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let lit = b.emit_const_str(xx);
+            let owned = b
+                .emit(
+                    Op::Acquire,
+                    vec![lit],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::StoreRefCell,
+                vec![owned],
+                Some(Immediate::LocalSlot(slot_w)),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Br {
+                target: header,
+                args: Vec::new(),
+            });
+
+            b.position_at_end(exit);
+            for i in [0_i64, 1] {
+                let idx = b.emit_const_i64(i);
+                let g = b
+                    .emit(
+                        Op::ArrayGet,
+                        vec![arr, idx],
+                        None,
+                        IrType::Str,
+                        PhpType::Str,
+                        Ownership::Borrowed,
+                    )
+                    .unwrap();
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![g],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "XX");
         }
     }
 

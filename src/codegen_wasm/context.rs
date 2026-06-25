@@ -12,6 +12,11 @@
 //!   Loading a value pushes its local(s) onto the WASM operand stack in canonical
 //!   order; storing pops them back in reverse, which keeps multi-local values
 //!   (Str = ptr+len, Tagged = payload+tag) consistent.
+//! - Ref-cell pointers (PHP `=&` aliases and `foreach &$item`) are carried in a
+//!   dedicated i32 local per slot (`ref_cell_ptrs`), since WASM locals are not
+//!   addressable linear memory and a slot's own `WasmRepr` is the value repr, not a
+//!   pointer. Owner slots register for end-of-scope release in `ref_cell_owners`,
+//!   drained by the `Return` epilogue (see `refcell`).
 
 use std::collections::HashMap;
 
@@ -96,6 +101,21 @@ pub(super) struct FnCtx<'a> {
     /// loop's `IterNext`/`IterCurrent*` ops (which reference the iterator value by
     /// dominance) recover its source/cursor without any heap state.
     pub(super) iter_state: HashMap<u32, IterSlots>,
+    /// Maps a slot raw id (php-visible OR owner) to the `$name` of the i32 local
+    /// holding that slot's ref-cell pointer. Populated by `PromoteLocalRefCell`
+    /// (both the php-visible and the owner slot share one local) and by
+    /// `AliasLocalRefCell` (the target gets its own local, copied from the source).
+    /// `LoadRefCell`/`StoreRefCell`/`ReleaseLocalRefCell` look the pointer up here;
+    /// a missing entry means the slot is not ref-bound and is a lowering error.
+    /// (P7c0a: only Promote/Alias populate it; by-ref params stay rejected.)
+    pub(super) ref_cell_ptrs: HashMap<u32, String>,
+    /// Owner slots needing end-of-scope release at every `Return`, paired with the
+    /// payload `PhpType` (already `codegen_repr`-applied) that drives the release.
+    /// Collected when lowering `PromoteLocalRefCell` (owner slot + the instruction's
+    /// `result_php_type`). The `Return` epilogue releases each non-null owner; an
+    /// explicit `ReleaseLocalRefCell` zeroes the owner first, so the epilogue skips
+    /// it — idempotent, no double-free.
+    pub(super) ref_cell_owners: Vec<(u32, PhpType)>,
 }
 
 impl<'a> FnCtx<'a> {
@@ -342,6 +362,72 @@ impl<'a> FnCtx<'a> {
                 .ins(&format!("local.set {}", dest), "store param component");
         }
 
+        Ok(())
+    }
+
+    /// Looks up the `$name` of the i32 local holding a slot's ref-cell pointer.
+    ///
+    /// Returns `Err(WasmError::Unsupported)` when the slot is not ref-bound — the
+    /// caller surfaces this as a clean diagnostic rather than miscompiling a
+    /// ref-cell op against a plain local slot.
+    pub(super) fn ref_cell_ptr(&self, slot_raw: u32) -> Result<&str> {
+        self.ref_cell_ptrs
+            .get(&slot_raw)
+            .map(String::as_str)
+            .ok_or_else(|| {
+                WasmError::Unsupported("ref-cell op on non-ref-bound slot".to_string())
+            })
+    }
+
+    /// Registers the i32 local holding a slot's ref-cell pointer.
+    ///
+    /// Called by `PromoteLocalRefCell` (twice, for the php-visible and owner slot —
+    /// both share one local) and by `AliasLocalRefCell` (once, for the target slot,
+    /// which gets its own local). A later registration for the same slot overwrites
+    /// the previous mapping (re-aliasing repoints the slot to a fresh cell).
+    pub(super) fn register_ref_cell_ptr(&mut self, slot_raw: u32, local: String) {
+        self.ref_cell_ptrs.insert(slot_raw, local);
+    }
+
+    /// Records an owner slot + payload type for the end-of-scope release epilogue.
+    ///
+    /// Only called by `PromoteLocalRefCell`: an aliased target gets no owner (the
+    /// source's owner is the sole releaser), mirroring the native ownership
+    /// discipline where `release_ref_cell_owner(target)` early-returns.
+    pub(super) fn add_ref_cell_owner(&mut self, owner_raw: u32, payload_type: PhpType) {
+        if !self.ref_cell_owners.iter().any(|(s, _)| *s == owner_raw) {
+            self.ref_cell_owners.push((owner_raw, payload_type));
+        }
+    }
+
+    /// Emits the release sequence for one ref-cell owner at function exit.
+    ///
+    /// `ptr_local` is the i32 local holding the cell pointer; `payload_type` is the
+    /// value type stored in the cell (already `codegen_repr`-applied). The sequence
+    /// mirrors `ReleaseLocalRefCell`: skip if null (idempotent vs an explicit
+    /// release that already zeroed the owner), release the payload by kind, free
+    /// the 16-byte cell, then zero the owner local. Scalars (Int/Float/Bool/Tagged/
+    /// Pointer) skip the payload release and only free the cell.
+    pub(super) fn emit_ref_cell_release(
+        &mut self,
+        ptr_local: &str,
+        payload_type: &PhpType,
+    ) -> Result<()> {
+        super::refcell::emit_ref_cell_release_seq(self, ptr_local, payload_type)
+    }
+
+    /// Emits the owner-slot release epilogue at a function return.
+    ///
+    /// Iterates every recorded owner slot and releases its cell (skip-if-null,
+    /// release payload, free cell, zero owner). Idempotent: an explicit
+    /// `ReleaseLocalRefCell` earlier zeroed that owner, so the epilogue skips it.
+    /// Mirrors the native `emit_ref_cell_owner_epilogue_cleanup`.
+    pub(super) fn emit_ref_cell_owner_epilogue(&mut self) -> Result<()> {
+        let owners = self.ref_cell_owners.clone();
+        for (owner_raw, payload_type) in owners {
+            let ptr_local = self.ref_cell_ptr(owner_raw)?.to_string();
+            super::refcell::emit_ref_cell_release_seq(self, &ptr_local, &payload_type)?;
+        }
         Ok(())
     }
 }

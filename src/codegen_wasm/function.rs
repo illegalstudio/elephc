@@ -72,6 +72,16 @@ pub fn lower_function(
     let mut param_reprs: Vec<WasmRepr> = Vec::new();
     if !is_main {
         for (i, p) in function.params.iter().enumerate() {
+            if p.by_ref {
+                // By-ref free-function parameters require the caller to heap-alloc a
+                // ref cell AND the caller's local to become ref-bound after the call
+                // (an EIR-level concept the backend cannot do alone). That is the
+                // P7c0b cross-backend deliverable; until then, reject cleanly so a
+                // PHP `function f(&$x)` surfaces a diagnostic instead of miscompiling.
+                return Err(WasmError::Unsupported(
+                    "by-ref free-function parameter (P7c0b)".to_string(),
+                ));
+            }
             let repr = declare_param(&mut fb, &format!("p{}", i), p.ir_type);
             param_reprs.push(repr);
         }
@@ -116,6 +126,8 @@ pub fn lower_function(
         str_literals,
         closure_tag_ptrs,
         iter_state: std::collections::HashMap::new(),
+        ref_cell_ptrs: std::collections::HashMap::new(),
+        ref_cell_owners: Vec::new(),
     };
 
     // Prologue: capture this frame's concat-buffer baseline, then set the initial
@@ -324,6 +336,13 @@ fn lower_terminator(ctx: &mut FnCtx, term: &Terminator) -> Result<()> {
         }
 
         Terminator::Return { value } => {
+            // Owner-slot release epilogue: release every ref-cell owner before
+            // leaving the function. Runs first so the return value (pushed next)
+            // is not stranded across the epilogue's local.get/local.set. Idempotent
+            // via the null-guard — explicit ReleaseLocalRefCell ops already zeroed
+            // their owners, so the epilogue skips them. Mirrors the native
+            // emit_ref_cell_owner_epilogue_cleanup at every exit.
+            ctx.emit_ref_cell_owner_epilogue()?;
             if ctx.function.flags.is_main {
                 ctx.fb.ins("i32.const 0", "exit status 0");
                 ctx.fb.ins("call $wasi_proc_exit", "WASI proc_exit(0)");
