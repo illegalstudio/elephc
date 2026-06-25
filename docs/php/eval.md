@@ -162,6 +162,8 @@ declared type metadata, including nullable, union, `mixed`, `self`, `parent`,
 Eval validates inherited property redeclarations with PHP-style invariant
 property types, matching static/readonly modifiers, and compatible read/write
 visibility.
+Eval validates inherited class/interface constant redeclarations with PHP-style
+visibility compatibility, and rejects non-public interface constants.
 Eval-declared method calls also enforce declared return values at runtime, with
 weak scalar coercions and PHP-style handling for `void`, `never`, `self`,
 `parent`, and late-bound `static`.

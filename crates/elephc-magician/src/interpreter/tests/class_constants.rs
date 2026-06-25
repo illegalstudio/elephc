@@ -101,6 +101,102 @@ class EvalFinalConstChild extends EvalFinalConstBase {
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies eval accepts class constant redeclarations that keep compatible visibility.
+#[test]
+fn execute_program_accepts_compatible_eval_class_constant_redeclaration() {
+    let program = parse_fragment(
+        br#"class EvalConstVisibilityBase {
+    protected const SEED = 2;
+}
+class EvalConstVisibilityChild extends EvalConstVisibilityBase {
+    public const SEED = 7;
+}
+interface EvalConstVisibilityIface {
+    public const TOKEN = 3;
+}
+class EvalConstVisibilityImpl implements EvalConstVisibilityIface {
+    public const TOKEN = 5;
+}
+echo EvalConstVisibilityChild::SEED; echo ":";
+return EvalConstVisibilityImpl::TOKEN;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "7:");
+    assert_eq!(values.get(result), FakeValue::Int(5));
+}
+
+/// Verifies eval rejects inherited class constant redeclarations with reduced visibility.
+#[test]
+fn execute_program_rejects_reduced_eval_class_constant_visibility() {
+    let reduced_parent_visibility = parse_fragment(
+        br#"class EvalConstPublicBase {
+    public const SEED = 1;
+}
+class EvalConstProtectedChild extends EvalConstPublicBase {
+    protected const SEED = 2;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&reduced_parent_visibility, &mut scope, &mut values)
+        .expect_err("reduced class constant visibility should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let reduced_protected_parent_visibility = parse_fragment(
+        br#"class EvalConstProtectedBase {
+    protected const SEED = 1;
+}
+class EvalConstPrivateChild extends EvalConstProtectedBase {
+    private const SEED = 2;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&reduced_protected_parent_visibility, &mut scope, &mut values)
+        .expect_err("private class constant redeclaration should fail protected parent");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let reduced_interface_visibility = parse_fragment(
+        br#"interface EvalConstPublicContract {
+    public const SEED = 1;
+}
+class EvalConstProtectedImpl implements EvalConstPublicContract {
+    protected const SEED = 2;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&reduced_interface_visibility, &mut scope, &mut values)
+        .expect_err("reduced interface constant visibility should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies eval rejects non-public interface constants like PHP.
+#[test]
+fn execute_program_rejects_non_public_eval_interface_constants() {
+    parse_fragment(
+        br#"interface EvalConstProtectedIface {
+    protected const SEED = 1;
+}"#,
+    )
+    .expect_err("protected interface constant should fail while parsing");
+
+    parse_fragment(
+        br#"interface EvalConstPrivateIface {
+    private const SEED = 1;
+}"#,
+    )
+    .expect_err("private interface constant should fail while parsing");
+}
+
 /// Verifies private eval constants cannot be declared final.
 #[test]
 fn execute_program_rejects_final_private_eval_class_constant() {
