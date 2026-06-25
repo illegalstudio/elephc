@@ -6,8 +6,8 @@
 //! - `crate::codegen_ir::lower_inst::objects::lower_object_new()`.
 //!
 //! Key details:
-//! - `ReflectionClass`, `ReflectionFunction`, `ReflectionMethod`, `ReflectionProperty`,
-//!   `ReflectionClassConstant`, and `ReflectionEnum*`
+//! - `ReflectionClass`, `ReflectionObject`, `ReflectionFunction`, `ReflectionMethod`,
+//!   `ReflectionProperty`, `ReflectionClassConstant`, and `ReflectionEnum*`
 //!   constructors are compile-time metadata lookups that populate private
 //!   `__name`/`__attrs` slots instead of running their public empty bodies.
 
@@ -277,11 +277,18 @@ struct ReflectionMemberFlags {
     is_virtual: bool,
 }
 
+/// Runtime class candidate used when object reflection must dispatch by object class id.
+struct ReflectionRuntimeClassCandidate {
+    class_name: String,
+    class_id: u64,
+}
+
 /// Returns true for reflection owner classes that need metadata-aware construction.
 pub(super) fn is_reflection_owner_class(class_name: &str) -> bool {
     matches!(
         class_name,
         "ReflectionClass"
+            | "ReflectionObject"
             | "ReflectionFunction"
             | "ReflectionMethod"
             | "ReflectionProperty"
@@ -299,12 +306,250 @@ pub(super) fn lower_reflection_owner_new(
     inst: &Instruction,
     class_name: &str,
 ) -> Result<()> {
-    let metadata = reflection_owner_metadata(ctx, class_name, inst)?;
-    emit_reflection_owner_object(ctx, class_name, &metadata)?;
+    if let Some(object_operand) = reflection_object_operand(ctx, class_name, inst)? {
+        emit_reflection_owner_from_runtime_object(ctx, class_name, object_operand)?;
+    } else {
+        let metadata = reflection_owner_metadata(ctx, class_name, inst)?;
+        emit_reflection_owner_object(ctx, class_name, &metadata)?;
+    }
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
     ctx.store_result_value(result)
+}
+
+/// Returns the constructor object operand for ReflectionClass/Object object reflection.
+fn reflection_object_operand(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    inst: &Instruction,
+) -> Result<Option<ValueId>> {
+    if !matches!(class_name, "ReflectionClass" | "ReflectionObject") {
+        return Ok(None);
+    }
+    let Some(object_operand) = inst.operands.first().copied() else {
+        return Ok(None);
+    };
+    if matches!(ctx.value_php_type(object_operand)?, PhpType::Object(_)) {
+        Ok(Some(object_operand))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Materializes ReflectionClass/Object metadata by dispatching on the object's runtime class id.
+fn emit_reflection_owner_from_runtime_object(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    object_operand: ValueId,
+) -> Result<()> {
+    let candidates = reflection_runtime_class_candidates(ctx, object_operand)?;
+    if candidates.is_empty() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} constructor for object with no known runtime class candidates",
+            class_name
+        )));
+    }
+
+    let fallback_label = ctx.next_label("reflection_object_fallback");
+    let done_label = ctx.next_label("reflection_object_done");
+    let case_labels = candidates
+        .iter()
+        .map(|_| ctx.next_label("reflection_object_case"))
+        .collect::<Vec<_>>();
+
+    emit_runtime_object_class_dispatch(ctx, object_operand, &candidates, &case_labels, &fallback_label)?;
+
+    let fallback_metadata = reflection_class_metadata_for_name(ctx, &candidates[0].class_name)?;
+    emit_reflection_owner_object(ctx, class_name, &fallback_metadata)?;
+    emit_reflection_dispatch_jump(ctx, &done_label);                            // skip runtime reflection candidates after fallback allocation
+
+    for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
+        ctx.emitter.label(label);
+        let metadata = reflection_class_metadata_for_name(ctx, &candidate.class_name)?;
+        emit_reflection_owner_object(ctx, class_name, &metadata)?;
+        emit_reflection_dispatch_jump(ctx, &done_label);                        // finish after materializing the matched runtime class
+    }
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits an unconditional jump for the reflection runtime-class dispatch.
+fn emit_reflection_dispatch_jump(ctx: &mut FunctionContext<'_>, label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b {}", label));                   // continue after the selected reflection object is ready
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("jmp {}", label));                 // continue after the selected reflection object is ready
+        }
+    }
+}
+
+/// Emits target-specific class-id comparisons for runtime object reflection.
+fn emit_runtime_object_class_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    object_operand: ValueId,
+    candidates: &[ReflectionRuntimeClassCandidate],
+    case_labels: &[String],
+    fallback_label: &str,
+) -> Result<()> {
+    ctx.load_value_to_result(object_operand)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", fallback_label));    // use fallback metadata for null object pointers
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the object's concrete runtime class id
+            for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
+                ctx.emitter.instruction("cmp x9, x10");                         // compare the object class id with this reflection candidate
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // select metadata for the matched runtime class
+            }
+            ctx.emitter.instruction(&format!("b {}", fallback_label));          // fall back when no generated candidate matches
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // use fallback metadata for null object pointers
+            ctx.emitter.instruction(&format!("je {}", fallback_label));         // skip class-id loading when the object pointer is null
+            ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // load the object's concrete runtime class id
+            for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
+                ctx.emitter.instruction("cmp r11, r10");                        // compare the object class id with this reflection candidate
+                ctx.emitter.instruction(&format!("je {}", label));              // select metadata for the matched runtime class
+            }
+            ctx.emitter.instruction(&format!("jmp {}", fallback_label));        // fall back when no generated candidate matches
+        }
+    }
+    ctx.emitter.label(fallback_label);
+    Ok(())
+}
+
+/// Returns runtime class candidates compatible with the object's static type metadata.
+fn reflection_runtime_class_candidates(
+    ctx: &FunctionContext<'_>,
+    object_operand: ValueId,
+) -> Result<Vec<ReflectionRuntimeClassCandidate>> {
+    let static_type = reflection_object_static_type_name(ctx, object_operand)?;
+    let mut candidates = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(class_name, _)| reflection_class_matches_object_type(ctx, class_name, &static_type))
+        .map(|(class_name, class_info)| ReflectionRuntimeClassCandidate {
+            class_name: class_name.clone(),
+            class_id: class_info.class_id,
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|candidate| candidate.class_id);
+    candidates.dedup_by_key(|candidate| candidate.class_id);
+    Ok(candidates)
+}
+
+/// Resolves the static object type name used to bound runtime ReflectionObject dispatch.
+fn reflection_object_static_type_name(
+    ctx: &FunctionContext<'_>,
+    object_operand: ValueId,
+) -> Result<String> {
+    match ctx.value_php_type(object_operand)? {
+        PhpType::Object(class_name) if class_name.is_empty() => reflection_current_method_class(ctx)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                CodegenIrError::unsupported(
+                    "ReflectionObject constructor for object with unknown static class",
+                )
+            }),
+        PhpType::Object(class_name) => Ok(class_name),
+        other => Err(CodegenIrError::unsupported(format!(
+            "ReflectionObject constructor for PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Returns the lexical class name encoded in the current EIR method name, if any.
+fn reflection_current_method_class<'a>(ctx: &'a FunctionContext<'_>) -> Option<&'a str> {
+    ctx.function
+        .name
+        .rsplit_once("::")
+        .map(|(class_name, _)| class_name)
+}
+
+/// Returns true when a runtime candidate class can inhabit the operand's static object type.
+fn reflection_class_matches_object_type(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    static_type: &str,
+) -> bool {
+    if reflection_same_php_type_name(class_name, static_type) {
+        return true;
+    }
+    if resolve_reflection_interface(ctx, static_type).is_some() {
+        return reflection_class_implements_interface(ctx, class_name, static_type);
+    }
+    reflection_class_extends_class(ctx, class_name, static_type)
+}
+
+/// Returns true when two PHP type names compare case-insensitively after namespace trimming.
+fn reflection_same_php_type_name(left: &str, right: &str) -> bool {
+    php_symbol_key(left.trim_start_matches('\\')) == php_symbol_key(right.trim_start_matches('\\'))
+}
+
+/// Returns true when a runtime class candidate is or extends `target_class`.
+fn reflection_class_extends_class(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    target_class: &str,
+) -> bool {
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        if reflection_same_php_type_name(&name, target_class) {
+            return true;
+        }
+        current = resolve_reflection_class(ctx, &name)
+            .and_then(|(_, class_info)| class_info.parent.clone());
+    }
+    false
+}
+
+/// Returns true when a runtime class candidate implements the requested interface.
+fn reflection_class_implements_interface(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    target_interface: &str,
+) -> bool {
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        let Some((_, class_info)) = resolve_reflection_class(ctx, &name) else {
+            return false;
+        };
+        if class_info.interfaces.iter().any(|interface_name| {
+            reflection_interface_extends_interface(ctx, interface_name, target_interface)
+        }) {
+            return true;
+        }
+        current = class_info.parent.clone();
+    }
+    false
+}
+
+/// Returns true when an interface is or extends the requested interface target.
+fn reflection_interface_extends_interface(
+    ctx: &FunctionContext<'_>,
+    interface_name: &str,
+    target_interface: &str,
+) -> bool {
+    if reflection_same_php_type_name(interface_name, target_interface) {
+        return true;
+    }
+    let Some(interface_name) = resolve_reflection_interface(ctx, interface_name) else {
+        return false;
+    };
+    let Some(interface) = ctx.module.interface_infos.get(interface_name) else {
+        return false;
+    };
+    interface
+        .parents
+        .iter()
+        .any(|parent| reflection_interface_extends_interface(ctx, parent, target_interface))
 }
 
 /// Allocates and populates one builtin Reflection owner object from metadata.
@@ -313,6 +558,7 @@ fn emit_reflection_owner_object(
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
 ) -> Result<()> {
+    let is_reflection_class_owner = matches!(class_name, "ReflectionClass" | "ReflectionObject");
     let (class_id, property_count, uninitialized_marker_offsets) = {
         let class_info =
             ctx.module.class_infos.get(class_name).ok_or_else(|| {
@@ -332,86 +578,110 @@ fn emit_reflection_owner_object(
         &uninitialized_marker_offsets,
     )?;
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
-        emit_reflection_string_property(ctx, reflected_name, 8, 16);
-        if matches!(class_name, "ReflectionClass" | "ReflectionEnum") {
+        emit_reflection_owner_string_property_by_name(ctx, class_name, "__name", reflected_name)?;
+        if is_reflection_class_owner || class_name == "ReflectionEnum" {
             emit_reflection_class_name_parts(ctx, class_name, reflected_name)?;
         }
-        if class_name == "ReflectionClass" {
-            emit_reflection_string_array_property_by_name(
+        if is_reflection_class_owner {
+            emit_reflection_owner_string_array_property_by_name(
                 ctx,
+                class_name,
                 "__interface_names",
                 &metadata.interface_names,
             )?;
             emit_reflection_class_array_property_by_name(
                 ctx,
+                class_name,
                 "__interfaces",
                 &metadata.interface_names,
             )?;
-            emit_reflection_string_array_property_by_name(
+            emit_reflection_owner_string_array_property_by_name(
                 ctx,
+                class_name,
                 "__trait_names",
                 &metadata.trait_names,
             )?;
-            emit_reflection_class_array_property_by_name(ctx, "__traits", &metadata.trait_names)?;
+            emit_reflection_class_array_property_by_name(
+                ctx,
+                class_name,
+                "__traits",
+                &metadata.trait_names,
+            )?;
             emit_reflection_string_assoc_property_by_name(
                 ctx,
+                class_name,
                 "__trait_aliases",
                 &metadata.trait_aliases,
             )?;
-            emit_reflection_string_array_property_by_name(
+            emit_reflection_owner_string_array_property_by_name(
                 ctx,
+                class_name,
                 "__parent_names",
                 &metadata.parent_names,
             )?;
-            emit_reflection_string_array_property_by_name(
+            emit_reflection_owner_string_array_property_by_name(
                 ctx,
+                class_name,
                 "__method_names",
                 &metadata.method_names,
             )?;
-            emit_reflection_string_array_property_by_name(
+            emit_reflection_owner_string_array_property_by_name(
                 ctx,
+                class_name,
                 "__property_names",
                 &metadata.property_names,
             )?;
-            emit_reflection_string_array_property_by_name(
+            emit_reflection_owner_string_array_property_by_name(
                 ctx,
+                class_name,
                 "__constant_names",
                 &metadata.constant_names,
             )?;
             emit_reflection_constant_array_property_by_name(
                 ctx,
+                class_name,
                 "__constants",
                 &metadata.constant_members,
             )?;
             emit_reflection_default_property_array_property_by_name(
                 ctx,
+                class_name,
                 "__default_properties",
                 &metadata.default_property_members,
             )?;
             emit_reflection_static_property_array_property_by_name(
                 ctx,
+                class_name,
                 "__static_properties",
                 &metadata.static_property_members,
             )?;
             emit_reflection_member_array_property_by_name(
                 ctx,
-                "ReflectionClass",
+                class_name,
                 "__reflection_constants",
                 "ReflectionClassConstant",
                 &metadata.constant_reflection_members,
             )?;
             emit_reflection_member_array_property_by_name(
                 ctx,
-                "ReflectionClass",
+                class_name,
                 "__methods",
                 "ReflectionMethod",
                 &metadata.method_members,
             )?;
-            emit_reflection_constructor_property(ctx, metadata.constructor_member.as_ref())?;
-            emit_reflection_parent_class_property(ctx, metadata.parent_class_name.as_deref())?;
+            emit_reflection_constructor_property(
+                ctx,
+                class_name,
+                metadata.constructor_member.as_ref(),
+            )?;
+            emit_reflection_parent_class_property(
+                ctx,
+                class_name,
+                metadata.parent_class_name.as_deref(),
+            )?;
             emit_reflection_member_array_property_by_name(
                 ctx,
-                "ReflectionClass",
+                class_name,
                 "__properties",
                 "ReflectionProperty",
                 &metadata.property_members,
@@ -462,7 +732,7 @@ fn emit_reflection_owner_object(
         }
     }
     emit_reflection_attrs_property(ctx, class_name, &metadata.attr_names, &metadata.attr_args)?;
-    if matches!(class_name, "ReflectionClass" | "ReflectionEnum") {
+    if is_reflection_class_owner || class_name == "ReflectionEnum" {
         emit_reflection_owner_bool_property(ctx, class_name, "__is_final", metadata.is_final)?;
         emit_reflection_owner_bool_property(ctx, class_name, "__is_abstract", metadata.is_abstract)?;
         emit_reflection_owner_bool_property(ctx, class_name, "__is_interface", metadata.is_interface)?;
@@ -4770,7 +5040,9 @@ fn emit_reflection_attrs_property(
 /// Returns PHP's `Attribute::TARGET_*` bitmask for attributes on one Reflection owner type.
 fn reflection_attribute_target_for_owner(class_name: &str) -> i64 {
     match class_name {
-        "ReflectionClass" => super::super::builtins::attributes::REFLECTION_ATTRIBUTE_TARGET_CLASS,
+        "ReflectionClass" | "ReflectionObject" => {
+            super::super::builtins::attributes::REFLECTION_ATTRIBUTE_TARGET_CLASS
+        }
         "ReflectionFunction" => {
             super::super::builtins::attributes::REFLECTION_ATTRIBUTE_TARGET_FUNCTION
         }
@@ -4788,20 +5060,6 @@ fn reflection_attribute_target_for_owner(class_name: &str) -> i64 {
         }
         _ => 0,
     }
-}
-
-/// Replaces a ReflectionClass private array slot with an indexed string array.
-fn emit_reflection_string_array_property_by_name(
-    ctx: &mut FunctionContext<'_>,
-    property_name: &str,
-    names: &[String],
-) -> Result<()> {
-    emit_reflection_owner_string_array_property_by_name(
-        ctx,
-        "ReflectionClass",
-        property_name,
-        names,
-    )
 }
 
 /// Replaces a Reflection owner private array slot with an indexed string array.
@@ -4839,16 +5097,17 @@ fn emit_reflection_owner_string_array_property_by_name(
     Ok(())
 }
 
-/// Replaces a ReflectionClass private slot with name-keyed ReflectionClass objects.
+/// Replaces a ReflectionClass-like private slot with name-keyed ReflectionClass objects.
 fn emit_reflection_class_array_property_by_name(
     ctx: &mut FunctionContext<'_>,
+    owner_class_name: &str,
     property_name: &str,
     names: &[String],
 ) -> Result<()> {
     let class_info = ctx
         .module
         .class_infos
-        .get("ReflectionClass")
+        .get(owner_class_name)
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, property_name)?;
     let high_offset = low_offset + 8;
@@ -4873,16 +5132,17 @@ fn emit_reflection_class_array_property_by_name(
     Ok(())
 }
 
-/// Replaces a ReflectionClass private slot with an associative constant-value array.
+/// Replaces a ReflectionClass-like private slot with an associative constant-value array.
 fn emit_reflection_constant_array_property_by_name(
     ctx: &mut FunctionContext<'_>,
+    owner_class_name: &str,
     property_name: &str,
     members: &[ReflectionConstantMember],
 ) -> Result<()> {
     let class_info = ctx
         .module
         .class_infos
-        .get("ReflectionClass")
+        .get(owner_class_name)
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, property_name)?;
     let high_offset = low_offset + 8;
@@ -4906,16 +5166,17 @@ fn emit_reflection_constant_array_property_by_name(
     Ok(())
 }
 
-/// Replaces a ReflectionClass private slot with an associative default-property array.
+/// Replaces a ReflectionClass-like private slot with an associative default-property array.
 fn emit_reflection_default_property_array_property_by_name(
     ctx: &mut FunctionContext<'_>,
+    owner_class_name: &str,
     property_name: &str,
     members: &[ReflectionDefaultPropertyMember],
 ) -> Result<()> {
     let class_info = ctx
         .module
         .class_infos
-        .get("ReflectionClass")
+        .get(owner_class_name)
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, property_name)?;
     let high_offset = low_offset + 8;
@@ -4939,16 +5200,17 @@ fn emit_reflection_default_property_array_property_by_name(
     Ok(())
 }
 
-/// Replaces a ReflectionClass private slot with current static-property values.
+/// Replaces a ReflectionClass-like private slot with current static-property values.
 fn emit_reflection_static_property_array_property_by_name(
     ctx: &mut FunctionContext<'_>,
+    owner_class_name: &str,
     property_name: &str,
     members: &[ReflectionStaticPropertyMember],
 ) -> Result<()> {
     let class_info = ctx
         .module
         .class_infos
-        .get("ReflectionClass")
+        .get(owner_class_name)
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, property_name)?;
     let high_offset = low_offset + 8;
@@ -5043,15 +5305,16 @@ fn emit_reflection_property_hook_array_property_by_name(
     Ok(())
 }
 
-/// Replaces the ReflectionClass private constructor slot with `ReflectionMethod|null`.
+/// Replaces a ReflectionClass-like private constructor slot with `ReflectionMethod|null`.
 fn emit_reflection_constructor_property(
     ctx: &mut FunctionContext<'_>,
+    owner_class_name: &str,
     member: Option<&ReflectionListedMember>,
 ) -> Result<()> {
     let class_info = ctx
         .module
         .class_infos
-        .get("ReflectionClass")
+        .get(owner_class_name)
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, "__constructor")?;
     let high_offset = low_offset + 8;
@@ -5105,15 +5368,16 @@ fn emit_reflection_method_prototype_property(
     Ok(())
 }
 
-/// Replaces the ReflectionClass private parent slot with `ReflectionClass|false`.
+/// Replaces a ReflectionClass-like private parent slot with `ReflectionClass|false`.
 fn emit_reflection_parent_class_property(
     ctx: &mut FunctionContext<'_>,
+    owner_class_name: &str,
     parent_class_name: Option<&str>,
 ) -> Result<()> {
     let class_info = ctx
         .module
         .class_infos
-        .get("ReflectionClass")
+        .get(owner_class_name)
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, "__parent_class")?;
     let high_offset = low_offset + 8;
@@ -5412,16 +5676,17 @@ fn reflection_property_hook_map_type() -> PhpType {
     }
 }
 
-/// Replaces a ReflectionClass private slot with a string-keyed string-value map.
+/// Replaces a ReflectionClass-like private slot with a string-keyed string-value map.
 fn emit_reflection_string_assoc_property_by_name(
     ctx: &mut FunctionContext<'_>,
+    owner_class_name: &str,
     property_name: &str,
     entries: &[(String, String)],
 ) -> Result<()> {
     let class_info = ctx
         .module
         .class_infos
-        .get("ReflectionClass")
+        .get(owner_class_name)
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, property_name)?;
     let high_offset = low_offset + 8;

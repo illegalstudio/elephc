@@ -4413,6 +4413,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
     }
     for class_name in [
         "ReflectionClass",
+        "ReflectionObject",
         "ReflectionFunction",
         "ReflectionMethod",
         "ReflectionProperty",
@@ -4431,6 +4432,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
             if matches!(
                 class_name,
                 "ReflectionClass"
+                    | "ReflectionObject"
                     | "ReflectionFunction"
                     | "ReflectionMethod"
                     | "ReflectionProperty"
@@ -4458,7 +4460,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
             if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getExtension")) {
                 sig.return_type = PhpType::Mixed;
             }
-            if class_name == "ReflectionClass" {
+            if matches!(class_name, "ReflectionClass" | "ReflectionObject") {
                 for (property_name, property_type) in &mut class_info.properties {
                     match property_name.as_str() {
                         "__interfaces" | "__traits" => {

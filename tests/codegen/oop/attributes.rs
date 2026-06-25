@@ -1643,6 +1643,45 @@ echo $iface->isInstance(StaticInstanceEnum::Ready) ? "N" : "n";
     assert_eq!(out.stdout, "BcItEN");
 }
 
+/// Verifies ReflectionObject and object-argument ReflectionClass construction use
+/// the runtime object class rather than the declared static return type.
+#[test]
+fn test_reflection_object_uses_runtime_class_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class StaticReflectObjectBase {
+    public function baseMethod(): void {}
+}
+class StaticReflectObjectChild extends StaticReflectObjectBase {
+    public int $value = 4;
+    public function childMethod(): void {}
+}
+function makeStaticReflectObject(): StaticReflectObjectBase {
+    return new StaticReflectObjectChild();
+}
+$object = makeStaticReflectObject();
+$objectRef = new ReflectionObject($object);
+echo get_class($objectRef) . ":";
+echo $objectRef instanceof ReflectionObject ? "O" : "o";
+echo $objectRef instanceof ReflectionClass ? "C" : "c";
+echo ":" . $objectRef->getName();
+echo ":" . $objectRef->getParentClass()->getName();
+$classRef = new ReflectionClass($object);
+echo ":" . get_class($classRef);
+echo ":" . $classRef->getName();
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "ReflectionObject:OC:StaticReflectObjectChild:StaticReflectObjectBase:ReflectionClass:StaticReflectObjectChild"
+    );
+}
+
 /// Verifies that `ReflectionClass::getParentClass()` returns a ReflectionClass
 /// object for subclasses and `false` for parentless classes.
 #[test]

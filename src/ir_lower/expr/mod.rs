@@ -8294,7 +8294,7 @@ fn lower_new_object(
     )
 }
 
-/// Lowers `ReflectionClass(object)` to the object's statically-known class name.
+/// Lowers `ReflectionClass(object)` while preserving object operands for runtime class metadata.
 fn lower_reflection_class_constructor_operands(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
@@ -8302,6 +8302,12 @@ fn lower_reflection_class_constructor_operands(
     let reflected_arg = reflection_class_constructor_class_arg(ctx, args)?;
     let class_name = instance_callable_object_class(ctx, &reflected_arg)?;
     let lowered = lower_expr(ctx, &reflected_arg);
+    if matches!(
+        ctx.builder.value_php_type(lowered.value).codegen_repr(),
+        PhpType::Object(_)
+    ) {
+        return Some(vec![lowered.value]);
+    }
     if ctx.value_is_owning_temporary(lowered) {
         crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(reflected_arg.span));
     }
