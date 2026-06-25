@@ -2135,6 +2135,21 @@ fn eval_reflection_aot_class_flags(
     Ok(Some((flags, modifiers)))
 }
 
+/// Returns whether a generated/AOT reflected class can be allocated without its constructor.
+pub(in crate::interpreter) fn eval_reflection_aot_class_allows_without_constructor_allocation(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<bool>, EvalStatus> {
+    let Some((flags, _)) = eval_reflection_aot_class_flags(class_name, values)? else {
+        return Ok(None);
+    };
+    let rejected_flags = EVAL_REFLECTION_CLASS_FLAG_ABSTRACT
+        | EVAL_REFLECTION_CLASS_FLAG_INTERFACE
+        | EVAL_REFLECTION_CLASS_FLAG_TRAIT
+        | EVAL_REFLECTION_CLASS_FLAG_ENUM;
+    Ok(Some(flags & rejected_flags == 0))
+}
+
 /// Returns whether an absent or public AOT lifecycle method allows public reflection.
 fn eval_reflection_aot_lifecycle_method_allows_public_reflection(
     class_name: &str,
