@@ -507,7 +507,7 @@ pub(crate) fn emit_runtime_data_user(
                     // (tag, lo, hi) rows in source order.
                     let mut arg_rows = Vec::with_capacity(args.len());
                     for arg in args {
-                        match arg {
+                        match arg.value() {
                             crate::types::AttrArgValue::Str(value) => {
                                 let label = format!("_attr_arg_str_{}", arg_str_id);
                                 arg_str_id += 1;
@@ -527,6 +527,9 @@ pub(crate) fn emit_runtime_data_user(
                             }
                             crate::types::AttrArgValue::Null => {
                                 arg_rows.push((8u64, "0".to_string(), 0u64));
+                            }
+                            crate::types::AttrArgValue::Named { .. } => {
+                                unreachable!("named attribute arguments are unwrapped before runtime data emission")
                             }
                         }
                     }

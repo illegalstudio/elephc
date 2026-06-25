@@ -297,7 +297,10 @@ pub(super) fn infer_function_call_type(
         | "ptr_write_string" => PhpType::Int,
         "ptr_set" | "ptr_write8" | "ptr_write16" | "ptr_write32" => PhpType::Void,
         "class_attribute_names" => PhpType::Array(Box::new(PhpType::Str)),
-        "class_attribute_args" => PhpType::Array(Box::new(PhpType::Mixed)),
+        "class_attribute_args" => PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
         "class_get_attributes" => PhpType::Array(Box::new(PhpType::Object(
             "ReflectionAttribute".to_string(),
         ))),

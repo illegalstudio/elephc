@@ -127,7 +127,7 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
     // __rt_mixed_from_value. The helper persists strings and retains
     // refcounted heap children; scalars (int/bool/null) flow straight to
     // the alloc path with no ownership work.
-    match arg {
+    match arg.value() {
         AttrArgValue::Null => {
             emitter.instruction("mov x0, #8");                                  // runtime tag 8 = null payload
             emitter.instruction("mov x1, xzr");                                 // null mixed payloads carry no low word
@@ -150,6 +150,7 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
             abi::emit_symbol_address(emitter, "x1", &sym);                      // x1 = string data address
             emitter.instruction(&format!("mov x2, #{}", len));                  // x2 = string length
         }
+        AttrArgValue::Named { .. } => unreachable!("named attribute arguments are unwrapped before boxing"),
     }
     emitter.instruction("bl __rt_mixed_from_value");                            // box the captured payload into an owned mixed cell
 }
@@ -163,7 +164,7 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
 /// address is materialized into `rdi`; `data` is only mutated for `Str`.
 fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut DataSection) {
     // Set (tag in rax, lo in rdi, hi in rsi) per the mixed-cell ABI on x86_64.
-    match arg {
+    match arg.value() {
         AttrArgValue::Null => {
             emitter.instruction("mov rax, 8");                                  // runtime tag 8 = null payload
             emitter.instruction("xor rdi, rdi");                                // null mixed payloads carry no low word
@@ -186,6 +187,7 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
             abi::emit_symbol_address(emitter, "rdi", &sym);                     // rdi = string data address
             emitter.instruction(&format!("mov rsi, {}", len));                  // rsi = string length
         }
+        AttrArgValue::Named { .. } => unreachable!("named attribute arguments are unwrapped before boxing"),
     }
     emitter.instruction("call __rt_mixed_from_value");                          // box the captured payload into an owned mixed cell
 }

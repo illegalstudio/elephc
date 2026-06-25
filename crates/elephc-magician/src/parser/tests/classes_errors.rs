@@ -138,7 +138,13 @@ class DynEvalAttributed {}"#,
                         EvalAttributeArg::Null,
                     ]),
                 ),
-                EvalAttribute::new("Tag", None),
+                EvalAttribute::new(
+                    "Tag",
+                    Some(vec![EvalAttributeArg::Named {
+                        name: "name".to_string(),
+                        value: Box::new(EvalAttributeArg::String("named".to_string())),
+                    }]),
+                ),
             ])
         )]
     );

@@ -74,6 +74,11 @@ fn native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &EvalAttributeArg
             record.push(3);
             native_member_attribute_push_string(record, value);
         }
+        EvalAttributeArg::Named { name, value } => {
+            record.push(4);
+            native_member_attribute_push_string(record, name);
+            native_member_attribute_push_arg(record, value);
+        }
     }
 }
 
@@ -720,6 +725,10 @@ fn register_native_member_attribute_records_metadata() {
         "Route",
         Some(&[
             EvalAttributeArg::String("api".to_string()),
+            EvalAttributeArg::Named {
+                name: "path".to_string(),
+                value: Box::new(EvalAttributeArg::String("/users".to_string())),
+            },
             EvalAttributeArg::Int(7),
             EvalAttributeArg::Bool(true),
             EvalAttributeArg::Null,
@@ -785,6 +794,10 @@ fn register_native_member_attribute_records_metadata() {
         Some(
             [
                 EvalAttributeArg::String("api".to_string()),
+                EvalAttributeArg::Named {
+                    name: "path".to_string(),
+                    value: Box::new(EvalAttributeArg::String("/users".to_string())),
+                },
                 EvalAttributeArg::Int(7),
                 EvalAttributeArg::Bool(true),
                 EvalAttributeArg::Null,

@@ -190,6 +190,34 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval class attribute metadata preserves named literal arguments.
+#[test]
+fn execute_program_dispatches_named_class_attribute_args() {
+    let program = parse_fragment(
+        br#"#[Route(path: "/eval", secure: true, code: 9)]
+class EvalNamedAttrMeta {}
+$args = class_attribute_args("EvalNamedAttrMeta", "Route");
+echo count($args); echo ":";
+echo $args["path"]; echo ":";
+echo $args["secure"] ? "T" : "F"; echo ":";
+echo $args["code"]; echo ":";
+$attrs = class_get_attributes("EvalNamedAttrMeta");
+$attr_args = $attrs[0]->getArguments();
+echo $attr_args["path"]; echo ":";
+echo $attr_args["secure"] ? "T" : "F"; echo ":";
+echo $attr_args["code"];
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "3:/eval:T:9:/eval:T:9");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionAttribute::newInstance instantiates eval-declared attribute classes.
 #[test]
 fn execute_program_instantiates_eval_declared_reflection_attribute() {
@@ -207,7 +235,7 @@ fn execute_program_instantiates_eval_declared_reflection_attribute() {
         return $this->path . ":" . $this->code . ":" . ($this->enabled ? "T" : "F");
     }
 }
-#[EvalRoute("/home", -7, true)]
+#[EvalRoute(enabled: true, code: -7, path: "/home")]
 class EvalRouteTarget {}
 $attrs = class_get_attributes("EvalRouteTarget");
 $instance = $attrs[0]->newInstance();

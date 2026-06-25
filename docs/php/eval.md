@@ -179,10 +179,13 @@ static/class-constant accesses. Class-level attributes declared on eval classes,
 interfaces, traits, and enums, plus bridge-registered generated/AOT class-level
 attributes, are visible through `class_attribute_names()`,
 `class_attribute_args()`, and `class_get_attributes()` when their arguments fit
-the supported literal positional subset (`string`, `int`, `bool`, `null`, or
-negated integer literals). `ReflectionAttribute::newInstance()` instantiates
-eval-declared or bridge-supported generated/AOT attribute classes from those
-materialized attributes, and `ReflectionAttribute::getTarget()` /
+the supported literal positional/named subset (`string`, `int`, `bool`, `null`,
+or negated integer literals). Positional arguments keep integer keys in
+`class_attribute_args()` / `ReflectionAttribute::getArguments()`, and named
+arguments keep their PHP names as string keys.
+`ReflectionAttribute::newInstance()` instantiates eval-declared or
+bridge-supported generated/AOT attribute classes from those materialized
+attributes, and `ReflectionAttribute::getTarget()` /
 `isRepeated()` report the reflected owner target and same-owner repetition
 metadata.
 Attribute names remain visible when an attribute uses unsupported argument
@@ -197,7 +200,7 @@ child methods and public access see the child property.
 property, class-constant, and method-parameter attributes for eval-declared
 class-like symbols and bridge-registered generated/AOT class-level, method,
 property, and class-constant attributes when their arguments fit the same
-literal subset, and `getName()` returns the reflected class, member, or
+literal positional/named subset, and `getName()` returns the reflected class, member, or
 parameter name
 for those owners. `ReflectionClass`, `ReflectionObject`, `ReflectionFunction`, `ReflectionMethod`,
 `ReflectionProperty`, `ReflectionClassConstant`, `ReflectionEnumUnitCase`, and

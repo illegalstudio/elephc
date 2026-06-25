@@ -303,6 +303,14 @@ fn reflection_static_properties_map_type() -> PhpType {
     }
 }
 
+/// Returns `array<int|string, mixed>` for ReflectionAttribute argument maps.
+fn reflection_attribute_args_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    }
+}
+
 /// Returns `array<string, ReflectionMethod>` for property-hook reflection maps.
 fn reflection_property_hook_map_type() -> PhpType {
     PhpType::AssocArray {
@@ -4442,6 +4450,11 @@ fn make_reflection_variadic_optional(sig: &mut crate::types::FunctionSig) {
 /// - `getAttributes` → `array<ReflectionAttribute>`
 pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
     if let Some(class_info) = checker.classes.get_mut("ReflectionAttribute") {
+        for (name, ty) in &mut class_info.properties {
+            if name == "__args" {
+                *ty = reflection_attribute_args_type();
+            }
+        }
         if let Some(sig) = class_info.methods.get_mut("__construct") {
             sig.return_type = PhpType::Void;
         }
@@ -4449,7 +4462,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
             sig.return_type = PhpType::Str;
         }
         if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getArguments")) {
-            sig.return_type = PhpType::Array(Box::new(PhpType::Mixed));
+            sig.return_type = reflection_attribute_args_type();
         }
         if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("newInstance")) {
             sig.return_type = PhpType::Mixed;

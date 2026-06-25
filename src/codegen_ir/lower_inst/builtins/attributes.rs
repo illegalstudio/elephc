@@ -1,13 +1,13 @@
 //! Purpose:
 //! Lowers class-level PHP attribute metadata builtins for the EIR backend.
-//! Materializes attribute name and literal argument arrays from EIR class metadata.
+//! Materializes attribute name arrays and literal argument hashes from EIR class metadata.
 //!
 //! Called from:
 //! - `crate::codegen_ir::lower_inst::builtins::lower_builtin_call()`.
 //!
 //! Key details:
 //! - Class and attribute lookup follows PHP's case-insensitive symbol rules.
-//! - Captured literal attribute arguments are boxed as owned Mixed cells.
+//! - Captured literal attribute arguments are boxed as owned Mixed cells in PHP array order.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -58,7 +58,7 @@ pub(super) fn lower_class_attribute_names(
     super::store_if_result(ctx, inst)
 }
 
-/// Lowers `class_attribute_args(class, attr)` into an indexed Mixed array.
+/// Lowers `class_attribute_args(class, attr)` into a Mixed PHP argument array.
 pub(super) fn lower_class_attribute_args(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -316,7 +316,7 @@ fn emit_set_args_property(
         object_reg,
         layout.args_lo,
     );
-    abi::emit_load_int_immediate(ctx.emitter, tag_reg, 4);
+    abi::emit_load_int_immediate(ctx.emitter, tag_reg, 5);
     abi::emit_store_to_address(ctx.emitter, tag_reg, object_reg, layout.args_hi);
     Ok(())
 }
@@ -429,14 +429,9 @@ fn emit_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]
     ctx.emitter.instruction("pop rax");                                         // restore the final attribute-name array as the result
 }
 
-/// Allocates and fills an indexed array of boxed Mixed attribute arguments.
+/// Allocates and fills a PHP hash array of boxed Mixed attribute arguments.
 fn emit_mixed_array(ctx: &mut FunctionContext<'_>, attr_args: &[AttrArgValue]) -> Result<()> {
-    allocate_indexed_array(ctx, attr_args.len().max(1), 8);
-    crate::codegen::emit_array_value_type_stamp(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        &PhpType::Mixed,
-    );
+    allocate_mixed_hash(ctx, attr_args.len().max(1));
     match ctx.emitter.target.arch {
         Arch::AArch64 => emit_mixed_array_fill_aarch64(ctx, attr_args),
         Arch::X86_64 => emit_mixed_array_fill_x86_64(ctx, attr_args),
@@ -444,32 +439,95 @@ fn emit_mixed_array(ctx: &mut FunctionContext<'_>, attr_args: &[AttrArgValue]) -
     Ok(())
 }
 
-/// Appends boxed Mixed attribute arguments to the current result array on AArch64.
+/// Inserts boxed Mixed attribute arguments into the current result hash on AArch64.
 fn emit_mixed_array_fill_aarch64(ctx: &mut FunctionContext<'_>, attr_args: &[AttrArgValue]) {
-    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // park the attribute-arg array while boxing values
-    for arg in attr_args {
-        emit_box_arg_aarch64(ctx, arg);
-        ctx.emitter.instruction("mov x1, x0");                                  // pass the boxed attribute argument as the append value
-        ctx.emitter.instruction("ldr x0, [sp]");                                // reload the attribute-arg array for this append
-        abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
-        ctx.emitter.instruction("str x0, [sp]");                                // preserve the possibly-grown attribute-arg array
+    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // park the attribute-arg hash while boxing values
+    for (index, arg) in attr_args.iter().enumerate() {
+        emit_box_arg_aarch64(ctx, arg.value());
+        ctx.emitter.instruction("mov x3, x0");                                  // pass the boxed argument as the hash value payload
+        ctx.emitter.instruction("mov x4, xzr");                                 // boxed Mixed hash entries do not use a high payload word
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            "x5",
+            crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64,
+        );
+        ctx.emitter.instruction("ldr x0, [sp]");                                // reload the attribute-arg hash for this insertion
+        emit_attribute_arg_key_aarch64(ctx, index, arg);
+        abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        ctx.emitter.instruction("str x0, [sp]");                                // preserve the possibly-grown attribute-arg hash
     }
-    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the final attribute-arg array as the result
+    ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the final attribute-arg hash as the result
 }
 
-/// Appends boxed Mixed attribute arguments to the current result array on x86_64.
+/// Inserts boxed Mixed attribute arguments into the current result hash on x86_64.
 fn emit_mixed_array_fill_x86_64(ctx: &mut FunctionContext<'_>, attr_args: &[AttrArgValue]) {
-    ctx.emitter.instruction("push rax");                                        // park the attribute-arg array while boxing values
+    ctx.emitter.instruction("push rax");                                        // park the attribute-arg hash while boxing values
     ctx.emitter.instruction("sub rsp, 8");                                      // keep stack alignment stable across helper calls
-    for arg in attr_args {
-        emit_box_arg_x86_64(ctx, arg);
-        ctx.emitter.instruction("mov rsi, rax");                                // pass the boxed attribute argument as the append value
-        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // reload the attribute-arg array for this append
-        abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
-        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // preserve the possibly-grown attribute-arg array
+    for (index, arg) in attr_args.iter().enumerate() {
+        emit_box_arg_x86_64(ctx, arg.value());
+        ctx.emitter.instruction("mov rcx, rax");                                // pass the boxed argument as the hash value payload
+        abi::emit_load_int_immediate(ctx.emitter, "r8", 0);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            "r9",
+            crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64,
+        );
+        ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                // reload the attribute-arg hash for this insertion
+        emit_attribute_arg_key_x86_64(ctx, index, arg);
+        abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+        ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                // preserve the possibly-grown attribute-arg hash
     }
     ctx.emitter.instruction("add rsp, 8");                                      // drop the temporary alignment slot
-    ctx.emitter.instruction("pop rax");                                         // restore the final attribute-arg array as the result
+    ctx.emitter.instruction("pop rax");                                         // restore the final attribute-arg hash as the result
+}
+
+/// Materializes the hash key for one attribute argument on AArch64.
+fn emit_attribute_arg_key_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    index: usize,
+    arg: &AttrArgValue,
+) {
+    if let Some(name) = arg.name() {
+        let (label, len) = ctx.data.add_string(name.as_bytes());
+        abi::emit_symbol_address(ctx.emitter, "x1", &label);
+        abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, "x1", index as i64);
+        abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
+    }
+}
+
+/// Materializes the hash key for one attribute argument on x86_64.
+fn emit_attribute_arg_key_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    index: usize,
+    arg: &AttrArgValue,
+) {
+    if let Some(name) = arg.name() {
+        let (label, len) = ctx.data.add_string(name.as_bytes());
+        abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+        abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, "rsi", index as i64);
+        abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+    }
+}
+
+/// Allocates a Mixed-valued PHP hash with room for captured attribute args.
+fn allocate_mixed_hash(ctx: &mut FunctionContext<'_>, capacity: usize) {
+    let capacity = (capacity * 2).max(16);
+    let value_tag = crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", capacity as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", value_tag);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", capacity as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", value_tag);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_new");
 }
 
 /// Allocates an indexed array with the requested capacity and element stride.
@@ -489,7 +547,7 @@ fn allocate_indexed_array(ctx: &mut FunctionContext<'_>, capacity: usize, stride
 
 /// Boxes one captured attribute argument into the AArch64 Mixed-cell ABI.
 fn emit_box_arg_aarch64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue) {
-    match arg {
+    match arg.value() {
         AttrArgValue::Null => {
             ctx.emitter.instruction("mov x0, #8");                              // runtime tag 8 = null payload
             ctx.emitter.instruction("mov x1, xzr");                             // null mixed payloads carry no low word
@@ -513,13 +571,14 @@ fn emit_box_arg_aarch64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue) {
             abi::emit_symbol_address(ctx.emitter, "x1", &label);
             ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the captured string length as the mixed high word
         }
+        AttrArgValue::Named { .. } => unreachable!("named attribute arguments are unwrapped before boxing"),
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
 }
 
 /// Boxes one captured attribute argument into the x86_64 Mixed-cell ABI.
 fn emit_box_arg_x86_64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue) {
-    match arg {
+    match arg.value() {
         AttrArgValue::Null => {
             ctx.emitter.instruction("mov rax, 8");                              // runtime tag 8 = null payload
             ctx.emitter.instruction("xor rdi, rdi");                            // null mixed payloads carry no low word
@@ -543,6 +602,7 @@ fn emit_box_arg_x86_64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue) {
             abi::emit_symbol_address(ctx.emitter, "rdi", &label);
             ctx.emitter.instruction(&format!("mov rsi, {}", len));              // pass the captured string length as the mixed high word
         }
+        AttrArgValue::Named { .. } => unreachable!("named attribute arguments are unwrapped before boxing"),
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
 }

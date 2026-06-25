@@ -18,13 +18,36 @@ use super::{FunctionSig, PhpType};
 
 /// Compile-time attribute argument literal. Captures the subset of PHP
 /// attribute argument expressions that reflection helpers can currently
-/// materialize: strings, ints, bools, null, and negative int literals.
+/// materialize: strings, ints, bools, null, negative int literals, and named
+/// wrappers around those same literal values.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AttrArgValue {
     Null,
     Int(i64),
     Bool(bool),
     Str(String),
+    Named {
+        name: String,
+        value: Box<AttrArgValue>,
+    },
+}
+
+impl AttrArgValue {
+    /// Returns the PHP named-argument key when this attribute arg is named.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            AttrArgValue::Named { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
+    /// Returns the scalar payload, unwrapping a named-argument wrapper.
+    pub fn value(&self) -> &AttrArgValue {
+        match self {
+            AttrArgValue::Named { value, .. } => value,
+            _ => self,
+        }
+    }
 }
 
 /// Collects attribute names from attribute groups while preserving source order.
@@ -42,7 +65,7 @@ pub(crate) fn collect_attribute_names(groups: &[AttributeGroup]) -> Vec<String> 
     out
 }
 
-/// Collects materializable positional attribute arguments in source order.
+/// Collects materializable positional and named attribute arguments in source order.
 ///
 /// Legal PHP attribute expressions outside the current literal subset are
 /// represented as `None` so compilation can proceed until a reflection query
@@ -56,33 +79,38 @@ pub(crate) fn collect_attribute_args(
             let mut args = Vec::new();
             let mut supported = true;
             for arg_expr in &attr.args {
-                match &arg_expr.kind {
-                    ExprKind::StringLiteral(value) => args.push(AttrArgValue::Str(value.clone())),
-                    ExprKind::IntLiteral(value) => args.push(AttrArgValue::Int(*value)),
-                    ExprKind::BoolLiteral(value) => args.push(AttrArgValue::Bool(*value)),
-                    ExprKind::Null => args.push(AttrArgValue::Null),
-                    ExprKind::Negate(inner) => {
-                        if let ExprKind::IntLiteral(n) = &inner.kind {
-                            args.push(AttrArgValue::Int(n.wrapping_neg()));
-                        } else {
-                            supported = false;
-                            break;
-                        }
-                    }
-                    ExprKind::NamedArg { .. } => {
-                        supported = false;
-                        break;
-                    }
-                    _ => {
-                        supported = false;
-                        break;
-                    }
+                if let Some(arg) = collect_attribute_arg_value(arg_expr) {
+                    args.push(arg);
+                } else {
+                    supported = false;
+                    break;
                 }
             }
             out.push(if supported { Some(args) } else { None });
         }
     }
     out
+}
+
+/// Converts one parsed attribute argument expression into retained literal metadata.
+fn collect_attribute_arg_value(expr: &Expr) -> Option<AttrArgValue> {
+    match &expr.kind {
+        ExprKind::StringLiteral(value) => Some(AttrArgValue::Str(value.clone())),
+        ExprKind::IntLiteral(value) => Some(AttrArgValue::Int(*value)),
+        ExprKind::BoolLiteral(value) => Some(AttrArgValue::Bool(*value)),
+        ExprKind::Null => Some(AttrArgValue::Null),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(n) => Some(AttrArgValue::Int(n.wrapping_neg())),
+            _ => None,
+        },
+        ExprKind::NamedArg { name, value } => {
+            collect_attribute_arg_value(value).map(|value| AttrArgValue::Named {
+                name: name.clone(),
+                value: Box::new(value),
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Property hook contract for `get`/`set` hook declarations in classes and interfaces.

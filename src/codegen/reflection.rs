@@ -210,6 +210,10 @@ fn attr_arg_expr(arg: &AttrArgValue) -> Expr {
         AttrArgValue::Int(value) => ExprKind::IntLiteral(*value),
         AttrArgValue::Bool(value) => ExprKind::BoolLiteral(*value),
         AttrArgValue::Str(value) => ExprKind::StringLiteral(value.clone()),
+        AttrArgValue::Named { name, value } => ExprKind::NamedArg {
+            name: name.clone(),
+            value: Box::new(attr_arg_expr(value)),
+        },
     };
     Expr::new(kind, span)
 }
@@ -453,7 +457,7 @@ fn emit_set_factory_property(
 /// high payload into `x2`, then calls `__rt_mixed_from_value` to
 /// produce an owned boxed cell returned in `x0`.
 fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut DataSection) {
-    match arg {
+    match arg.value() {
         AttrArgValue::Null => {
             emitter.instruction("mov x0, #8");                                  // runtime tag 8 = null payload
             emitter.instruction("mov x1, xzr");                                 // null carries no low word
@@ -476,6 +480,7 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
             abi::emit_symbol_address(emitter, "x1", &sym);                      // x1 = string data address
             emitter.instruction(&format!("mov x2, #{}", len));                  // x2 = string length
         }
+        AttrArgValue::Named { .. } => unreachable!("named attribute arguments are unwrapped before boxing"),
     }
     emitter.instruction("bl __rt_mixed_from_value");                            // box the captured payload into an owned mixed cell
 }
@@ -485,7 +490,7 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
 /// high payload into `rsi`, then calls `__rt_mixed_from_value` to
 /// produce an owned boxed cell returned in `rax`.
 fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut DataSection) {
-    match arg {
+    match arg.value() {
         AttrArgValue::Null => {
             emitter.instruction("mov rax, 8");                                  // runtime tag 8 = null payload
             emitter.instruction("xor rdi, rdi");                                // null carries no low word
@@ -508,6 +513,7 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
             abi::emit_symbol_address(emitter, "rdi", &sym);                     // rdi = string data address
             emitter.instruction(&format!("mov rsi, {}", len));                  // rsi = string length
         }
+        AttrArgValue::Named { .. } => unreachable!("named attribute arguments are unwrapped before boxing"),
     }
     emitter.instruction("call __rt_mixed_from_value");                          // box the captured payload into an owned mixed cell
 }

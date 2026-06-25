@@ -6381,7 +6381,10 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "stream_get_transports"
         | "stream_get_wrappers"
         | "sscanf" => Some(PhpType::Array(Box::new(PhpType::Str))),
-        "class_attribute_args" => Some(PhpType::Array(Box::new(PhpType::Mixed))),
+        "class_attribute_args" => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        }),
         "class_get_attributes" => Some(PhpType::Array(Box::new(PhpType::Object(
             "ReflectionAttribute".to_string(),
         )))),

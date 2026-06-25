@@ -186,7 +186,7 @@ pub(super) fn check_builtin(
                     "class_attribute_args(): requested attribute uses argument metadata that is not supported yet",
                 ));
             }
-            Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
+            Ok(Some(attribute_args_array_type()))
         }
         "class_get_attributes" => {
             if args.len() != 1 {
@@ -469,6 +469,14 @@ pub(super) fn check_builtin(
             Ok(Some(PhpType::Array(Box::new(elem_ty))))
         }
         _ => Ok(None),
+    }
+}
+
+/// Returns `array<int|string, mixed>` for PHP attribute argument arrays.
+fn attribute_args_array_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
     }
 }
 
