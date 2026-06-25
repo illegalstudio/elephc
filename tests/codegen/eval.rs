@@ -9831,6 +9831,42 @@ return $obj->describe() . ":" . EvalAotObjectDefaultMethodTarget::describeStatic
     assert_eq!(out, "meth:stat:meth");
 }
 
+/// Verifies eval materializes nested generated/AOT object defaults during method dispatch.
+#[test]
+fn test_eval_aot_method_call_uses_nested_object_default() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotNestedObjectDefaultInner {
+    public string $label;
+
+    public function __construct(string $label = "inner") {
+        $this->label = $label;
+    }
+}
+
+class EvalAotNestedObjectDefaultOuter {
+    public EvalAotNestedObjectDefaultInner $inner;
+
+    public function __construct(EvalAotNestedObjectDefaultInner $inner = new EvalAotNestedObjectDefaultInner("outer")) {
+        $this->inner = $inner;
+    }
+}
+
+class EvalAotNestedObjectDefaultMethodTarget {
+    public function describe(EvalAotNestedObjectDefaultOuter $outer = new EvalAotNestedObjectDefaultOuter(new EvalAotNestedObjectDefaultInner("method"))): string {
+        return $outer->inner->label;
+    }
+}
+
+echo eval('$obj = new EvalAotNestedObjectDefaultMethodTarget();
+$method = new ReflectionMethod("EvalAotNestedObjectDefaultMethodTarget", "describe");
+$default = $method->getParameters()[0]->getDefaultValue();
+return $obj->describe() . ":" . $default->inner->label;');
+"#,
+    );
+    assert_eq!(out, "method:method");
+}
+
 /// Verifies eval ReflectionMethod exposes generated/AOT by-ref and variadic parameter flags.
 #[test]
 fn test_eval_reflection_method_exposes_aot_parameter_flags() {
@@ -13114,6 +13150,42 @@ class EvalDynamicNewObjectDefaultCtor {
 }
 
 echo eval('$box = new EvalDynamicNewObjectDefaultCtor();
+return $box->label;');
+"#,
+    );
+    assert_eq!(out, "ctor");
+}
+
+/// Verifies eval materializes nested generated/AOT object defaults during constructor dispatch.
+#[test]
+fn test_eval_dynamic_new_uses_constructor_nested_object_default() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewNestedDefaultInner {
+    public string $label;
+
+    public function __construct(string $label = "inner") {
+        $this->label = $label;
+    }
+}
+
+class EvalDynamicNewNestedDefaultOuter {
+    public EvalDynamicNewNestedDefaultInner $inner;
+
+    public function __construct(EvalDynamicNewNestedDefaultInner $inner = new EvalDynamicNewNestedDefaultInner("outer")) {
+        $this->inner = $inner;
+    }
+}
+
+class EvalDynamicNewNestedDefaultCtor {
+    public string $label = "";
+
+    public function __construct(EvalDynamicNewNestedDefaultOuter $outer = new EvalDynamicNewNestedDefaultOuter(new EvalDynamicNewNestedDefaultInner("ctor"))) {
+        $this->label = $outer->inner->label;
+    }
+}
+
+echo eval('$box = new EvalDynamicNewNestedDefaultCtor();
 return $box->label;');
 "#,
     );
