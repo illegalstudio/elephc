@@ -1265,8 +1265,16 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
             "variadic __call",
         ),
         (
+            br#"class EvalBadCallArgsType { public function __call(string $name, string $args) {} }"#.as_slice(),
+            "bad __call args type",
+        ),
+        (
             br#"class EvalBadCallStatic { public function __callStatic($name, $args) { return "x"; } }"#.as_slice(),
             "instance __callStatic",
+        ),
+        (
+            br#"class EvalBadCallStaticArgsType { public static function __callStatic(string $name, string $args) {} }"#.as_slice(),
+            "bad __callStatic args type",
         ),
         (
             br#"class EvalBadSleepReturn { public function __sleep(): string { return "x"; } }"#.as_slice(),
@@ -1289,6 +1297,10 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
             "bad __unserialize return type",
         ),
         (
+            br#"class EvalBadUnserializeParam { public function __unserialize(string $data): void {} }"#.as_slice(),
+            "bad __unserialize parameter type",
+        ),
+        (
             br#"class EvalBadDebugInfoReturn { public function __debugInfo(): string { return "x"; } }"#.as_slice(),
             "bad __debugInfo return type",
         ),
@@ -1303,6 +1315,10 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
         (
             br#"class EvalBadSetStateArity { public static function __set_state($data, $extra) {} }"#.as_slice(),
             "bad __set_state arity",
+        ),
+        (
+            br#"class EvalBadSetStateParam { public static function __set_state(string $data) {} }"#.as_slice(),
+            "bad __set_state parameter type",
         ),
         (
             br#"class EvalBadInvoke { private function __invoke() { return 1; } }"#.as_slice(),

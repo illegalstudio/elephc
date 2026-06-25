@@ -180,7 +180,7 @@ parameterless `__toString()` for `echo`, `print`, concatenation, `strval()`,
 callable `strval()` dispatch, and weak `string` parameter coercion. Classes
 with a compatible `__toString()` satisfy `Stringable` implicitly.
 Eval validates magic method staticness, visibility, arity, by-reference
-parameter bans, and relevant declared return-type contracts for
+parameter bans, and relevant declared parameter/return-type contracts for
 `__toString()`, `__get()`, `__set()`, `__isset()`, `__unset()`, `__call()`,
 `__callStatic()`, `__sleep()`, `__wakeup()`, `__serialize()`,
 `__unserialize()`, `__debugInfo()`, `__set_state()`, `__invoke()`,
