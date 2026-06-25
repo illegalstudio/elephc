@@ -159,6 +159,9 @@ Eval validates method override and interface method parameter and return types
 with PHP-style parameter contravariance and return covariance for supported
 declared type metadata, including nullable, union, `mixed`, `self`, `parent`,
 `static`, class, and interface types.
+Eval validates inherited property redeclarations with PHP-style invariant
+property types, matching static/readonly modifiers, and compatible read/write
+visibility.
 Eval-declared method calls also enforce declared return values at runtime, with
 weak scalar coercions and PHP-style handling for `void`, `never`, `self`,
 `parent`, and late-bound `static`.

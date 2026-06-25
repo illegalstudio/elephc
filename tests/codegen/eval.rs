@@ -9438,6 +9438,108 @@ echo $protected->getModifiers();');
     assert_eq!(out, "1:base:7:owner:child:Pt4129:pT2049");
 }
 
+/// Verifies eval-declared inherited properties preserve PHP redeclaration invariants.
+#[test]
+fn test_eval_declared_inherited_property_redeclaration_contracts() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalPropertyRedeclareBase {
+    protected int|string $value;
+}
+class EvalPropertyRedeclareChild extends EvalPropertyRedeclareBase {
+    public string|int $value;
+}
+class EvalPropertyRelativeBase {
+    public self $selfValue;
+    public EvalPropertyRelativeBase $parentValue;
+}
+class EvalPropertyRelativeChild extends EvalPropertyRelativeBase {
+    public self $selfValue;
+    public parent $parentValue;
+}
+$box = new EvalPropertyRedeclareChild();
+$box->value = "ok";
+echo $box->value;');
+"#,
+    );
+    assert_eq!(out, "ok");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalPropertyTypeBase {
+    public int $value;
+}
+class EvalPropertyStringChild extends EvalPropertyTypeBase {
+    public string $value;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalPropertyPublicBase {
+    public int $value;
+}
+class EvalPropertyProtectedChild extends EvalPropertyPublicBase {
+    protected int $value;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalPropertyUntypedBase {
+    public $value;
+}
+class EvalPropertyTypedChild extends EvalPropertyUntypedBase {
+    public int $value;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalPropertyStaticBase {
+    public static int $value;
+}
+class EvalPropertyInstanceChild extends EvalPropertyStaticBase {
+    public int $value;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalPropertyReadonlyBase {
+    public readonly int $value;
+}
+class EvalPropertyMutableChild extends EvalPropertyReadonlyBase {
+    public int $value;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared interface asymmetric property contracts are enforced and reflected.
 #[test]
 fn test_eval_declared_interface_asymmetric_property_contract() {
