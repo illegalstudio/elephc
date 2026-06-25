@@ -1838,6 +1838,8 @@ echo ":" . $objectRef->getName();
 echo ":" . $objectRef->getParentClass()->getName();
 echo ":" . ($objectRef->hasMethod("childMethod") ? "M" : "m");
 echo ":" . ($objectRef->hasProperty("value") ? "P" : "p");
+$made = $objectRef->newInstance();
+echo ":" . get_class($made);
 $classRef = new ReflectionClass($object);
 echo ":" . get_class($classRef);
 echo ":" . $classRef->getName();
@@ -1850,7 +1852,7 @@ echo ":" . $classRef->getName();
     );
     assert_eq!(
         out.stdout,
-        "ReflectionObject:OC:StaticReflectObjectChild:StaticReflectObjectBase:M:P:ReflectionClass:StaticReflectObjectChild"
+        "ReflectionObject:OC:StaticReflectObjectChild:StaticReflectObjectBase:M:P:StaticReflectObjectChild:ReflectionClass:StaticReflectObjectChild"
     );
 }
 

@@ -475,7 +475,7 @@ fn builtin_reflection_class_new_instance_method() -> ClassMethod {
         param_attributes: Vec::new(),
         variadic: Some("args".to_string()),
         variadic_type: None,
-        return_type: Some(mixed_type()),
+        return_type: Some(object_type()),
         by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
@@ -4659,7 +4659,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                     sig.return_type = PhpType::Int;
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("newInstance")) {
-                    sig.return_type = PhpType::Mixed;
+                    sig.return_type = PhpType::Object(String::new());
                     sig.variadic = Some("args".to_string());
                     let variadic_default = Some(Expr::new(
                         ExprKind::ArrayLiteral(Vec::new()),
