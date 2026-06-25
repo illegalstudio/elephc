@@ -146,7 +146,8 @@ return true;"#,
 #[test]
 fn execute_program_dispatches_class_attribute_metadata_builtins() {
     let program = parse_fragment(
-        br#"#[Route("/home", -1, 1.5, true, null)]
+        br#"class EvalAttrDep {}
+#[Route("/home", -1, 1.5, true, null, EvalAttrDep::class)]
 #[Tag("first"), Tag("second")]
 class EvalAttrMeta {}
 $names = class_attribute_names("EvalAttrMeta");
@@ -154,6 +155,7 @@ echo count($names); echo ":"; echo $names[0]; echo ":"; echo $names[1]; echo ":"
 $args = class_attribute_args("EvalAttrMeta", "route");
 echo count($args); echo ":"; echo $args[0]; echo ":"; echo $args[1]; echo ":";
 echo $args[2]; echo ":"; echo $args[3] ? "T" : "F"; echo ":"; echo is_null($args[4]) ? "N" : "bad"; echo ":";
+echo $args[5]; echo ":";
 $tag = class_attribute_args("evalattrmeta", "Tag");
 echo $tag[0]; echo ":";
 $missing = class_attribute_args("EvalAttrMeta", "Missing");
@@ -163,6 +165,7 @@ echo count($attrs); echo ":"; echo $attrs[0]->getName(); echo ":";
 $attr_args = $attrs[0]->getArguments();
 echo count($attr_args); echo ":"; echo $attr_args[0]; echo ":"; echo $attr_args[1]; echo ":";
 echo $attr_args[2]; echo ":"; echo $attr_args[3] ? "T" : "F"; echo ":"; echo is_null($attr_args[4]) ? "N" : "bad"; echo ":";
+echo $attr_args[5]; echo ":";
 $tag_attr_args = $attrs[1]->getArguments();
 echo $attrs[1]->getName(); echo ":"; echo $tag_attr_args[0]; echo ":";
 echo is_null($attrs[0]->newInstance()) ? "N" : "bad"; echo ":";
@@ -185,7 +188,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "3:Route:Tag:Tag:5:/home:-1:1.5:T:N:first:0:3:Route:5:/home:-1:1.5:T:N:Tag:first:N:Route:/home:111"
+        "3:Route:Tag:Tag:6:/home:-1:1.5:T:N:EvalAttrDep:first:0:3:Route:6:/home:-1:1.5:T:N:EvalAttrDep:Tag:first:N:Route:/home:111"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

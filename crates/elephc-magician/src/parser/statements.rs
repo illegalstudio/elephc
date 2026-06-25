@@ -2775,8 +2775,23 @@ fn eval_attribute_arg_from_expr(expr: &EvalExpr) -> Option<EvalAttributeArg> {
             }
             _ => None,
         },
+        EvalExpr::ClassNameFetch { class_name } => {
+            eval_attribute_class_name_arg(class_name).map(EvalAttributeArg::String)
+        }
         _ => None,
     }
+}
+
+/// Returns a compile-time class-name string for named `ClassName::class` attribute args.
+fn eval_attribute_class_name_arg(class_name: &str) -> Option<String> {
+    let class_name = class_name.trim_start_matches('\\');
+    if ["self", "parent", "static"]
+        .iter()
+        .any(|special| class_name.eq_ignore_ascii_case(special))
+    {
+        return None;
+    }
+    Some(class_name.to_string())
 }
 
 /// Returns whether any parsed property hook accessor uses its own backing slot.

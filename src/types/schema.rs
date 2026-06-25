@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::parser::ast::{AttributeGroup, ClassMethod, Expr, ExprKind, Visibility};
+use crate::parser::ast::{AttributeGroup, ClassMethod, Expr, ExprKind, StaticReceiver, Visibility};
 use crate::span::Span;
 
 use super::{FunctionSig, PhpType};
@@ -19,7 +19,8 @@ use super::{FunctionSig, PhpType};
 /// Compile-time attribute argument literal. Captures the subset of PHP
 /// attribute argument expressions that reflection helpers can currently
 /// materialize: strings, ints, floats, bools, null, negative numeric literals,
-/// and named wrappers around those same literal values.
+/// `ClassName::class` strings, and named wrappers around those same literal
+/// values.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AttrArgValue {
     Null,
@@ -106,6 +107,9 @@ fn collect_attribute_arg_value(expr: &Expr) -> Option<AttrArgValue> {
             ExprKind::FloatLiteral(n) => Some(AttrArgValue::Float((-*n).to_bits())),
             _ => None,
         },
+        ExprKind::ClassConstant {
+            receiver: StaticReceiver::Named(name),
+        } => Some(AttrArgValue::Str(name.as_str().to_string())),
         ExprKind::NamedArg { name, value } => {
             collect_attribute_arg_value(value).map(|value| AttrArgValue::Named {
                 name: name.clone(),
