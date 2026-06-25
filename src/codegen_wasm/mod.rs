@@ -3803,6 +3803,316 @@ mod tests {
         }
     }
 
+    // ----- P7d1: Mixed/Union closure captures (by-value + by-ref) -----
+
+    /// P7d1 Mixed by-value capture (tag 7): main boxes an int (7) into a kind-5 Mixed
+    /// cell, captures it by value (`ClosureNew` stamps one i32 ptr + incref for the
+    /// borrowed operand, tag 7), the body loads the capture and returns the cell
+    /// unchanged (`box_result_wat` Heap(Mixed) arm forwards it), and the caller
+    /// `EchoValue`s the `ClosureCall` result via `__rt_mixed_write_stdout` -> "7".
+    /// Exercises the Mixed accept in `reject_unsupported_capture`, the `Heap|Mixed`
+    /// arms in `stamp_capture_slot` + `unbox_capture_wat`, and the tag-7 descriptor
+    /// release walk at main exit. Asserts stdout only (the by-value incref leak is
+    /// pre-existing and tracked as P7d0).
+    #[test]
+    fn closure_capture_mixed_by_value_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = module.data.intern_string("__eir_closure_cap_mixed_bv");
+
+        let mut body = Function::new(
+            "__eir_closure_cap_mixed_bv".to_string(),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        body.flags.is_closure = true;
+        body.flags.closure_capture_count = 1;
+        body.params.push(FunctionParam {
+            name: "m".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Mixed),
+            php_type: PhpType::Mixed,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_m = body.add_local(
+            Some("m".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let mv = b.emit_load_local(slot_m, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            b.terminate(Terminator::Return { value: Some(mv) });
+        }
+        module.add_closure(body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        let slot_m_main = main.add_local(
+            Some("m".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let v = b.emit_const_i64(7);
+            let cell = box_into_mixed(&mut b, v, PhpType::Mixed);
+            b.emit_store_local(slot_m_main, cell);
+            let cap = b.emit_load_local(slot_m_main, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap],
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let result = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "7");
+        }
+    }
+
+    /// P7d1 Union by-value capture (tag 7): main boxes an int (7) into a kind-5 Mixed
+    /// cell labeled `Union([Int, Void])` and captures it by value into a `Heap(Union)`
+    /// body param, exercising the Union accept in `reject_unsupported_capture`, the
+    /// `Heap|Union` arm in `stamp_capture_slot` (the operand is `Heap(Mixed)` but the
+    /// stamp matches the param's `Heap(Union)` and loads the single-i32 Ptr), and the
+    /// `Heap|Union` arm in `unbox_capture_wat` (incref + push the cell ptr). The body
+    /// cannot return `Heap(Union)` (`box_result_wat` rejects it) and `EchoValue`
+    /// rejects a `Union` php_type, so the body returns `MixedTagOf` (the cell's value
+    /// tag = 0 for an int payload) as an I64, proving the Union cell round-tripped
+    /// with its int tag intact -> "0".
+    #[test]
+    fn closure_capture_union_by_value_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = module.data.intern_string("__eir_closure_cap_union_bv");
+        let union_ty = PhpType::Union(vec![PhpType::Int, PhpType::Void]);
+
+        let mut body = Function::new("__eir_closure_cap_union_bv".to_string(), IrType::I64, PhpType::Int);
+        body.flags.is_closure = true;
+        body.flags.closure_capture_count = 1;
+        body.params.push(FunctionParam {
+            name: "u".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Union),
+            php_type: union_ty.clone(),
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_u = body.add_local(
+            Some("u".to_string()),
+            IrType::Heap(IrHeapKind::Union),
+            union_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let uv = b.emit_load_local(slot_u, IrType::Heap(IrHeapKind::Union), union_ty.clone());
+            let tag = b
+                .emit(
+                    Op::MixedTagOf,
+                    vec![uv],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(tag) });
+        }
+        module.add_closure(body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        let slot_u_main = main.add_local(
+            Some("u".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            union_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let v = b.emit_const_i64(7);
+            let cell = box_into_mixed(&mut b, v, union_ty.clone());
+            b.emit_store_local(slot_u_main, cell);
+            let cap = b.emit_load_local(slot_u_main, IrType::Heap(IrHeapKind::Mixed), union_ty.clone());
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap],
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let result = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "0");
+        }
+    }
+
+    /// P7d1 Mixed by-ref capture (0xFF tag): main boxes an int (1) into a Mixed cell,
+    /// `ClosureNew` promotes the caller local into a persistent ref-cell (P7c
+    /// machinery; the Ptr-repr retain-store handles a Mixed cell), the body builds a
+    /// fresh Mixed cell (int 9) and `StoreRefCell`s it through the cell, and the
+    /// caller's post-call `LoadLocal` retroactively routes through the cell to read
+    /// the new cell, echoing "9". Exercises the by-ref Mixed accept (the only by-ref
+    /// change is the `reject_unsupported_capture` lift; promote + `unbox_by_ref` +
+    /// `StoreRefCell` are Ptr-agnostic) and confirms a Mixed cell flows through the
+    /// by-ref capture machinery. The body does not release the cell's prior payload
+    /// (consistent with the single-call, stdout-only P7b/P7c test style).
+    #[test]
+    fn closure_capture_mixed_by_ref_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = module.data.intern_string("__eir_closure_cap_mixed_br");
+
+        let mut body = Function::new(
+            "__eir_closure_cap_mixed_br".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        body.flags.is_closure = true;
+        body.flags.closure_capture_count = 1;
+        body.params.push(FunctionParam {
+            name: "m".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Mixed),
+            php_type: PhpType::Mixed,
+            by_ref: true,
+            variadic: false,
+        });
+        let slot_m = body.add_local(
+            Some("m".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let v = b.emit_const_i64(9);
+            let new_cell = box_into_mixed(&mut b, v, PhpType::Mixed);
+            let _ = b.emit(
+                Op::StoreRefCell,
+                vec![new_cell],
+                Some(Immediate::LocalSlot(slot_m)),
+                IrType::Void,
+                PhpType::Mixed,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_closure(body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        let slot_x = main.add_local(
+            Some("x".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let v = b.emit_const_i64(1);
+            let cell = box_into_mixed(&mut b, v, PhpType::Mixed);
+            b.emit_store_local(slot_x, cell);
+            let cap = b.emit_load_local(slot_x, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap],
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::ClosureCall,
+                vec![callable],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let after = b.emit_load_local(slot_x, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![after],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "9");
+        }
+    }
+
     // ----- P2: scalar instruction lowering, observed via wasmer --invoke -----
 
     /// Returns whether the `wasmer` CLI is available.

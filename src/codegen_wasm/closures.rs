@@ -229,18 +229,19 @@ pub(super) fn emit_closure_capture_tag_tables(
 /// indexes `ctx.closure_tag_ptrs`.
 ///
 /// P7b supports by-value captures of `Int`/`Bool`/`Float`/`Str`/`Array`/`AssocArray`/
-/// `Object`/`Callable`. The capture list is recovered as the trailing
+/// `Object`/`Callable`; P7d1 extends that to `Mixed`/`Union` (both a kind-5 Mixed
+/// cell, capture tag 7). The capture list is recovered as the trailing
 /// `closure_capture_count` params of the closure body (parity with native
 /// `closure_capture_params_from_eir`); the operand count is cross-checked against it.
 /// The slot layout (tag + store shape) is derived from the **capture param** type
 /// (not the operand type), with an explicit operand/param type-drift cross-check so a
 /// future lowering divergence is a compile error, not a silent miscompile. By-ref
 /// captures (P7c/P7c0), by-ref/variadic visible params (m10), and
-/// `Mixed`/`Union`/`Iterable`/`Buffer`/`TaggedScalar`/`Pointer`/`Resource`/`Packed`/
-/// `Never` captures are rejected. Ownership: a non-`Owned` refcounted capture is
-/// `incref`'d (or `__rt_str_persist`'d for strings) so the descriptor owns a ref; an
-/// `Owned` operand's ref transfers directly (no incref), mirroring native
-/// `emit_runtime_closure_descriptor_with_captures`.
+/// `Iterable`/`Buffer`/`TaggedScalar`/`Pointer`/`Resource`/`Packed`/`Never` captures
+/// are rejected (Iterable/Buffer/TaggedScalar land in P7d1b). Ownership: a non-`Owned`
+/// refcounted capture is `incref`'d (or `__rt_str_persist`'d for strings) so the
+/// descriptor owns a ref; an `Owned` operand's ref transfers directly (no incref),
+/// mirroring native `emit_runtime_closure_descriptor_with_captures`.
 pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let data_id = data_immediate(inst)?;
     let name = ctx
@@ -330,9 +331,16 @@ pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
 /// Rejects a capture param whose kind is outside the supported set.
 /// By-ref captures are supported (P7c) for the by-value value-type set: the caller
 /// local is promoted into a persistent ref-cell and the cell pointer is stamped into
-/// the descriptor. `Mixed`/`Union`/`Iterable`/`Buffer`/`TaggedScalar` captures need a
-/// cell-ptr stamp + Mixed unbox arm (P7d); `Pointer`/`Resource`/`Packed`/`Never`
-/// captures would stamp a slot whose tag is not in the release set
+/// the descriptor. P7d1 extends the by-value set to `Mixed`/`Union` (both
+/// `WasmRepr::Ptr`, boxed as a kind-5 Mixed cell, capture tag 7 already in the
+/// release set `{1,4,5,6,7,10}`); the by-ref path reuses the same Ptr-repr promote
+/// + cell-ptr stamp, so by-ref `Mixed`/`Union` only needs this reject lift.
+/// `Iterable`/`Buffer`/`TaggedScalar` captures still need dedicated work (P7d1b):
+/// `Iterable` carries capture tag 12 (outside the release condition today) and its
+/// cell kind must be confirmed in `__rt_decref_any`'s dispatched set; `Buffer` is
+/// non-refcounted; `TaggedScalar` is a 2-word `WasmRepr::Tagged` cell that diverges
+/// from the release walk's single-i32-ptr read. `Pointer`/`Resource`/`Packed`/
+/// `Never` captures would stamp a slot whose tag is not in the release set
 /// `{1,4,5,6,7,10}` (an unleakable ptr) — and a by-ref capture of them has no sound
 /// promote either. `Void` captures carry no value. Each is rejected with a phase tag
 /// so the caller knows where it lands later.
@@ -356,13 +364,12 @@ fn reject_unsupported_capture(name: &str, p: &crate::ir::FunctionParam) -> Resul
     }
     match p.ir_type {
         IrType::I64 | IrType::F64 | IrType::Str => Ok(()),
-        IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object) => Ok(()),
-        IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Iterable | IrHeapKind::Union | IrHeapKind::Buffer) => {
-            Err(WasmError::Unsupported(format!(
-                "ClosureNew {} capture on wasm32-wasi (P7d)",
-                name
-            )))
-        }
+        IrType::Heap(
+            IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object | IrHeapKind::Mixed | IrHeapKind::Union,
+        ) => Ok(()),
+        IrType::Heap(IrHeapKind::Iterable | IrHeapKind::Buffer) => Err(WasmError::Unsupported(
+            format!("ClosureNew {} capture on wasm32-wasi (P7d1b)", name),
+        )),
         IrType::TaggedScalar | IrType::Void => Err(WasmError::Unsupported(format!(
             "ClosureNew {:?} capture {} on wasm32-wasi",
             p.ir_type, p.name
@@ -459,14 +466,18 @@ fn stamp_capture_slot(
                 "store the string length (i32) in the slot high 4 bytes",
             );
         }
-        IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object) => {
-            // Container ptr on the stack as a single i32.
+        IrType::Heap(
+            IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object | IrHeapKind::Mixed | IrHeapKind::Union,
+        ) => {
+            // Container/Mixed-cell ptr on the stack as a single i32. Mixed and Union
+            // are both `WasmRepr::Ptr` (a kind-5 Mixed cell), so they stamp exactly like
+            // an array/hash/object slot: one i32 ptr the release walk reads back.
             let ptr = ctx.fresh_temp(ValType::I32);
-            ctx.fb.ins(&format!("local.set {}", ptr), "capture container pointer");
+            ctx.fb.ins(&format!("local.set {}", ptr), "capture container/cell pointer");
             if not_owned {
                 ctx.fb.ins(
                     &format!("(call $__rt_incref (local.get {}))", ptr),
-                    "share the captured container (descriptor owns a ref)",
+                    "share the captured container/cell (descriptor owns a ref)",
                 );
             }
             ctx.fb.ins(
@@ -474,7 +485,7 @@ fn stamp_capture_slot(
                     "(i64.store (i32.add (local.get {}) (i32.const {})) (i64.extend_i32_u (local.get {})))",
                     desc, off, ptr
                 ),
-                "store the container pointer (i64) for the release walk's i64.load",
+                "store the container/cell pointer (i64) for the release walk's i64.load",
             );
         }
         // Unsupported kinds are rejected up front by `reject_unsupported_capture`; the
@@ -939,20 +950,20 @@ fn unbox_capture_wat(slot_off: usize, ir: &IrType, php: &PhpType) -> Result<Stri
             s.push_str(&wat_ins("local.get $rb_len", "push the string length for the body"));
         }
         IrType::Heap(kind) => match kind {
-            IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object => {
+            IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object | IrHeapKind::Mixed | IrHeapKind::Union => {
                 s.push_str(&wat_ins(
                     &format!("(local.set $rb_ptr (i32.load offset={} (local.get $desc)))", off),
-                    "load the captured container pointer",
+                    "load the captured container/cell pointer",
                 ));
                 s.push_str(&wat_ins(
                     "(call $__rt_incref (local.get $rb_ptr))",
-                    "own a ref to the captured container for the body",
+                    "own a ref to the captured container/cell for the body",
                 ));
-                s.push_str(&wat_ins("local.get $rb_ptr", "push the container pointer for the body"));
+                s.push_str(&wat_ins("local.get $rb_ptr", "push the container/cell pointer for the body"));
             }
-            IrHeapKind::Mixed | IrHeapKind::Iterable | IrHeapKind::Union | IrHeapKind::Buffer => {
+            IrHeapKind::Iterable | IrHeapKind::Buffer => {
                 return Err(WasmError::Unsupported(format!(
-                    "closure heap capture kind {:?} on wasm32-wasi (P7d)",
+                    "closure heap capture kind {:?} on wasm32-wasi (P7d1b)",
                     kind
                 )));
             }
