@@ -1727,6 +1727,17 @@ impl ElephcEvalContext {
         &self,
         interface_name: &str,
     ) -> Vec<EvalInterfaceProperty> {
+        self.interface_property_requirements_with_owners(interface_name)
+            .into_iter()
+            .map(|(_, property)| property)
+            .collect()
+    }
+
+    /// Returns direct and inherited property contracts with their declaring interface.
+    pub fn interface_property_requirements_with_owners(
+        &self,
+        interface_name: &str,
+    ) -> Vec<(String, EvalInterfaceProperty)> {
         let mut properties = Vec::new();
         let mut seen_interfaces = HashSet::new();
         self.collect_interface_property_requirements(
@@ -1741,7 +1752,7 @@ impl ElephcEvalContext {
     fn collect_interface_property_requirements(
         &self,
         interface_name: &str,
-        properties: &mut Vec<EvalInterfaceProperty>,
+        properties: &mut Vec<(String, EvalInterfaceProperty)>,
         seen_interfaces: &mut HashSet<String>,
     ) {
         let key = normalize_class_name(interface_name);
@@ -1755,13 +1766,13 @@ impl ElephcEvalContext {
             self.collect_interface_property_requirements(parent, properties, seen_interfaces);
         }
         for property in interface.properties() {
-            if let Some(existing) = properties
+            if let Some((_, existing)) = properties
                 .iter_mut()
-                .find(|existing| existing.name() == property.name())
+                .find(|(_, existing)| existing.name() == property.name())
             {
                 *existing = existing.merged_with(property);
             } else {
-                properties.push(property.clone());
+                properties.push((interface.name().to_string(), property.clone()));
             }
         }
     }
