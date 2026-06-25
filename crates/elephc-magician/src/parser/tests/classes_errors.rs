@@ -120,7 +120,7 @@ fn parse_fragment_rejects_invalid_void_and_never_return_type_forms() {
 #[test]
 fn parse_fragment_accepts_class_attribute_metadata() {
     let program = parse_fragment(
-        br#"#[Route("/home", -1, 1.5, -2.5, true, null, EvalAttrDep::class)]
+        br#"#[Route("/home", -1, 1.5, -2.5, true, null, EvalAttrDep::class, ["nested", 2])]
 #[Tag(name: "named")]
 class DynEvalAttributed {}"#,
     )
@@ -139,6 +139,10 @@ class DynEvalAttributed {}"#,
                         EvalAttributeArg::Bool(true),
                         EvalAttributeArg::Null,
                         EvalAttributeArg::String("EvalAttrDep".to_string()),
+                        EvalAttributeArg::Array(vec![
+                            EvalAttributeArg::String("nested".to_string()),
+                            EvalAttributeArg::Int(2),
+                        ]),
                     ]),
                 ),
                 EvalAttribute::new(

@@ -180,7 +180,8 @@ interfaces, traits, and enums, plus bridge-registered generated/AOT class-level
 attributes, are visible through `class_attribute_names()`,
 `class_attribute_args()`, and `class_get_attributes()` when their arguments fit
 the supported literal positional/named subset (`string`, `int`, `float`, `bool`,
-`null`, negated numeric literals, or `ClassName::class` strings). Positional arguments keep integer keys in
+`null`, negated numeric literals, `ClassName::class` strings, or positional
+array literals containing the same supported values). Positional arguments keep integer keys in
 `class_attribute_args()` / `ReflectionAttribute::getArguments()`, and named
 arguments keep their PHP names as string keys.
 `ReflectionAttribute::newInstance()` instantiates eval-declared or
@@ -200,7 +201,8 @@ child methods and public access see the child property.
 property, class-constant, and method-parameter attributes for eval-declared
 class-like symbols and bridge-registered generated/AOT class-level, method,
 property, and class-constant attributes when their arguments fit the same
-literal positional/named subset, and `getName()` returns the reflected class, member, or
+literal positional/named subset. Associative or dynamic attribute arrays are
+still unsupported metadata. `getName()` returns the reflected class, member, or
 parameter name
 for those owners. `ReflectionClass`, `ReflectionObject`, `ReflectionFunction`, `ReflectionMethod`,
 `ReflectionProperty`, `ReflectionClassConstant`, `ReflectionEnumUnitCase`, and

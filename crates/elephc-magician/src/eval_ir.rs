@@ -432,6 +432,7 @@ pub enum EvalAttributeArg {
     Float(u64),
     Bool(bool),
     Null,
+    Array(Vec<EvalAttributeArg>),
     Named {
         name: String,
         value: Box<EvalAttributeArg>,

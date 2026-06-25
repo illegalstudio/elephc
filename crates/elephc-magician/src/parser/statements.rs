@@ -2778,8 +2778,23 @@ fn eval_attribute_arg_from_expr(expr: &EvalExpr) -> Option<EvalAttributeArg> {
         EvalExpr::ClassNameFetch { class_name } => {
             eval_attribute_class_name_arg(class_name).map(EvalAttributeArg::String)
         }
+        EvalExpr::Array(elements) => eval_attribute_array_arg_from_elements(elements),
         _ => None,
     }
+}
+
+/// Converts a positional eval array literal into retained attribute metadata.
+fn eval_attribute_array_arg_from_elements(
+    elements: &[EvalArrayElement],
+) -> Option<EvalAttributeArg> {
+    elements
+        .iter()
+        .map(|element| match element {
+            EvalArrayElement::Value(value) => eval_attribute_arg_from_expr(value),
+            EvalArrayElement::KeyValue { .. } => None,
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(EvalAttributeArg::Array)
 }
 
 /// Returns a compile-time class-name string for named `ClassName::class` attribute args.

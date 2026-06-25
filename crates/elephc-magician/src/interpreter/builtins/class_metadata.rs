@@ -257,8 +257,23 @@ fn eval_class_attribute_arg_value(
         EvalAttributeArg::Float(bits) => values.float(f64::from_bits(*bits)),
         EvalAttributeArg::Bool(value) => values.bool_value(*value),
         EvalAttributeArg::Null => values.null(),
+        EvalAttributeArg::Array(elements) => eval_class_attribute_array_arg_value(elements, values),
         EvalAttributeArg::Named { value, .. } => eval_class_attribute_arg_value(value, values),
     }
+}
+
+/// Materializes one retained positional attribute array literal as a runtime array cell.
+fn eval_class_attribute_array_arg_value(
+    elements: &[EvalAttributeArg],
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_new(elements.len())?;
+    for (index, element) in elements.iter().enumerate() {
+        let key = values.int(index as i64)?;
+        let value = eval_class_attribute_arg_value(element.value(), values)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
 }
 
 /// Returns whether a query names the same PHP attribute class case-insensitively.

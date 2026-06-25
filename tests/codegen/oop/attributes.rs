@@ -650,6 +650,58 @@ echo $instance->named;
     assert_eq!(out, "2:1.5:-2.25:1.5:-2.25:1.5:-2.25");
 }
 
+/// Verifies positional array literal attribute args survive helper reads and instantiation.
+#[test]
+fn test_class_attribute_args_preserves_array_literals() {
+    let out = compile_and_run(
+        r#"<?php
+class ArrayAttr {
+    public function __construct(public array $items) {}
+}
+
+#[ArrayAttr(["one", 2, true, null])]
+class ArrayAttrSubject {}
+
+$args = class_attribute_args('ArrayAttrSubject', 'ArrayAttr');
+echo count($args[0]);
+echo ":";
+echo $args[0][0];
+echo ":";
+echo $args[0][1];
+echo ":";
+echo $args[0][2] ? "T" : "F";
+echo ":";
+echo is_null($args[0][3]) ? "N" : "bad";
+
+$attr = class_get_attributes('ArrayAttrSubject')[0];
+$attrArgs = $attr->getArguments();
+echo ":";
+echo count($attrArgs[0]);
+echo ":";
+echo $attrArgs[0][0];
+echo ":";
+echo $attrArgs[0][1];
+echo ":";
+echo $attrArgs[0][2] ? "T" : "F";
+echo ":";
+echo is_null($attrArgs[0][3]) ? "N" : "bad";
+
+$instance = $attr->newInstance();
+echo ":";
+echo count($instance->items);
+echo ":";
+echo $instance->items[0];
+echo ":";
+echo $instance->items[1];
+echo ":";
+echo $instance->items[2] ? "T" : "F";
+echo ":";
+echo is_null($instance->items[3]) ? "N" : "bad";
+"#,
+    );
+    assert_eq!(out, "4:one:2:T:N:4:one:2:T:N:4:one:2:T:N");
+}
+
 /// Verifies that `ClassName::class` attribute args are retained as strings.
 #[test]
 fn test_class_attribute_args_preserves_class_name_literals() {

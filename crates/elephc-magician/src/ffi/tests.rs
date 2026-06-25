@@ -83,6 +83,13 @@ fn native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &EvalAttributeArg
             native_member_attribute_push_string(record, name);
             native_member_attribute_push_arg(record, value);
         }
+        EvalAttributeArg::Array(elements) => {
+            record.push(6);
+            record.extend_from_slice(&(elements.len() as u32).to_le_bytes());
+            for element in elements {
+                native_member_attribute_push_arg(record, element);
+            }
+        }
     }
 }
 
@@ -735,6 +742,10 @@ fn register_native_member_attribute_records_metadata() {
             },
             EvalAttributeArg::Int(7),
             EvalAttributeArg::Float(1.5f64.to_bits()),
+            EvalAttributeArg::Array(vec![
+                EvalAttributeArg::Int(1),
+                EvalAttributeArg::String("two".to_string()),
+            ]),
             EvalAttributeArg::Bool(true),
             EvalAttributeArg::Null,
         ]),
@@ -805,6 +816,10 @@ fn register_native_member_attribute_records_metadata() {
                 },
                 EvalAttributeArg::Int(7),
                 EvalAttributeArg::Float(1.5f64.to_bits()),
+                EvalAttributeArg::Array(vec![
+                    EvalAttributeArg::Int(1),
+                    EvalAttributeArg::String("two".to_string()),
+                ]),
                 EvalAttributeArg::Bool(true),
                 EvalAttributeArg::Null,
             ]
