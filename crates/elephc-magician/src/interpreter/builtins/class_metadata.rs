@@ -309,7 +309,7 @@ fn eval_class_relation_name_exists(
         || context.has_trait(name)
         || context.has_enum(name)
         || values.class_exists(name)?
-        || values.interface_exists(name)?
+        || eval_runtime_interface_exists(name, values)?
         || values.trait_exists(name)?
     {
         return Ok(true);

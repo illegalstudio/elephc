@@ -599,6 +599,26 @@ pub(in crate::interpreter) fn catch_types_match_thrown(
     Ok(false)
 }
 
+/// Returns whether one name is a PHP native enum interface.
+pub(in crate::interpreter) fn eval_builtin_enum_interface_name(name: &str) -> bool {
+    let name = name.trim_start_matches('\\');
+    name.eq_ignore_ascii_case("UnitEnum") || name.eq_ignore_ascii_case("BackedEnum")
+}
+
+/// Returns whether one name is PHP's native backed-enum interface.
+fn eval_builtin_backed_enum_interface_name(name: &str) -> bool {
+    name.trim_start_matches('\\')
+        .eq_ignore_ascii_case("BackedEnum")
+}
+
+/// Returns whether one name is visible as a native/runtime interface to eval.
+pub(in crate::interpreter) fn eval_runtime_interface_exists(
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(eval_builtin_enum_interface_name(name) || values.interface_exists(name)?)
+}
+
 /// Registers an eval-declared class in the dynamic class table.
 pub(in crate::interpreter) fn execute_class_decl_stmt(
     class: &EvalClass,
@@ -612,7 +632,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         || context.has_trait(name)
         || context.has_enum(name)
         || values.class_exists(name)?
-        || values.interface_exists(name)?
+        || eval_runtime_interface_exists(name, values)?
         || values.trait_exists(name)?
         || values.enum_exists(name)?
     {
@@ -633,10 +653,11 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         }
     }
     for interface in class.interfaces() {
-        if !context.has_interface(interface) && !values.interface_exists(interface)? {
+        if !context.has_interface(interface) && !eval_runtime_interface_exists(interface, values)? {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
+    validate_eval_class_does_not_implement_enum_interfaces(class, context)?;
     validate_declared_class_interface_members(class, context)?;
     if !class.is_abstract() {
         validate_concrete_class_requirements(class, context)?;
@@ -689,7 +710,7 @@ pub(in crate::interpreter) fn execute_enum_decl_stmt(
         || context.has_trait(name)
         || values.enum_exists(name)?
         || values.class_exists(name)?
-        || values.interface_exists(name)?
+        || eval_runtime_interface_exists(name, values)?
         || values.trait_exists(name)?
     {
         return Err(EvalStatus::RuntimeFatal);
@@ -720,12 +741,33 @@ fn validate_eval_enum_decl(
     validate_eval_enum_method_declarations(enum_decl)?;
     let enum_class = enum_decl.as_class_metadata();
     validate_eval_class_modifiers(&enum_class, context)?;
+    validate_eval_enum_interfaces(enum_decl, &enum_class, context, values)?;
+    validate_concrete_class_requirements(&enum_class, context)
+}
+
+/// Validates PHP's special enum interface rules for one eval enum declaration.
+fn validate_eval_enum_interfaces(
+    enum_decl: &EvalEnum,
+    enum_class: &EvalClass,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     for interface in enum_decl.interfaces() {
-        if !context.has_interface(interface) && !values.interface_exists(interface)? {
+        if eval_builtin_enum_interface_name(interface) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if !context.has_interface(interface) && !eval_runtime_interface_exists(interface, values)? {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
-    validate_concrete_class_requirements(&enum_class, context)
+    if enum_decl.backing_type().is_none()
+        && pending_class_interface_names(enum_class, context)
+            .iter()
+            .any(|interface| eval_builtin_backed_enum_interface_name(interface))
+    {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(())
 }
 
 /// Validates enum case names and pure/backed declaration shape.
@@ -916,7 +958,7 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
     if context.has_interface(name)
         || context.has_class(name)
         || context.has_enum(name)
-        || values.interface_exists(name)?
+        || eval_runtime_interface_exists(name, values)?
         || values.class_exists(name)?
         || values.enum_exists(name)?
     {
@@ -930,7 +972,7 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
         {
             return Err(EvalStatus::RuntimeFatal);
         }
-        if !context.has_interface(parent) && !values.interface_exists(parent)? {
+        if !context.has_interface(parent) && !eval_runtime_interface_exists(parent, values)? {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -964,7 +1006,7 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
         || context.has_enum(name)
         || values.trait_exists(name)?
         || values.class_exists(name)?
-        || values.interface_exists(name)?
+        || eval_runtime_interface_exists(name, values)?
         || values.enum_exists(name)?
     {
         return Err(EvalStatus::RuntimeFatal);
@@ -1383,6 +1425,21 @@ fn trait_adaptation_target_matches(
         && target_trait.map_or(true, |target_trait| {
             same_eval_class_name(target_trait, trait_name)
         })
+}
+
+/// Rejects non-enum classes that implement PHP's native enum interfaces.
+fn validate_eval_class_does_not_implement_enum_interfaces(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    if pending_class_interface_names(class, context)
+        .iter()
+        .any(|interface| eval_builtin_enum_interface_name(interface))
+    {
+        Err(EvalStatus::RuntimeFatal)
+    } else {
+        Ok(())
+    }
 }
 
 /// Validates abstract/final modifiers on an eval-declared class and its methods.

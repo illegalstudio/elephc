@@ -137,6 +137,9 @@ fn execute_program_interface_exists_uses_runtime_probe() {
         br#"echo interface_exists("KnownInterface") ? "Y" : "N";
 echo interface_exists("knowninterface") ? "Y" : "N";
 echo interface_exists("KnownClass") ? "Y" : "N";
+echo interface_exists("UnitEnum") ? "U" : "u";
+echo interface_exists("BackedEnum") ? "B" : "b";
+echo class_exists("UnitEnum") ? "C" : "c";
 echo call_user_func("interface_exists", "KnownInterface") ? "Y" : "N";
 echo call_user_func_array("interface_exists", ["interface" => "KnownInterface"]) ? "Y" : "N";
 echo interface_exists(interface: "MissingInterface", autoload: false) ? "Y" : "N";"#,
@@ -147,7 +150,7 @@ echo interface_exists(interface: "MissingInterface", autoload: false) ? "Y" : "N
 
     let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "YYNYYN");
+    assert_eq!(values.output, "YYNUBcYYN");
 }
 /// Verifies eval-declared interfaces are visible to interface symbol probes.
 #[test]
@@ -322,6 +325,9 @@ echo interface_exists("DynAliasIfaceCopy") ? "iface-exists" : "bad"; echo ":";
 echo class_exists("DynAliasIfaceCopy") ? "bad" : "iface-not-class"; echo ":";
 echo is_a("DynAliasIfaceCopy", "DynAliasIface", true) ? "iface-isa" : "bad"; echo ":";
 echo (new ReflectionClass("DynAliasIfaceCopy"))->isInterface() ? "iface-reflect" : "bad"; echo ":";
+echo class_alias("UnitEnum", "DynAliasUnitEnum") ? "unit-alias" : "bad"; echo ":";
+echo interface_exists("DynAliasUnitEnum") ? "unit-exists" : "bad"; echo ":";
+echo class_exists("DynAliasUnitEnum") ? "bad" : "unit-not-class"; echo ":";
 echo class_alias("DynAliasTrait", "DynAliasTraitCopy") ? "trait-alias" : "bad"; echo ":";
 echo trait_exists("DynAliasTraitCopy") ? "trait-exists" : "bad"; echo ":";
 echo class_exists("DynAliasTraitCopy") ? "bad" : "trait-not-class"; echo ":";
@@ -349,7 +355,7 @@ return is_callable("class_alias");"#,
 
     assert_eq!(
         values.output,
-        "alias:exists:DynAliasBox:7:isa:iface-alias:iface-exists:iface-not-class:iface-isa:iface-reflect:trait-alias:trait-exists:trait-not-class:trait-isa:enum-alias:enum-exists:enum-class:DynAliasEnum:ready:duplicate:missing:call:call-exists:aot:known:1"
+        "alias:exists:DynAliasBox:7:isa:iface-alias:iface-exists:iface-not-class:iface-isa:iface-reflect:unit-alias:unit-exists:unit-not-class:trait-alias:trait-exists:trait-not-class:trait-isa:enum-alias:enum-exists:enum-class:DynAliasEnum:ready:duplicate:missing:call:call-exists:aot:known:1"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
