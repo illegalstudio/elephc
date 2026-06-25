@@ -67,6 +67,7 @@ const NATIVE_ATTRIBUTE_ARG_BOOL: u8 = 1;
 const NATIVE_ATTRIBUTE_ARG_INT: u8 = 2;
 const NATIVE_ATTRIBUTE_ARG_STRING: u8 = 3;
 const NATIVE_ATTRIBUTE_ARG_NAMED: u8 = 4;
+const NATIVE_ATTRIBUTE_ARG_FLOAT: u8 = 5;
 const NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
 const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = 8;
@@ -2158,6 +2159,10 @@ fn eval_native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &AttrArgValu
         AttrArgValue::Int(value) => {
             record.push(NATIVE_ATTRIBUTE_ARG_INT);
             record.extend_from_slice(&value.to_le_bytes());
+        }
+        AttrArgValue::Float(bits) => {
+            record.push(NATIVE_ATTRIBUTE_ARG_FLOAT);
+            record.extend_from_slice(&bits.to_le_bytes());
         }
         AttrArgValue::Str(value) => {
             record.push(NATIVE_ATTRIBUTE_ARG_STRING);

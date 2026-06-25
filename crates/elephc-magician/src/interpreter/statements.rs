@@ -4132,6 +4132,7 @@ fn eval_reflection_attribute_arg_value(
     match arg {
         EvalAttributeArg::String(value) => values.string(value),
         EvalAttributeArg::Int(value) => values.int(*value),
+        EvalAttributeArg::Float(bits) => values.float(f64::from_bits(*bits)),
         EvalAttributeArg::Bool(value) => values.bool_value(*value),
         EvalAttributeArg::Null => values.null(),
         EvalAttributeArg::Named { value, .. } => eval_reflection_attribute_arg_value(value, values),

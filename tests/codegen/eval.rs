@@ -7535,21 +7535,21 @@ echo EvalClassNameChild::staticName();');
 fn test_eval_declared_class_attribute_metadata() {
     let out = compile_and_run_capture(
         r#"<?php
-eval('#[Route("/home", -1, true, null)]
+eval('#[Route("/home", -1, 1.5, true, null)]
 #[Tag("first"), Tag("second")]
 class EvalAttrMeta {}
 $names = class_attribute_names("EvalAttrMeta");
 echo count($names) . ":" . $names[0] . ":" . $names[1] . ":" . $names[2] . ":";
 $args = class_attribute_args("EvalAttrMeta", "route");
 echo count($args) . ":" . $args[0] . ":" . $args[1] . ":";
-echo ($args[2] ? "T" : "F") . ":" . (is_null($args[3]) ? "N" : "bad") . ":";
+echo $args[2] . ":" . ($args[3] ? "T" : "F") . ":" . (is_null($args[4]) ? "N" : "bad") . ":";
 $tag = class_attribute_args("evalattrmeta", "Tag");
 echo $tag[0] . ":";
 $attrs = class_get_attributes("EvalAttrMeta");
 echo count($attrs) . ":" . $attrs[0]->getName() . ":";
 $attrArgs = $attrs[0]->getArguments();
 echo count($attrArgs) . ":" . $attrArgs[0] . ":" . $attrArgs[1] . ":";
-echo ($attrArgs[2] ? "T" : "F") . ":" . (is_null($attrArgs[3]) ? "N" : "bad") . ":";
+echo $attrArgs[2] . ":" . ($attrArgs[3] ? "T" : "F") . ":" . (is_null($attrArgs[4]) ? "N" : "bad") . ":";
 $tagArgs = $attrs[1]->getArguments();
 echo $attrs[1]->getName() . ":" . $tagArgs[0] . ":";
 echo is_null($attrs[0]->newInstance()) ? "N" : "bad";');
@@ -7562,8 +7562,30 @@ echo is_null($attrs[0]->newInstance()) ? "N" : "bad";');
     );
     assert_eq!(
         out.stdout,
-        "3:Route:Tag:Tag:4:/home:-1:T:N:first:3:Route:4:/home:-1:T:N:Tag:first:N"
+        "3:Route:Tag:Tag:5:/home:-1:1.5:T:N:first:3:Route:5:/home:-1:1.5:T:N:Tag:first:N"
     );
+}
+
+/// Verifies eval can read generated/AOT float attribute arguments.
+#[test]
+fn test_eval_reflection_class_exposes_aot_float_attribute_args() {
+    let out = compile_and_run_capture(
+        r#"<?php
+#[EvalAotFloatAttr(1.5, value: -2.25)]
+class EvalAotFloatAttrTarget {}
+echo eval('$args = class_attribute_args("EvalAotFloatAttrTarget", "EvalAotFloatAttr");
+echo count($args) . ":" . $args[0] . ":" . $args["value"] . ":";
+$attrs = class_get_attributes("EvalAotFloatAttrTarget");
+$attrArgs = $attrs[0]->getArguments();
+echo count($attrArgs) . ":" . $attrArgs[0] . ":" . $attrArgs["value"];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "2:1.5:-2.25:2:1.5:-2.25");
 }
 
 /// Verifies eval ReflectionAttribute::newInstance builds eval-declared attribute objects.

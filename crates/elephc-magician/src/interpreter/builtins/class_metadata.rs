@@ -234,7 +234,7 @@ fn eval_class_attribute_args_result(
     args: &[EvalAttributeArg],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(args.len())?;
+    let mut result = values.assoc_new(args.len())?;
     for (index, arg) in args.iter().enumerate() {
         let key = match arg.name() {
             Some(name) => values.string(name)?,
@@ -254,6 +254,7 @@ fn eval_class_attribute_arg_value(
     match arg {
         EvalAttributeArg::String(value) => values.string(value),
         EvalAttributeArg::Int(value) => values.int(*value),
+        EvalAttributeArg::Float(bits) => values.float(f64::from_bits(*bits)),
         EvalAttributeArg::Bool(value) => values.bool_value(*value),
         EvalAttributeArg::Null => values.null(),
         EvalAttributeArg::Named { value, .. } => eval_class_attribute_arg_value(value, values),
