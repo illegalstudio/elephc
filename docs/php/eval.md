@@ -374,8 +374,10 @@ call supports instance and static methods, constructors returned by
 `ReflectionClass::getConstructor()`, method-name case-insensitivity, defaults,
 and named arguments. Generated/AOT
 bridge-supported invoke targets also bypass public/protected/private visibility
-like PHP reflection. Runtime-only or non-literal argument arrays still require
-richer runtime/typechecker support.
+like PHP reflection. Inside eval fragments, `invokeArgs()` accepts literal or
+runtime-built indexed/string-keyed argument arrays for those bridge-supported
+generated/AOT targets; unsupported runtime-only reflector shapes outside that
+signature slice still fail at runtime.
 Eval-declared method parameter type hints are checked when the method is
 entered. Supported checks include scalar hints with PHP-style weak scalar
 coercion, `array`, `object`, `iterable`, `mixed`, nullable/union forms, and

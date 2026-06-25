@@ -9691,6 +9691,41 @@ return $join->invokeArgs($object, ["b" => "2", "a" => "1"]);');
     );
 }
 
+/// Verifies eval ReflectionMethod::invokeArgs accepts runtime-built AOT argument arrays.
+#[test]
+fn test_eval_reflection_method_invoke_args_accepts_runtime_aot_arg_arrays() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectRuntimeInvokeArgsTarget {
+    public function join(string $a, string $b = "B"): string {
+        return $a . $b;
+    }
+
+    public static function make(string $left, string $right = "S"): string {
+        return $left . $right;
+    }
+}
+echo eval('$object = new EvalAotReflectRuntimeInvokeArgsTarget();
+$join = new ReflectionMethod("EvalAotReflectRuntimeInvokeArgsTarget", "join");
+$args = [];
+$args["b"] = "2";
+$args["a"] = "1";
+echo $join->invokeArgs($object, $args) . ":";
+$static = new ReflectionMethod("EvalAotReflectRuntimeInvokeArgsTarget", "make");
+$staticArgs = [];
+$staticArgs["right"] = "Y";
+$staticArgs["left"] = "X";
+return $static->invokeArgs(null, $staticArgs);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "12:XY");
+}
+
 /// Verifies eval ReflectionMethod::invoke bypasses generated/AOT method visibility.
 #[test]
 fn test_eval_reflection_method_invoke_bypasses_aot_method_visibility() {
