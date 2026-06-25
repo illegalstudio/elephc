@@ -184,6 +184,12 @@ echo interface_exists("UnitEnum") ? "U" : "u"; echo ":";
 echo interface_exists("BackedEnum") ? "B" : "b"; echo ":";
 echo is_a(EvalMarkedUnit::Ready, "EvalUnitMarker") ? "unit" : "bad"; echo ":";
 echo is_a(EvalMarkedBacked::Ready, "EvalBackedMarker") ? "backed" : "bad"; echo ":";
+$unitInterfaces = class_implements("EvalMarkedUnit");
+echo count($unitInterfaces); echo ":"; echo $unitInterfaces["EvalUnitMarker"]; echo ":";
+echo $unitInterfaces["UnitEnum"]; echo ":";
+$backedInterfaces = (new ReflectionClass("EvalMarkedBacked"))->getInterfaceNames();
+echo count($backedInterfaces); echo ":"; echo $backedInterfaces[0]; echo ":";
+echo $backedInterfaces[1]; echo ":"; echo $backedInterfaces[2]; echo ":";
 return EvalMarkedBacked::Ready->value;"#,
     )
     .expect("parse eval fragment");
@@ -192,7 +198,10 @@ return EvalMarkedBacked::Ready->value;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "U:B:unit:backed:");
+    assert_eq!(
+        values.output,
+        "U:B:unit:backed:2:EvalUnitMarker:UnitEnum:3:EvalBackedMarker:UnitEnum:BackedEnum:"
+    );
     assert_eq!(
         values.get(result),
         FakeValue::String("ready".to_string())
