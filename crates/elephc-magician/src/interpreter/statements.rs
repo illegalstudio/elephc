@@ -3918,18 +3918,40 @@ fn eval_reflection_class_new_instance_without_constructor_result(
     values.new_object(&class_name).map(Some)
 }
 
-/// Instantiates an eval-declared attribute class for `ReflectionAttribute::newInstance()`.
+/// Instantiates an attribute class for `ReflectionAttribute::newInstance()`.
 fn eval_reflection_attribute_new_instance_result(
     attribute: &EvalAttribute,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let Some(class) = context.class(attribute.name()).cloned() else {
-        return values.null();
-    };
     let args = eval_reflection_attribute_arg_values(attribute, values)?;
-    let mut scope = ElephcEvalScope::new();
-    eval_dynamic_class_new_object(&class, positional_args(args), context, &mut scope, values)
+    if let Some(class) = context.class(attribute.name()).cloned() {
+        let mut scope = ElephcEvalScope::new();
+        return eval_dynamic_class_new_object(
+            &class,
+            positional_args(args),
+            context,
+            &mut scope,
+            values,
+        );
+    }
+    let class_name = context
+        .resolve_class_name(attribute.name())
+        .unwrap_or_else(|| attribute.name().trim_start_matches('\\').to_string());
+    if !values.class_exists(&class_name)? {
+        return values.null();
+    }
+    let args = bind_native_callable_args(
+        context.native_constructor_signature(&class_name),
+        positional_args(args),
+        values,
+    )?;
+    let object = values.new_object(&class_name)?;
+    if let Err(err) = values.construct_object(object, args) {
+        let _ = values.release(object);
+        return Err(err);
+    }
+    Ok(object)
 }
 
 /// Materializes eval attribute literal arguments as constructor argument cells.
