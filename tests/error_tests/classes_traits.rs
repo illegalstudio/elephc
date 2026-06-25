@@ -441,12 +441,12 @@ fn test_error_class_attribute_expression_args_are_not_silently_dropped() {
     );
 }
 
-/// Verifies that `class_get_attributes()` on a class with an array attribute argument
+/// Verifies that `class_get_attributes()` on a class with an associative array attribute argument
 /// reports "class has attribute argument metadata that is not supported yet".
 #[test]
-fn test_error_class_attribute_array_args_are_not_silently_dropped() {
+fn test_error_class_attribute_associative_array_args_are_not_silently_dropped() {
     expect_error(
-        "<?php #[Foo([1])] class C {} class_get_attributes('C');",
+        "<?php #[Foo(['key' => 1])] class C {} class_get_attributes('C');",
         "class has attribute argument metadata that is not supported yet",
     );
 }

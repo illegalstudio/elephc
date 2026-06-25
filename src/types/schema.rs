@@ -19,8 +19,8 @@ use super::{FunctionSig, PhpType};
 /// Compile-time attribute argument literal. Captures the subset of PHP
 /// attribute argument expressions that reflection helpers can currently
 /// materialize: strings, ints, floats, bools, null, negative numeric literals,
-/// `ClassName::class` strings, and named wrappers around those same literal
-/// values.
+/// `ClassName::class` strings, positional array literals containing the same
+/// subset, and named wrappers around those same literal values.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AttrArgValue {
     Null,
@@ -28,6 +28,7 @@ pub enum AttrArgValue {
     Float(u64),
     Bool(bool),
     Str(String),
+    Array(Vec<AttrArgValue>),
     Named {
         name: String,
         value: Box<AttrArgValue>,
@@ -110,6 +111,11 @@ fn collect_attribute_arg_value(expr: &Expr) -> Option<AttrArgValue> {
         ExprKind::ClassConstant {
             receiver: StaticReceiver::Named(name),
         } => Some(AttrArgValue::Str(name.as_str().to_string())),
+        ExprKind::ArrayLiteral(items) => items
+            .iter()
+            .map(collect_attribute_arg_value)
+            .collect::<Option<Vec<_>>>()
+            .map(AttrArgValue::Array),
         ExprKind::NamedArg { name, value } => {
             collect_attribute_arg_value(value).map(|value| AttrArgValue::Named {
                 name: name.clone(),

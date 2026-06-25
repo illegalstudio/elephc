@@ -211,6 +211,9 @@ fn attr_arg_expr(arg: &AttrArgValue) -> Expr {
         AttrArgValue::Float(bits) => ExprKind::FloatLiteral(f64::from_bits(*bits)),
         AttrArgValue::Bool(value) => ExprKind::BoolLiteral(*value),
         AttrArgValue::Str(value) => ExprKind::StringLiteral(value.clone()),
+        AttrArgValue::Array(elements) => {
+            ExprKind::ArrayLiteral(elements.iter().map(attr_arg_expr).collect())
+        }
         AttrArgValue::Named { name, value } => ExprKind::NamedArg {
             name: name.clone(),
             value: Box::new(attr_arg_expr(value)),
@@ -486,9 +489,33 @@ fn emit_box_arg_aarch64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Da
             abi::emit_symbol_address(emitter, "x1", &sym);                      // x1 = string data address
             emitter.instruction(&format!("mov x2, #{}", len));                  // x2 = string length
         }
+        AttrArgValue::Array(elements) => emit_array_arg_payload_aarch64(elements, emitter, data),
         AttrArgValue::Named { .. } => unreachable!("named attribute arguments are unwrapped before boxing"),
     }
     emitter.instruction("bl __rt_mixed_from_value");                            // box the captured payload into an owned mixed cell
+}
+
+/// Emits an indexed-array attribute argument payload for AArch64 reflection boxing.
+fn emit_array_arg_payload_aarch64(
+    elements: &[AttrArgValue],
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    emitter.instruction(&format!("mov x0, #{}", elements.len().max(1)));        // initial capacity for the nested attribute array
+    emitter.instruction("mov x1, #8");                                          // element stride: one boxed mixed-cell pointer per slot
+    emitter.instruction("bl __rt_array_new");                                   // x0 = freshly allocated nested attribute array
+    emit_array_value_type_stamp(emitter, "x0", &PhpType::Mixed);
+    abi::emit_push_reg(emitter, "x0");
+    for element in elements {
+        emit_box_arg_aarch64(element.value(), emitter, data);
+        emitter.instruction("mov x1, x0");                                      // pass the boxed array element as the append value
+        abi::emit_load_temporary_stack_slot(emitter, "x0", 0);
+        emitter.instruction("bl __rt_array_push_int");                          // append the boxed element and return the current array
+        abi::emit_store_to_sp(emitter, "x0", 0);
+    }
+    abi::emit_pop_reg(emitter, "x1");
+    emitter.instruction("mov x0, #4");                                          // runtime tag 4 = indexed array payload
+    emitter.instruction("mov x2, xzr");                                         // array mixed payloads do not use the high word
 }
 
 /// Emits a boxed `Mixed` cell for `arg` using x86_64 System V calling conventions.
@@ -524,9 +551,33 @@ fn emit_box_arg_x86_64(arg: &AttrArgValue, emitter: &mut Emitter, data: &mut Dat
             abi::emit_symbol_address(emitter, "rdi", &sym);                     // rdi = string data address
             emitter.instruction(&format!("mov rsi, {}", len));                  // rsi = string length
         }
+        AttrArgValue::Array(elements) => emit_array_arg_payload_x86_64(elements, emitter, data),
         AttrArgValue::Named { .. } => unreachable!("named attribute arguments are unwrapped before boxing"),
     }
     emitter.instruction("call __rt_mixed_from_value");                          // box the captured payload into an owned mixed cell
+}
+
+/// Emits an indexed-array attribute argument payload for x86_64 reflection boxing.
+fn emit_array_arg_payload_x86_64(
+    elements: &[AttrArgValue],
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+) {
+    emitter.instruction(&format!("mov rdi, {}", elements.len().max(1)));        // initial capacity for the nested attribute array
+    emitter.instruction("mov rsi, 8");                                          // element stride: one boxed mixed-cell pointer per slot
+    emitter.instruction("call __rt_array_new");                                 // rax = freshly allocated nested attribute array
+    emit_array_value_type_stamp(emitter, "rax", &PhpType::Mixed);
+    abi::emit_push_reg(emitter, "rax");
+    for element in elements {
+        emit_box_arg_x86_64(element.value(), emitter, data);
+        emitter.instruction("mov rsi, rax");                                    // pass the boxed array element as the append value
+        abi::emit_load_temporary_stack_slot(emitter, "rdi", 0);
+        emitter.instruction("call __rt_array_push_int");                        // append the boxed element and return the current array
+        abi::emit_store_to_sp(emitter, "rax", 0);
+    }
+    abi::emit_pop_reg(emitter, "rdi");
+    emitter.instruction("mov rax, 4");                                          // runtime tag 4 = indexed array payload
+    emitter.instruction("xor rsi, rsi");                                        // array mixed payloads do not use the high word
 }
 
 /// Iterates over parallel `names` and `args` slices and inserts each

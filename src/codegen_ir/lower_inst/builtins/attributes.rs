@@ -576,9 +576,31 @@ fn emit_box_arg_aarch64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue) {
             abi::emit_symbol_address(ctx.emitter, "x1", &label);
             ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the captured string length as the mixed high word
         }
+        AttrArgValue::Array(elements) => emit_array_arg_payload_aarch64(ctx, elements),
         AttrArgValue::Named { .. } => unreachable!("named attribute arguments are unwrapped before boxing"),
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+}
+
+/// Materializes a positional array attribute argument into Mixed ABI payload registers on AArch64.
+fn emit_array_arg_payload_aarch64(ctx: &mut FunctionContext<'_>, elements: &[AttrArgValue]) {
+    allocate_indexed_array(ctx, elements.len().max(1), 8);
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &PhpType::Mixed,
+    );
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    for element in elements {
+        emit_box_arg_aarch64(ctx, element.value());
+        ctx.emitter.instruction("mov x1, x0");                                  // pass the boxed array element as the append value
+        abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+        abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        abi::emit_store_to_sp(ctx.emitter, "x0", 0);
+    }
+    abi::emit_pop_reg(ctx.emitter, "x1");
+    ctx.emitter.instruction("mov x0, #4");                                      // runtime tag 4 = indexed array payload
+    ctx.emitter.instruction("mov x2, xzr");                                     // array mixed payloads do not use the high word
 }
 
 /// Boxes one captured attribute argument into the x86_64 Mixed-cell ABI.
@@ -612,9 +634,31 @@ fn emit_box_arg_x86_64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue) {
             abi::emit_symbol_address(ctx.emitter, "rdi", &label);
             ctx.emitter.instruction(&format!("mov rsi, {}", len));              // pass the captured string length as the mixed high word
         }
+        AttrArgValue::Array(elements) => emit_array_arg_payload_x86_64(ctx, elements),
         AttrArgValue::Named { .. } => unreachable!("named attribute arguments are unwrapped before boxing"),
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+}
+
+/// Materializes a positional array attribute argument into Mixed ABI payload registers on x86_64.
+fn emit_array_arg_payload_x86_64(ctx: &mut FunctionContext<'_>, elements: &[AttrArgValue]) {
+    allocate_indexed_array(ctx, elements.len().max(1), 8);
+    crate::codegen::emit_array_value_type_stamp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &PhpType::Mixed,
+    );
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    for element in elements {
+        emit_box_arg_x86_64(ctx, element.value());
+        ctx.emitter.instruction("mov rsi, rax");                                // pass the boxed array element as the append value
+        abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+        abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        abi::emit_store_to_sp(ctx.emitter, "rax", 0);
+    }
+    abi::emit_pop_reg(ctx.emitter, "rdi");
+    ctx.emitter.instruction("mov rax, 4");                                      // runtime tag 4 = indexed array payload
+    ctx.emitter.instruction("xor rsi, rsi");                                    // array mixed payloads do not use the high word
 }
 
 /// Returns a string literal value defined by a `ConstStr` instruction operand.

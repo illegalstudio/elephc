@@ -7536,7 +7536,7 @@ fn test_eval_declared_class_attribute_metadata() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalAttrDep {}
-#[Route("/home", -1, 1.5, true, null, EvalAttrDep::class)]
+#[Route("/home", -1, 1.5, true, null, EvalAttrDep::class, ["nested", 2])]
 #[Tag("first"), Tag("second")]
 class EvalAttrMeta {}
 $names = class_attribute_names("EvalAttrMeta");
@@ -7545,6 +7545,7 @@ $args = class_attribute_args("EvalAttrMeta", "route");
 echo count($args) . ":" . $args[0] . ":" . $args[1] . ":";
 echo $args[2] . ":" . ($args[3] ? "T" : "F") . ":" . (is_null($args[4]) ? "N" : "bad") . ":";
 echo $args[5] . ":";
+echo count($args[6]) . ":" . $args[6][0] . ":" . $args[6][1] . ":";
 $tag = class_attribute_args("evalattrmeta", "Tag");
 echo $tag[0] . ":";
 $attrs = class_get_attributes("EvalAttrMeta");
@@ -7553,6 +7554,7 @@ $attrArgs = $attrs[0]->getArguments();
 echo count($attrArgs) . ":" . $attrArgs[0] . ":" . $attrArgs[1] . ":";
 echo $attrArgs[2] . ":" . ($attrArgs[3] ? "T" : "F") . ":" . (is_null($attrArgs[4]) ? "N" : "bad") . ":";
 echo $attrArgs[5] . ":";
+echo count($attrArgs[6]) . ":" . $attrArgs[6][0] . ":" . $attrArgs[6][1] . ":";
 $tagArgs = $attrs[1]->getArguments();
 echo $attrs[1]->getName() . ":" . $tagArgs[0] . ":";
 echo is_null($attrs[0]->newInstance()) ? "N" : "bad";');
@@ -7565,7 +7567,7 @@ echo is_null($attrs[0]->newInstance()) ? "N" : "bad";');
     );
     assert_eq!(
         out.stdout,
-        "3:Route:Tag:Tag:6:/home:-1:1.5:T:N:EvalAttrDep:first:3:Route:6:/home:-1:1.5:T:N:EvalAttrDep:Tag:first:N"
+        "3:Route:Tag:Tag:7:/home:-1:1.5:T:N:EvalAttrDep:2:nested:2:first:3:Route:7:/home:-1:1.5:T:N:EvalAttrDep:2:nested:2:Tag:first:N"
     );
 }
 
@@ -9125,29 +9127,35 @@ fn test_eval_reflection_class_exposes_aot_attributes() {
 class EvalAotClassAttr {
     public string $name = "";
     public int $value = 0;
+    public array $items = [];
 
-    public function __construct(string $name, int $value = 0) {
+    public function __construct(string $name, int $value = 0, array $items = []) {
         $this->name = $name;
         $this->value = $value;
+        $this->items = $items;
     }
 
     public function label(): string {
         return $this->name . ":" . $this->value;
     }
 }
-#[EvalAotClassAttr("class", 1), EvalAotClassAttr("again", 2)]
+#[EvalAotClassAttr("class", 1, ["nested", 3]), EvalAotClassAttr("again", 2, ["later"])]
 class EvalAotClassAttrTarget {}
 echo eval('$names = class_attribute_names("EvalAotClassAttrTarget");
 echo count($names) . ":" . $names[0] . ":" . $names[1] . ":";
 $args = class_attribute_args("evalaotclassattrtarget", "EvalAotClassAttr");
 echo count($args) . ":" . $args[0] . ":" . $args[1] . ":";
+echo count($args[2]) . ":" . $args[2][0] . ":" . $args[2][1] . ":";
 $attrs = class_get_attributes("EvalAotClassAttrTarget");
 echo count($attrs) . ":" . $attrs[0]->getName() . ":";
 echo ($attrs[0]->isRepeated() ? "R" : "r") . ":";
 echo $attrs[0]->getArguments()[0] . ":" . $attrs[0]->getArguments()[1] . ":";
-echo $attrs[0]->getTarget() . ":" . $attrs[0]->newInstance()->label() . ":";
+echo count($attrs[0]->getArguments()[2]) . ":" . $attrs[0]->getArguments()[2][0] . ":";
+$firstInstance = $attrs[0]->newInstance();
+echo $attrs[0]->getTarget() . ":" . $firstInstance->label() . ":" . count($firstInstance->items) . ":" . $firstInstance->items[0] . ":";
 $refAttrs = (new ReflectionClass("EvalAotClassAttrTarget"))->getAttributes();
 echo count($refAttrs) . ":" . $refAttrs[1]->getArguments()[0] . ":";
+echo count($refAttrs[1]->getArguments()[2]) . ":" . $refAttrs[1]->getArguments()[2][0] . ":";
 echo $refAttrs[1]->newInstance()->label();');
 "#,
     );
@@ -9158,7 +9166,7 @@ echo $refAttrs[1]->newInstance()->label();');
     );
     assert_eq!(
         out.stdout,
-        "2:EvalAotClassAttr:EvalAotClassAttr:2:class:1:2:EvalAotClassAttr:R:class:1:1:class:1:2:again:again:2"
+        "2:EvalAotClassAttr:EvalAotClassAttr:3:class:1:2:nested:3:2:EvalAotClassAttr:R:class:1:2:nested:1:class:1:2:nested:2:again:1:later:again:2"
     );
 }
 

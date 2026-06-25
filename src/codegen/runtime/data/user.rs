@@ -15,7 +15,7 @@ use crate::names::{
     method_symbol, php_symbol_key, static_method_symbol, static_property_symbol,
 };
 use crate::parser::ast::Visibility;
-use crate::types::{ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
+use crate::types::{AttrArgValue, ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
 
 use super::instanceof::{escaped_ascii, escaped_bytes};
 
@@ -39,6 +39,19 @@ const EVAL_REFLECTION_METHOD_FLAG_PROTECTED: u64 = 4;
 const EVAL_REFLECTION_METHOD_FLAG_PRIVATE: u64 = 8;
 const EVAL_REFLECTION_METHOD_FLAG_FINAL: u64 = 16;
 const EVAL_REFLECTION_METHOD_FLAG_ABSTRACT: u64 = 32;
+
+/// Monotonic label counters for static attribute argument data blocks.
+struct StaticAttrArgDataIds {
+    str_id: u64,
+    block_id: u64,
+}
+
+/// One static attribute argument row in the `(tag, lo, hi)` table format.
+struct StaticAttrArgRow {
+    tag: u64,
+    lo: String,
+    hi: u64,
+}
 
 /// Emit the user-dependent data section — globals, statics, class metadata.
 /// This changes per program and cannot be cached.
@@ -470,6 +483,7 @@ pub(crate) fn emit_runtime_data_user(
     //   tag 1 = str   (lo = .ascii label addr, hi = byte length)
     //   tag 2 = float (lo = f64 bits,          hi = 0)
     //   tag 3 = bool  (lo = 0 or 1,            hi = 0)
+    //   tag 4 = array (lo = nested args ptr,   hi = element count)
     //   tag 8 = null  (lo = 0,                 hi = 0)
     //
     // Unsupported args are represented as absent metadata by
@@ -478,8 +492,10 @@ pub(crate) fn emit_runtime_data_user(
     // payloads are reserved for future iterations.
     if let Some(max_class_id) = max_class_id {
         let mut name_id = 0u64;
-        let mut arg_str_id = 0u64;
-        let mut args_block_id = 0u64;
+        let mut attr_arg_ids = StaticAttrArgDataIds {
+            str_id: 0,
+            block_id: 0,
+        };
         for class_id in 0..=max_class_id {
             let Some(info) = class_info_by_id.get(&class_id) else {
                 continue;
@@ -503,50 +519,11 @@ pub(crate) fn emit_runtime_data_user(
                 let args_label = if args.is_empty() {
                     None
                 } else {
-                    // Intern any string-arg payload first so the per-arg
-                    // table can reference it by label, then emit the tagged
-                    // (tag, lo, hi) rows in source order.
-                    let mut arg_rows = Vec::with_capacity(args.len());
-                    for arg in args {
-                        match arg.value() {
-                            crate::types::AttrArgValue::Str(value) => {
-                                let label = format!("_attr_arg_str_{}", arg_str_id);
-                                arg_str_id += 1;
-                                let bytes = crate::string_bytes::literal_bytes(value);
-                                out.push_str(&format!(".globl {0}\n{0}:\n", label));
-                                out.push_str(&format!(
-                                    "    .ascii \"{}\"\n",
-                                    escaped_bytes(&bytes)
-                                ));
-                                arg_rows.push((1u64, label, bytes.len() as u64));
-                            }
-                            crate::types::AttrArgValue::Int(value) => {
-                                arg_rows.push((0u64, format!("{}", *value as u64), 0u64));
-                            }
-                            crate::types::AttrArgValue::Float(bits) => {
-                                arg_rows.push((2u64, format!("{}", bits), 0u64));
-                            }
-                            crate::types::AttrArgValue::Bool(value) => {
-                                arg_rows.push((3u64, format!("{}", *value as u64), 0u64));
-                            }
-                            crate::types::AttrArgValue::Null => {
-                                arg_rows.push((8u64, "0".to_string(), 0u64));
-                            }
-                            crate::types::AttrArgValue::Named { .. } => {
-                                unreachable!("named attribute arguments are unwrapped before runtime data emission")
-                            }
-                        }
-                    }
-                    out.push_str("    .p2align 3\n");
-                    let block_label = format!("_attr_args_{}", args_block_id);
-                    args_block_id += 1;
-                    out.push_str(&format!(".globl {0}\n{0}:\n", block_label));
-                    for (tag, lo, hi) in arg_rows {
-                        out.push_str(&format!("    .quad {}\n", tag));
-                        out.push_str(&format!("    .quad {}\n", lo));
-                        out.push_str(&format!("    .quad {}\n", hi));
-                    }
-                    Some(block_label)
+                    Some(emit_static_attr_arg_block(
+                        &mut out,
+                        args,
+                        &mut attr_arg_ids,
+                    ))
                 };
                 entries.push((name_label, name.len(), args.len(), args_label));
             }
@@ -1766,6 +1743,81 @@ fn interface_method_table_symbol(
         )
     } else {
         method_symbol(impl_class, method_name)
+    }
+}
+
+/// Emits one static attribute argument block and returns its assembly label.
+fn emit_static_attr_arg_block(
+    out: &mut String,
+    args: &[AttrArgValue],
+    ids: &mut StaticAttrArgDataIds,
+) -> String {
+    let rows = args
+        .iter()
+        .map(|arg| static_attr_arg_row(out, arg.value(), ids))
+        .collect::<Vec<_>>();
+    out.push_str("    .p2align 3\n");
+    let block_label = format!("_attr_args_{}", ids.block_id);
+    ids.block_id += 1;
+    out.push_str(&format!(".globl {0}\n{0}:\n", block_label));
+    for row in rows {
+        out.push_str(&format!("    .quad {}\n", row.tag));
+        out.push_str(&format!("    .quad {}\n", row.lo));
+        out.push_str(&format!("    .quad {}\n", row.hi));
+    }
+    block_label
+}
+
+/// Converts one retained attribute argument into a static data row.
+fn static_attr_arg_row(
+    out: &mut String,
+    arg: &AttrArgValue,
+    ids: &mut StaticAttrArgDataIds,
+) -> StaticAttrArgRow {
+    match arg {
+        AttrArgValue::Str(value) => {
+            let label = format!("_attr_arg_str_{}", ids.str_id);
+            ids.str_id += 1;
+            let bytes = crate::string_bytes::literal_bytes(value);
+            out.push_str(&format!(".globl {0}\n{0}:\n", label));
+            out.push_str(&format!("    .ascii \"{}\"\n", escaped_bytes(&bytes)));
+            StaticAttrArgRow {
+                tag: 1,
+                lo: label,
+                hi: bytes.len() as u64,
+            }
+        }
+        AttrArgValue::Int(value) => StaticAttrArgRow {
+            tag: 0,
+            lo: format!("{}", *value as u64),
+            hi: 0,
+        },
+        AttrArgValue::Float(bits) => StaticAttrArgRow {
+            tag: 2,
+            lo: format!("{}", bits),
+            hi: 0,
+        },
+        AttrArgValue::Bool(value) => StaticAttrArgRow {
+            tag: 3,
+            lo: format!("{}", *value as u64),
+            hi: 0,
+        },
+        AttrArgValue::Array(elements) => {
+            let label = emit_static_attr_arg_block(out, elements, ids);
+            StaticAttrArgRow {
+                tag: 4,
+                lo: label,
+                hi: elements.len() as u64,
+            }
+        }
+        AttrArgValue::Null => StaticAttrArgRow {
+            tag: 8,
+            lo: "0".to_string(),
+            hi: 0,
+        },
+        AttrArgValue::Named { .. } => {
+            unreachable!("named attribute arguments are unwrapped before runtime data emission")
+        }
     }
 }
 

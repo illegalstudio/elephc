@@ -34,6 +34,7 @@ const NATIVE_ATTRIBUTE_ARG_INT: u8 = 2;
 const NATIVE_ATTRIBUTE_ARG_STRING: u8 = 3;
 const NATIVE_ATTRIBUTE_ARG_NAMED: u8 = 4;
 const NATIVE_ATTRIBUTE_ARG_FLOAT: u8 = 5;
+const NATIVE_ATTRIBUTE_ARG_ARRAY: u8 = 6;
 const NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
 const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = 8;
@@ -1740,6 +1741,14 @@ fn native_attribute_take_arg(bytes: &[u8], offset: &mut usize) -> Option<EvalAtt
                 name,
                 value: Box::new(value),
             })
+        }
+        NATIVE_ATTRIBUTE_ARG_ARRAY => {
+            let len = usize::try_from(native_attribute_take_u32(bytes, offset)?).ok()?;
+            let mut elements = Vec::with_capacity(len);
+            for _ in 0..len {
+                elements.push(native_attribute_take_arg(bytes, offset)?);
+            }
+            Some(EvalAttributeArg::Array(elements))
         }
         _ => None,
     }
