@@ -13723,8 +13723,21 @@ trait EvalConstReusableTrait {
         return self::SEED;
     }
 }
+trait EvalConstDuplicateA {
+    public const DUP = 9;
+}
+trait EvalConstDuplicateB {
+    public const DUP = 9;
+}
 class EvalConstIfaceTraitBox implements EvalConstChildIface {
     use EvalConstReusableTrait;
+}
+class EvalConstDuplicateTraitBox {
+    use EvalConstDuplicateA, EvalConstDuplicateB;
+}
+class EvalConstDuplicateClassBox {
+    use EvalConstDuplicateA;
+    public const DUP = 9;
 }
 echo EvalConstParentIface::BASE . ":";
 echo EvalConstChildIface::BASE . ":";
@@ -13732,7 +13745,9 @@ echo EvalConstIfaceTraitBox::BASE . ":";
 echo EvalConstIfaceTraitBox::LOCAL . ":";
 echo EvalConstReusableTrait::SEED . ":";
 echo EvalConstIfaceTraitBox::SEED . ":";
-echo EvalConstIfaceTraitBox::readTraitSeed();');
+echo EvalConstIfaceTraitBox::readTraitSeed() . ":";
+echo EvalConstDuplicateTraitBox::DUP . ":";
+echo EvalConstDuplicateClassBox::DUP;');
 "#,
     );
     assert!(
@@ -13740,7 +13755,27 @@ echo EvalConstIfaceTraitBox::readTraitSeed();');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "2:2:2:3:6:6:6");
+    assert_eq!(out.stdout, "2:2:2:3:6:6:6:9:9");
+}
+
+/// Verifies eval-declared trait constant conflicts follow PHP compatibility rules.
+#[test]
+fn test_eval_declared_trait_constant_conflict_rules() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('trait EvalTraitConstBad {
+    public const SEED = 6;
+}
+class EvalTraitConstBadBox {
+    use EvalTraitConstBad;
+    public const SEED = 7;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
 }
 
 /// Verifies eval rejects private member access from outside the declaring class.

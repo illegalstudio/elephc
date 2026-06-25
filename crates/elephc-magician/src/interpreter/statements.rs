@@ -993,10 +993,9 @@ fn expand_eval_class_traits(
         return Ok(class.clone());
     }
     let class_method_names = class_method_name_set(class);
-    let class_constant_names = class_constant_name_set(class);
     let mut trait_method_names = std::collections::HashSet::new();
     let mut trait_properties = std::collections::HashMap::new();
-    let mut trait_constant_names = std::collections::HashSet::new();
+    let mut trait_constants = std::collections::HashMap::new();
     let mut constants = Vec::new();
     let mut properties = Vec::new();
     let mut methods = Vec::new();
@@ -1006,8 +1005,8 @@ fn expand_eval_class_traits(
         };
         append_eval_trait_constants(
             trait_decl,
-            &class_constant_names,
-            &mut trait_constant_names,
+            class.constants(),
+            &mut trait_constants,
             &mut constants,
         )?;
         append_eval_trait_properties(
@@ -1056,35 +1055,44 @@ fn class_method_name_set(class: &EvalClass) -> std::collections::HashSet<String>
         .collect()
 }
 
-/// Returns constant names declared directly by a pending class.
-fn class_constant_name_set(class: &EvalClass) -> std::collections::HashSet<String> {
-    class
-        .constants()
-        .iter()
-        .map(|constant| constant.name().to_string())
-        .collect()
-}
-
-/// Appends trait constants unless the class provides a same-name constant.
+/// Appends trait constants while enforcing PHP-compatible same-name conflicts.
 fn append_eval_trait_constants(
     trait_decl: &EvalTrait,
-    class_constant_names: &std::collections::HashSet<String>,
-    trait_constant_names: &mut std::collections::HashSet<String>,
+    class_constants: &[EvalClassConstant],
+    trait_constants: &mut std::collections::HashMap<String, EvalClassConstant>,
     constants: &mut Vec<EvalClassConstant>,
 ) -> Result<(), EvalStatus> {
     for constant in trait_decl.constants() {
-        if class_constant_names.contains(constant.name()) {
-            if constant.is_final() {
-                return Err(EvalStatus::RuntimeFatal);
-            }
+        if let Some(class_constant) = class_constants
+            .iter()
+            .find(|class_constant| class_constant.name() == constant.name())
+        {
+            validate_eval_trait_constant_compatibility(class_constant, constant)?;
             continue;
         }
-        if !trait_constant_names.insert(constant.name().to_string()) {
-            return Err(EvalStatus::RuntimeFatal);
+        if let Some(existing) = trait_constants.get(constant.name()) {
+            validate_eval_trait_constant_compatibility(existing, constant)?;
+            continue;
         }
+        trait_constants.insert(constant.name().to_string(), constant.clone());
         constants.push(constant.clone());
     }
     Ok(())
+}
+
+/// Validates that a same-name trait constant definition is compatible with PHP composition.
+fn validate_eval_trait_constant_compatibility(
+    existing: &EvalClassConstant,
+    incoming: &EvalClassConstant,
+) -> Result<(), EvalStatus> {
+    if existing.visibility() == incoming.visibility()
+        && existing.is_final() == incoming.is_final()
+        && existing.value() == incoming.value()
+    {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
 }
 
 /// Appends trait properties while enforcing PHP-compatible same-name conflicts.

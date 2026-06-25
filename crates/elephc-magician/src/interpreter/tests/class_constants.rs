@@ -338,3 +338,75 @@ return EvalConstTraitBox::readTraitSeed();"#,
     assert_eq!(values.output, "6:6:");
     assert_eq!(values.get(result), FakeValue::Int(6));
 }
+
+/// Verifies compatible same-name trait constants are deduplicated during composition.
+#[test]
+fn execute_program_allows_compatible_eval_trait_constant_conflicts() {
+    let program = parse_fragment(
+        br#"trait EvalConstCompatibleA {
+    public const SEED = 6;
+}
+trait EvalConstCompatibleB {
+    public const SEED = 6;
+}
+class EvalConstCompatibleTraitBox {
+    use EvalConstCompatibleA, EvalConstCompatibleB;
+}
+class EvalConstCompatibleClassBox {
+    use EvalConstCompatibleA;
+    public const SEED = 6;
+}
+echo EvalConstCompatibleTraitBox::SEED; echo ":";
+return EvalConstCompatibleClassBox::SEED;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "6:");
+    assert_eq!(values.get(result), FakeValue::Int(6));
+}
+
+/// Verifies incompatible same-name class and trait constants fail like PHP.
+#[test]
+fn execute_program_rejects_incompatible_eval_trait_constant_conflicts() {
+    let class_conflict = parse_fragment(
+        br#"trait EvalConstClassTraitConflict {
+    public const SEED = 6;
+}
+class EvalConstClassTraitConflictBox {
+    use EvalConstClassTraitConflict;
+    public const SEED = 7;
+}"#,
+    )
+    .expect("parse class/trait constant conflict");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&class_conflict, &mut scope, &mut values)
+        .expect_err("incompatible class/trait constant should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let trait_conflict = parse_fragment(
+        br#"trait EvalConstTraitConflictA {
+    public const SEED = 6;
+}
+trait EvalConstTraitConflictB {
+    public const SEED = 7;
+}
+class EvalConstTraitConflictBox {
+    use EvalConstTraitConflictA, EvalConstTraitConflictB;
+}"#,
+    )
+    .expect("parse trait/trait constant conflict");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&trait_conflict, &mut scope, &mut values)
+        .expect_err("incompatible trait/trait constant should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
