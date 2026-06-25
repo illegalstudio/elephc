@@ -92,7 +92,7 @@ jobs:
         run: cargo build $BRIDGE_CRATES
 
       - name: Run non-codegen tests
-        run: cargo nextest run --workspace -E 'not binary(codegen_tests)' --no-fail-fast -j ${{ matrix.platform.nextest_jobs }}
+        run: cargo nextest run --profile ci --workspace -E 'not binary(codegen_tests)' --no-fail-fast -j ${{ matrix.platform.nextest_jobs }}
 
       - name: Run doctests
         run: cargo test --workspace --doc
@@ -165,7 +165,7 @@ jobs:
         run: cargo build $BRIDGE_CRATES
 
       - name: Run codegen test shard
-        run: cargo nextest run --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast -j ${{ matrix.platform.nextest_jobs }}
+        run: cargo nextest run --profile ci --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast -j ${{ matrix.platform.nextest_jobs }}
 
   image-api-sync:
     name: Image API stubs in sync
