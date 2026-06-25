@@ -1191,18 +1191,24 @@ fn validate_eval_magic_methods(methods: &[EvalClassMethod]) -> Result<(), EvalSt
     Ok(())
 }
 
-/// Validates staticness, visibility, and arity for one eval magic method.
+/// Validates staticness, visibility, arity, and declared return type for one eval magic method.
 fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus> {
     match method.name().to_ascii_lowercase().as_str() {
         "__tostring" => {
             validate_magic_non_static(method)?;
             validate_magic_public(method)?;
             validate_magic_arity(method, 0)?;
+            validate_magic_declared_return_type(method, MagicReturnType::String)?;
         }
         "__get" | "__isset" | "__unset" => {
             validate_magic_non_static(method)?;
             validate_magic_public(method)?;
             validate_magic_arity(method, 1)?;
+            if method.name().eq_ignore_ascii_case("__isset") {
+                validate_magic_declared_return_type(method, MagicReturnType::Bool)?;
+            } else if method.name().eq_ignore_ascii_case("__unset") {
+                validate_magic_declared_return_type(method, MagicReturnType::Void)?;
+            }
         }
         "__set" | "__call" => {
             validate_magic_non_static(method)?;
@@ -1221,6 +1227,9 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
         "__clone" | "__destruct" => {
             validate_magic_non_static(method)?;
             validate_magic_arity(method, 0)?;
+            if method.name().eq_ignore_ascii_case("__clone") {
+                validate_magic_declared_return_type(method, MagicReturnType::Void)?;
+            }
         }
         "__construct" => {
             if method.is_static() {
@@ -1230,6 +1239,14 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
         _ => {}
     }
     Ok(())
+}
+
+/// Magic method return types that eval can validate from retained declarations.
+#[derive(Clone, Copy)]
+enum MagicReturnType {
+    Bool,
+    String,
+    Void,
 }
 
 /// Rejects static declarations for magic methods that must be instance methods.
@@ -1270,6 +1287,39 @@ fn validate_magic_arity(method: &EvalClassMethod, expected: usize) -> Result<(),
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
+}
+
+/// Rejects incompatible explicit return types on PHP magic methods.
+fn validate_magic_declared_return_type(
+    method: &EvalClassMethod,
+    expected: MagicReturnType,
+) -> Result<(), EvalStatus> {
+    method.return_type().map_or(Ok(()), |return_type| {
+        if magic_return_type_matches(return_type, expected) {
+            Ok(())
+        } else {
+            Err(EvalStatus::RuntimeFatal)
+        }
+    })
+}
+
+/// Returns whether one retained eval return type is exactly the expected magic return atom.
+fn magic_return_type_matches(
+    return_type: &EvalParameterType,
+    expected: MagicReturnType,
+) -> bool {
+    if return_type.allows_null() || return_type.is_intersection() {
+        return false;
+    }
+    let [variant] = return_type.variants() else {
+        return false;
+    };
+    matches!(
+        (expected, variant),
+        (MagicReturnType::Bool, EvalParameterTypeVariant::Bool)
+            | (MagicReturnType::String, EvalParameterTypeVariant::String)
+            | (MagicReturnType::Void, EvalParameterTypeVariant::Void)
+    )
 }
 
 /// Validates property declarations that can be checked before class registration.
