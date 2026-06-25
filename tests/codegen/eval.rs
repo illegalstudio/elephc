@@ -11800,6 +11800,37 @@ echo $plain->getReturnType() === null ? "Q" : "q";');
     assert_eq!(out.stdout, "T:int:N:B:2:intBstringB:never:n:B:p:Q");
 }
 
+/// Verifies eval ReflectionFunction and ReflectionMethod stringify retained signatures.
+#[test]
+fn test_eval_reflection_function_method_to_string() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('function eval_reflect_string_text(string $name, int $count = 3, &...$items): ?string {
+    return $name;
+}
+class EvalReflectMethodStringTextTarget {
+    final public static function run(?int $id, string $label = "ok"): ?string {
+        return $label;
+    }
+}
+$function = new ReflectionFunction("eval_reflect_string_text");
+echo str_replace("\n", "|", $function->__toString());
+echo "::";
+$method = new ReflectionMethod("EvalReflectMethodStringTextTarget", "run");
+echo str_replace("\n", "|", $method->__toString());');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Function [ <user> function eval_reflect_string_text ] {|  - Parameters [3] {|    Parameter #0 [ <required> string $name ]|    Parameter #1 [ <optional> int $count = 3 ]|    Parameter #2 [ <optional> &...$items ]|  }|  - Return [ ?string ]|}|::Method [ <user> final static public method run ] {|  - Parameters [2] {|    Parameter #0 [ <required> ?int $id ]|    Parameter #1 [ <optional> string $label = 'ok' ]|  }|  - Return [ ?string ]|}|"
+    );
+}
+
 /// Verifies eval Reflection origin metadata APIs are present on supported owners.
 #[test]
 fn test_eval_reflection_origin_metadata_defaults() {

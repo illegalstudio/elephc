@@ -190,6 +190,7 @@ enum EvalReflectionFunctionMethodTarget {
         name: String,
         static_key: Option<String>,
         static_variables: Vec<EvalStaticVarInitializer>,
+        parameters: Vec<EvalReflectionParameterMetadata>,
         source_location: Option<EvalSourceLocation>,
         is_variadic: bool,
         is_static: bool,
@@ -200,9 +201,13 @@ enum EvalReflectionFunctionMethodTarget {
         name: String,
         static_key: Option<String>,
         static_variables: Vec<EvalStaticVarInitializer>,
+        parameters: Vec<EvalReflectionParameterMetadata>,
         source_location: Option<EvalSourceLocation>,
+        visibility: Option<EvalVisibility>,
         is_variadic: bool,
         is_static: bool,
+        is_final: bool,
+        is_abstract: bool,
         return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     },
 }
@@ -1235,6 +1240,25 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
         }
         _ => Ok(None),
     }
+}
+
+/// Handles eval-backed `ReflectionFunction::__toString()` and `ReflectionMethod::__toString()`.
+pub(in crate::interpreter) fn eval_reflection_function_method_to_string_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("__toString") {
+        return Ok(None);
+    }
+    let Some(target) = eval_reflection_function_method_target(identity, context, values)? else {
+        return Ok(None);
+    };
+    eval_reflection_bind_no_args(evaluated_args)?;
+    let rendered = eval_reflection_function_method_to_string(&target);
+    values.string(&rendered).map(Some)
 }
 
 /// Handles eval-backed `ReflectionParameter::isArray()` and `isCallable()` calls.
@@ -5190,6 +5214,117 @@ fn eval_reflection_property_modifiers(
     modifiers
 }
 
+/// Formats one reflected function or method similarly to PHP's `__toString()` output.
+fn eval_reflection_function_method_to_string(
+    target: &EvalReflectionFunctionMethodTarget,
+) -> String {
+    let mut rendered = format!(
+        "{} {{\n  - Parameters [{}] {{\n",
+        eval_reflection_function_method_header(target),
+        eval_reflection_function_method_parameters(target).len()
+    );
+    for parameter in eval_reflection_function_method_parameters(target) {
+        rendered.push_str("    ");
+        rendered.push_str(&eval_reflection_function_method_parameter_to_string(parameter));
+        rendered.push('\n');
+    }
+    rendered.push_str("  }\n");
+    if let Some(return_type) = eval_reflection_function_method_return_type(target) {
+        rendered.push_str("  - Return [ ");
+        rendered.push_str(&eval_reflection_type_metadata_to_string(return_type));
+        rendered.push_str(" ]\n");
+    }
+    rendered.push_str("}\n");
+    rendered
+}
+
+/// Returns the PHP-like header line for a reflected function or method.
+fn eval_reflection_function_method_header(
+    target: &EvalReflectionFunctionMethodTarget,
+) -> String {
+    match target {
+        EvalReflectionFunctionMethodTarget::Function { name, .. } => {
+            format!(
+                "Function [ <user> function {} ]",
+                name.trim_start_matches('\\')
+            )
+        }
+        EvalReflectionFunctionMethodTarget::Method {
+            name,
+            visibility,
+            is_static,
+            is_final,
+            is_abstract,
+            ..
+        } => {
+            let mut parts = Vec::new();
+            if *is_abstract {
+                parts.push(String::from("abstract"));
+            }
+            if *is_final {
+                parts.push(String::from("final"));
+            }
+            if *is_static {
+                parts.push(String::from("static"));
+            }
+            if let Some(visibility) = visibility {
+                parts.push(eval_reflection_visibility_label(*visibility).to_string());
+            }
+            parts.push(String::from("method"));
+            parts.push(name.clone());
+            format!("Method [ <user> {} ]", parts.join(" "))
+        }
+    }
+}
+
+/// Returns retained parameters for a reflected function or method target.
+fn eval_reflection_function_method_parameters(
+    target: &EvalReflectionFunctionMethodTarget,
+) -> &[EvalReflectionParameterMetadata] {
+    match target {
+        EvalReflectionFunctionMethodTarget::Function { parameters, .. }
+        | EvalReflectionFunctionMethodTarget::Method { parameters, .. } => parameters,
+    }
+}
+
+/// Formats one parameter line for function-like `__toString()` output.
+fn eval_reflection_function_method_parameter_to_string(
+    parameter: &EvalReflectionParameterMetadata,
+) -> String {
+    let requiredness = if parameter.is_optional {
+        "optional"
+    } else {
+        "required"
+    };
+    let mut signature_parts = Vec::new();
+    if let Some(type_metadata) = parameter.type_metadata.as_ref() {
+        signature_parts.push(eval_reflection_type_metadata_to_string(type_metadata));
+    }
+    let mut variable = String::new();
+    if parameter.is_passed_by_reference {
+        variable.push('&');
+    }
+    if parameter.is_variadic {
+        variable.push_str("...");
+    }
+    variable.push('$');
+    variable.push_str(&parameter.name);
+    signature_parts.push(variable);
+    let default = parameter
+        .default_value
+        .as_ref()
+        .and_then(eval_reflection_default_expr_to_string)
+        .map(|value| format!(" = {value}"))
+        .unwrap_or_default();
+    format!(
+        "Parameter #{} [ <{}> {}{} ]",
+        parameter.position,
+        requiredness,
+        signature_parts.join(" "),
+        default
+    )
+}
+
 /// Formats one reflected property similarly to PHP's `ReflectionProperty::__toString()`.
 fn eval_reflection_property_to_string(
     property_name: &str,
@@ -7291,6 +7426,20 @@ fn eval_reflection_function_method_target(
         let function = context.function(&name.to_ascii_lowercase());
         let is_variadic = function
             .is_some_and(|function| function.parameter_is_variadic().iter().any(|flag| *flag));
+        let parameters = function
+            .map(|function| {
+                eval_reflection_function_parameters(
+                    function.name(),
+                    function.params(),
+                    function.attributes().to_vec(),
+                    function.parameter_attributes(),
+                    function.parameter_types(),
+                    function.parameter_defaults(),
+                    function.parameter_is_by_ref(),
+                    function.parameter_is_variadic(),
+                )
+            })
+            .unwrap_or_default();
         let source_location = function.and_then(EvalFunction::source_location);
         let return_type_metadata = function
             .and_then(EvalFunction::return_type)
@@ -7303,6 +7452,7 @@ fn eval_reflection_function_method_target(
             name: name.to_string(),
             static_key,
             static_variables,
+            parameters,
             source_location,
             is_variadic,
             is_static: false,
@@ -7324,18 +7474,36 @@ fn eval_reflection_function_method_target(
             values,
         )?
     };
-    let is_variadic = method_metadata.as_ref().is_some_and(|method| {
-        method
-            .parameters
-            .iter()
-            .any(|parameter| parameter.is_variadic)
-    });
-    let is_static = method_metadata
-        .as_ref()
-        .is_some_and(|method| method.is_static);
-    let source_location = method_metadata.as_ref().and_then(|method| method.source_location);
-    let return_type_metadata = method_metadata.and_then(|method| method.return_type_metadata);
-    let static_method = eval_reflection_eval_method_static_target(declaring_class, method_name, context);
+    let (
+        parameters,
+        source_location,
+        visibility,
+        is_variadic,
+        is_static,
+        is_final,
+        is_abstract,
+        return_type_metadata,
+    ) = match method_metadata {
+        Some(method) => {
+            let is_variadic = method
+                .parameters
+                .iter()
+                .any(|parameter| parameter.is_variadic);
+            (
+                method.parameters,
+                method.source_location,
+                Some(method.visibility),
+                is_variadic,
+                method.is_static,
+                method.is_final,
+                method.is_abstract,
+                method.return_type_metadata,
+            )
+        }
+        None => (Vec::new(), None, None, false, false, false, false, None),
+    };
+    let static_method =
+        eval_reflection_eval_method_static_target(declaring_class, method_name, context);
     let declaring_class = static_method
         .as_ref()
         .map(|(declaring_class, _)| declaring_class.clone());
@@ -7351,9 +7519,13 @@ fn eval_reflection_function_method_target(
         name: method_name.to_string(),
         static_key,
         static_variables,
+        parameters,
         source_location,
+        visibility,
         is_variadic,
         is_static,
+        is_final,
+        is_abstract,
         return_type_metadata,
     }))
 }

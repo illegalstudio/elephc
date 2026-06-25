@@ -3815,6 +3815,12 @@ fn builtin_reflection_owner_class(
     }
     if matches!(name, "ReflectionFunction" | "ReflectionMethod") {
         properties.push(builtin_property(
+            "__string",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        properties.push(builtin_property(
             "__parameters",
             Visibility::Private,
             Some(object_array_type("ReflectionParameter")),
@@ -3884,6 +3890,10 @@ fn builtin_reflection_owner_class(
             "getTentativeReturnType",
         ));
         methods.push(builtin_reflection_function_method_is_variadic_method());
+        methods.push(builtin_reflection_class_string_method(
+            "__toString",
+            "__string",
+        ));
     }
     if name == "ReflectionMethod" {
         properties.push(builtin_property(
@@ -4866,6 +4876,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
             }
             if class_name == "ReflectionMethod" {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
+                }
                 for method_name in [
                     "isfinal",
                     "isabstract",
@@ -4903,6 +4916,9 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
             }
             if class_name == "ReflectionFunction" {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__toString")) {
+                    sig.return_type = PhpType::Str;
+                }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("invoke")) {
                     sig.return_type = PhpType::Mixed;
                     sig.variadic = Some("args".to_string());
