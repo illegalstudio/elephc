@@ -707,7 +707,7 @@ particular, advanced native callable descriptors and closure callback values are
 still outside eval fragments. Runtime/AOT object-method, static-method, and
 constructor fallback from eval can bind registered names, defaults, positional
 variadic tails, and by-reference lvalue metadata. Generated AOT bridge dispatch
-is limited to visibility-checked non-by-reference scalar/nullable-int/Mixed/array/iterable/object
+is limited to visibility-checked non-by-reference scalar/nullable scalar/Mixed/array/iterable/object
 parameter signatures plus `mixed`/untyped, scalar including string, nullable-int, array, iterable, and object by-reference
 method and constructor parameters, including the generated positional variadic
 array slot when present. Broader parameter/return ABI shapes are still outside
@@ -725,7 +725,7 @@ property, and function/method return metadata, broader
 parameter and generated property default-value materialization beyond scalar,
 null, empty-array, supported array-valued defaults, and supported object-valued parameter defaults during generated/AOT invocation,
 and broader generated/AOT method and constructor bridge signatures beyond the current visibility-checked
-scalar/nullable-int/Mixed/array/iterable/object parameter slice plus scalar/nullable-int/Mixed/array/iterable/object returns and
+scalar/nullable scalar/Mixed/array/iterable/object parameter slice plus scalar/nullable scalar/Mixed/array/iterable/object returns and
 `__clone()` hooks. Generated/AOT method type
 metadata, by-reference and variadic parameter flags, and generated/AOT
 class/method/property/class-constant attributes are exposed for registered metadata slices, while

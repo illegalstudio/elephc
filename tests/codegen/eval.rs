@@ -5248,6 +5248,83 @@ echo (new EvalAotNullableIntReturnBox())->run();
     assert_eq!(out, "I7:N:S11:SN");
 }
 
+/// Verifies eval fragments can pass nullable scalar arguments to AOT methods and constructors.
+#[test]
+fn test_eval_fragment_dispatches_aot_nullable_scalar_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotNullableScalarParamBox {
+    public string $label;
+
+    public function __construct(?string $name = null, ?bool $flag = null, ?float $ratio = null) {
+        $this->label = self::format($name, $flag, $ratio);
+    }
+
+    public function describe(?string $name, ?bool $flag, ?float $ratio): string {
+        return self::format($name, $flag, $ratio);
+    }
+
+    public static function describeStatic(?string $name = null, ?bool $flag = null, ?float $ratio = null): string {
+        return self::format($name, $flag, $ratio);
+    }
+
+    private static function format(?string $name, ?bool $flag, ?float $ratio): string {
+        $namePart = $name === null ? "N" : (is_string($name) ? "S" . $name : "badName");
+        $flagPart = $flag === null ? "N" : (is_bool($flag) ? ($flag ? "BT" : "BF") : "badFlag");
+        $ratioPart = $ratio === null ? "N" : (is_float($ratio) ? "F" . $ratio : "badRatio");
+        return $namePart . "/" . $flagPart . "/" . $ratioPart;
+    }
+}
+
+echo eval('$defaulted = new EvalAotNullableScalarParamBox();
+$filled = new EvalAotNullableScalarParamBox("Ada", true, 2.5);
+return $defaulted->label . ":" . $filled->label . ":" . $filled->describe(null, false, 3.5) . ":" . EvalAotNullableScalarParamBox::describeStatic("Bea", true, 4.5);');
+"#,
+    );
+    assert_eq!(out, "N/N/N:SAda/BT/F2.5:N/BF/F3.5:SBea/BT/F4.5");
+}
+
+/// Verifies eval fragments can read nullable scalar return values from AOT methods.
+#[test]
+fn test_eval_fragment_dispatches_aot_nullable_scalar_returns() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotNullableScalarReturnBox {
+    public function maybeName(bool $keep): ?string {
+        return $keep ? "Ada" : null;
+    }
+
+    public function maybeFlag(bool $keep): ?bool {
+        return $keep ? false : null;
+    }
+
+    public function maybeRatio(bool $keep): ?float {
+        return $keep ? 1.5 : null;
+    }
+
+    public static function maybeStaticName(bool $keep): ?string {
+        return $keep ? "Bea" : null;
+    }
+
+    public static function maybeStaticFlag(bool $keep): ?bool {
+        return $keep ? true : null;
+    }
+
+    public static function maybeStaticRatio(bool $keep): ?float {
+        return $keep ? 2.5 : null;
+    }
+
+    public function run() {
+        return eval('return ($this->maybeName(true) === "Ada" ? "S" : "bad") . ":" . (is_null($this->maybeName(false)) ? "SN" : "bad") . ":" . ($this->maybeFlag(true) === false ? "BF" : "bad") . ":" . (is_null($this->maybeFlag(false)) ? "BN" : "bad") . ":" . ($this->maybeRatio(true) === 1.5 ? "F15" : "bad") . ":" . (is_null($this->maybeRatio(false)) ? "FN" : "bad") . ":" . (EvalAotNullableScalarReturnBox::maybeStaticName(true) === "Bea" ? "SS" : "bad") . ":" . (is_null(EvalAotNullableScalarReturnBox::maybeStaticName(false)) ? "SSN" : "bad") . ":" . (EvalAotNullableScalarReturnBox::maybeStaticFlag(true) === true ? "SBT" : "bad") . ":" . (is_null(EvalAotNullableScalarReturnBox::maybeStaticFlag(false)) ? "SBN" : "bad") . ":" . (EvalAotNullableScalarReturnBox::maybeStaticRatio(true) === 2.5 ? "SF25" : "bad") . ":" . (is_null(EvalAotNullableScalarReturnBox::maybeStaticRatio(false)) ? "SFN" : "bad");');
+    }
+}
+
+echo (new EvalAotNullableScalarReturnBox())->run();
+"#,
+    );
+    assert_eq!(out, "S:SN:BF:BN:F15:FN:SS:SSN:SBT:SBN:SF25:SFN");
+}
+
 /// Verifies eval fragments can read iterable return values from AOT methods.
 #[test]
 fn test_eval_fragment_dispatches_aot_method_with_iterable_return() {
