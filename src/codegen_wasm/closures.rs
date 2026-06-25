@@ -52,9 +52,9 @@ use super::context::{wasm_fn_symbol, FnCtx, Result};
 use super::inst::{data_immediate, operand, store_result};
 use super::objects::emit_box_value_into_mixed;
 use super::values::WasmRepr;
-use super::wat::{ValType, WatModule};
+use super::wat::{DataSegment, ValType, WatModule};
 use super::WasmError;
-use crate::ir::{Function, Instruction, IrHeapKind, IrType, Module, ValueId};
+use crate::ir::{Function, Instruction, IrHeapKind, IrType, Module, Ownership, ValueId};
 use crate::types::PhpType;
 
 /// Registers the callable-descriptor refcount runtime (`__rt_callable_descriptor_release`)
@@ -121,24 +121,125 @@ const RT_CALLABLE_DESCRIPTOR_RELEASE: &str = r#"(func $__rt_callable_descriptor_
 /// only; capture slots begin at `+32` and are absent when `capture_count` is 0).
 const DESCRIPTOR_PAYLOAD_BYTES: i32 = 32;
 
-/// Lowers `Op::ClosureNew` for a no-capture closure: allocates a kind-6 descriptor,
-/// stamps its payload (descriptor kind 1, the closure's `entry_index`, capture_count 0),
-/// and stores the zero-extended pointer into the result's `I64` local.
+/// The byte offset of the first capture slot within a callable descriptor payload.
+/// Each capture slot is 16 bytes (low 8 = value/ptr, high 8 = string length).
+const CAPTURE_SLOT_OFFSET: i32 = 32;
+
+/// The size of one capture slot in the descriptor payload.
+const CAPTURE_SLOT_BYTES: i32 = 16;
+
+// ---------------------------------------------------------------------------
+// P7b: by-value capture tag tables + capture-aware ClosureNew / wrapper unbox.
+// ---------------------------------------------------------------------------
+
+/// The runtime release-tag byte for a capture of `php` type, mirroring the native
+/// `type_tag` table (`src/codegen/callable_descriptor.rs:584`) with the by-ref
+/// override. The release runtime (`__rt_callable_descriptor_release`) releases a
+/// slot iff its tag is in `{1,4,5,6,7,10}` (str/array/assoc/object/mixed/callable);
+/// scalars (`0/2/3`), null (`8`), and the by-ref sentinel (`0xFF`) own no heap
+/// storage and are skipped. Only the wrapper-supported set is reachable for P7b
+/// (see `lower_closure_new`), but the full table is emitted for forward-compat
+/// with P7c (by-ref) and P7d (Mixed/Union) captures.
+fn capture_tag_for_php_type(php: &PhpType, by_ref: bool) -> u8 {
+    if by_ref {
+        return 0xFF;
+    }
+    match php {
+        PhpType::Int => 0,
+        PhpType::Str => 1,
+        PhpType::Float => 2,
+        PhpType::Bool => 3,
+        PhpType::Array(_) => 4,
+        PhpType::AssocArray { .. } => 5,
+        PhpType::Object(_) => 6,
+        PhpType::Mixed | PhpType::Union(_) => 7,
+        PhpType::Void => 8,
+        PhpType::Resource(_) => 9,
+        PhpType::Callable => 10,
+        PhpType::Pointer(_) => 11,
+        PhpType::Iterable => 12,
+        PhpType::Buffer(_) => 13,
+        PhpType::Packed(_) => 14,
+        PhpType::Never => 15,
+        PhpType::TaggedScalar => 7,
+    }
+}
+
+/// Emits one static per-closure capture-tag byte array into `wm` (in static memory
+/// below the heap) and returns `(advanced_cursor, tag_base_per_closure)`. The
+/// returned vec is indexed by the closure's position in `module.closures` (its
+/// `entry_index`); a no-capture closure gets a `0` sentinel (no segment emitted),
+/// so indexing by `entry_index` is uniform. Each array holds one tag byte per
+/// capture param (the trailing `flags.closure_capture_count` params, source order),
+/// computed via `capture_tag_for_php_type`. `generate()` calls this after the
+/// instanceof target table and before `heap_base` is computed.
+pub(super) fn emit_closure_capture_tag_tables(
+    wm: &mut WatModule,
+    module: &Module,
+    mut cursor: u32,
+) -> Result<(u32, Vec<u32>)> {
+    let mut tag_ptrs: Vec<u32> = Vec::with_capacity(module.closures.len());
+    for f in &module.closures {
+        let cap = f.flags.closure_capture_count;
+        if cap == 0 {
+            tag_ptrs.push(0);
+            continue;
+        }
+        // 4-align the cursor so a multi-byte tag array starts on a clean boundary.
+        cursor = (cursor + 3) & !3;
+        let base = cursor;
+        // Defensive: `closure_capture_count` is set by `lower_closure_function_with_signature`
+        // to exactly the appended capture count, so `cap <= params.len()` always holds for
+        // well-formed modules. Guard anyway so a hand-crafted malformed `Module` surfaces an
+        // error instead of panicking on slice underflow.
+        let visible = f
+            .params
+            .len()
+            .checked_sub(cap)
+            .ok_or_else(|| WasmError::Unsupported(format!(
+                "closure {} capture_count {} > params {}",
+                f.name, cap, f.params.len()
+            )))?;
+        let mut bytes = Vec::with_capacity(cap);
+        for p in &f.params[visible..] {
+            bytes.push(capture_tag_for_php_type(&p.php_type, p.by_ref));
+        }
+        wm.add_data(DataSegment {
+            offset: base,
+            bytes,
+        });
+        cursor = base + cap as u32;
+        tag_ptrs.push(base);
+    }
+    Ok((cursor, tag_ptrs))
+}
+
+/// Lowers `Op::ClosureNew`: allocates a kind-6 callable descriptor, stamps its
+/// payload (descriptor kind 1, the closure's `entry_index`, `capture_count`, and the
+/// per-closure `capture_tags_ptr` from the static tag array), stamps each by-value
+/// capture into its slot, and stores the zero-extended pointer into the result's
+/// `I64` local.
 ///
 /// The closure name is carried by an `Immediate::Data` index into the module's string
-/// pool (the same pool `ClosureNew` interns the `__eir_closure_<owner>_<n>` name into at
-/// lowering time). The `entry_index` is the closure `Function`'s position in
-/// `module.closures`, which the `__rt_closure_call` if-ladder keys on.
+/// pool (the same pool `ClosureNew` interns the `__eir_closure_<owner>_<n>` name into
+/// at lowering time). The `entry_index` is the closure `Function`'s position in
+/// `module.closures`, which the `__rt_closure_call` if-ladder keys on and which
+/// indexes `ctx.closure_tag_ptrs`.
 ///
-/// P7a1 rejects captures (`operands` non-empty → P7b) and any by-ref/variadic visible
-/// parameter (m10): the wrapper forwards Owned by-value args only. The release runtime
-/// already walks capture slots, so P7b only needs this path to populate them.
+/// P7b supports by-value captures of `Int`/`Bool`/`Float`/`Str`/`Array`/`AssocArray`/
+/// `Object`/`Callable`. The capture list is recovered as the trailing
+/// `closure_capture_count` params of the closure body (parity with native
+/// `closure_capture_params_from_eir`); the operand count is cross-checked against it.
+/// The slot layout (tag + store shape) is derived from the **capture param** type
+/// (not the operand type), with an explicit operand/param type-drift cross-check so a
+/// future lowering divergence is a compile error, not a silent miscompile. By-ref
+/// captures (P7c/P7c0), by-ref/variadic visible params (m10), and
+/// `Mixed`/`Union`/`Iterable`/`Buffer`/`TaggedScalar`/`Pointer`/`Resource`/`Packed`/
+/// `Never` captures are rejected. Ownership: a non-`Owned` refcounted capture is
+/// `incref`'d (or `__rt_str_persist`'d for strings) so the descriptor owns a ref; an
+/// `Owned` operand's ref transfers directly (no incref), mirroring native
+/// `emit_runtime_closure_descriptor_with_captures`.
 pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    if !inst.operands.is_empty() {
-        return Err(WasmError::Unsupported(
-            "ClosureNew with captures (P7b) on wasm32-wasi".to_string(),
-        ));
-    }
     let data_id = data_immediate(inst)?;
     let name = ctx
         .module
@@ -154,21 +255,34 @@ pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
         .enumerate()
         .find(|(_, f)| f.name == name)
         .ok_or_else(|| WasmError::Unsupported(format!("closure new: no body for {}", name)))?;
-    // No-capture closures expose every parameter as a visible by-value arg; reject
-    // by-ref/variadic params (the wrapper cannot forward them) until P7c/P7-c0.
-    for p in &closure_fn.params {
+    let capture_count = inst.operands.len();
+    let visible_count = closure_fn.params.len().saturating_sub(capture_count);
+    if capture_count != closure_fn.flags.closure_capture_count {
+        return Err(WasmError::Unsupported(format!(
+            "closure {}: operand count {} != capture_count {}",
+            name, capture_count, closure_fn.flags.closure_capture_count
+        )));
+    }
+    // Visible params must be by-value non-variadic (the wrapper forwards them as-is).
+    for p in &closure_fn.params[..visible_count] {
         if p.by_ref || p.variadic {
             return Err(WasmError::Unsupported(format!(
-                "ClosureNew by-ref/variadic param {} on wasm32-wasi (P7c)",
+                "ClosureNew by-ref/variadic visible param {} on wasm32-wasi (P7c)",
                 p.name
             )));
         }
     }
+    // Validate every capture param up front so an unsupported capture fails before any
+    // descriptor allocation (no half-stamped descriptor leaks on the error path).
+    for p in &closure_fn.params[visible_count..] {
+        reject_unsupported_capture(&name, p)?;
+    }
 
+    let total = DESCRIPTOR_PAYLOAD_BYTES + capture_count as i32 * CAPTURE_SLOT_BYTES;
     let desc = ctx.fresh_temp(ValType::I32);
     ctx.fb.ins(
-        &format!("(call $__rt_heap_alloc (i32.const {}))", DESCRIPTOR_PAYLOAD_BYTES),
-        "allocate 32-byte callable descriptor (refcount 1)",
+        &format!("(call $__rt_heap_alloc (i32.const {}))", total),
+        "allocate callable descriptor (refcount 1) + capture slots",
     );
     ctx.fb.ins(&format!("local.set {}", desc), "save descriptor pointer");
     ctx.fb.ins(
@@ -184,16 +298,190 @@ pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
         "entry_index = position in module.closures",
     );
     ctx.fb.ins(
-        &format!("(i32.store offset=12 (local.get {}) (i32.const 0))", desc),
-        "capture_count = 0 (no-capture closure)",
+        &format!("(i32.store offset=12 (local.get {}) (i32.const {}))", desc, capture_count),
+        "capture_count = number of capture slots",
     );
+    let tag_base = ctx.closure_tag_base(entry_index);
     ctx.fb.ins(
-        &format!("(i32.store offset=16 (local.get {}) (i32.const 0))", desc),
-        "capture_tags_ptr = 0 (no capture walk)",
+        &format!("(i32.store offset=16 (local.get {}) (i32.const {}))", desc, tag_base),
+        "capture_tags_ptr = static per-closure tag array (0 if no captures)",
     );
+
+    // Stamp each by-value capture into its 16-byte slot at [desc + 32 + i*16].
+    for i in 0..capture_count {
+        let operand = operand(inst, i)?;
+        let cap_p = &closure_fn.params[visible_count + i];
+        stamp_capture_slot(ctx, &desc, i, operand, cap_p)?;
+    }
+
     ctx.fb.ins(&format!("local.get {}", desc), "descriptor pointer");
     ctx.fb.ins("i64.extend_i32_u", "zero-extend ptr -> i64 callable value");
     store_result(ctx, inst)
+}
+
+/// Rejects a capture param whose kind is outside the P7b by-value supported set.
+/// By-ref captures need ref-cell promotion (P7c0/P7c); `Mixed`/`Union`/`Iterable`/
+/// `Buffer`/`TaggedScalar` captures need a cell-ptr stamp + Mixed unbox arm (P7d);
+/// `Pointer`/`Resource`/`Packed`/`Never` captures would stamp a slot whose tag is not
+/// in the release set `{1,4,5,6,7,10}` (an unleakable ptr). `Void` captures carry no
+/// value. Each is rejected with a phase tag so the caller knows where it lands later.
+fn reject_unsupported_capture(name: &str, p: &crate::ir::FunctionParam) -> Result<()> {
+    if p.by_ref {
+        return Err(WasmError::Unsupported(format!(
+            "ClosureNew by-ref capture {} on wasm32-wasi (P7c)",
+            p.name
+        )));
+    }
+    // Reject by php_type first: Pointer/Resource lower to a raw I64 and Packed to
+    // Heap(Object), so the ir_type match below would otherwise accept them even
+    // though their capture tags (9/11, or a Packed-as-object ref) are outside the
+    // release set or semantically wrong for a by-value capture. Never carries no
+    // value to stamp.
+    match &p.php_type {
+        PhpType::Pointer(_)
+        | PhpType::Resource(_)
+        | PhpType::Packed(_)
+        | PhpType::Never => {
+            return Err(WasmError::Unsupported(format!(
+                "ClosureNew {:?} capture {} on wasm32-wasi (unsupported capture kind)",
+                p.php_type, p.name
+            )));
+        }
+        _ => {}
+    }
+    match p.ir_type {
+        IrType::I64 | IrType::F64 | IrType::Str => Ok(()),
+        IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object) => Ok(()),
+        IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Iterable | IrHeapKind::Union | IrHeapKind::Buffer) => {
+            Err(WasmError::Unsupported(format!(
+                "ClosureNew {} capture on wasm32-wasi (P7d)",
+                name
+            )))
+        }
+        IrType::TaggedScalar | IrType::Void => Err(WasmError::Unsupported(format!(
+            "ClosureNew {:?} capture {} on wasm32-wasi",
+            p.ir_type, p.name
+        ))),
+    }
+}
+
+/// Stamps one by-value capture `operand` into descriptor slot `i` (`[desc + 32 + i*16]`)
+/// using the capture **param**'s type for the tag/store shape. Loads the operand,
+/// applies ownership-aware retain (`incref` for refcounted, `__rt_str_persist` for a
+/// non-owned string; an `Owned` operand transfers its ref with no retain), then stores
+/// the value into the slot. Cross-checks the operand's php_type against the param's so
+/// a stamp/unbox type drift is a compile error rather than a silent miscompile.
+fn stamp_capture_slot(
+    ctx: &mut FnCtx,
+    desc: &str,
+    i: usize,
+    operand: ValueId,
+    cap_p: &crate::ir::FunctionParam,
+) -> Result<()> {
+    let off = CAPTURE_SLOT_OFFSET + i as i32 * CAPTURE_SLOT_BYTES;
+    let operand_php = ctx.value_php_type(operand)?;
+    if operand_php != cap_p.php_type {
+        return Err(WasmError::Unsupported(format!(
+            "closure capture {}: operand type {:?} != param type {:?}",
+            cap_p.name, operand_php, cap_p.php_type
+        )));
+    }
+    let ownership = ctx
+        .function
+        .value(operand)
+        .map(|v| v.ownership)
+        .unwrap_or(Ownership::NonHeap);
+    let not_owned = !matches!(ownership, Ownership::Owned);
+    ctx.emit_load_value(operand)?;
+    match cap_p.ir_type {
+        IrType::I64 => {
+            // Int/Bool/Callable: one i64 (the value, or the descriptor pointer for Callable).
+            let v = ctx.fresh_temp(ValType::I64);
+            ctx.fb.ins(&format!("local.set {}", v), "capture i64 value");
+            if matches!(cap_p.php_type, PhpType::Callable) && not_owned {
+                ctx.fb.ins(
+                    &format!("(call $__rt_incref (i32.wrap_i64 (local.get {})))", v),
+                    "share the captured callable descriptor (descriptor owns a ref)",
+                );
+            }
+            ctx.fb.ins(
+                &format!(
+                    "(i64.store (i32.add (local.get {}) (i32.const {})) (local.get {}))",
+                    desc, off, v
+                ),
+                "store the i64 capture into its slot",
+            );
+        }
+        IrType::F64 => {
+            let v = ctx.fresh_temp(ValType::F64);
+            ctx.fb.ins(&format!("local.set {}", v), "capture f64 value");
+            ctx.fb.ins(
+                &format!(
+                    "(f64.store (i32.add (local.get {}) (i32.const {})) (local.get {}))",
+                    desc, off, v
+                ),
+                "store the f64 capture into its slot (no refcount)",
+            );
+        }
+        IrType::Str => {
+            // Str repr on the stack: [ptr i32, len i64] (len on top).
+            let len = ctx.fresh_temp(ValType::I64);
+            let ptr = ctx.fresh_temp(ValType::I32);
+            ctx.fb.ins(&format!("local.set {}", len), "capture string length");
+            ctx.fb.ins(&format!("local.set {}", ptr), "capture string pointer");
+            if not_owned {
+                // __rt_str_persist(ptr i32, len i64) -> (owned ptr i32, owned len i64).
+                ctx.fb.ins(&format!("local.get {}", ptr), "string pointer for persist");
+                ctx.fb.ins(&format!("local.get {}", len), "string length for persist");
+                ctx.fb.ins("call $__rt_str_persist", "persist an owned copy for the descriptor");
+                ctx.fb.ins(&format!("local.set {}", len), "owned copy length");
+                ctx.fb.ins(&format!("local.set {}", ptr), "owned copy pointer");
+            }
+            ctx.fb.ins(
+                &format!(
+                    "(i32.store (i32.add (local.get {}) (i32.const {})) (local.get {}))",
+                    desc, off, ptr
+                ),
+                "store the string pointer in the slot low 4 bytes",
+            );
+            ctx.fb.ins(
+                &format!(
+                    "(i32.store (i32.add (local.get {}) (i32.const {})) (i32.wrap_i64 (local.get {})))",
+                    desc,
+                    off + 8,
+                    len
+                ),
+                "store the string length (i32) in the slot high 4 bytes",
+            );
+        }
+        IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object) => {
+            // Container ptr on the stack as a single i32.
+            let ptr = ctx.fresh_temp(ValType::I32);
+            ctx.fb.ins(&format!("local.set {}", ptr), "capture container pointer");
+            if not_owned {
+                ctx.fb.ins(
+                    &format!("(call $__rt_incref (local.get {}))", ptr),
+                    "share the captured container (descriptor owns a ref)",
+                );
+            }
+            ctx.fb.ins(
+                &format!(
+                    "(i64.store (i32.add (local.get {}) (i32.const {})) (i64.extend_i32_u (local.get {})))",
+                    desc, off, ptr
+                ),
+                "store the container pointer (i64) for the release walk's i64.load",
+            );
+        }
+        // Unsupported kinds are rejected up front by `reject_unsupported_capture`; the
+        // remaining ir types are unreachable here.
+        _ => {
+            return Err(WasmError::Unsupported(format!(
+                "closure capture {:?} stamp on wasm32-wasi",
+                cap_p.ir_type
+            )))
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `Op::ClosureCapture`, a no-op marker the EIR emits (with an `Immediate::I64(1)`
@@ -430,9 +718,26 @@ fn build_closure_call_ladder(arms: &[(u32, String)]) -> String {
 }
 
 /// Builds the raw WAT body of a closure wrapper: unbox each visible param from the arg
-/// buffer, call the body, box the result, and return the result cell.
+/// buffer, unbox each capture param from the descriptor's capture slots, call the body
+/// (visible args then capture args, in EIR `Function` param order), box the result, and
+/// return the result cell. The visible/capture split is read from
+/// `f.flags.closure_capture_count` (captures are the trailing params); captures are
+/// stamped into the descriptor by `lower_closure_new` and read here from
+/// `[desc + 32 + j*16]` (NOT from the arg buffer, which carries only visible args).
 fn build_closure_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
     let body_symbol = wasm_fn_symbol(&f.name);
+    let cap = f.flags.closure_capture_count;
+    // Defensive: `cap` is the trailing capture count set at lowering time, so
+    // `cap <= params.len()` for well-formed modules. Guard so a malformed `Function`
+    // surfaces an error instead of panicking on slice underflow.
+    let vis = f
+        .params
+        .len()
+        .checked_sub(cap)
+        .ok_or_else(|| WasmError::Unsupported(format!(
+            "closure {} capture_count {} > params {}",
+            f.name, cap, f.params.len()
+        )))?;
     let mut wat = String::new();
     wat.push_str(&format!(
         "(func ${} (param $desc i32) (param $args i32) (result i32)\n",
@@ -442,11 +747,11 @@ fn build_closure_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
     wat.push_str("  (local $ub_tag i64) (local $ub_lo i64) (local $ub_hi i64)\n");
     wat.push_str("  (local $rb_i64 i64) (local $rb_f64 f64) (local $rb_ptr i32) (local $rb_len i64)\n");
 
-    // Unbox each visible parameter and push it for the body call (val-type order).
-    for (i, p) in f.params.iter().enumerate() {
+    // Unbox each visible parameter from the arg buffer and push it for the body call.
+    for (i, p) in f.params[..vis].iter().enumerate() {
         let slot_off = 24 + i * 16;
         wat.push_str(&format!(
-            "  ;; unbox arg {} (param {} : {:?}) from slot +{}\n",
+            "  ;; unbox visible arg {} (param {} : {:?}) from arg slot +{}\n",
             i, p.name, p.ir_type, slot_off
         ));
         wat.push_str(&format!(
@@ -456,7 +761,18 @@ fn build_closure_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
         wat.push_str(&unbox_arg_wat(&p.ir_type, &p.php_type)?);
     }
 
-    // Call the closure body with the forwarded args on the stack.
+    // Unbox each capture from the descriptor and push it for the body call. Captures sit
+    // at [desc + 32 + j*16] (raw slots, NOT Mixed cells), so they use `unbox_capture_wat`.
+    for (j, p) in f.params[vis..].iter().enumerate() {
+        let slot_off = CAPTURE_SLOT_OFFSET as usize + j * CAPTURE_SLOT_BYTES as usize;
+        wat.push_str(&format!(
+            "  ;; unbox capture {} (param {} : {:?}) from descriptor slot +{}\n",
+            j, p.name, p.ir_type, slot_off
+        ));
+        wat.push_str(&unbox_capture_wat(slot_off, &p.ir_type, &p.php_type)?);
+    }
+
+    // Call the closure body with the forwarded visible + capture args on the stack.
     wat.push_str(&format!("  call ${}\n", body_symbol));
     wat.push_str("  ;; box the body result into a Mixed cell (result i32)\n");
 
@@ -464,6 +780,88 @@ fn build_closure_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
     wat.push_str(&box_result_wat(&f.return_type, &f.return_php_type)?);
     wat.push_str(")\n");
     Ok(wat)
+}
+
+/// Returns the raw WAT sequence that unboxes one capture from a raw descriptor slot at
+/// `[desc + slot_off]` (NOT a Mixed cell) to the body capture parameter's `IrType` /
+/// `PhpType`, pushing exactly the param's `WasmRepr::val_types` for the body call.
+/// Refcounted captures (containers, callables, strings) are `incref`'d so the body's
+/// Owned parameter owns a fresh ref; the descriptor retains its own ref (released by the
+/// tag-walk at descriptor free). Scalars (int/bool/float) are pushed with no refcount.
+fn unbox_capture_wat(slot_off: usize, ir: &IrType, php: &PhpType) -> Result<String> {
+    let off = slot_off as i32;
+    let mut s = String::new();
+    match ir {
+        IrType::I64 => {
+            if matches!(php, PhpType::Callable) {
+                s.push_str(&wat_ins(
+                    &format!("(local.set $ub_lo (i64.load offset={} (local.get $desc)))", off),
+                    "load the captured callable descriptor (i64 lo)",
+                ));
+                s.push_str(&wat_ins(
+                    "(call $__rt_incref (i32.wrap_i64 (local.get $ub_lo)))",
+                    "own a ref for the body's capture parameter",
+                ));
+                s.push_str(&wat_ins("local.get $ub_lo", "push the descriptor i64 for the body"));
+            } else {
+                s.push_str(&wat_ins(
+                    &format!("(i64.load offset={} (local.get $desc))", off),
+                    "load the captured int/bool i64 for the body",
+                ));
+            }
+        }
+        IrType::F64 => {
+            s.push_str(&wat_ins(
+                &format!("(f64.load offset={} (local.get $desc))", off),
+                "load the captured f64 for the body",
+            ));
+        }
+        IrType::Str => {
+            s.push_str(&wat_ins(
+                &format!("(local.set $rb_ptr (i32.load offset={} (local.get $desc)))", off),
+                "load the captured string pointer",
+            ));
+            s.push_str(&wat_ins(
+                &format!(
+                    "(local.set $rb_len (i64.extend_i32_u (i32.load offset={} (local.get $desc))))",
+                    off + 8
+                ),
+                "load the captured string length (i32 -> i64 for the Str repr)",
+            ));
+            s.push_str(&wat_ins(
+                "(call $__rt_incref (local.get $rb_ptr))",
+                "own a ref to the captured string for the body",
+            ));
+            s.push_str(&wat_ins("local.get $rb_ptr", "push the string pointer for the body"));
+            s.push_str(&wat_ins("local.get $rb_len", "push the string length for the body"));
+        }
+        IrType::Heap(kind) => match kind {
+            IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object => {
+                s.push_str(&wat_ins(
+                    &format!("(local.set $rb_ptr (i32.load offset={} (local.get $desc)))", off),
+                    "load the captured container pointer",
+                ));
+                s.push_str(&wat_ins(
+                    "(call $__rt_incref (local.get $rb_ptr))",
+                    "own a ref to the captured container for the body",
+                ));
+                s.push_str(&wat_ins("local.get $rb_ptr", "push the container pointer for the body"));
+            }
+            IrHeapKind::Mixed | IrHeapKind::Iterable | IrHeapKind::Union | IrHeapKind::Buffer => {
+                return Err(WasmError::Unsupported(format!(
+                    "closure heap capture kind {:?} on wasm32-wasi (P7d)",
+                    kind
+                )));
+            }
+        },
+        IrType::TaggedScalar | IrType::Void => {
+            return Err(WasmError::Unsupported(format!(
+                "closure capture ir {:?} on wasm32-wasi",
+                ir
+            )));
+        }
+    }
+    Ok(s)
 }
 
 /// Returns the raw WAT sequence that unboxes one arg cell (already loaded on the stack
@@ -938,6 +1336,248 @@ mod tests {
   (global.get $_gc_live))                                             ;; expect 0 (balanced)
 "#;
         if let Some(o) = run_p7a1_driver(int_closure_fn(), int_closure_body_wat(), driver, "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // P7b: by-value capture refcount balance (string capture, explicit release).
+    // -------------------------------------------------------------------------
+
+    /// Builds a one-Str-capture closure body `__eir_closure_cap_gc_0` for the P7b
+    /// balance driver: it returns the captured string unchanged (the wrapper incref'd
+    /// it for this body param; `box_result_wat` persists a copy and releases the body's
+    /// source ref). Body params are `(ptr i32, len i64)` — the wrapper's
+    /// `unbox_capture_wat` Str arm pushes them in that order.
+    fn str_capture_body_wat() -> &'static str {
+        r#"(func $fn___eir_closure_cap_gc_0 (param $cp i32) (param $cl i64) (result i32) (result i64)
+  (local.get $cp)                                                       ;; return the captured string pointer
+  (local.get $cl))                                                      ;; return the captured string length
+"#
+    }
+
+    /// Builds the closure `Function` (name, one Str capture param, Str return) that
+    /// `emit_closure_dispatch` reads to generate the capture-aware wrapper + ladder arm.
+    fn str_capture_fn() -> Function {
+        let mut f = Function::new(
+            "__eir_closure_cap_gc_0".to_string(),
+            IrType::Str,
+            PhpType::Str,
+        );
+        f.flags.is_closure = true;
+        f.flags.closure_capture_count = 1;
+        f.params.push(FunctionParam {
+            name: "s".to_string(),
+            ir_type: IrType::Str,
+            php_type: PhpType::Str,
+            by_ref: false,
+            variadic: false,
+        });
+        f
+    }
+
+    /// Like `run_p7a1_driver`, but also emits the per-closure capture-tag byte array
+    /// (at offset 512) and an optional literal string (at offset 600) into static memory
+    /// below the heap (heap_base = 1024), so a capture-bearing driver can stamp a real
+    /// `capture_tags_ptr` and persist a real capture value. `tag_byte` is the single
+    /// capture's tag (1 = string, 10 = callable, ...); `literal` is the optional string
+    /// literal body for string-capture drivers. Validates with `wasmparser` and runs
+    /// `export` under `wasmer`; `None` if wasmer is absent.
+    fn run_p7b_capture_driver(
+        closure_fn: Function,
+        body_wat: &str,
+        driver: &str,
+        export: &str,
+        tag_byte: u8,
+        literal: Option<&[u8]>,
+    ) -> Option<String> {
+        use super::super::wat::DataSegment;
+        let mut wm = WatModule::new();
+        wm.set_memory(3, Some("memory"));
+        emit_heap_runtime(&mut wm, 1024, 3 * 65536);
+        emit_refcount_runtime(&mut wm);
+        emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
+        super::super::hashes::emit_hash_runtime(&mut wm);
+        emit_object_runtime(&mut wm);
+        emit_gc_desc_stub(&mut wm);
+        emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
+        emit_closure_runtime(&mut wm);
+        // Static data for the capture driver: the single capture's tag byte at 512,
+        // and an optional string literal at 600 (used by string-capture drivers).
+        wm.add_data(DataSegment {
+            offset: 512,
+            bytes: vec![tag_byte],
+        });
+        if let Some(lit) = literal {
+            wm.add_data(DataSegment {
+                offset: 600,
+                bytes: lit.to_vec(),
+            });
+        }
+        wm.add_raw_func(body_wat);
+        let mut module = Module::new(Target::wasm());
+        module.closures.push(closure_fn);
+        super::emit_closure_dispatch(&mut wm, &module).expect("emit_closure_dispatch");
+        wm.add_raw_func(driver);
+        let wat = wm.render();
+        let bytes = ::wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("WAT did not assemble: {e}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|e| panic!("wasm did not validate: {e}\n{wat}"));
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = unique_tmp_dir();
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg(export)
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer --invoke {export} failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            wat
+        );
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// A one-Str-capture closure, created and called through the full P7b path with
+    /// explicit release of the result cell, the arg buffer, and the descriptor, leaves
+    /// `_gc_live` at "0". The driver manually stamps the descriptor (mirroring
+    /// `lower_closure_new`): `__rt_str_persist` makes an owned copy for the descriptor,
+    /// stored in slot 0 with `capture_tags_ptr` pointing at the static tag array. The
+    /// generated wrapper unboxes the capture (incref for the body), the body returns it,
+    /// the wrapper boxes the result (persist + release the body's source), and the
+    /// driver releases the result cell, arg buffer, and descriptor (whose tag-1 walk
+    /// frees the descriptor's persisted copy). Proves the by-value string capture is
+    /// refcount-balanced end-to-end (no descriptor/cell/string leak).
+    #[test]
+    fn closure_capture_str_balanced_gc() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $desc i32) (local $args i32) (local $rcell i32) (local $cp i32) (local $cl i64)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 48)))            ;; descriptor (32 + 1 capture slot)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp heap-header kind = 6 (callable)
+  (i64.store (local.get $desc) (i64.const 1))                         ;; descriptor kind = 1 (Closure)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0
+  (i32.store offset=12 (local.get $desc) (i32.const 1))              ;; capture_count = 1
+  (i32.store offset=16 (local.get $desc) (i32.const 512))            ;; capture_tags_ptr = static tag array [1]
+  (call $__rt_str_persist (i32.const 600) (i64.const 2))             ;; persist "hi" -> (ptr i32, len i64)
+  (local.set $cl)                                                    ;; save owned copy length
+  (local.set $cp)                                                    ;; save owned copy pointer
+  (i32.store offset=32 (local.get $desc) (local.get $cp))            ;; store capture string ptr in slot 0 low 4
+  (i32.store offset=40 (local.get $desc) (i32.wrap_i64 (local.get $cl))) ;; store capture string len in slot 0 high 4
+  (local.set $args (call $__rt_array_new (i64.const 0) (i64.const 16))) ;; empty arg buffer (no visible args)
+  (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args))) ;; dispatch -> result cell
+  (call $__rt_decref_any (local.get $rcell))                         ;; release the result cell (frees its persisted copy)
+  (call $__rt_decref_any (local.get $args))                          ;; release the empty arg buffer
+  (call $__rt_decref_any (local.get $desc))                          ;; release the descriptor (tag-1 walk frees its copy)
+  (global.get $_gc_live))                                            ;; expect 0 (balanced)
+"#;
+        if let Some(o) =
+            run_p7b_capture_driver(str_capture_fn(), str_capture_body_wat(), driver, "t", 1, Some(b"hi"))
+        {
+            assert_eq!(o, "0");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // P7b: by-value callable capture refcount balance (tag 10, the release-walk
+    // recursion path that the string test does not exercise). Verifies by execution
+    // the audit's "no double-free" claim for callable captures: the descriptor's
+    // tag-10 walk releases the captured descriptor exactly once.
+    // -------------------------------------------------------------------------
+
+    /// Builds the one-Callable-capture closure body `__eir_closure_cap_call_gc_0` for the
+    /// callable balance driver: it returns the captured descriptor unchanged (an I64).
+    /// The wrapper increfs the capture for this body param; `box_result_wat`'s Callable
+    /// arm increfs it again for the result cell and releases the body's source ref. Body
+    /// param is `(param $cap i64)` — the wrapper's `unbox_capture_wat` Callable arm pushes
+    /// the descriptor i64.
+    fn callable_capture_body_wat() -> &'static str {
+        r#"(func $fn___eir_closure_cap_call_gc_0 (param $cap i64) (result i64)
+  (local.get $cap))                                                     ;; return the captured callable descriptor (i64)
+"#
+    }
+
+    /// Builds the closure `Function` (name, one Callable capture param, Callable return)
+    /// that `emit_closure_dispatch` reads to generate the capture-aware wrapper + ladder
+    /// arm. Callable carries as `IrType::I64` with `PhpType::Callable`.
+    fn callable_capture_fn() -> Function {
+        let mut f = Function::new(
+            "__eir_closure_cap_call_gc_0".to_string(),
+            IrType::I64,
+            PhpType::Callable,
+        );
+        f.flags.is_closure = true;
+        f.flags.closure_capture_count = 1;
+        f.params.push(FunctionParam {
+            name: "c".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Callable,
+            by_ref: false,
+            variadic: false,
+        });
+        f
+    }
+
+    /// A one-Callable-capture closure, created and called through the full P7b path with
+    /// explicit release of the result cell, the arg buffer, the outer descriptor, and the
+    /// captured inner descriptor, leaves `_gc_live` at "0". The driver hand-stamps a
+    /// minimal inner callable descriptor (kind 6, no captures) and an outer descriptor
+    /// that captures it (tag 10), mirroring `lower_closure_new`'s MaybeOwned-incref stamp
+    /// arm: the inner is `incref`'d before being stored in the slot, so the outer owns one
+    /// ref and the driver retains its allocation ref. The generated wrapper unboxes the
+    /// capture (incref for the body), the body returns it, the wrapper boxes the result
+    /// (Callable: incref for the cell + release the body's source), and the driver
+    /// releases the result cell, the arg buffer, the outer descriptor (whose tag-10 walk
+    /// recurses through `__rt_callable_descriptor_release` to release the captured ref),
+    /// and finally its own inner ref. Proves the by-value callable capture is
+    /// refcount-balanced end-to-end with no double-free and no leak.
+    #[test]
+    fn closure_capture_callable_balanced_gc() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $inner i32) (local $desc i32) (local $args i32) (local $rcell i32)
+  (local.set $inner (call $__rt_heap_alloc (i32.const 32)))           ;; inner callable descriptor (no captures)
+  (i64.store (i32.sub (local.get $inner) (i32.const 8)) (i64.const 6)) ;; stamp inner heap-header kind = 6 (callable)
+  (i64.store (local.get $inner) (i64.const 1))                         ;; inner descriptor kind = 1 (Closure)
+  (i32.store offset=8 (local.get $inner) (i32.const 0))               ;; inner entry_index = 0 (unused here)
+  (i32.store offset=12 (local.get $inner) (i32.const 0))              ;; inner capture_count = 0
+  (i32.store offset=16 (local.get $inner) (i32.const 0))              ;; inner capture_tags_ptr = 0 (no tags)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 48)))            ;; outer descriptor (32 + 1 capture slot)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp outer heap-header kind = 6 (callable)
+  (i64.store (local.get $desc) (i64.const 1))                         ;; outer descriptor kind = 1 (Closure)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; outer entry_index = 0 (only closure)
+  (i32.store offset=12 (local.get $desc) (i32.const 1))              ;; outer capture_count = 1
+  (i32.store offset=16 (local.get $desc) (i32.const 512))            ;; outer capture_tags_ptr = static tag array [10]
+  (call $__rt_incref (local.get $inner))                              ;; retain a ref for the descriptor (MaybeOwned stamp arm)
+  (i64.store offset=32 (local.get $desc) (i64.extend_i32_u (local.get $inner))) ;; store captured callable ptr in slot 0
+  (local.set $args (call $__rt_array_new (i64.const 0) (i64.const 16))) ;; empty arg buffer (no visible args)
+  (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args))) ;; dispatch -> result cell
+  (call $__rt_decref_any (local.get $rcell))                         ;; release the result cell (frees its ref on inner)
+  (call $__rt_decref_any (local.get $args))                          ;; release the empty arg buffer
+  (call $__rt_decref_any (local.get $desc))                          ;; release the outer descriptor (tag-10 walk releases its inner ref)
+  (call $__rt_decref_any (local.get $inner))                         ;; release the driver's own inner allocation ref
+  (global.get $_gc_live))                                            ;; expect 0 (balanced)
+"#;
+        if let Some(o) = run_p7b_capture_driver(
+            callable_capture_fn(),
+            callable_capture_body_wat(),
+            driver,
+            "t",
+            10,
+            None,
+        ) {
             assert_eq!(o, "0");
         }
     }

@@ -188,4 +188,11 @@ pub struct FunctionFlags {
     pub is_static: bool,
     /// `true` when the function/closure returns by reference (`function &f()` / `fn &()`).
     pub by_ref_return: bool,
+    /// For a closure, the number of trailing `params` that are capture params
+    /// (appended after the visible user params, in source order). Set by the EIR
+    /// closure lowerer (`lower_closure_function_with_signature`) so backends that
+    /// build a per-closure wrapper from the `Function` alone — without the
+    /// `ClosureNew` instruction in hand — can recover the visible/capture split.
+    /// Native ignores it; the WASM backend reads it to split wrapper unboxing.
+    pub closure_capture_count: usize,
 }

@@ -130,6 +130,15 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // `emit_class_runtime`).
     cursor = classes::emit_instanceof_target_table(&mut wm, module, cursor);
 
+    // P7b: per-closure capture-tag byte arrays (one byte per by-value capture, in
+    // source order), laid out in static memory below the heap. The recorded base
+    // address per closure (indexed by `module.closures` position = `entry_index`)
+    // is stamped as the descriptor's `capture_tags_ptr` by `ClosureNew`, so the
+    // release runtime can walk refcounted captures. Must land before `heap_base`
+    // is computed so the arrays sit below the bump allocator. No-capture closures
+    // get a `0` sentinel (no segment emitted).
+    let (cursor, closure_tag_ptrs) = closures::emit_closure_capture_tag_tables(&mut wm, module, cursor)?;
+
     // The heap begins 16-aligned just above the string/data region; reserve two
     // pages of initial headroom above it. The bump allocator grows beyond
     // `heap_end` with `memory.grow` when this region is exhausted.
@@ -169,7 +178,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
 
     // Lower every user function; `main` becomes the WASI `_start` command entry.
     for func in &module.functions {
-        let fb = function::lower_function(module, func, &str_literals)?;
+        let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs)?;
         wm.add_func(fb);
     }
 
@@ -182,7 +191,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // order, so a `module.functions` entry calling `__construct` (via `ObjectNew`)
     // sees the method defined here even though methods are lowered after it.
     for func in &module.class_methods {
-        let fb = function::lower_function(module, func, &str_literals)?;
+        let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs)?;
         wm.add_func(fb);
     }
 
@@ -193,7 +202,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // the whole module regardless of definition order, so the P7a1 wrapper that calls a
     // closure body sees it defined here.
     for func in &module.closures {
-        let fb = function::lower_function(module, func, &str_literals)?;
+        let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs)?;
         wm.add_func(fb);
     }
 
@@ -966,6 +975,572 @@ mod tests {
 
         if let Some(out) = run_main(&module) {
             assert_eq!(out, "hi");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // P7b: by-value closure captures (end-to-end through real generate()).
+    // Each test builds a closure body whose trailing params are captures (with
+    // `flags.closure_capture_count` set) and a `main` that `ClosureNew`s with the
+    // capture operands, `ClosureCall`s, and echoes. These exercise the actual
+    // `lower_closure_new` stamp path + the per-closure tag table + the wrapper's
+    // `unbox_capture_wat` descriptor-slot unbox, which the hand-written-body unit
+    // tests in `closures.rs` do not cover. AssocArray (tag 5) and Object (tag 6)
+    // captures share the `Heap(Array|Hash|Object)` stamp/unbox/release arm with the
+    // Array capture test below (the release walk treats 4/5/6 identically); they are
+    // covered by parity rather than a dedicated e2e here.
+    // -------------------------------------------------------------------------
+
+    /// P7b int capture (tag 0): body `() -> int { return $n + 5 }` capturing `$n = 10`
+    /// echoes "15". Exercises the i64 stamp + `unbox_capture_wat` I64 int arm.
+    #[test]
+    fn closure_capture_int_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = module.data.intern_string("__eir_closure_cap_int_0");
+
+        let mut body = Function::new("__eir_closure_cap_int_0".to_string(), IrType::I64, PhpType::Int);
+        body.flags.is_closure = true;
+        body.flags.closure_capture_count = 1;
+        body.params.push(FunctionParam {
+            name: "n".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_n = body.add_local(Some("n".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let n = b.emit_load_local(slot_n, IrType::I64, PhpType::Int);
+            let five = b.emit_const_i64(5);
+            let sum = b.emit_iadd(n, five);
+            b.terminate(Terminator::Return { value: Some(sum) });
+        }
+        module.add_closure(body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let cap_n = b.emit_const_i64(10);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap_n],
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let result = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "15");
+        }
+    }
+
+    /// P7b string capture (tag 1): body `() -> Str { return $s }` capturing `$s = "hi"`
+    /// echoes "hi". The capture operand is a `ConstStr` (Persistent) so the stamp path
+    /// takes the `__rt_str_persist` arm (owned copy for the descriptor); the wrapper
+    /// `unbox_capture_wat` Str arm increfs the captured string for the body. Exercises
+    /// the 2-word slot (ptr at +0, len at +8) and the tag-1 release walk.
+    #[test]
+    fn closure_capture_str_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = module.data.intern_string("__eir_closure_cap_str_0");
+        let hi = module.data.intern_string("hi");
+
+        let mut body = Function::new("__eir_closure_cap_str_0".to_string(), IrType::Str, PhpType::Str);
+        body.flags.is_closure = true;
+        body.flags.closure_capture_count = 1;
+        body.params.push(FunctionParam {
+            name: "s".to_string(),
+            ir_type: IrType::Str,
+            php_type: PhpType::Str,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_s = body.add_local(Some("s".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let s = b.emit_load_local(slot_s, IrType::Str, PhpType::Str);
+            b.terminate(Terminator::Return { value: Some(s) });
+        }
+        module.add_closure(body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let cap_s = b.emit_const_str(hi);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap_s],
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let result = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "hi");
+        }
+    }
+
+    /// P7b float capture (tag 2): body `() -> float { return $f * 2.0 }` capturing
+    /// `$f = 1.5` echoes "3". Exercises the `f64.store` stamp + `unbox_capture_wat` F64
+    /// arm (no refcount; tag 2 is outside the release set).
+    #[test]
+    fn closure_capture_float_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = module.data.intern_string("__eir_closure_cap_flt_0");
+
+        let mut body = Function::new("__eir_closure_cap_flt_0".to_string(), IrType::F64, PhpType::Float);
+        body.flags.is_closure = true;
+        body.flags.closure_capture_count = 1;
+        body.params.push(FunctionParam {
+            name: "f".to_string(),
+            ir_type: IrType::F64,
+            php_type: PhpType::Float,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_f = body.add_local(Some("f".to_string()), IrType::F64, PhpType::Float, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let f = b.emit_load_local(slot_f, IrType::F64, PhpType::Float);
+            let two = b.emit_const_f64(2.0);
+            let doubled = b
+                .emit(Op::FMul, vec![f, two], None, IrType::F64, PhpType::Float, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(doubled) });
+        }
+        module.add_closure(body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let cap_f = b.emit_const_f64(1.5);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap_f],
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let result = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable],
+                    None,
+                    IrType::F64,
+                    PhpType::Float,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "3");
+        }
+    }
+
+    /// P7b two-int captures (source-order slot mapping): body `() -> int { return $a * $b }`
+    /// capturing `$a = 3, $b = 4` echoes "12". Exercises multi-capture stamp ordering
+    /// (slot i = `[desc+32+i*16]`) and the wrapper unboxing both captures in param order.
+    #[test]
+    fn closure_capture_two_values_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = module.data.intern_string("__eir_closure_cap_two_0");
+
+        let mut body = Function::new("__eir_closure_cap_two_0".to_string(), IrType::I64, PhpType::Int);
+        body.flags.is_closure = true;
+        body.flags.closure_capture_count = 2;
+        body.params.push(FunctionParam {
+            name: "a".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        body.params.push(FunctionParam {
+            name: "b".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_a = body.add_local(Some("a".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        let slot_b = body.add_local(Some("b".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let a = b.emit_load_local(slot_a, IrType::I64, PhpType::Int);
+            let bb = b.emit_load_local(slot_b, IrType::I64, PhpType::Int);
+            let prod = b
+                .emit(Op::IMul, vec![a, bb], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(prod) });
+        }
+        module.add_closure(body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let cap_a = b.emit_const_i64(3);
+            let cap_b = b.emit_const_i64(4);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap_a, cap_b],
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let result = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "12");
+        }
+    }
+
+    /// P7b array capture (tag 4): body `() -> int { return count($arr) }` capturing
+    /// `$arr = [10, 20]` echoes "2". The capture operand is a loaded local (MaybeOwned)
+    /// so the stamp path takes the `__rt_incref` arm; the wrapper `unbox_capture_wat`
+    /// Heap arm increfs the container for the body. Exercises the i64 ptr stamp +
+    /// tag-4 release walk. AssocArray (5) / Object (6) shares this arm.
+    #[test]
+    fn closure_capture_array_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = module.data.intern_string("__eir_closure_cap_arr_0");
+        let arr_ty = PhpType::Array(Box::new(PhpType::Int));
+
+        let mut body = Function::new("__eir_closure_cap_arr_0".to_string(), IrType::I64, PhpType::Int);
+        body.flags.is_closure = true;
+        body.flags.closure_capture_count = 1;
+        body.params.push(FunctionParam {
+            name: "arr".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Array),
+            php_type: arr_ty.clone(),
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_arr = body.add_local(
+            Some("arr".to_string()),
+            IrType::Heap(IrHeapKind::Array),
+            arr_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arr = b.emit_load_local(slot_arr, IrType::Heap(IrHeapKind::Array), arr_ty.clone());
+            let len = b
+                .emit(Op::ArrayLen, vec![arr], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(len) });
+        }
+        module.add_closure(body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        let slot_main_arr = main.add_local(
+            Some("arr".to_string()),
+            IrType::Heap(IrHeapKind::Array),
+            arr_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Array),
+                    arr_ty.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot_main_arr, arr);
+            for v in [10_i64, 20] {
+                let h = b.emit_load_local(slot_main_arr, IrType::Heap(IrHeapKind::Array), arr_ty.clone());
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![h, c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let cap_arr = b.emit_load_local(slot_main_arr, IrType::Heap(IrHeapKind::Array), arr_ty.clone());
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap_arr],
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let result = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "2");
+        }
+    }
+
+    /// P7b callable capture (tag 10): an inner no-capture closure `(int) -> int { $x+1 }`
+    /// is captured by an outer closure `() -> int { $f(100) }`; main creates both, the
+    /// outer body invokes the captured inner callable with 100, echoing "101". Exercises
+    /// the I64 Callable stamp (Owned transfer, no incref at stamp) + `unbox_capture_wat`
+    /// I64 Callable arm (incref for the body) + the tag-10 release walk recursing through
+    /// kind 6.
+    #[test]
+    fn closure_capture_callable_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let inner_name_id = module.data.intern_string("__eir_closure_cap_call_inner");
+        let outer_name_id = module.data.intern_string("__eir_closure_cap_call_outer");
+
+        // Inner closure: (int $x) -> int { return $x + 1 }.
+        let mut inner = Function::new("__eir_closure_cap_call_inner".to_string(), IrType::I64, PhpType::Int);
+        inner.flags.is_closure = true;
+        inner.params.push(FunctionParam {
+            name: "x".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_x = inner.add_local(Some("x".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut inner);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let x = b.emit_load_local(slot_x, IrType::I64, PhpType::Int);
+            let one = b.emit_const_i64(1);
+            let sum = b.emit_iadd(x, one);
+            b.terminate(Terminator::Return { value: Some(sum) });
+        }
+        module.add_closure(inner);
+
+        // Outer closure: () -> int { return $f(100) }, capturing the inner callable.
+        let mut outer = Function::new("__eir_closure_cap_call_outer".to_string(), IrType::I64, PhpType::Int);
+        outer.flags.is_closure = true;
+        outer.flags.closure_capture_count = 1;
+        outer.params.push(FunctionParam {
+            name: "f".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Callable,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_f = outer.add_local(Some("f".to_string()), IrType::I64, PhpType::Callable, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut outer);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let f = b.emit_load_local(slot_f, IrType::I64, PhpType::Callable);
+            let arg = b.emit_const_i64(100);
+            let result = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![f, arg],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(result) });
+        }
+        module.add_closure(outer);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let inner_callable = b
+                .emit(
+                    Op::ClosureNew,
+                    Vec::new(),
+                    Some(Immediate::Data(inner_name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let outer_callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![inner_callable],
+                    Some(Immediate::Data(outer_name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let result = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![outer_callable],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "101");
         }
     }
 

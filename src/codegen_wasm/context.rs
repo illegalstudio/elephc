@@ -87,6 +87,11 @@ pub(super) struct FnCtx<'a> {
     /// String-literal layout indexed by `DataId.as_raw()`: `(byte_offset, byte_len)`
     /// of each interned string's data segment in linear memory.
     pub(super) str_literals: &'a [(u32, u32)],
+    /// Per-closure capture-tag-byte-array base address, indexed by the closure's
+    /// position in `module.closures` (its `entry_index`). `0` for a no-capture
+    /// closure (no tag array emitted). `ClosureNew` stamps this as the
+    /// descriptor's `capture_tags_ptr` so the release runtime can walk it.
+    pub(super) closure_tag_ptrs: &'a [u32],
     /// Maps an `IterStart` result `ValueId::as_raw()` to its iterator locals, so the
     /// loop's `IterNext`/`IterCurrent*` ops (which reference the iterator value by
     /// dominance) recover its source/cursor without any heap state.
@@ -158,6 +163,14 @@ impl<'a> FnCtx<'a> {
             .get(data_id.as_raw() as usize)
             .copied()
             .ok_or_else(|| WasmError::Unsupported(format!("unknown string literal {:?}", data_id)))
+    }
+
+    /// Resolves the capture-tag-byte-array base address for the closure whose
+    /// `entry_index` is its position in `module.closures`. Returns `0` for a
+    /// no-capture closure (no tag array emitted) or an out-of-range index
+    /// (defensive; should not happen for a valid `ClosureNew`).
+    pub(super) fn closure_tag_base(&self, entry_index: usize) -> u32 {
+        self.closure_tag_ptrs.get(entry_index).copied().unwrap_or(0)
     }
 
     /// Declares a fresh temp local of the given type and returns its `$name` reference.

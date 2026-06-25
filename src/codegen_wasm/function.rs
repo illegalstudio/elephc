@@ -44,11 +44,15 @@ use crate::ir::{Function, InstId, LocalSlotId, Module, Terminator};
 /// 7. Build `FnCtx`, emit the entry-state prologue, emit the dispatch loop.
 ///
 /// `str_literals` is the module-wide string-literal layout (indexed by `DataId`),
-/// used by `ConstStr` lowering to address the data segments.
+/// used by `ConstStr` lowering to address the data segments. `closure_tag_ptrs`
+/// is the per-closure capture-tag-array base address layout (indexed by
+/// `module.closures` position), used by `ClosureNew` lowering to stamp the
+/// descriptor's `capture_tags_ptr`.
 pub fn lower_function(
     module: &Module,
     function: &Function,
     str_literals: &[(u32, u32)],
+    closure_tag_ptrs: &[u32],
 ) -> Result<FuncBuilder> {
     let is_main = function.flags.is_main;
 
@@ -110,6 +114,7 @@ pub fn lower_function(
         concat_base_local,
         temp_counter: 0,
         str_literals,
+        closure_tag_ptrs,
         iter_state: std::collections::HashMap::new(),
     };
 

@@ -499,6 +499,7 @@ fn lower_closure_function_with_signature(
     function.flags = FunctionFlags {
         is_closure: true,
         by_ref_return: signature.by_ref_return,
+        closure_capture_count: captures.len(),
         ..FunctionFlags::default()
     };
     function.params = function_params(&signature);
