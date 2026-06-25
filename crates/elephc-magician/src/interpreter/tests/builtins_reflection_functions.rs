@@ -127,6 +127,30 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionFunction formats retained eval function metadata through `__toString()`.
+#[test]
+fn execute_program_reflection_function_to_string() {
+    let program = parse_fragment(
+        br#"function eval_reflect_string(string $name, int $count = 3, &...$items): ?string {
+    return $name;
+}
+$ref = new ReflectionFunction("eval_reflect_string");
+echo str_replace("\n", "|", $ref->__toString());
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Function [ <user> function eval_reflect_string ] {|  - Parameters [3] {|    Parameter #0 [ <required> string $name ]|    Parameter #1 [ <optional> int $count = 3 ]|    Parameter #2 [ <optional> &...$items ]|  }|  - Return [ ?string ]|}|"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionFunction origin metadata APIs report eval user-defined defaults.
 #[test]
 fn execute_program_reflection_function_reports_origin_metadata_defaults() {

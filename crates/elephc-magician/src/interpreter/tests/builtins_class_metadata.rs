@@ -1896,6 +1896,32 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod formats retained eval method metadata through `__toString()`.
+#[test]
+fn execute_program_reflection_method_to_string() {
+    let program = parse_fragment(
+        br#"class EvalReflectMethodStringTarget {
+    final public static function run(?int $id, string $label = "ok"): ?string {
+        return $label;
+    }
+}
+$ref = new ReflectionMethod("EvalReflectMethodStringTarget", "run");
+echo str_replace("\n", "|", $ref->__toString());
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Method [ <user> final static public method run ] {|  - Parameters [2] {|    Parameter #0 [ <required> ?int $id ]|    Parameter #1 [ <optional> string $label = 'ok' ]|  }|  - Return [ ?string ]|}|"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionParameter reports eval constructor-promotion metadata.
 #[test]
 fn execute_program_reflection_parameter_reports_eval_promoted_metadata() {
