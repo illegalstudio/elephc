@@ -2644,6 +2644,19 @@ pub(in crate::interpreter) fn eval_reflection_aot_class_allows_without_construct
     Ok(Some(flags & rejected_flags == 0))
 }
 
+/// Returns whether a generated/AOT reflected class can be constructed through a public constructor.
+pub(in crate::interpreter) fn eval_reflection_aot_class_allows_public_instantiation(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<bool>, EvalStatus> {
+    let Some((flags, _)) = eval_reflection_aot_class_flags(class_name, values)? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        flags & EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE == EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE,
+    ))
+}
+
 /// Returns whether an absent or public AOT lifecycle method allows public reflection.
 fn eval_reflection_aot_lifecycle_method_allows_public_reflection(
     class_name: &str,

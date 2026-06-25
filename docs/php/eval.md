@@ -355,7 +355,8 @@ generated/AOT reflected classes with public constructors and forwards
 constructor arguments through eval's positional, named, and unpacking-aware call
 binding. Non-public constructors fail like PHP reflection construction.
 `ReflectionClass::newInstanceArgs()` constructs those reflected classes from an
-argument array, treating string keys as named constructor arguments.
+indexed or string-keyed argument array, including arrays built at eval runtime,
+and treats string keys as named constructor arguments.
 `ReflectionClass::newInstanceWithoutConstructor()` allocates eval-declared and
 generated/AOT reflected classes, initializes supported property defaults, skips
 `__construct()`, and rejects reflected abstract classes, interfaces, traits,
