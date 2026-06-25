@@ -26,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ir::{BlockId, DataPool, Function, Immediate, Op, Terminator, ValueId};
 
-use super::cfg::successors;
+use super::cfg::{has_exception_handlers, successors};
 use super::driver::IrPass;
 use super::rewrite::{defining_instruction, neutralize_to_nop};
 
@@ -52,25 +52,6 @@ impl IrPass for BranchSimplify {
         changed |= neutralize_unreachable_blocks(function);
         changed
     }
-}
-
-/// Returns true when the function uses any exception-handling opcode.
-///
-/// Such functions have handler blocks reachable only through implicit edges
-/// (a `try_push_handler` token names the handler block id), so terminator-graph
-/// reachability is incomplete and the pass conservatively skips them.
-fn has_exception_handlers(function: &Function) -> bool {
-    function.instructions.iter().any(|inst| {
-        matches!(
-            inst.op,
-            Op::TryPushHandler
-                | Op::TryPopHandler
-                | Op::CatchCurrent
-                | Op::CatchBind
-                | Op::FinallyEnter
-                | Op::FinallyExit
-        )
-    })
 }
 
 /// Resolves a branch condition value to a compile-time truthiness, if known.

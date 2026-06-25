@@ -43,6 +43,8 @@ pub mod optimize;
 pub mod parser;
 /// PDO (SQLite) standard-library prelude injection.
 pub mod pdo_prelude;
+/// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
+pub mod image_prelude;
 /// Resolution of includes.
 pub mod resolver;
 /// Source span tracking.

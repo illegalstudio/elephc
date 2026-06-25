@@ -4,8 +4,21 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed a heap leak when releasing string-keyed associative arrays (issue #408): promoting an indexed array to hash storage (`array_to_hash`) built the result hash from a copy of the source array but never freed that source array, leaking one allocation per conversion. Reassigning an assoc array in a loop — or, under `--web`, rebuilding the request superglobals each request — slowly exhausted the heap. The conversion now releases the temporary source array, so the heap stays flat.
+- EIR small-function inliner: splices small (≤24-instruction), non-recursive user functions into their callers — covering scalar, string, and array/value helpers — with copy-on-write and reference-counting semantics preserved, gated by `--ir-opt`. Recursive (direct or mutual), generator/fiber, exception-handling, object/closure/resource/by-reference, and argument-coercing call sites are left as ordinary calls.
+- EIR optimization pipeline now runs to a module-level fixed point: the small-function inliner and the per-function passes are interleaved and repeated until neither changes anything, so optimization and inlining feed each other (e.g. a function inlined once its callees fold below the size threshold). Behavior is unchanged with `--ir-opt` on vs off; only the generated code gets tighter.
+- EIR common-subexpression elimination now unifies constant operands by value, so repeated computations built on constants are deduplicated too — `($n + 1) * ($n + 1)` computes `$n + 1` once. Gated by `--ir-opt`; output is unchanged, only the generated code is tighter.
+- Fixed an EIR optimizer miscompile: `$x / 1` (PHP's float-producing division) was folded to its integer operand, so the result's bits were misread as a float — `var_dump($x / 1)` and float arithmetic on it produced wrong values with the optimizer on. Identity folding now only folds genuine integer division.
+
+## [0.25.1] - 2026-06-22
+- Image support (EIR backend), pure-Rust with no runtime dependency (`elephc-image` crate): GD raster I/O (PNG/JPEG/GIF/BMP/WebP/TGA), drawing primitives, bitmap text, transforms/filters/copy, and color handling; Exif and IPTC metadata; Imagick and Gmagick OOP with the full method surface callable (operations with no pure-Rust equivalent throw `*Exception("... is not supported in elephc")` at runtime, matching PHP); and a Cairo (tiny-skia) procedural + OOP subset.
+- Loose equality (`==`/`!=`) and `switch` compare a float against an int numerically (`1.5 == 1` is `false`, `1.0 == 1` is `true`, `switch (1.5)` matches `case 1.5`) instead of failing to compile or truncating the float subject to int.
 - EIR dead store elimination over PHP local slots: a CFG-liveness pass that drops `store_local` writes to scalar locals that are never read before being overwritten or the function exits, gated by `--ir-opt`. Refcounted and by-reference-aliased slots are left untouched to preserve ownership and aliasing semantics.
 - EIR branch simplification: folds constant-condition `cond_br`/`switch` terminators to unconditional branches (e.g. `while (true)` loops), threads predecessors through empty forwarding blocks, and neutralizes unreachable blocks, gated by `--ir-opt`.
+- EIR per-block constant folding: folds pure operations whose operands are all compile-time constants (integer/float arithmetic and bitwise ops, in-range shifts, comparisons, `is_null`/`is_truthy`) into a single constant, gated by `--ir-opt`. Composed with the peephole's scalar load/store forwarding, it propagates constants through EIR value ids and local slots.
+- EIR dominator-tree and natural-loop analyses: read-only sidecar analyses (Cooper–Harvey–Kennedy dominators; a back-edge/natural-loop forest with nesting and preheader detection) that underpin the cross-block optimizations below.
+- EIR common-subexpression elimination: a dominator-tree value-numbering pass that removes a pure computation when an identical one already dominates it (per-block and cross-block), gated by `--ir-opt`.
+- EIR loop-invariant code motion: hoists pure loop-invariant computations out of loop bodies into loop preheaders, gated by `--ir-opt`.
 - `--web` flag: compile a PHP program into a standalone prefork HTTP server binary. Each request re-runs the top-level code from fresh state; `echo`/`print` output becomes the response body. Request input is exposed through `$_SERVER`/`$_GET`/`$_POST` and `php://input`; response status and headers are controlled with `http_response_code()` and `header()` (PHP-compatible, including status lines and `Location:`→302). Runtime args: `--listen host:port`, `--workers N`, `--max-body-size N` (413 on overflow). The prefork master shuts down cleanly on `SIGINT`/`SIGTERM`, respawns workers that die, and bounds slow/idle keep-alive connections with a header-read timeout.
 
 ## [0.25.0] - 2026-06-19
@@ -388,7 +401,8 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.25.1...HEAD
+[0.25.1]: https://github.com/illegalstudio/elephc/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/illegalstudio/elephc/compare/v0.24.3...v0.25.0
 [0.24.3]: https://github.com/illegalstudio/elephc/compare/v0.24.2...v0.24.3
 [0.24.2]: https://github.com/illegalstudio/elephc/compare/v0.24.1...v0.24.2

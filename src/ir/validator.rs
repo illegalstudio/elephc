@@ -846,9 +846,21 @@ fn definition_dominates_use(
 }
 
 /// Computes simple iterative dominator sets for the function CFG.
+///
+/// Only predecessors reachable from the entry are intersected. An unreachable
+/// block carries no real control flow from the entry, so including it as a
+/// predecessor would wrongly shrink a reachable block's dominator set — e.g. a
+/// loop whose `for.update` is skipped by an unconditional `break` leaves that
+/// update block unreachable yet still branching back to the loop header, which
+/// would otherwise strip the entry block out of the header's dominators and
+/// produce spurious `UseNotDominated` errors for any value the entry defines and
+/// a later pass forwards into the loop. Unreachable blocks themselves still
+/// resolve to `{self}` (no reachable predecessor), so genuine uses inside dead
+/// code remain flagged until they are neutralized.
 fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
     let all_blocks: HashSet<BlockId> = function.blocks.iter().map(|block| block.id).collect();
     let predecessors = compute_predecessors(function);
+    let reachable = reachable_from_entry(function, &predecessors);
     let mut dominators = HashMap::new();
     for block in &function.blocks {
         if block.id == function.entry {
@@ -865,7 +877,10 @@ fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>>
             if block.id == function.entry {
                 continue;
             }
-            let preds = predecessors.get(&block.id).cloned().unwrap_or_default();
+            let preds: Vec<BlockId> = predecessors
+                .get(&block.id)
+                .map(|preds| preds.iter().copied().filter(|p| reachable.contains(p)).collect())
+                .unwrap_or_default();
             let mut next = if preds.is_empty() {
                 HashSet::new()
             } else {
@@ -879,6 +894,33 @@ fn compute_dominators(function: &Function) -> HashMap<BlockId, HashSet<BlockId>>
         }
     }
     dominators
+}
+
+/// Computes the set of blocks reachable from the entry over the same edge set as
+/// `compute_predecessors` (terminator successors plus implicit exception-handler
+/// edges): a block is reachable when it is the entry or any of its predecessors
+/// is reachable. Iterates to a fixed point.
+fn reachable_from_entry(
+    function: &Function,
+    predecessors: &HashMap<BlockId, Vec<BlockId>>,
+) -> HashSet<BlockId> {
+    let mut reachable: HashSet<BlockId> = HashSet::from([function.entry]);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in &function.blocks {
+            if reachable.contains(&block.id) {
+                continue;
+            }
+            if let Some(preds) = predecessors.get(&block.id) {
+                if preds.iter().any(|pred| reachable.contains(pred)) {
+                    reachable.insert(block.id);
+                    changed = true;
+                }
+            }
+        }
+    }
+    reachable
 }
 
 /// Builds predecessor lists from every terminator edge plus implicit exception edges.

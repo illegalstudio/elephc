@@ -3612,6 +3612,43 @@ fn coerce_scalar_arg_to_param_storage(
     value
 }
 
+/// Widens positional call operands to their declared scalar parameter types.
+///
+/// The C/native ABI places an argument in an integer or floating-point register based
+/// on the *value's* type, while the callee reads each parameter from the register class
+/// of the *parameter's* type. Without this step an `int` (or `bool`) argument passed to
+/// a `float` parameter is deposited in an integer register and then read back as garbage
+/// from a floating-point slot. Only pure `float` parameters receiving an integer/bool
+/// operand are rewritten with an int→float conversion; by-reference parameters and the
+/// variadic tail operand are left untouched.
+fn coerce_operands_to_params(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    mut operands: Vec<crate::ir::ValueId>,
+) -> Vec<crate::ir::ValueId> {
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    let limit = operands.len().min(regular_param_count);
+    for index in 0..limit {
+        if sig.ref_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some((_, param_ty)) = sig.params.get(index) else {
+            continue;
+        };
+        if param_ty.codegen_repr() != PhpType::Float {
+            continue;
+        }
+        let value = operands[index];
+        let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
+        if !matches!(operand_ty, PhpType::Int | PhpType::Bool) {
+            continue;
+        }
+        let lowered = LoweredValue { value, ir_type: IrType::I64 };
+        operands[index] = coerce_to_float_at_span(ctx, lowered, None).value;
+    }
+    operands
+}
+
 /// Widens local indexed-array storage before passing it to an `array<mixed>` ref parameter.
 fn lower_by_ref_array_arg_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
@@ -3671,10 +3708,11 @@ fn lower_args_with_signature(
         return lower_args(ctx, args);
     };
     if crate::types::call_args::has_named_args(args) {
-        return lower_named_args_with_signature(ctx, sig, args);
+        let operands = lower_named_args_with_signature(ctx, sig, args);
+        return coerce_operands_to_params(ctx, sig, operands);
     }
     if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args) {
-        return operands;
+        return coerce_operands_to_params(ctx, sig, operands);
     }
     let static_spread_args = if has_static_call_spread_args(args) {
         Some(expand_static_call_spread_args(args))
@@ -3683,7 +3721,7 @@ fn lower_args_with_signature(
     };
     let args = static_spread_args.as_deref().unwrap_or(args);
     if let Some(operands) = lower_assoc_spread_only_args(ctx, sig, args) {
-        return operands;
+        return coerce_operands_to_params(ctx, sig, operands);
     }
     if args.iter().any(is_spread_arg) {
         return lower_args(ctx, args);
@@ -3695,11 +3733,12 @@ fn lower_args_with_signature(
         args.len()
     };
     if sig.variadic.is_none() && fixed_arg_count >= regular_param_count {
-        return args
+        let operands = args
             .iter()
             .enumerate()
             .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg))
             .collect();
+        return coerce_operands_to_params(ctx, sig, operands);
     }
     let mut operands: Vec<crate::ir::ValueId> = args[..fixed_arg_count]
         .iter()
@@ -3720,7 +3759,7 @@ fn lower_args_with_signature(
         };
         operands.push(lower_variadic_tail_array(ctx, sig, tail).value);
     }
-    operands
+    coerce_operands_to_params(ctx, sig, operands)
 }
 
 /// Lowers one trailing indexed spread in a fixed-arity positional call.
@@ -7389,6 +7428,7 @@ fn lower_method_call(
         Some(expr.span),
     );
     release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span);
+    release_owning_receiver_temporary(ctx, object, expr.span);
     call
 }
 
@@ -7607,6 +7647,7 @@ fn lower_method_call_with_receiver(
         Some(expr.span),
     );
     release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span);
+    release_owning_receiver_temporary(ctx, object, expr.span);
     call
 }
 
@@ -7660,6 +7701,25 @@ fn call_result_may_alias_arg(
         (PhpType::Callable, PhpType::Callable) => true,
         (PhpType::Buffer(_), PhpType::Buffer(_)) => true,
         _ => arg_ty == result_ty,
+    }
+}
+
+/// Releases the receiver of a method call when it was an owning temporary.
+///
+/// A method borrows its receiver, so a receiver that is itself a temporary — the
+/// result of a prior chained call (`$o->a()->b()`) or an inline `new X()->m()` —
+/// has no owner once the call returns and would otherwise never reach refcount
+/// zero (a leak; its destructor never runs). A plain local or `$this` receiver is
+/// not an owning temporary and is left to normal scope cleanup. This must run
+/// after the call is emitted (and after `return $this` has acquired its own
+/// reference) so the released reference is the receiver's, not the result's.
+fn release_owning_receiver_temporary(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    span: Span,
+) {
+    if ctx.value_is_owning_temporary(receiver) {
+        crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
     }
 }
 

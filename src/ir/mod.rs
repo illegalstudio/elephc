@@ -13,6 +13,7 @@ mod block;
 mod builder;
 mod effects;
 mod function;
+pub(crate) mod function_variants;
 mod instr;
 mod module;
 mod print;
@@ -40,4 +41,8 @@ pub use module::{
 pub use print::{print_function, print_module};
 pub use types::{IrHeapKind, IrType};
 pub use validator::{validate_function, validate_module, ValidationError};
+pub use function_variants::{
+    collect_dispatch_groups, parse_variant_label, resolve_variant_callee,
+    resolve_variant_callee_name, FunctionVariantLabel,
+};
 pub use value::{Ownership, Value, ValueDef, ValueId};

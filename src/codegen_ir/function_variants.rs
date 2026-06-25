@@ -10,81 +10,21 @@
 //! - Dispatchers use the public PHP function symbol and tail-dispatch through an
 //!   active function-pointer slot populated by `FunctionVariantMark`.
 
-use std::collections::HashSet;
-
 use crate::codegen::abi;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
-use crate::ir::{Function, Module};
-use crate::names::{function_symbol, function_variant_active_symbol, php_symbol_key};
+use crate::ir::{function_variants, Function, Module};
+use crate::names::{function_symbol, function_variant_active_symbol};
 
-/// Parsed representation of one `name:variant[,variant...]` metadata label.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct FunctionVariantLabel {
-    pub(super) name: String,
-    pub(super) variants: Vec<String>,
-}
-
-/// Parses the string payload used by EIR function-variant metadata.
-pub(super) fn parse_variant_label(label: &str) -> Option<FunctionVariantLabel> {
-    let (name, variants) = label.split_once(':')?;
-    if name.is_empty() || variants.is_empty() {
-        return None;
-    }
-    let variants = variants
-        .split(',')
-        .filter(|variant| !variant.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if variants.is_empty() {
-        return None;
-    }
-    Some(FunctionVariantLabel {
-        name: name.to_string(),
-        variants,
-    })
-}
-
-/// Collects public function names that need an include-variant dispatcher.
-pub(super) fn collect_dispatch_groups(module: &Module) -> Vec<FunctionVariantLabel> {
-    let function_keys = module
-        .functions
-        .iter()
-        .map(|function| normalized_function_key(&function.name))
-        .collect::<HashSet<_>>();
-    let mut seen_groups = HashSet::new();
-    let mut groups = Vec::new();
-    for value in &module.data.strings {
-        let Some(mut label) = parse_variant_label(value) else {
-            continue;
-        };
-        label
-            .variants
-            .retain(|variant| function_keys.contains(&normalized_function_key(variant)));
-        if label.variants.is_empty()
-            || function_keys.contains(&normalized_function_key(&label.name))
-            || !seen_groups.insert(normalized_function_key(&label.name))
-        {
-            continue;
-        }
-        groups.push(label);
-    }
-    groups
-}
+// Delegate pure variant resolution/collect to the canonical ir module (single source of truth).
+pub(super) use function_variants::{
+    collect_dispatch_groups, parse_variant_label, FunctionVariantLabel,
+};
 
 /// Returns a representative concrete variant function for a public function group.
 pub(super) fn variant_callee_for_group<'a>(module: &'a Module, name: &str) -> Option<&'a Function> {
-    let requested = normalized_function_key(name);
-    collect_dispatch_groups(module)
-        .into_iter()
-        .find(|group| normalized_function_key(&group.name) == requested)
-        .and_then(|group| {
-            group
-                .variants
-                .iter()
-                .find_map(|variant| function_by_php_name(module, variant))
-        })
+    function_variants::variant_callee_for_group(module, name)
 }
 
 /// Emits every include-variant dispatcher required by the EIR module.
@@ -172,16 +112,4 @@ fn emit_function_variant_dispatcher(
     }
 }
 
-/// Finds a user function by PHP name using case-insensitive lookup.
-fn function_by_php_name<'a>(module: &'a Module, name: &str) -> Option<&'a Function> {
-    let key = normalized_function_key(name);
-    module
-        .functions
-        .iter()
-        .find(|function| normalized_function_key(&function.name) == key)
-}
-
-/// Normalizes a PHP function name for case-insensitive comparisons.
-fn normalized_function_key(name: &str) -> String {
-    php_symbol_key(name.trim_start_matches('\\'))
-}
+// (pure helpers moved to crate::ir::function_variants for canonical single implementation)

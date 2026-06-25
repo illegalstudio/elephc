@@ -153,6 +153,15 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = var_export_prelude::inject_if_used(ast);
     timings.record_since("var-export-prelude", phase_started);
 
+    // Inject the image standard-library prelude (elephc_image externs + GD/Exif/
+    // Imagick/Gmagick/Cairo surface, written in elephc-PHP) only when the program
+    // references an image symbol, so non-image binaries never declare the
+    // elephc_image externs or link the bridge. Runs after include resolution so
+    // image usage inside includes is detected.
+    let phase_started = Instant::now();
+    let ast = crate::image_prelude::inject_if_used(ast);
+    timings.record_since("image-prelude", phase_started);
+
     let phase_started = Instant::now();
     let ast = web_prelude::inject_if_web(ast, web);
     timings.record_since("web-prelude", phase_started);

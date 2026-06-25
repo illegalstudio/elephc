@@ -47,11 +47,20 @@ impl IrPass for IdentityArith {
                 continue;
             };
             match classify(function, inst) {
-                Some(Fold::ToOperand(replacement)) => {
+                // Type-safety backstop: a fold-to-operand RAUWs every use of `result`
+                // to `replacement`, so their storage types must match; a fold-to-zero
+                // rewrites the instruction to `const_i64 0` in place, so `result` must
+                // already be I64. Mismatches (e.g. a float-producing op classified as an
+                // integer identity) are left unfolded rather than miscompiled.
+                Some(Fold::ToOperand(replacement))
+                    if value_ir_type(function, result) == value_ir_type(function, replacement) =>
+                {
                     to_operand.push((inst_id, result, replacement));
                 }
-                Some(Fold::ToZeroI64) => to_zero.push(inst_id),
-                None => {}
+                Some(Fold::ToZeroI64) if value_ir_type(function, result) == Some(IrType::I64) => {
+                    to_zero.push(inst_id)
+                }
+                _ => {}
             }
         }
         if to_operand.is_empty() && to_zero.is_empty() {
@@ -138,8 +147,12 @@ fn classify(function: &Function, inst: &Instruction) -> Option<Fold> {
                 None
             }
         }
-        // x / 1 = x (x / 0 must trap and is excluded)
-        Op::IDiv | Op::ISDiv => {
+        // x / 1 = x for genuine *integer* division (`ISDiv`). PHP's `/` (`Op::IDiv`)
+        // is float-producing even on two int operands (it lowers via int-div-to-float),
+        // so its F64 result must never be folded onto an I64 operand — that would
+        // reinterpret the integer bits as a double. `x / 0` must trap and is excluded.
+        // (The fold-to-operand type guard in `run` is the backstop for this.)
+        Op::ISDiv => {
             if rhs_is_one {
                 Some(Fold::ToOperand(lhs))
             } else {
@@ -214,6 +227,13 @@ fn classify(function: &Function, inst: &Instruction) -> Option<Fold> {
         }
         _ => None,
     }
+}
+
+/// Returns the EIR storage type of `value`, used to keep folds type-safe (a
+/// fold-to-operand RAUW must not change a use's storage type, and a fold-to-zero
+/// only applies to I64 results).
+fn value_ir_type(function: &Function, value: ValueId) -> Option<IrType> {
+    function.value(value).map(|v| v.ir_type)
 }
 
 /// Returns true when `value` is an `i64` constant equal to `expected`.

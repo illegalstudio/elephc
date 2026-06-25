@@ -869,3 +869,82 @@ fn test_echo_owned_temp_array_balances_gc_stats() {
     );
     assert_eq!(allocs - baseline_allocs, frees - baseline_frees);
 }
+
+/// Regression test for issue #408: releasing a string-keyed associative array
+/// must free everything it owns. Reassigning a hash-typed local each iteration
+/// promotes a fresh indexed array literal to hash storage via `array_to_hash`,
+/// which builds the result hash from a copy of the source array; the source
+/// array was leaked once per conversion. With many iterations the leak would
+/// exhaust the fixed heap, so a balanced alloc/free count proves it is freed.
+#[test]
+fn test_regression_408_reassigned_string_keyed_array_does_not_leak() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$g = [];
+for ($n = 0; $n < 500; $n++) {
+    $g = [];
+    $g["a"] = "x";
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert!(allocs >= 500, "expected per-iteration allocations: {allocs}");
+    assert_eq!(
+        allocs, frees,
+        "string-keyed array release must free its source array (issue #408)"
+    );
+}
+
+/// Regression test for issue #408 (heap-debug): the same reassignment loop must
+/// report a clean heap with no live blocks at exit and must not trip the
+/// double-free detector, confirming the conversion releases exactly one
+/// reference of the source array (correct COW ownership).
+#[test]
+fn test_regression_408_reassigned_string_keyed_array_heap_debug_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$g = [];
+for ($n = 0; $n < 500; $n++) {
+    $g = [];
+    $g["a"] = "x";
+    $g["bb"] = "yy";
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #408 (in-place promotion): a string-key write that
+/// promotes a freshly built indexed array literal to hash storage must also free
+/// the source array. Repeated promotion in a loop keeps GC allocs and frees
+/// balanced with no leaked source arrays.
+#[test]
+fn test_regression_408_string_key_promotion_does_not_leak() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$g = [];
+for ($n = 0; $n < 500; $n++) {
+    $g = [1, 2];
+    $g["a"] = "x";
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(
+        allocs, frees,
+        "promoting an indexed array literal to hash storage must free the source array (issue #408)"
+    );
+}

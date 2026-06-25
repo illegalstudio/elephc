@@ -1,0 +1,9 @@
+*.s
+*.o
+main
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.bmp

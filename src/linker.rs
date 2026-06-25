@@ -101,6 +101,17 @@ const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
     },
     BridgeStaticlib {
+        lib_name: "elephc_image",
+        env_var: "ELEPHC_IMAGE_LIB_DIR",
+        crate_name: "elephc-image",
+        // Pure-Rust image codecs/drawing: no link-time side effects, so a plain
+        // `-l elephc_image` suffices.
+        whole_archive: false,
+        // No native transitive deps (the `image` stack is pure Rust).
+        macos_frameworks: &[],
+        needs_libdl: true,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_web",
         env_var: "ELEPHC_WEB_LIB_DIR",
         crate_name: "elephc-web",

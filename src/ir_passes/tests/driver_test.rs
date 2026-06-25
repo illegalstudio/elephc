@@ -144,3 +144,31 @@ fn malformed_ir_pass_trips_validation_in_debug() {
     let passes: Vec<Box<dyn IrPass>> = vec![Box::new(DropTerminatorPass)];
     drive(&mut function, &passes);
 }
+
+/// `run_function_passes` reports whether it modified the function: `false` when no
+/// pass fires, `true` when at least one does, and `false` again once converged. The
+/// module-level fixed-point loop in `optimize_module` relies on this flag to know
+/// when to stop interleaving the inliner with the per-function passes.
+#[test]
+fn run_function_passes_reports_whether_modified() {
+    let mut data = DataPool::default();
+
+    let noop: Vec<Box<dyn IrPass>> = vec![Box::new(NoopPass)];
+    let mut unchanged = sample_function();
+    assert!(
+        !run_function_passes(&mut unchanged, &noop, &mut data),
+        "a no-op pipeline must report no modification"
+    );
+
+    let bang: Vec<Box<dyn IrPass>> = vec![Box::new(AppendBangPass)];
+    let mut changed = sample_function();
+    assert!(
+        run_function_passes(&mut changed, &bang, &mut data),
+        "a firing pass must report a modification"
+    );
+    assert_eq!(changed.name, "sample!");
+    assert!(
+        !run_function_passes(&mut changed, &bang, &mut data),
+        "re-running an already-converged function reports no modification"
+    );
+}

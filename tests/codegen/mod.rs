@@ -31,6 +31,7 @@ mod io;
 mod pdo;
 mod pdo_mysql;
 mod pdo_pgsql;
+mod image;
 mod arrays;
 mod calendar;
 mod callables;
