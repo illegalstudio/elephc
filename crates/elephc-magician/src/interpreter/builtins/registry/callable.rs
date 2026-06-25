@@ -180,7 +180,12 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
             eval_callable_with_values(name, evaluated_args, context, values)
         }
         EvaluatedCallable::InvokableObject { object } => {
-            eval_method_call_result(*object, "__invoke", evaluated_args, context, values)
+            eval_invokable_object_call_result(
+                *object,
+                positional_args(evaluated_args),
+                context,
+                values,
+            )
         }
         EvaluatedCallable::ObjectMethod { object, method } => {
             eval_method_call_result(*object, method, evaluated_args, context, values)
@@ -207,13 +212,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
             eval_callable_with_call_array_args(name, evaluated_args, context, values)
         }
         EvaluatedCallable::InvokableObject { object } => {
-            eval_method_call_result_with_evaluated_args(
-                *object,
-                "__invoke",
-                evaluated_args,
-                context,
-                values,
-            )
+            eval_invokable_object_call_result(*object, evaluated_args, context, values)
         }
         EvaluatedCallable::ObjectMethod { object, method } => {
             eval_method_call_result_with_evaluated_args(

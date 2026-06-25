@@ -792,6 +792,9 @@ fn eval_object_method_callable_probe(
     if method.is_static() || method.is_abstract() {
         return Ok(false);
     }
+    if method_name.eq_ignore_ascii_case("__invoke") {
+        return Ok(true);
+    }
     Ok(validate_eval_member_access(&declaring_class, method.visibility(), context).is_ok())
 }
 

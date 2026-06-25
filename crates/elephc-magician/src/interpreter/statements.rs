@@ -1454,7 +1454,6 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
         }
         "__get" | "__isset" | "__unset" => {
             validate_magic_non_static(method)?;
-            validate_magic_public(method)?;
             validate_magic_arity(method, 1)?;
             validate_magic_declared_param_type(method, 0, MagicParamType::String)?;
             if method.name().eq_ignore_ascii_case("__isset") {
@@ -1465,7 +1464,6 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
         }
         "__set" | "__call" => {
             validate_magic_non_static(method)?;
-            validate_magic_public(method)?;
             validate_magic_arity(method, 2)?;
             validate_magic_declared_param_type(method, 0, MagicParamType::String)?;
             if method.name().eq_ignore_ascii_case("__set") {
@@ -1476,7 +1474,6 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
         }
         "__callstatic" => {
             validate_magic_static(method)?;
-            validate_magic_public(method)?;
             validate_magic_arity(method, 2)?;
             validate_magic_declared_param_type(method, 0, MagicParamType::String)?;
             validate_magic_declared_param_type(method, 1, MagicParamType::Array)?;
@@ -1509,7 +1506,6 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
         }
         "__invoke" => {
             validate_magic_non_static(method)?;
-            validate_magic_public(method)?;
         }
         "__clone" | "__destruct" => {
             validate_magic_non_static(method)?;
@@ -2978,7 +2974,6 @@ fn eval_magic_property_get(
     if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    validate_eval_member_access(&declaring_class, method.visibility(), context)?;
     let property = values.string(property_name)?;
     eval_dynamic_method_with_values(
         &declaring_class,
@@ -3007,7 +3002,6 @@ fn eval_magic_property_set(
     if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    validate_eval_member_access(&declaring_class, method.visibility(), context)?;
     let property = values.string(property_name)?;
     let result = eval_dynamic_method_with_values(
         &declaring_class,
@@ -3036,7 +3030,6 @@ fn eval_magic_property_isset(
     if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    validate_eval_member_access(&declaring_class, method.visibility(), context)?;
     let property = values.string(property_name)?;
     let result = eval_dynamic_method_with_values(
         &declaring_class,
@@ -3066,7 +3059,6 @@ fn eval_magic_property_unset(
     if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    validate_eval_member_access(&declaring_class, method.visibility(), context)?;
     let property = values.string(property_name)?;
     let result = eval_dynamic_method_with_values(
         &declaring_class,
@@ -4477,6 +4469,40 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     Err(EvalStatus::RuntimeFatal)
 }
 
+/// Dispatches an invokable object through `__invoke()` without enforcing hook visibility.
+pub(in crate::interpreter) fn eval_invokable_object_call_result(
+    object: RuntimeCellHandle,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Ok(identity) = values.object_identity(object) else {
+        let evaluated_args = positional_evaluated_arg_values(evaluated_args)?;
+        return values.method_call(object, "__invoke", evaluated_args);
+    };
+    let Some(class) = context.dynamic_object_class(identity) else {
+        let evaluated_args = positional_evaluated_arg_values(evaluated_args)?;
+        return values.method_call(object, "__invoke", evaluated_args);
+    };
+    let called_class_name = class.name().to_string();
+    let Some((declaring_class, method)) = context.class_method(&called_class_name, "__invoke")
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if method.is_static() || method.is_abstract() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_dynamic_method_with_values(
+        &declaring_class,
+        &called_class_name,
+        &method,
+        object,
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
 /// Dispatches a missing or inaccessible eval instance method through `__call()`.
 fn eval_magic_instance_method_call(
     object: RuntimeCellHandle,
@@ -4492,7 +4518,6 @@ fn eval_magic_instance_method_call(
     if method.is_static() || method.is_abstract() {
         return Ok(None);
     }
-    validate_eval_member_access(&declaring_class, method.visibility(), context)?;
     let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
     eval_dynamic_method_with_values(
         &declaring_class,
@@ -4520,7 +4545,6 @@ fn eval_magic_static_method_call(
     if !method.is_static() || method.is_abstract() {
         return Ok(None);
     }
-    validate_eval_member_access(&declaring_class, method.visibility(), context)?;
     let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
     eval_dynamic_static_method_with_values(
         &declaring_class,

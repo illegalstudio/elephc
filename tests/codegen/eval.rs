@@ -7669,11 +7669,11 @@ eval('class EvalMagicPropertyBox {
     private string $secret = "raw";
     public string $events = "";
     public function readOwn() { return $this->secret; }
-    public function __get($name) {
+    protected function __get($name) {
         $this->events = $this->events . "get:" . $name . ";";
         return "read:" . $name;
     }
-    public function __set($name, $value) {
+    private function __set($name, $value) {
         $this->events = $this->events . "set:" . $name . "=" . $value . ";";
     }
 }
@@ -7732,15 +7732,15 @@ eval('class EvalMagicPropertyProbeBox {
     public string $present = "ready";
     public $nullish = null;
     private string $secret = "raw";
-    public function __isset($name) {
+    private function __isset($name) {
         $this->events = $this->events . "isset:" . $name . ";";
         return $name !== "no";
     }
-    public function __get($name) {
+    protected function __get($name) {
         $this->events = $this->events . "get:" . $name . ";";
         return $name === "empty" ? "" : "value:" . $name;
     }
-    public function __unset($name) {
+    private function __unset($name) {
         $this->events = $this->events . "unset:" . $name . ";";
     }
 }
@@ -8258,7 +8258,7 @@ eval('class EvalInvokableBox {
     public function __construct($label = "box") {
         $this->label = $label;
     }
-    public function __invoke($left = "A", $right = "B") {
+    private function __invoke($left = "A", $right = "B") {
         return $this->label . ":" . $left . $right;
     }
 }
@@ -8288,7 +8288,7 @@ fn test_eval_declared_magic_call_method_fallback() {
         r#"<?php
 eval('class EvalMagicCallBox {
     private function hidden($value) { return "bad"; }
-    public function __call($method, $args) {
+    protected function __call($method, $args) {
         return $method . ":" . $args[0] . ":" . $args["name"];
     }
 }
@@ -8312,7 +8312,7 @@ fn test_eval_declared_magic_call_static_method_fallback() {
         r#"<?php
 eval('class EvalMagicStaticBox {
     private static function hidden($value) { return "bad"; }
-    public static function __callStatic($method, $args) {
+    private static function __callStatic($method, $args) {
         return $method . ":" . $args[0] . ":" . $args["name"];
     }
 }

@@ -1062,6 +1062,63 @@ return $box->events;"#,
     );
 }
 
+/// Verifies eval invokes non-public magic methods that PHP accepts with warnings.
+#[test]
+fn execute_program_dispatches_non_public_eval_magic_methods() {
+    let program = parse_fragment(
+        br#"class EvalNonPublicMagicBox {
+    public string $events = "";
+    protected function __get(string $name) {
+        $this->events = $this->events . "get:" . $name . ";";
+        return "value:" . $name;
+    }
+    protected function __set(string $name, $value): void {
+        $this->events = $this->events . "set:" . $name . "=" . $value . ";";
+    }
+    private function __isset(string $name): bool {
+        $this->events = $this->events . "isset:" . $name . ";";
+        return true;
+    }
+    private function __unset(string $name): void {
+        $this->events = $this->events . "unset:" . $name . ";";
+    }
+    private function __call(string $name, array $args) {
+        return $name . ":" . $args[0] . ":" . $args["name"];
+    }
+    private static function __callStatic(string $name, array $args) {
+        return $name . ":" . $args[0] . ":" . $args["name"];
+    }
+    private function __invoke(string $left = "I", string $right = "J") {
+        return "invoke:" . $left . $right;
+    }
+}
+$box = new EvalNonPublicMagicBox();
+echo is_callable($box) ? "callable:" : "bad:";
+echo $box->missing; echo ":";
+$box->other = "B";
+echo isset($box->probe) ? "isset:" : "bad:";
+unset($box->gone);
+echo $box->run("A", name: "B"); echo ":";
+echo EvalNonPublicMagicBox::staticRun("C", name: "D"); echo ":";
+echo $box(right: "F", left: "E");
+return $box->events;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "callable:value:missing:isset:run:A:B:staticRun:C:D:invoke:EF"
+    );
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("get:missing;set:other=B;isset:probe;unset:gone;".to_string())
+    );
+}
+
 /// Verifies inaccessible eval properties dispatch through magic property methods.
 #[test]
 fn execute_program_dispatches_inaccessible_eval_properties_to_magic_methods() {
@@ -1228,7 +1285,7 @@ echo $box;"#,
     execute_program(&program, &mut scope, &mut values).expect_err("missing __toString should fail");
 }
 
-/// Verifies eval rejects magic methods whose staticness, visibility, or arity is invalid.
+/// Verifies eval rejects magic methods whose staticness, arity, or fatal contracts are invalid.
 #[test]
 fn execute_program_rejects_invalid_eval_magic_method_contracts() {
     let cases: Vec<(&[u8], &str)> = vec![
@@ -1239,10 +1296,6 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
         (
             br#"class EvalBadToStringReturn { public function __toString(): int { return 1; } }"#.as_slice(),
             "bad __toString return type",
-        ),
-        (
-            br#"class EvalBadGet { protected function __get($name) { return "x"; } }"#.as_slice(),
-            "protected __get",
         ),
         (
             br#"class EvalBadGetByRef { public function __get(&$name) { return "x"; } }"#.as_slice(),
@@ -1331,10 +1384,6 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
         (
             br#"class EvalBadSetStateParam { public static function __set_state(string $data) {} }"#.as_slice(),
             "bad __set_state parameter type",
-        ),
-        (
-            br#"class EvalBadInvoke { private function __invoke() { return 1; } }"#.as_slice(),
-            "private __invoke",
         ),
         (
             br#"class EvalBadClone { public static function __clone() {} }"#.as_slice(),
