@@ -715,6 +715,8 @@ pub(in crate::interpreter) fn execute_enum_decl_stmt(
     {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let enum_decl = expand_eval_enum_traits(enum_decl, context)?;
+    let enum_decl = &enum_decl;
     validate_eval_enum_decl(enum_decl, context, values)?;
     if context.define_enum(enum_decl.clone()) {
         initialize_eval_declared_constants(
@@ -728,6 +730,69 @@ pub(in crate::interpreter) fn execute_enum_decl_stmt(
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
+}
+
+/// Expands eval trait uses into enum metadata while rejecting imported properties.
+fn expand_eval_enum_traits(
+    enum_decl: &EvalEnum,
+    context: &ElephcEvalContext,
+) -> Result<EvalEnum, EvalStatus> {
+    if enum_decl.traits().is_empty() {
+        return Ok(enum_decl.clone());
+    }
+    let enum_class = enum_decl.as_class_metadata();
+    validate_eval_trait_adaptations(&enum_class, context)?;
+    let enum_method_names = class_method_name_set(&enum_class);
+    let mut trait_method_names = std::collections::HashSet::new();
+    let mut trait_properties = std::collections::HashMap::new();
+    let mut trait_constants = std::collections::HashMap::new();
+    let mut constants = Vec::new();
+    let mut properties = Vec::new();
+    let mut methods = Vec::new();
+    for trait_name in enum_decl.traits() {
+        let Some(trait_decl) = context.trait_decl(trait_name) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        append_eval_trait_constants(
+            trait_decl,
+            enum_decl.constants(),
+            &mut trait_constants,
+            &mut constants,
+        )?;
+        append_eval_trait_properties(
+            trait_decl,
+            &[],
+            &mut trait_properties,
+            &mut properties,
+        )?;
+        append_eval_trait_methods(
+            trait_decl,
+            enum_decl.trait_adaptations(),
+            &enum_method_names,
+            &mut trait_method_names,
+            &mut methods,
+        )?;
+    }
+    if !properties.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    constants.extend(enum_decl.constants().iter().cloned());
+    methods.extend(enum_decl.methods().iter().cloned());
+    let mut expanded = EvalEnum::with_members_traits_adaptations(
+        enum_decl.name().to_string(),
+        enum_decl.backing_type(),
+        enum_decl.interfaces().to_vec(),
+        enum_decl.cases().to_vec(),
+        constants,
+        methods,
+        enum_decl.traits().to_vec(),
+        enum_decl.trait_adaptations().to_vec(),
+    )
+    .with_attributes(enum_decl.attributes().to_vec());
+    if let Some(source_location) = enum_decl.source_location() {
+        expanded = expanded.with_source_location(source_location);
+    }
+    Ok(expanded)
 }
 
 /// Validates enum metadata before it is inserted into the dynamic context.

@@ -129,6 +129,45 @@ return EvalSuit::fallback() === EvalSuit::Hearts;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval enums can import trait methods and expose direct trait metadata.
+#[test]
+fn execute_program_dispatches_eval_enum_trait_use() {
+    let program = parse_fragment(
+        br#"trait EvalEnumTrait {
+    public function label() { return $this->name; }
+    public static function suffix() { return "S"; }
+}
+enum EvalTraitEnum {
+    use EvalEnumTrait {
+        label as private hiddenLabel;
+    }
+    case Ready;
+    public function read() { return $this->label() . ":" . $this->hiddenLabel(); }
+}
+echo EvalTraitEnum::Ready->read(); echo ":";
+echo EvalTraitEnum::suffix(); echo ":";
+$ref = new ReflectionClass("EvalTraitEnum");
+$traits = $ref->getTraitNames();
+echo count($traits); echo ":"; echo $traits[0]; echo ":";
+$aliases = $ref->getTraitAliases();
+echo $aliases["hiddenLabel"]; echo ":";
+$uses = class_uses(EvalTraitEnum::Ready);
+echo count($uses); echo ":"; echo $uses["EvalEnumTrait"]; echo ":";
+return EvalTraitEnum::Ready->label();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Ready:Ready:S:1:EvalEnumTrait:EvalEnumTrait::label:1:EvalEnumTrait:"
+    );
+    assert_eq!(values.get(result), FakeValue::String("Ready".to_string()));
+}
+
 /// Verifies eval enum interfaces can inherit PHP's native enum marker interfaces.
 #[test]
 fn execute_program_allows_eval_enum_marker_interface_inheritance() {
@@ -193,6 +232,17 @@ fn execute_program_rejects_invalid_eval_enum_members() {
     public function __GET($name) {}
 }"#,
         "forbidden enum magic method lookup should be case-insensitive",
+    );
+
+    assert_invalid_enum_fragment(
+        br#"trait EvalInvalidEnumPropertyTrait {
+    public int $x = 1;
+}
+enum EvalInvalidEnumTraitProperty {
+    use EvalInvalidEnumPropertyTrait;
+    case Ready;
+}"#,
+        "enum cannot import trait properties",
     );
 
     assert_invalid_enum_fragment(

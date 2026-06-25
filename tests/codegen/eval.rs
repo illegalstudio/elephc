@@ -6450,6 +6450,56 @@ echo is_a(EvalDynColor::Red, "EvalDynLabel") ? "I" : "i";');
     assert_eq!(out, "EC2Gcolor:Green:gFNI");
 }
 
+/// Verifies eval enums can import trait methods and report direct trait metadata.
+#[test]
+fn test_eval_declared_enum_trait_use() {
+    let out = compile_and_run(
+        r#"<?php
+eval('trait EvalDynEnumTrait {
+    public function label() { return $this->name; }
+    public static function suffix() { return "S"; }
+}
+enum EvalDynTraitEnum {
+    use EvalDynEnumTrait {
+        label as private hiddenLabel;
+    }
+    case Ready;
+    public function read() { return $this->label() . ":" . $this->hiddenLabel(); }
+}
+echo EvalDynTraitEnum::Ready->read(); echo ":";
+echo EvalDynTraitEnum::suffix(); echo ":";
+$ref = new ReflectionClass("EvalDynTraitEnum");
+$traits = $ref->getTraitNames();
+echo count($traits) . ":" . $traits[0] . ":";
+$aliases = $ref->getTraitAliases();
+echo $aliases["hiddenLabel"] . ":";
+$uses = class_uses(EvalDynTraitEnum::Ready);
+echo count($uses) . ":" . $uses["EvalDynEnumTrait"] . ":";
+echo EvalDynTraitEnum::Ready->label();');
+"#,
+    );
+    assert_eq!(
+        out,
+        "Ready:Ready:S:1:EvalDynEnumTrait:EvalDynEnumTrait::label:1:EvalDynEnumTrait:Ready"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('trait EvalDynEnumPropertyTrait {
+    public int $x = 1;
+}
+enum EvalDynInvalidTraitEnum {
+    use EvalDynEnumPropertyTrait;
+    case Ready;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval enums support user interfaces derived from PHP enum marker interfaces.
 #[test]
 fn test_eval_declared_enum_marker_interface_inheritance() {
