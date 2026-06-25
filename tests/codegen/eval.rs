@@ -6500,6 +6500,60 @@ enum EvalDynInvalidTraitEnum {
     );
 }
 
+/// Verifies eval enum synthetic methods hide conflicting trait imports like PHP.
+#[test]
+fn test_eval_declared_enum_trait_synthetic_method_precedence() {
+    let out = compile_and_run(
+        r#"<?php
+eval('trait EvalDynEnumSyntheticTrait {
+    public function cases() { return "trait-cases"; }
+    public static function from($value) { return "trait-from"; }
+    public static function tryFrom($value) { return "trait-try"; }
+}
+enum EvalDynPureSynthetic {
+    use EvalDynEnumSyntheticTrait {
+        cases as traitCases;
+    }
+    case Ready;
+}
+enum EvalDynBackedSynthetic: string {
+    use EvalDynEnumSyntheticTrait {
+        cases as traitCases;
+        from as traitFrom;
+    }
+    case Ready = "ready";
+}
+echo is_array(EvalDynPureSynthetic::Ready->cases()) ? "cases" : "bad"; echo ":";
+echo EvalDynPureSynthetic::Ready->traitCases(); echo ":";
+echo EvalDynPureSynthetic::from("x"); echo ":";
+echo EvalDynPureSynthetic::Ready->from("x"); echo ":";
+echo EvalDynBackedSynthetic::from("ready")->value; echo ":";
+echo EvalDynBackedSynthetic::Ready->from("ready")->value; echo ":";
+echo EvalDynBackedSynthetic::tryFrom("missing") === null ? "null" : "bad"; echo ":";
+echo EvalDynBackedSynthetic::traitFrom("x"); echo ":";
+echo EvalDynBackedSynthetic::Ready->traitCases(); echo ":";
+echo is_callable([EvalDynBackedSynthetic::Ready, "cases"]) ? "callable" : "bad";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "cases:trait-cases:trait-from:trait-from:ready:ready:null:trait-from:trait-cases:callable"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('enum EvalDynInvalidBackedFrom: string {
+    case Ready = "ready";
+    public static function from($value) { return self::Ready; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval enums support user interfaces derived from PHP enum marker interfaces.
 #[test]
 fn test_eval_declared_enum_marker_interface_inheritance() {
