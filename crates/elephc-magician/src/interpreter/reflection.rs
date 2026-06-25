@@ -188,6 +188,7 @@ enum EvalReflectionFunctionMethodTarget {
         static_variables: Vec<EvalStaticVarInitializer>,
         source_location: Option<EvalSourceLocation>,
         is_variadic: bool,
+        is_static: bool,
         return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     },
     Method {
@@ -197,6 +198,7 @@ enum EvalReflectionFunctionMethodTarget {
         static_variables: Vec<EvalStaticVarInitializer>,
         source_location: Option<EvalSourceLocation>,
         is_variadic: bool,
+        is_static: bool,
         return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     },
 }
@@ -911,6 +913,12 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
         | "returnsreference"
         | "isgenerator"
         | "hastentativereturntype" => eval_reflection_false_metadata_result(evaluated_args, values),
+        "isanonymous" => match target {
+            EvalReflectionFunctionMethodTarget::Function { .. } => {
+                eval_reflection_false_metadata_result(evaluated_args, values)
+            }
+            EvalReflectionFunctionMethodTarget::Method { .. } => Ok(None),
+        },
         "hasreturntype" => {
             eval_reflection_bind_no_args(evaluated_args)?;
             values
@@ -925,6 +933,12 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
             eval_reflection_bind_no_args(evaluated_args)?;
             values
                 .bool_value(eval_reflection_function_method_is_variadic(&target))
+                .map(Some)
+        }
+        "isstatic" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values
+                .bool_value(eval_reflection_function_method_is_static(&target))
                 .map(Some)
         }
         "isdisabled" => match target {
@@ -954,6 +968,10 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
         "getclosureusedvariables" => {
             eval_reflection_bind_no_args(evaluated_args)?;
             values.array_new(0).map(Some)
+        }
+        "getclosurethis" | "getclosurescopeclass" | "getclosurecalledclass" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values.null().map(Some)
         }
         _ => Ok(None),
     }
@@ -6671,6 +6689,7 @@ fn eval_reflection_function_method_target(
             static_variables,
             source_location,
             is_variadic,
+            is_static: false,
             return_type_metadata,
         }));
     }
@@ -6695,6 +6714,9 @@ fn eval_reflection_function_method_target(
             .iter()
             .any(|parameter| parameter.is_variadic)
     });
+    let is_static = method_metadata
+        .as_ref()
+        .is_some_and(|method| method.is_static);
     let source_location = method_metadata.as_ref().and_then(|method| method.source_location);
     let return_type_metadata = method_metadata.and_then(|method| method.return_type_metadata);
     let static_method = eval_reflection_eval_method_static_target(declaring_class, method_name, context);
@@ -6715,6 +6737,7 @@ fn eval_reflection_function_method_target(
         static_variables,
         source_location,
         is_variadic,
+        is_static,
         return_type_metadata,
     }))
 }
@@ -6926,6 +6949,14 @@ fn eval_reflection_function_method_is_variadic(
     match target {
         EvalReflectionFunctionMethodTarget::Function { is_variadic, .. }
         | EvalReflectionFunctionMethodTarget::Method { is_variadic, .. } => *is_variadic,
+    }
+}
+
+/// Returns whether the reflected function-like target is static.
+fn eval_reflection_function_method_is_static(target: &EvalReflectionFunctionMethodTarget) -> bool {
+    match target {
+        EvalReflectionFunctionMethodTarget::Function { is_static, .. }
+        | EvalReflectionFunctionMethodTarget::Method { is_static, .. } => *is_static,
     }
 }
 

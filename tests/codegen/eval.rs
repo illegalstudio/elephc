@@ -11146,6 +11146,7 @@ eval('namespace EvalReflectNameNs;
 function sample(...$items) {}
 class Target {
     public function run(...$items) {}
+    public static function stat() {}
 }
 $fn = new \ReflectionFunction("EvalReflectNameNs\\\\sample");
 $method = new \ReflectionMethod(Target::class, "run");
@@ -11154,8 +11155,10 @@ echo $fn->getNamespaceName() . ":";
 echo ($fn->inNamespace() ? "Y" : "N") . ":";
 echo ($fn->isInternal() ? "I" : "i");
 echo ($fn->isUserDefined() ? "U" : "u") . ":";
+echo ($fn->isAnonymous() ? "A" : "a") . ":";
 echo ($fn->isClosure() ? "C" : "c") . ":";
 echo ($fn->isDeprecated() ? "D" : "d") . ":";
+echo ($fn->isStatic() ? "S" : "s") . ":";
 echo ($fn->returnsReference() ? "R" : "r") . ":";
 echo ($fn->hasReturnType() ? "T" : "t") . ":";
 echo ($fn->getReturnType() === null ? "N" : "n") . ":";
@@ -11164,6 +11167,9 @@ echo ($fn->isVariadic() ? "V" : "v") . ":";
 echo ($fn->hasTentativeReturnType() ? "H" : "h") . ":";
 echo ($fn->getTentativeReturnType() === null ? "Q" : "q") . ":";
 echo count($fn->getClosureUsedVariables()) . ":";
+echo ($fn->getClosureThis() === null ? "T" : "t") . ":";
+echo ($fn->getClosureScopeClass() === null ? "S" : "s") . ":";
+echo ($fn->getClosureCalledClass() === null ? "L" : "l") . ":";
 echo ($fn->isDisabled() ? "X" : "x") . "|";
 echo $method->getShortName() . ":";
 echo $method->getNamespaceName() . ":";
@@ -11172,6 +11178,7 @@ echo ($method->isInternal() ? "I" : "i");
 echo ($method->isUserDefined() ? "U" : "u") . ":";
 echo ($method->isClosure() ? "C" : "c") . ":";
 echo ($method->isDeprecated() ? "D" : "d") . ":";
+echo ($method->isStatic() ? "S" : "s") . ":";
 echo ($method->returnsReference() ? "R" : "r") . ":";
 echo ($method->hasReturnType() ? "T" : "t") . ":";
 echo ($method->getReturnType() === null ? "N" : "n") . ":";
@@ -11179,7 +11186,12 @@ echo ($method->isGenerator() ? "G" : "g") . ":";
 echo ($method->isVariadic() ? "V" : "v") . ":";
 echo ($method->hasTentativeReturnType() ? "H" : "h") . ":";
 echo ($method->getTentativeReturnType() === null ? "Q" : "q") . ":";
-echo count($method->getClosureUsedVariables());');
+echo count($method->getClosureUsedVariables()) . ":";
+echo ($method->getClosureThis() === null ? "T" : "t") . ":";
+echo ($method->getClosureScopeClass() === null ? "S" : "s") . ":";
+echo ($method->getClosureCalledClass() === null ? "L" : "l") . ":";
+$static = new \ReflectionMethod(Target::class, "stat");
+echo ($static->isStatic() ? "S" : "s");');
 "#,
     );
     assert!(
@@ -11189,7 +11201,7 @@ echo count($method->getClosureUsedVariables());');
     );
     assert_eq!(
         out.stdout,
-        "sample:EvalReflectNameNs:Y:iU:c:d:r:t:N:g:V:h:Q:0:x|run::N:iU:c:d:r:t:N:g:V:h:Q:0"
+        "sample:EvalReflectNameNs:Y:iU:a:c:d:s:r:t:N:g:V:h:Q:0:T:S:L:x|run::N:iU:c:d:s:r:t:N:g:V:h:Q:0:T:S:L:S"
     );
 }
 

@@ -160,8 +160,10 @@ echo $ref->getNamespaceName(); echo ":";
 echo $ref->inNamespace() ? "Y" : "N"; echo ":";
 echo $ref->isInternal() ? "I" : "i";
 echo $ref->isUserDefined() ? "U" : "u"; echo ":";
+echo $ref->isAnonymous() ? "A" : "a"; echo ":";
 echo $ref->isClosure() ? "C" : "c"; echo ":";
 echo $ref->isDeprecated() ? "D" : "d"; echo ":";
+echo $ref->isStatic() ? "S" : "s"; echo ":";
 echo $ref->returnsReference() ? "R" : "r"; echo ":";
 echo $ref->hasReturnType() ? "T" : "t"; echo ":";
 echo $ref->getReturnType() === null ? "N" : "n"; echo ":";
@@ -169,6 +171,9 @@ echo $ref->isGenerator() ? "G" : "g"; echo ":";
 echo $ref->isVariadic() ? "V" : "v"; echo ":";
 echo $ref->hasTentativeReturnType() ? "H" : "h"; echo ":";
 echo $ref->getTentativeReturnType() === null ? "Q" : "q"; echo ":";
+echo $ref->getClosureThis() === null ? "T" : "t"; echo ":";
+echo $ref->getClosureScopeClass() === null ? "S" : "s"; echo ":";
+echo $ref->getClosureCalledClass() === null ? "L" : "l"; echo ":";
 echo $ref->isDisabled() ? "X" : "x";
 return true;"#,
     )
@@ -180,7 +185,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "sample:EvalReflectFnNs:Y:iU:c:d:r:t:N:g:V:h:Q:x"
+        "sample:EvalReflectFnNs:Y:iU:a:c:d:s:r:t:N:g:V:h:Q:T:S:L:x"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
