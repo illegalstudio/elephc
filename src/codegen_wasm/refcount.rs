@@ -17,8 +17,9 @@
 //!   freed directly via `__rt_heap_free_safe` (strings use copy-on-acquire, so a
 //!   release is a free). Kinds 2/3/5 (array/hash/mixed) deep-free at zero through
 //!   `__rt_decref_array`/`__rt_decref_hash`/`__rt_decref_mixed`; kind 4 (object)
-//!   releases through `__rt_decref_object` (P6a: scalar-only, no property walk); any
-//!   other kind is a no-op today.
+//!   releases through `__rt_decref_object` (P6a: scalar-only, no property walk); kind
+//!   6 (callable descriptor) releases through `__rt_callable_descriptor_release`
+//!   (P7a0, emitted by `closures`); any other kind is a no-op today.
 //! - `__rt_str_persist` always copies into a fresh heap block (PHP string value
 //!   semantics). The native runtime may incref an already-heap string instead; the
 //!   observable string content and lifetime are identical.
@@ -51,9 +52,10 @@ const RT_INCREF: &str = r#"(func $__rt_incref (param $ptr i32)
 /// `__rt_decref_any`: the kind-dispatched release entry. Frees a string (kind 1)
 /// directly (copy-on-acquire model); decrefs an indexed array (kind 2) via
 /// `__rt_decref_array`, an associative hash (kind 3) via `__rt_decref_hash`, a
-/// boxed Mixed cell (kind 5) via `__rt_decref_mixed`, and an object (kind 4) via
-/// `__rt_decref_object` (P6a scalar-only release). Any other kind is a no-op.
-/// No-ops on non-heap pointers.
+/// boxed Mixed cell (kind 5) via `__rt_decref_mixed`, an object (kind 4) via
+/// `__rt_decref_object` (P6a scalar-only release), and a callable descriptor
+/// (kind 6) via `__rt_callable_descriptor_release` (P7a0). Any other kind is a
+/// no-op. No-ops on non-heap pointers.
 const RT_DECREF_ANY: &str = r#"(func $__rt_decref_any (param $ptr i32)
   (local $kind i32)
   (if (i32.eqz (local.get $ptr))                  ;; guard: null pointer
@@ -83,6 +85,10 @@ const RT_DECREF_ANY: &str = r#"(func $__rt_decref_any (param $ptr i32)
   (if (i32.eq (local.get $kind) (i32.const 4))    ;; kind 4 = object instance
     (then
       (call $__rt_decref_object (local.get $ptr))  ;; P6a: scalar-only release, frees at zero
+      (return)))
+  (if (i32.eq (local.get $kind) (i32.const 6))    ;; kind 6 = callable descriptor
+    (then
+      (call $__rt_callable_descriptor_release (local.get $ptr)) ;; P7a0: decref + capture walk + free
       (return)))
   (return))
 "#;
@@ -126,6 +132,7 @@ mod tests {
     use super::emit_refcount_runtime;
     use super::super::arrays::emit_array_runtime;
     use super::super::classes::{emit_class_metadata_stub, emit_class_runtime};
+    use super::super::closures::emit_closure_runtime;
     use super::super::heap::emit_heap_runtime;
     use super::super::mixed::emit_mixed_runtime;
     use super::super::objects::{emit_destructor_dispatch_stub, emit_gc_desc_stub, emit_object_runtime};
@@ -156,6 +163,10 @@ mod tests {
         wm.set_memory(3, Some("memory"));
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
+        // `__rt_decref_any` kind-6 dispatches to `__rt_callable_descriptor_release`, so
+        // the closure runtime must be present to validate (generate() emits it alongside
+        // refcount).
+        emit_closure_runtime(&mut wm);
         // `__rt_decref_any` dispatches to `__rt_decref_array` / `__rt_decref_hash` /
         // `__rt_decref_mixed`, so the array, hash, and mixed runtimes must be present
         // to validate (generate() emits all of them).
@@ -318,6 +329,8 @@ mod tests {
         wm.set_memory(3, Some("memory"));
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
+        // `__rt_decref_any` kind-6 dispatches to `__rt_callable_descriptor_release`.
+        emit_closure_runtime(&mut wm);
         // `__rt_decref_any` dispatches to the array/hash/mixed object runtimes.
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm);

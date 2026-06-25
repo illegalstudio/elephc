@@ -625,8 +625,20 @@ fn lower_echo(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 /// PHP string value semantics; a heap pointer is increfed (`__rt_incref`); scalars
 /// forward unchanged. The result value receives the acquired value. A `Mixed`
 /// (tagged) value is not handled yet (its ownership lands with the boxing phase).
+///
+/// A callable is a heap descriptor carried as `WasmRepr::I64` (a zero-extended i32
+/// pointer), so the generic `I64` arm below would forward it without incref'ing the
+/// descriptor and leak it. Callables are therefore routed explicitly to `__rt_incref`
+/// on the wrapped i32 pointer before forwarding (P7a0).
 fn lower_acquire(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let value = operand(inst, 0)?;
+    if ctx.value_php_type(value)? == PhpType::Callable {
+        ctx.emit_load_value(value)?;
+        ctx.fb
+            .ins("i32.wrap_i64", "narrow the callable descriptor pointer to i32");
+        ctx.fb.ins("call $__rt_incref", "incref the callable descriptor");
+        return forward_value(ctx, value, inst);
+    }
     let repr = ctx.value_repr(value)?.clone();
     match repr {
         WasmRepr::Str { .. } => {
@@ -665,6 +677,18 @@ fn lower_release(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         ownership,
         Ownership::NonHeap | Ownership::Borrowed | Ownership::Persistent | Ownership::Moved
     ) {
+        return Ok(());
+    }
+    // A callable is a heap descriptor carried as `WasmRepr::I64`, so the generic
+    // `I64` arm below is a no-op and an owned callable would leak. Route callables
+    // to `__rt_decref_any` on the wrapped i32 pointer; the kind dispatcher resolves
+    // heap-header kind 6 to `__rt_callable_descriptor_release` (P7a0).
+    if ctx.value_php_type(value)? == PhpType::Callable {
+        ctx.emit_load_value(value)?;
+        ctx.fb
+            .ins("i32.wrap_i64", "narrow the callable descriptor pointer to i32");
+        ctx.fb
+            .ins("call $__rt_decref_any", "release the callable descriptor (kind 6)");
         return Ok(());
     }
     let repr = ctx.value_repr(value)?.clone();

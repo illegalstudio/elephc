@@ -21,6 +21,7 @@
 
 mod arrays;
 mod classes;
+mod closures;
 mod context;
 mod float;
 mod function;
@@ -139,6 +140,12 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     wm.set_memory(pages, Some("memory"));
     heap::emit_heap_runtime(&mut wm, heap_base, heap_end);
     refcount::emit_refcount_runtime(&mut wm);
+    // Callable-descriptor refcount runtime: `__rt_callable_descriptor_release`, called
+    // from `__rt_decref_any` kind-6 (P7a0). References only `__rt_decref_any` and
+    // `__rt_heap_free`, so it needs no extra globals; every module emitting the refcount
+    // runtime must emit this too, since `__rt_decref_any`'s kind-6 branch calls it and
+    // WAT requires the call target to be defined.
+    closures::emit_closure_runtime(&mut wm);
     // Object refcount runtime: `__rt_decref_object`, called from `__rt_decref_any`
     // kind-4. P6b performs the full gc_desc-driven property walk + `__rt_heap_free`.
     objects::emit_object_runtime(&mut wm);
@@ -175,6 +182,18 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // order, so a `module.functions` entry calling `__construct` (via `ObjectNew`)
     // sees the method defined here even though methods are lowered after it.
     for func in &module.class_methods {
+        let fb = function::lower_function(module, func, &str_literals)?;
+        wm.add_func(fb);
+    }
+
+    // Lower every closure body (P7a0). A closure is a module-level EIR function with a
+    // synthetic `__eir_closure_<owner>_<n>` name and `FunctionFlags::is_closure`; its
+    // params are the visible user params ++ capture params (captures appended at the
+    // tail). `lower_function` handles the body as-is, so P7a0 only needs the bodies to
+    // compile (no `ClosureNew`/`ClosureCall` lowering yet — that is P7a1). WAT `call
+    // $<name>` resolves across the whole module regardless of definition order, so the
+    // P7a1 wrapper that calls a closure body sees it defined here.
+    for func in &module.closures {
         let fb = function::lower_function(module, func, &str_literals)?;
         wm.add_func(fb);
     }

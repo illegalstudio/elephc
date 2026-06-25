@@ -844,6 +844,7 @@ mod tests {
     use super::super::mixed::emit_mixed_runtime;
     use super::super::objects::{emit_destructor_dispatch_stub, emit_gc_desc_stub, emit_object_runtime};
     use super::super::refcount::emit_refcount_runtime;
+    use super::super::closures::emit_closure_runtime;
     use super::super::wat::WatModule;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -871,6 +872,7 @@ mod tests {
         wm.set_memory(4, Some("memory"));
         emit_heap_runtime(&mut wm, 1024, 4 * 65536);
         emit_refcount_runtime(&mut wm);
+        emit_closure_runtime(&mut wm);
         emit_array_runtime(&mut wm);
         emit_mixed_runtime(&mut wm);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
