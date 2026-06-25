@@ -3430,7 +3430,7 @@ fn builtin_reflection_property_get_value_method() -> ClassMethod {
         variadic_type: None,
         return_type: Some(mixed_type()),
         body: vec![
-            reflection_property_static_value_guard("getValue", dummy_span),
+            reflection_property_static_get_value_return(dummy_span),
             reflection_property_object_required_guard("getValue", dummy_span),
             Stmt::new(
                 StmtKind::Return(Some(reflection_dynamic_object_property(object, dummy_span))),
@@ -3487,6 +3487,7 @@ fn builtin_reflection_property_set_value_method() -> ClassMethod {
 /// Returns `ReflectionProperty::isInitialized()` for supported materialized reflectors.
 fn builtin_reflection_property_is_initialized_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
+    let static_return = reflection_property_static_is_initialized_return(dummy_span);
     let dynamic_return = Stmt::new(
         StmtKind::If {
             condition: reflection_this_property("__is_dynamic", dummy_span),
@@ -3518,7 +3519,7 @@ fn builtin_reflection_property_is_initialized_method() -> ClassMethod {
         variadic_type: None,
         return_type: Some(bool_type()),
         body: vec![
-            reflection_property_static_value_guard("isInitialized", dummy_span),
+            static_return,
             reflection_property_object_required_guard("isInitialized", dummy_span),
             dynamic_return,
             defaulted_return,
@@ -3533,6 +3534,55 @@ fn builtin_reflection_property_is_initialized_method() -> ClassMethod {
         span: dummy_span,
         attributes: Vec::new(),
     }
+}
+
+/// Returns a static-property `getValue()` branch backed by the declaring ReflectionClass snapshot.
+fn reflection_property_static_get_value_return(span: crate::span::Span) -> Stmt {
+    Stmt::new(
+        StmtKind::If {
+            condition: reflection_this_property("__is_static", span),
+            then_body: vec![Stmt::new(
+                StmtKind::Return(Some(method_call_expr(
+                    reflection_this_property("__declaring_class", span),
+                    "getStaticPropertyValue",
+                    vec![reflection_this_property("__name", span)],
+                    span,
+                ))),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+/// Returns a static-property `isInitialized()` branch backed by materialized static values.
+fn reflection_property_static_is_initialized_return(span: crate::span::Span) -> Stmt {
+    Stmt::new(
+        StmtKind::If {
+            condition: reflection_this_property("__is_static", span),
+            then_body: vec![Stmt::new(
+                StmtKind::Return(Some(function_call(
+                    "array_key_exists",
+                    vec![
+                        reflection_this_property("__name", span),
+                        method_call_expr(
+                            reflection_this_property("__declaring_class", span),
+                            "getStaticProperties",
+                            Vec::new(),
+                            span,
+                        ),
+                    ],
+                    span,
+                ))),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
 }
 
 /// Builds a guard for static property value access that still needs inline lowering.

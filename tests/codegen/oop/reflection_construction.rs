@@ -45,3 +45,28 @@ echo get_class($fourth);
         "IN|AB|ReflectObjectConstructChild:XY|ReflectObjectConstructChild:MN|ReflectObjectConstructChild:ReflectObjectConstructChild"
     );
 }
+
+/// Verifies `ReflectionClass` construction helpers support inferred constructor signatures.
+#[test]
+fn test_reflection_class_construction_helpers_call_inferred_constructor_signature() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReflectConstructInferredTarget {
+    public function __construct($left, $right = "B") {
+        echo $left . $right . "|";
+    }
+}
+
+$ref = new ReflectionClass(ReflectConstructInferredTarget::class);
+$ref->newInstance("A", "C");
+$ref->newInstanceArgs(["right" => "Y", "left" => "X"]);
+$ref->newInstance(right: "N", left: "M");
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "AC|XY|MN|");
+}

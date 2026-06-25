@@ -331,6 +331,42 @@ inspect_static_props(new ReflectionClass(ReflectRuntimeStaticPropertiesTarget::c
     assert_eq!(out, "3:5:new:null:missing:5:null:fallback");
 }
 
+/// Verifies runtime-held static `ReflectionProperty` objects can read
+/// materialized static values and report initialization from their declaring class.
+#[test]
+fn test_reflection_property_runtime_static_reflectors_read_materialized_values() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectRuntimeStaticValuePropertyTarget {
+    public static int $count = 2;
+    private static string $label = "old";
+    public static int $unset;
+
+    public static function rename(string $value): void {
+        self::$label = $value;
+    }
+}
+
+function inspect_static_reflectors(ReflectionProperty $count, ReflectionProperty $label, ReflectionProperty $unset): void {
+    echo $count->getValue();
+    echo ":" . ($count->isInitialized() ? "count" : "bad");
+    echo ":" . $label->getValue(null);
+    echo ":" . ($label->isInitialized(object: null) ? "label" : "bad");
+    echo ":" . ($unset->isInitialized() ? "bad" : "unset");
+}
+
+ReflectRuntimeStaticValuePropertyTarget::$count = 7;
+ReflectRuntimeStaticValuePropertyTarget::rename("new");
+inspect_static_reflectors(
+    new ReflectionProperty(ReflectRuntimeStaticValuePropertyTarget::class, "count"),
+    new ReflectionProperty(ReflectRuntimeStaticValuePropertyTarget::class, "label"),
+    new ReflectionProperty(ReflectRuntimeStaticValuePropertyTarget::class, "unset")
+);
+"#,
+    );
+    assert_eq!(out, "7:count:new:label:unset");
+}
+
 /// Verifies runtime-held `ReflectionProperty` objects can read and write public
 /// instance properties through their retained property names.
 #[test]
