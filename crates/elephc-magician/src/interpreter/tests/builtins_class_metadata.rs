@@ -408,6 +408,7 @@ fn execute_program_reflection_method_reports_name_and_origin_predicates() {
         br#"namespace EvalReflectMethodNs;
 class Target {
     public function run(...$items) {}
+    public static function stat() {}
 }
 $ref = new \ReflectionMethod(Target::class, "run");
 echo $ref->getShortName(); echo ":";
@@ -417,6 +418,7 @@ echo $ref->isInternal() ? "I" : "i";
 echo $ref->isUserDefined() ? "U" : "u"; echo ":";
 echo $ref->isClosure() ? "C" : "c"; echo ":";
 echo $ref->isDeprecated() ? "D" : "d"; echo ":";
+echo $ref->isStatic() ? "S" : "s"; echo ":";
 echo $ref->returnsReference() ? "R" : "r"; echo ":";
 echo $ref->hasReturnType() ? "T" : "t"; echo ":";
 echo $ref->getReturnType() === null ? "N" : "n"; echo ":";
@@ -424,7 +426,12 @@ echo $ref->isGenerator() ? "G" : "g"; echo ":";
 echo $ref->isVariadic() ? "V" : "v"; echo ":";
 echo $ref->hasTentativeReturnType() ? "H" : "h"; echo ":";
 echo $ref->getTentativeReturnType() === null ? "Q" : "q"; echo ":";
-echo count($ref->getClosureUsedVariables());
+echo count($ref->getClosureUsedVariables()); echo ":";
+echo $ref->getClosureThis() === null ? "T" : "t"; echo ":";
+echo $ref->getClosureScopeClass() === null ? "S" : "s"; echo ":";
+echo $ref->getClosureCalledClass() === null ? "L" : "l"; echo ":";
+$static = new \ReflectionMethod(Target::class, "stat");
+echo $static->isStatic() ? "S" : "s";
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -433,7 +440,7 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "run::N:iU:c:d:r:t:N:g:V:h:Q:0");
+    assert_eq!(values.output, "run::N:iU:c:d:s:r:t:N:g:V:h:Q:0:T:S:L:S");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
