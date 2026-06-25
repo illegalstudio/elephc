@@ -206,7 +206,12 @@ echo is_callable([EvalBackedSynthetic::Ready, "cases"]) ? "callable" : "bad";"#,
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    let result = execute_program(&program, &mut scope, &mut values);
+    assert!(
+        result.is_ok(),
+        "execute eval ir failed after output {:?}",
+        values.output
+    );
 
     assert_eq!(
         values.output,
@@ -235,6 +240,58 @@ return is_callable([EvalPureDirectFrom::Ready, "from"]);"#,
 
     assert_eq!(values.output, "from:x:try:y:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies ReflectionMethod metadata and invocation for enum synthetic methods.
+#[test]
+fn execute_program_reflects_eval_enum_synthetic_methods() {
+    let program = parse_fragment(
+        br#"enum EvalReflectSyntheticEnum: string {
+    case Ready = "ready";
+}
+enum EvalReflectPureSyntheticEnum {
+    case Ready;
+}
+$ref = new ReflectionClass("EvalReflectSyntheticEnum");
+$methods = $ref->getMethods(ReflectionMethod::IS_STATIC);
+echo count($methods); echo ":";
+echo $methods[0]->getName(); echo "/";
+echo $methods[1]->getName(); echo "/";
+echo $methods[2]->getName(); echo ":";
+$cases = $ref->getMethod("cases");
+echo $cases->getReturnType(); echo ":";
+echo count($cases->invoke(null)); echo ":";
+$from = new ReflectionMethod("EvalReflectSyntheticEnum", "from");
+$params = $from->getParameters();
+echo $from->getDeclaringClass()->getName(); echo ":";
+echo $from->getNumberOfParameters(); echo "/";
+echo $from->getNumberOfRequiredParameters(); echo ":";
+echo $params[0]->getName(); echo "/";
+echo $params[0]->getType(); echo ":";
+echo $from->getReturnType(); echo ":";
+echo $from->invoke(null, "ready")->name; echo ":";
+$try = ReflectionMethod::createFromMethodName("EvalReflectSyntheticEnum::tryFrom");
+echo $try->getReturnType(); echo ":";
+echo $try->invokeArgs(null, ["missing"]) === null ? "null" : "bad"; echo ":";
+$pure = new ReflectionClass("EvalReflectPureSyntheticEnum");
+echo count($pure->getMethods()); echo ":";
+echo $pure->hasMethod("from") ? "bad" : "nofrom";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values);
+    assert!(
+        result.is_ok(),
+        "execute eval ir failed after output {:?}",
+        values.output
+    );
+
+    assert_eq!(
+        values.output,
+        "3:cases/from/tryFrom:array:1:EvalReflectSyntheticEnum:1/1:value/string|int:static:Ready:?static:null:1:nofrom"
+    );
 }
 
 /// Verifies eval enum interfaces can inherit PHP's native enum marker interfaces.

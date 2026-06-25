@@ -6366,71 +6366,70 @@ fn eval_reflection_method_metadata(
     context: &ElephcEvalContext,
 ) -> Option<EvalReflectionMemberMetadata> {
     if context.has_class(class_name) || context.has_enum(class_name) {
-        return context
-            .class_method(class_name, method_name)
-            .map(|(declaring_class, method)| {
-                let required_parameter_count = eval_reflection_required_parameter_count(
-                    method.parameter_defaults(),
-                    method.parameter_is_variadic(),
-                );
-                let flags = eval_reflection_member_flags(
+        if let Some((declaring_class, method)) = context.class_method(class_name, method_name) {
+            let required_parameter_count = eval_reflection_required_parameter_count(
+                method.parameter_defaults(),
+                method.parameter_is_variadic(),
+            );
+            let flags = eval_reflection_member_flags(
+                method.visibility(),
+                method.is_static(),
+                method.is_final(),
+                method.is_abstract(),
+                false,
+            );
+            let return_type_metadata = method
+                .return_type()
+                .and_then(eval_reflection_parameter_type_metadata);
+            let declaring_function = EvalReflectionDeclaringFunctionMetadata {
+                name: method.name().to_string(),
+                declaring_class_name: Some(declaring_class.clone()),
+                attributes: method.attributes().to_vec(),
+                flags,
+                required_parameter_count,
+            };
+            let promoted_parameter_names = eval_reflection_promoted_parameter_names(
+                &declaring_class,
+                method.name(),
+                context,
+            );
+            let parameters = eval_reflection_parameters_from_names_and_type_flags(
+                Some(declaring_class.as_str()),
+                Some(&declaring_function),
+                method.params(),
+                method.parameter_has_types(),
+                method.parameter_types(),
+                method.parameter_attributes(),
+                method.parameter_defaults(),
+                method.parameter_is_by_ref(),
+                method.parameter_is_variadic(),
+                &promoted_parameter_names,
+            );
+            return Some(EvalReflectionMemberMetadata {
+                declaring_class_name: Some(declaring_class),
+                source_location: method.source_location(),
+                attributes: method.attributes().to_vec(),
+                visibility: method.visibility(),
+                is_static: method.is_static(),
+                is_final: method.is_final(),
+                is_abstract: method.is_abstract(),
+                is_readonly: false,
+                is_promoted: false,
+                is_dynamic: false,
+                modifiers: eval_reflection_method_modifiers(
                     method.visibility(),
                     method.is_static(),
                     method.is_final(),
                     method.is_abstract(),
-                    false,
-                );
-                let return_type_metadata = method
-                    .return_type()
-                    .and_then(eval_reflection_parameter_type_metadata);
-                let declaring_function = EvalReflectionDeclaringFunctionMetadata {
-                    name: method.name().to_string(),
-                    declaring_class_name: Some(declaring_class.clone()),
-                    attributes: method.attributes().to_vec(),
-                    flags,
-                    required_parameter_count,
-                };
-                let promoted_parameter_names = eval_reflection_promoted_parameter_names(
-                    &declaring_class,
-                    method.name(),
-                    context,
-                );
-                let parameters = eval_reflection_parameters_from_names_and_type_flags(
-                    Some(declaring_class.as_str()),
-                    Some(&declaring_function),
-                    method.params(),
-                    method.parameter_has_types(),
-                    method.parameter_types(),
-                    method.parameter_attributes(),
-                    method.parameter_defaults(),
-                    method.parameter_is_by_ref(),
-                    method.parameter_is_variadic(),
-                    &promoted_parameter_names,
-                );
-                EvalReflectionMemberMetadata {
-                    declaring_class_name: Some(declaring_class),
-                    source_location: method.source_location(),
-                    attributes: method.attributes().to_vec(),
-                    visibility: method.visibility(),
-                    is_static: method.is_static(),
-                    is_final: method.is_final(),
-                    is_abstract: method.is_abstract(),
-                    is_readonly: false,
-                    is_promoted: false,
-                    is_dynamic: false,
-                    modifiers: eval_reflection_method_modifiers(
-                        method.visibility(),
-                        method.is_static(),
-                        method.is_final(),
-                        method.is_abstract(),
-                    ),
-                    type_metadata: None,
-                    return_type_metadata,
-                    default_value: None,
-                    required_parameter_count,
-                    parameters,
-                }
+                ),
+                type_metadata: None,
+                return_type_metadata,
+                default_value: None,
+                required_parameter_count,
+                parameters,
             });
+        }
+        return eval_reflection_enum_synthetic_method_metadata(class_name, method_name, context);
     }
     if context.has_interface(class_name) {
         return context
@@ -6561,6 +6560,91 @@ fn eval_reflection_method_metadata(
                     parameters,
                 }
             })
+    })
+}
+
+/// Builds ReflectionMethod metadata for PHP's enum-provided synthetic methods.
+fn eval_reflection_enum_synthetic_method_metadata(
+    class_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<EvalReflectionMemberMetadata> {
+    let synthetic_name = eval_enum_static_builtin_applies(class_name, method_name, context)?;
+    let enum_decl = context.enum_decl(class_name)?;
+    let declaring_class_name = enum_decl.name().trim_start_matches('\\').to_string();
+    let flags = eval_reflection_member_flags(EvalVisibility::Public, true, false, false, false);
+    let (parameter_names, parameter_types, return_type_metadata) = match synthetic_name {
+        "cases" => (
+            Vec::new(),
+            Vec::new(),
+            Some(eval_reflection_parameter_type_metadata(&EvalParameterType::new(
+                vec![EvalParameterTypeVariant::Array],
+                false,
+            ))?),
+        ),
+        "from" | "tryFrom" => {
+            let return_type = EvalParameterType::new(
+                vec![EvalParameterTypeVariant::Class(String::from("static"))],
+                synthetic_name == "tryFrom",
+            );
+            (
+                vec![String::from("value")],
+                vec![Some(EvalParameterType::new(
+                    vec![EvalParameterTypeVariant::String, EvalParameterTypeVariant::Int],
+                    false,
+                ))],
+                Some(eval_reflection_parameter_type_metadata(&return_type)?),
+            )
+        }
+        _ => return None,
+    };
+    let parameter_count = parameter_names.len();
+    let parameter_has_types = parameter_types
+        .iter()
+        .map(Option::is_some)
+        .collect::<Vec<_>>();
+    let parameter_attributes = vec![Vec::new(); parameter_count];
+    let parameter_defaults = vec![None; parameter_count];
+    let parameter_is_by_ref = vec![false; parameter_count];
+    let parameter_is_variadic = vec![false; parameter_count];
+    let required_parameter_count =
+        eval_reflection_required_parameter_count(&parameter_defaults, &parameter_is_variadic);
+    let declaring_function = EvalReflectionDeclaringFunctionMetadata {
+        name: synthetic_name.to_string(),
+        declaring_class_name: Some(declaring_class_name.clone()),
+        attributes: Vec::new(),
+        flags,
+        required_parameter_count,
+    };
+    let parameters = eval_reflection_parameters_from_names_and_type_flags(
+        Some(&declaring_class_name),
+        Some(&declaring_function),
+        &parameter_names,
+        &parameter_has_types,
+        &parameter_types,
+        &parameter_attributes,
+        &parameter_defaults,
+        &parameter_is_by_ref,
+        &parameter_is_variadic,
+        &[],
+    );
+    Some(EvalReflectionMemberMetadata {
+        declaring_class_name: Some(declaring_class_name),
+        source_location: None,
+        attributes: Vec::new(),
+        visibility: EvalVisibility::Public,
+        is_static: true,
+        is_final: false,
+        is_abstract: false,
+        is_readonly: false,
+        is_promoted: false,
+        is_dynamic: false,
+        modifiers: eval_reflection_method_modifiers(EvalVisibility::Public, true, false, false),
+        type_metadata: None,
+        return_type_metadata,
+        default_value: None,
+        required_parameter_count,
+        parameters,
     })
 }
 
@@ -7262,6 +7346,15 @@ fn eval_reflection_method_invoke_dispatch(
             &method,
             object,
             &by_value_parameters,
+            method_args,
+            context,
+            values,
+        );
+    }
+    if eval_enum_static_builtin_applies(declaring_class, &lookup_method_name, context).is_some() {
+        return eval_enum_builtin_static_method_result(
+            declaring_class,
+            &lookup_method_name,
             method_args,
             context,
             values,

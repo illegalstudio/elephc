@@ -3933,7 +3933,7 @@ pub(in crate::interpreter) fn eval_enum_static_builtin_applies(
 }
 
 /// Dispatches enum-provided static methods for eval-declared enums.
-fn eval_enum_builtin_static_method_result(
+pub(in crate::interpreter) fn eval_enum_builtin_static_method_result(
     enum_name: &str,
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,

@@ -6554,6 +6554,45 @@ eval('enum EvalDynInvalidBackedFrom: string {
     );
 }
 
+/// Verifies eval ReflectionMethod supports enum synthetic method metadata and invocation.
+#[test]
+fn test_eval_reflection_enum_synthetic_methods() {
+    let out = compile_and_run(
+        r#"<?php
+eval('enum EvalDynReflectSyntheticEnum: string {
+    case Ready = "ready";
+}
+enum EvalDynReflectPureSyntheticEnum {
+    case Ready;
+}
+$ref = new ReflectionClass("EvalDynReflectSyntheticEnum");
+$methods = $ref->getMethods(ReflectionMethod::IS_STATIC);
+echo count($methods) . ":";
+echo $methods[0]->getName() . "/" . $methods[1]->getName() . "/" . $methods[2]->getName() . ":";
+$cases = $ref->getMethod("cases");
+echo $cases->getReturnType() . ":";
+echo count($cases->invoke(null)) . ":";
+$from = new ReflectionMethod("EvalDynReflectSyntheticEnum", "from");
+$params = $from->getParameters();
+echo $from->getDeclaringClass()->getName() . ":";
+echo $from->getNumberOfParameters() . "/" . $from->getNumberOfRequiredParameters() . ":";
+echo $params[0]->getName() . "/" . $params[0]->getType() . ":";
+echo $from->getReturnType() . ":";
+echo $from->invoke(null, "ready")->name . ":";
+$try = ReflectionMethod::createFromMethodName("EvalDynReflectSyntheticEnum::tryFrom");
+echo $try->getReturnType() . ":";
+echo ($try->invokeArgs(null, ["missing"]) === null ? "null" : "bad") . ":";
+$pure = new ReflectionClass("EvalDynReflectPureSyntheticEnum");
+echo count($pure->getMethods()) . ":";
+echo $pure->hasMethod("from") ? "bad" : "nofrom";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "3:cases/from/tryFrom:array:1:EvalDynReflectSyntheticEnum:1/1:value/string|int:static:Ready:?static:null:1:nofrom"
+    );
+}
+
 /// Verifies eval enums support user interfaces derived from PHP enum marker interfaces.
 #[test]
 fn test_eval_declared_enum_marker_interface_inheritance() {
