@@ -556,6 +556,39 @@ fn builtin_reflection_method_invoke_args_method() -> ClassMethod {
     }
 }
 
+/// Returns a public static `ReflectionMethod::createFromMethodName()` method shell.
+fn builtin_reflection_method_create_from_method_name_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "createFromMethodName".to_string(),
+        visibility: Visibility::Public,
+        is_static: true,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("method".to_string(), Some(TypeExpr::Str), None, false)],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("ReflectionMethod"))),
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::NewObject {
+                    class_name: Name::unqualified("ReflectionMethod"),
+                    args: vec![
+                        Expr::new(ExprKind::StringLiteral(String::new()), dummy_span),
+                        Expr::new(ExprKind::StringLiteral(String::new()), dummy_span),
+                    ],
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public `setAccessible(bool $accessible)` no-op method shell.
 fn builtin_reflection_set_accessible_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
@@ -3081,6 +3114,7 @@ fn builtin_reflection_owner_class(
         methods.push(builtin_reflection_method_get_prototype_method());
         methods.push(builtin_reflection_method_invoke_method());
         methods.push(builtin_reflection_method_invoke_args_method());
+        methods.push(builtin_reflection_method_create_from_method_name_method());
         methods.push(builtin_reflection_set_accessible_method());
     }
     if name == "ReflectionFunction" {
@@ -4831,6 +4865,16 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("invokeArgs")) {
                     sig.return_type = PhpType::Mixed;
+                }
+                if let Some(sig) =
+                    class_info.methods.get_mut(&php_symbol_key("createFromMethodName"))
+                {
+                    sig.params = vec![("method".to_string(), PhpType::Str)];
+                    sig.param_type_exprs = vec![Some(TypeExpr::Str)];
+                    sig.defaults = vec![None];
+                    sig.ref_params = vec![false];
+                    sig.declared_params = vec![true];
+                    sig.return_type = PhpType::Object("ReflectionMethod".to_string());
                 }
                 if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getParameters")) {
                     sig.return_type = PhpType::Array(Box::new(PhpType::Object(

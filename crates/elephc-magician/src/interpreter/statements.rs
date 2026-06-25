@@ -2920,6 +2920,15 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
     )? {
         return Ok(result);
     }
+    if let Some(result) = eval_reflection_method_create_from_method_name_result(
+        &class_name,
+        method_name,
+        evaluated_args.clone(),
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
     if context.has_enum(&class_name) && eval_enum_static_builtin_name(method_name).is_some() {
         return eval_enum_builtin_static_method_result(
             &class_name,

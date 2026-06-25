@@ -1710,6 +1710,29 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod::createFromMethodName resolves eval method strings.
+#[test]
+fn execute_program_reflection_method_create_from_method_name() {
+    let program = parse_fragment(
+        br#"class EvalReflectCreateMethodTarget {
+    public function MiXeDCase() { return "ok"; }
+}
+$ref = ReflectionMethod::createFromMethodName("EvalReflectCreateMethodTarget::mixedcase");
+echo $ref->getDeclaringClass()->getName(); echo ":";
+echo $ref->getName(); echo ":";
+echo $ref->invoke(new EvalReflectCreateMethodTarget());
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "EvalReflectCreateMethodTarget:MiXeDCase:ok");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval member and enum-case reflectors expose their declaring class.
 #[test]
 fn execute_program_reflects_eval_declaring_class_metadata() {

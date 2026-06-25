@@ -3142,26 +3142,63 @@ fn eval_reflection_parameter_for_selector(
     }
 }
 
-/// Builds an eval-backed `ReflectionMethod` object when the reflected method exists in eval.
-fn eval_reflection_method_new(
+/// Handles eval-backed `ReflectionMethod::createFromMethodName()` static calls.
+pub(in crate::interpreter) fn eval_reflection_method_create_from_method_name_result(
+    class_name: &str,
+    method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let args = bind_evaluated_function_args(
-        &[String::from("class_name"), String::from("method_name")],
-        evaluated_args,
-    )?;
-    let class_name = eval_reflection_class_target_name(args[0], context, values)?;
-    if !eval_reflection_class_like_exists(&class_name, context) {
-        let method_name = eval_reflection_string_arg(args[1], values)?;
+    if !class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("ReflectionMethod")
+        || !method_name.eq_ignore_ascii_case("createFromMethodName")
+    {
+        return Ok(None);
+    }
+    let args = bind_evaluated_function_args(&[String::from("method")], evaluated_args)?;
+    let target = eval_reflection_string_arg(args[0], values)?;
+    let (class_name, method_name) = eval_reflection_method_target_parts(&target)?;
+    eval_reflection_method_object_result_if_exists(
+        &class_name,
+        &method_name,
+        context,
+        values,
+    )?
+    .map(Some)
+    .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Splits PHP's `ClassName::methodName` reflection-method target string.
+fn eval_reflection_method_target_parts(target: &str) -> Result<(String, String), EvalStatus> {
+    let Some((class_name, method_name)) = target.rsplit_once("::") else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if class_name.is_empty() || method_name.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok((class_name.to_string(), method_name.to_string()))
+}
+
+/// Builds a `ReflectionMethod` object when the reflected method exists in eval or AOT metadata.
+fn eval_reflection_method_object_result_if_exists(
+    class_name: &str,
+    requested_method_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let reflected_name = context
+        .resolve_class_like_name(class_name)
+        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    if !eval_reflection_class_like_exists(&reflected_name, context) {
         if let Some(method) = eval_reflection_aot_method_metadata_with_signature_if_exists(
-            &class_name,
-            &method_name,
+            &reflected_name,
+            requested_method_name,
             context,
             values,
         )? {
-            let method_name = method_name.to_ascii_lowercase();
+            let method_name = requested_method_name.to_ascii_lowercase();
             return eval_reflection_member_object_result(
                 EVAL_REFLECTION_OWNER_METHOD,
                 &method_name,
@@ -3173,15 +3210,14 @@ fn eval_reflection_method_new(
         }
         return Ok(None);
     }
-    let requested_method_name = eval_reflection_string_arg(args[1], values)?;
     let method_name = eval_reflection_member_name(
         EVAL_REFLECTION_OWNER_METHOD,
-        &class_name,
-        &requested_method_name,
+        &reflected_name,
+        requested_method_name,
         context,
     )
     .ok_or(EvalStatus::RuntimeFatal)?;
-    let method = eval_reflection_method_metadata(&class_name, &method_name, context)
+    let method = eval_reflection_method_metadata(&reflected_name, &method_name, context)
         .ok_or(EvalStatus::RuntimeFatal)?;
     eval_reflection_member_object_result(
         EVAL_REFLECTION_OWNER_METHOD,
@@ -3191,6 +3227,26 @@ fn eval_reflection_method_new(
         values,
     )
     .map(Some)
+}
+
+/// Builds an eval-backed `ReflectionMethod` object when the reflected method exists in eval.
+fn eval_reflection_method_new(
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let args = bind_evaluated_function_args(
+        &[String::from("class_name"), String::from("method_name")],
+        evaluated_args,
+    )?;
+    let class_name = eval_reflection_class_target_name(args[0], context, values)?;
+    let requested_method_name = eval_reflection_string_arg(args[1], values)?;
+    eval_reflection_method_object_result_if_exists(
+        &class_name,
+        &requested_method_name,
+        context,
+        values,
+    )
 }
 
 /// Builds an eval-backed `ReflectionProperty` object when the reflected property exists in eval.

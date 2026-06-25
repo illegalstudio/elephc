@@ -10518,6 +10518,38 @@ echo $aotOwn->getDeclaringClass()->getName();');
     );
 }
 
+/// Verifies eval ReflectionMethod::createFromMethodName resolves eval and AOT method strings.
+#[test]
+fn test_eval_reflection_method_create_from_method_name() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectCreateMethodTarget {
+    public function aotRun() { return "aot"; }
+}
+eval('class EvalReflectCreateMethodTarget {
+    public function MiXeDCase() { return "ok"; }
+}
+$ref = ReflectionMethod::createFromMethodName("EvalReflectCreateMethodTarget::mixedcase");
+echo $ref->getDeclaringClass()->getName() . ":";
+echo $ref->getName() . ":";
+echo $ref->invoke(new EvalReflectCreateMethodTarget()) . "|";
+$aot = ReflectionMethod::createFromMethodName("EvalAotReflectCreateMethodTarget::aotrun");
+echo $aot->getDeclaringClass()->getName() . ":";
+echo $aot->getName() . ":";
+echo $aot->invoke(new EvalAotReflectCreateMethodTarget());');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalReflectCreateMethodTarget:MiXeDCase:ok|EvalAotReflectCreateMethodTarget:aotrun:aot"
+    );
+}
+
 /// Verifies eval-declared final properties cannot be redeclared by subclasses.
 #[test]
 fn test_eval_declared_final_property_override_fails() {
