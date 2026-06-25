@@ -11,6 +11,7 @@
 //! - Generated/AOT targets use focused runtime hooks for supported point lookups.
 
 use super::*;
+use crate::context::NativeCallableObjectDefaultArg;
 use crate::eval_ir::EvalSourceLocation;
 
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
@@ -3374,9 +3375,13 @@ fn eval_reflection_native_callable_default_expr(default: &NativeCallableDefault)
     }
 }
 
-/// Converts one native object-default constructor argument into a positional eval call arg.
-fn eval_reflection_native_callable_default_arg(default: &NativeCallableDefault) -> EvalCallArg {
-    EvalCallArg::positional(eval_reflection_native_callable_default_expr(default))
+/// Converts one native object-default constructor argument into an eval call arg.
+fn eval_reflection_native_callable_default_arg(arg: &NativeCallableObjectDefaultArg) -> EvalCallArg {
+    let value = eval_reflection_native_callable_default_expr(&arg.value);
+    match &arg.name {
+        Some(name) => EvalCallArg::named(name, value),
+        None => EvalCallArg::positional(value),
+    }
 }
 
 /// Returns generated AOT ReflectionProperty metadata when the runtime table has a matching row.

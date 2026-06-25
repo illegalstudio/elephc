@@ -20,7 +20,7 @@ use crate::abi::{
     ElephcEvalContext, ElephcEvalResult, ElephcEvalScope, ABI_VERSION, SCOPE_FLAG_DIRTY,
     SCOPE_FLAG_OWNED, SCOPE_FLAG_PRESENT, SCOPE_FLAG_UNSET,
 };
-use crate::context::NativeCallableDefault;
+use crate::context::{NativeCallableDefault, NativeCallableObjectDefaultArg};
 use crate::errors::EvalStatus;
 use crate::eval_ir::{EvalAttributeArg, EvalParameterTypeVariant};
 use crate::value::{RuntimeCell, RuntimeCellHandle};
@@ -34,6 +34,7 @@ const TEST_NATIVE_DEFAULT_EMPTY_ARRAY: u64 = 4;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_OBJECT: u8 = 2;
+const TEST_NATIVE_OBJECT_DEFAULT_ARG_NAMED: u8 = 3;
 const TEST_MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = u8::MAX as usize;
 
 /// Test native invoker placeholder used only to validate ABI registration.
@@ -110,7 +111,10 @@ fn native_member_attribute_push_string(record: &mut Vec<u8>, value: &str) {
 }
 
 /// Builds one object-valued native parameter default ABI record for registration tests.
-fn native_object_default_record(class_name: &str, args: &[NativeCallableDefault]) -> Vec<u8> {
+fn native_object_default_record(
+    class_name: &str,
+    args: &[NativeCallableObjectDefaultArg],
+) -> Vec<u8> {
     let mut record = Vec::new();
     native_member_attribute_push_string(&mut record, class_name);
     record.push(args.len() as u8);
@@ -121,8 +125,17 @@ fn native_object_default_record(class_name: &str, args: &[NativeCallableDefault]
 }
 
 /// Appends one object-default constructor argument to a native parameter default record.
-fn native_object_default_push_arg(record: &mut Vec<u8>, arg: &NativeCallableDefault) {
-    match arg {
+fn native_object_default_push_arg(record: &mut Vec<u8>, arg: &NativeCallableObjectDefaultArg) {
+    if let Some(name) = &arg.name {
+        record.push(TEST_NATIVE_OBJECT_DEFAULT_ARG_NAMED);
+        native_member_attribute_push_string(record, name);
+    }
+    native_object_default_push_arg_value(record, &arg.value);
+}
+
+/// Appends one object-default constructor argument value to a native parameter default record.
+fn native_object_default_push_arg_value(record: &mut Vec<u8>, value: &NativeCallableDefault) {
+    match value {
         NativeCallableDefault::Null => {
             native_object_default_push_scalar(record, TEST_NATIVE_DEFAULT_NULL, 0)
         }
@@ -673,15 +686,64 @@ fn register_native_methods_record_signature_metadata() {
 fn register_native_object_default_decodes_nested_objects() {
     let mut ctx = ElephcEvalContext::new();
     let class = b"KnownClass";
-    let nested_args = vec![NativeCallableDefault::Object {
-        class_name: "InnerDefault".to_string(),
-        args: vec![NativeCallableDefault::String("leaf".to_string())],
-    }];
+    let nested_args = vec![NativeCallableObjectDefaultArg::positional(
+        NativeCallableDefault::Object {
+            class_name: "InnerDefault".to_string(),
+            args: vec![NativeCallableObjectDefaultArg::positional(
+                NativeCallableDefault::String("leaf".to_string()),
+            )],
+        },
+    )];
     let expected_default = NativeCallableDefault::Object {
         class_name: "OuterDefault".to_string(),
         args: nested_args.clone(),
     };
     let spec = native_object_default_record("OuterDefault", &nested_args);
+
+    let constructor_registered = unsafe {
+        __elephc_eval_register_native_constructor(&mut ctx, class.as_ptr(), class.len() as u64, 1)
+    };
+    let default_registered = unsafe {
+        __elephc_eval_register_native_constructor_param_default_object(
+            &mut ctx,
+            class.as_ptr(),
+            class.len() as u64,
+            0,
+            spec.as_ptr(),
+            spec.len() as u64,
+        )
+    };
+
+    assert_eq!(constructor_registered, 1);
+    assert_eq!(default_registered, 1);
+    assert_eq!(
+        ctx.native_constructor_signature("knownclass")
+            .expect("constructor metadata")
+            .param_default(0),
+        Some(&expected_default)
+    );
+}
+
+/// Verifies native AOT object defaults can carry named constructor args.
+#[test]
+fn register_native_object_default_decodes_named_args() {
+    let mut ctx = ElephcEvalContext::new();
+    let class = b"KnownClass";
+    let args = vec![
+        NativeCallableObjectDefaultArg::named(
+            "right",
+            NativeCallableDefault::String("R".to_string()),
+        ),
+        NativeCallableObjectDefaultArg::named(
+            "left",
+            NativeCallableDefault::String("L".to_string()),
+        ),
+    ];
+    let expected_default = NativeCallableDefault::Object {
+        class_name: "NamedDefault".to_string(),
+        args: args.clone(),
+    };
+    let spec = native_object_default_record("NamedDefault", &args);
 
     let constructor_registered = unsafe {
         __elephc_eval_register_native_constructor(&mut ctx, class.as_ptr(), class.len() as u64, 1)
@@ -713,7 +775,10 @@ fn register_native_object_default_decodes_full_u8_arg_count() {
     let mut ctx = ElephcEvalContext::new();
     let class = b"KnownClass";
     let args = (0..TEST_MAX_NATIVE_OBJECT_DEFAULT_ARGS)
-        .map(|index| NativeCallableDefault::String(format!("arg{}", index)))
+        .map(|index| {
+            let value = NativeCallableDefault::String(format!("arg{}", index));
+            NativeCallableObjectDefaultArg::positional(value)
+        })
         .collect::<Vec<_>>();
     let expected_default = NativeCallableDefault::Object {
         class_name: "LargeDefault".to_string(),

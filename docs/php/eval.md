@@ -721,7 +721,6 @@ and Enum/attribute slice, Reflection type APIs beyond retained parameter, genera
 property, and function/method return metadata, broader
 parameter and generated property default-value materialization beyond scalar,
 null, empty-array, and supported object-valued parameter defaults during generated/AOT invocation,
-object-valued generated defaults that need named or spread constructor arguments,
 and broader generated/AOT method and constructor bridge signatures beyond the current visibility-checked
 scalar/nullable-int/Mixed/array/iterable/object parameter slice plus scalar/nullable-int/Mixed/array/iterable/object returns and
 `__clone()` hooks. Generated/AOT method type
