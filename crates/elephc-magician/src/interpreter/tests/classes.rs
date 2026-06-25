@@ -674,6 +674,131 @@ class EvalAsymPrivateSetAbstractBox extends EvalAsymPrivateSetAbstractBase {
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies eval property redeclarations may widen visibility while preserving invariant types.
+#[test]
+fn execute_program_accepts_compatible_property_redeclarations() {
+    let program = parse_fragment(
+        br#"class EvalPropertyRedeclareBase {
+    protected int|string $value;
+}
+class EvalPropertyRedeclareChild extends EvalPropertyRedeclareBase {
+    public string|int $value;
+}
+class EvalPropertyRelativeBase {
+    public self $selfValue;
+    public EvalPropertyRelativeBase $parentValue;
+}
+class EvalPropertyRelativeChild extends EvalPropertyRelativeBase {
+    public self $selfValue;
+    public parent $parentValue;
+}
+$box = new EvalPropertyRedeclareChild();
+$box->value = "ok";
+return $box->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::String("ok".to_string()));
+}
+
+/// Verifies eval rejects inherited property redeclarations that violate PHP invariance.
+#[test]
+fn execute_program_rejects_incompatible_property_redeclarations() {
+    let incompatible_type = parse_fragment(
+        br#"class EvalPropertyTypeBase {
+    public int $value;
+}
+class EvalPropertyStringChild extends EvalPropertyTypeBase {
+    public string $value;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&incompatible_type, &mut scope, &mut values)
+        .expect_err("incompatible inherited property type should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let reduced_visibility = parse_fragment(
+        br#"class EvalPropertyPublicBase {
+    public int $value;
+}
+class EvalPropertyProtectedChild extends EvalPropertyPublicBase {
+    protected int $value;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&reduced_visibility, &mut scope, &mut values)
+        .expect_err("reduced inherited property visibility should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let typed_from_untyped = parse_fragment(
+        br#"class EvalPropertyUntypedBase {
+    public $value;
+}
+class EvalPropertyTypedChild extends EvalPropertyUntypedBase {
+    public int $value;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&typed_from_untyped, &mut scope, &mut values)
+        .expect_err("typed inherited property redeclaration should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let static_mismatch = parse_fragment(
+        br#"class EvalPropertyStaticBase {
+    public static int $value;
+}
+class EvalPropertyInstanceChild extends EvalPropertyStaticBase {
+    public int $value;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&static_mismatch, &mut scope, &mut values)
+        .expect_err("static inherited property redeclaration should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let readonly_mismatch = parse_fragment(
+        br#"class EvalPropertyReadonlyBase {
+    public readonly int $value;
+}
+class EvalPropertyMutableChild extends EvalPropertyReadonlyBase {
+    public int $value;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&readonly_mismatch, &mut scope, &mut values)
+        .expect_err("readonly inherited property redeclaration should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let reduced_write_visibility = parse_fragment(
+        br#"class EvalPropertyProtectedSetBase {
+    public protected(set) int $value;
+}
+class EvalPropertyPrivateSetChild extends EvalPropertyProtectedSetBase {
+    public private(set) int $value;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&reduced_write_visibility, &mut scope, &mut values)
+        .expect_err("reduced inherited property write visibility should fail");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies readonly class inheritance requires matching readonly status.
 #[test]
 fn execute_program_rejects_readonly_class_extending_non_readonly_parent() {

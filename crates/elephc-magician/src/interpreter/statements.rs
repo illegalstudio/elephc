@@ -1480,7 +1480,9 @@ fn validate_property_parent_redeclaration(
     let Some(parent) = class.parent() else {
         return Ok(());
     };
-    let Some((_, parent_property)) = context.class_property(parent, property.name()) else {
+    let Some((parent_declaring_class, parent_property)) =
+        context.class_property(parent, property.name())
+    else {
         return Ok(());
     };
     if parent_property.visibility() == EvalVisibility::Private {
@@ -1488,6 +1490,23 @@ fn validate_property_parent_redeclaration(
     }
     if parent_property.is_final()
         || parent_property.set_visibility() == Some(EvalVisibility::Private)
+    {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if parent_property.is_static() != property.is_static()
+        || parent_property.is_readonly() != property.is_readonly()
+        || property_visibility_rank(property.visibility())
+            < property_visibility_rank(parent_property.visibility())
+        || property_visibility_rank(property.write_visibility())
+            < property_visibility_rank(parent_property.write_visibility())
+        || !property_type_signature_matches(
+            property.property_type(),
+            class.name(),
+            parent_property.property_type(),
+            &parent_declaring_class,
+            Some(class),
+            context,
+        )
     {
         return Err(EvalStatus::RuntimeFatal);
     }

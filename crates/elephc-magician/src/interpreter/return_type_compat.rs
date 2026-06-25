@@ -1,7 +1,7 @@
 //! Purpose:
-//! Validates method type compatibility for eval-declared method signatures.
-//! This keeps class/interface parameter contravariance and return covariance
-//! checks out of the statement dispatcher.
+//! Validates type compatibility for eval-declared method and property signatures.
+//! This keeps method parameter contravariance, return covariance, and property
+//! type invariance checks out of the statement dispatcher.
 //!
 //! Called from:
 //! - `crate::interpreter::statements` while registering eval class-like declarations.
@@ -71,6 +71,29 @@ pub(super) fn method_return_type_signature_accepts(
     })
 }
 
+/// Returns whether a redeclared property preserves PHP's invariant type contract.
+pub(super) fn property_type_signature_matches(
+    property_type: Option<&EvalParameterType>,
+    property_owner: &str,
+    required_type: Option<&EvalParameterType>,
+    required_owner: &str,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+) -> bool {
+    match (property_type, required_type) {
+        (None, None) => true,
+        (Some(property_type), Some(required_type)) => eval_property_type_matches(
+            property_type,
+            property_owner,
+            required_type,
+            required_owner,
+            pending_class,
+            context,
+        ),
+        _ => false,
+    }
+}
+
 /// Returns the parameter type that applies at one source-order argument position.
 fn method_signature_effective_parameter_type<'a>(
     parameter_types: &'a [Option<EvalParameterType>],
@@ -85,6 +108,111 @@ fn method_signature_effective_parameter_type<'a>(
         }
     }
     parameter_types.get(position).and_then(Option::as_ref)
+}
+
+/// Returns whether two property type declarations are PHP-equivalent.
+fn eval_property_type_matches(
+    property_type: &EvalParameterType,
+    property_owner: &str,
+    required_type: &EvalParameterType,
+    required_owner: &str,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+) -> bool {
+    property_type.allows_null() == required_type.allows_null()
+        && property_type.is_intersection() == required_type.is_intersection()
+        && eval_property_type_variants_match(
+            property_type.variants(),
+            property_owner,
+            required_type.variants(),
+            required_owner,
+            pending_class,
+            context,
+        )
+}
+
+/// Returns whether two property type variant sets match, ignoring source order.
+fn eval_property_type_variants_match(
+    property_variants: &[EvalParameterTypeVariant],
+    property_owner: &str,
+    required_variants: &[EvalParameterTypeVariant],
+    required_owner: &str,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+) -> bool {
+    if property_variants.len() != required_variants.len() {
+        return false;
+    }
+    let mut matched = vec![false; property_variants.len()];
+    required_variants.iter().all(|required_variant| {
+        property_variants
+            .iter()
+            .enumerate()
+            .find(|(index, property_variant)| {
+                !matched[*index]
+                    && eval_property_type_variant_matches(
+                        property_variant,
+                        property_owner,
+                        required_variant,
+                        required_owner,
+                        pending_class,
+                        context,
+                    )
+            })
+            .is_some_and(|(index, _)| {
+                matched[index] = true;
+                true
+            })
+    })
+}
+
+/// Returns whether two property type atoms match PHP's invariant redeclaration rule.
+fn eval_property_type_variant_matches(
+    property_variant: &EvalParameterTypeVariant,
+    property_owner: &str,
+    required_variant: &EvalParameterTypeVariant,
+    required_owner: &str,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+) -> bool {
+    match (property_variant, required_variant) {
+        (
+            EvalParameterTypeVariant::Class(property_name),
+            EvalParameterTypeVariant::Class(required_name),
+        ) => eval_property_class_type_matches(
+            property_name,
+            property_owner,
+            required_name,
+            required_owner,
+            pending_class,
+            context,
+        ),
+        _ => property_variant == required_variant,
+    }
+}
+
+/// Returns whether two class-name property type atoms name the same PHP type.
+fn eval_property_class_type_matches(
+    property_name: &str,
+    property_owner: &str,
+    required_name: &str,
+    required_owner: &str,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+) -> bool {
+    if property_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case(required_name.trim_start_matches('\\'))
+    {
+        return true;
+    }
+    let Some(property_resolved) =
+        eval_resolve_return_class_type_name(property_name, property_owner, pending_class, context)
+    else {
+        return false;
+    };
+    eval_resolve_return_class_type_name(required_name, required_owner, pending_class, context)
+        .is_some_and(|required_resolved| property_resolved.eq_ignore_ascii_case(&required_resolved))
 }
 
 /// Returns whether an implementation parameter type is a PHP contravariant supertype.
