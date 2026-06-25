@@ -11138,6 +11138,7 @@ echo ($fn->isGenerator() ? "G" : "g") . ":";
 echo ($fn->isVariadic() ? "V" : "v") . ":";
 echo ($fn->hasTentativeReturnType() ? "H" : "h") . ":";
 echo ($fn->getTentativeReturnType() === null ? "Q" : "q") . ":";
+echo count($fn->getClosureUsedVariables()) . ":";
 echo ($fn->isDisabled() ? "X" : "x") . "|";
 echo $method->getShortName() . ":";
 echo $method->getNamespaceName() . ":";
@@ -11152,7 +11153,8 @@ echo ($method->getReturnType() === null ? "N" : "n") . ":";
 echo ($method->isGenerator() ? "G" : "g") . ":";
 echo ($method->isVariadic() ? "V" : "v") . ":";
 echo ($method->hasTentativeReturnType() ? "H" : "h") . ":";
-echo $method->getTentativeReturnType() === null ? "Q" : "q";');
+echo ($method->getTentativeReturnType() === null ? "Q" : "q") . ":";
+echo count($method->getClosureUsedVariables());');
 "#,
     );
     assert!(
@@ -11162,7 +11164,7 @@ echo $method->getTentativeReturnType() === null ? "Q" : "q";');
     );
     assert_eq!(
         out.stdout,
-        "sample:EvalReflectNameNs:Y:iU:c:d:r:t:N:g:V:h:Q:x|run::N:iU:c:d:r:t:N:g:V:h:Q"
+        "sample:EvalReflectNameNs:Y:iU:c:d:r:t:N:g:V:h:Q:0:x|run::N:iU:c:d:r:t:N:g:V:h:Q:0"
     );
 }
 

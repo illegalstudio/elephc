@@ -384,7 +384,8 @@ echo $ref->getReturnType() === null ? "N" : "n"; echo ":";
 echo $ref->isGenerator() ? "G" : "g"; echo ":";
 echo $ref->isVariadic() ? "V" : "v"; echo ":";
 echo $ref->hasTentativeReturnType() ? "H" : "h"; echo ":";
-echo $ref->getTentativeReturnType() === null ? "Q" : "q";
+echo $ref->getTentativeReturnType() === null ? "Q" : "q"; echo ":";
+echo count($ref->getClosureUsedVariables());
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -393,7 +394,7 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "run::N:iU:c:d:r:t:N:g:V:h:Q");
+    assert_eq!(values.output, "run::N:iU:c:d:r:t:N:g:V:h:Q:0");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

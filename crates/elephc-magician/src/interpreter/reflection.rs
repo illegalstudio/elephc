@@ -898,6 +898,10 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
             eval_reflection_bind_no_args(evaluated_args)?;
             values.null().map(Some)
         }
+        "getclosureusedvariables" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values.array_new(0).map(Some)
+        }
         _ => Ok(None),
     }
 }
