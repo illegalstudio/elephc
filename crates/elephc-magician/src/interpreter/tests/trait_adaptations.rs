@@ -71,6 +71,62 @@ return $box->hidden();"#,
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies trait aliases that collide with class methods or no-op names follow PHP rules.
+#[test]
+fn execute_program_applies_eval_trait_alias_collision_rules() {
+    let program = parse_fragment(
+        br#"trait EvalAliasSource {
+    public function source() { return "T"; }
+}
+class EvalAliasClassCollisionBox {
+    use EvalAliasSource {
+        source as target;
+    }
+    public function target() { return "C"; }
+    public function read() { return $this->source() . $this->target(); }
+}
+class EvalAliasNoopBox {
+    use EvalAliasSource {
+        source as source;
+    }
+}
+$box = new EvalAliasClassCollisionBox();
+echo $box->read(); echo ":";
+return (new EvalAliasNoopBox())->source();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "TC:");
+    assert_eq!(values.get(result), FakeValue::String("T".to_string()));
+}
+
+/// Verifies same-name trait aliases that change visibility remain composition fatals.
+#[test]
+fn execute_program_rejects_eval_trait_same_name_visibility_alias() {
+    let program = parse_fragment(
+        br#"trait EvalAliasVisibilitySource {
+    public function source() { return "T"; }
+}
+class EvalAliasVisibilityBox {
+    use EvalAliasVisibilitySource {
+        source as private source;
+    }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program(&program, &mut scope, &mut values)
+        .expect_err("same-name trait alias with visibility change should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies unresolved same-name trait methods remain a declaration-time fatal.
 #[test]
 fn execute_program_rejects_unresolved_eval_trait_method_conflict() {

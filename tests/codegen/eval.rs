@@ -7181,6 +7181,56 @@ echo $box->hidden();');
     );
 }
 
+/// Verifies eval-declared trait aliases follow PHP collision and no-op rules.
+#[test]
+fn test_eval_declared_trait_alias_collision_rules() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('trait EvalAliasSource {
+    public function source() { return "T"; }
+}
+class EvalAliasClassCollisionBox {
+    use EvalAliasSource {
+        source as target;
+    }
+    public function target() { return "C"; }
+    public function read() { return $this->source() . $this->target(); }
+}
+class EvalAliasNoopBox {
+    use EvalAliasSource {
+        source as source;
+    }
+}
+$box = new EvalAliasClassCollisionBox();
+echo $box->read() . ":";
+echo (new EvalAliasNoopBox())->source();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "TC:T");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('trait EvalAliasVisibilitySource {
+    public function source() { return "T"; }
+}
+class EvalAliasVisibilityBox {
+    use EvalAliasVisibilitySource {
+        source as private source;
+    }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared trait abstract methods must be implemented by concrete classes.
 #[test]
 fn test_eval_declared_trait_abstract_method_requirement_fails() {
