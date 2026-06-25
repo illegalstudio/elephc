@@ -1432,7 +1432,7 @@ pub(in crate::interpreter) fn eval_reflection_property_is_initialized_result(
     .map(Some)
 }
 
-/// Handles eval-backed `ReflectionProperty::isLazy()` and `skipLazyInitialization()` calls.
+/// Handles `ReflectionProperty::isLazy()` and `skipLazyInitialization()` calls.
 pub(in crate::interpreter) fn eval_reflection_property_lazy_result(
     identity: u64,
     method_name: &str,
@@ -1460,7 +1460,16 @@ pub(in crate::interpreter) fn eval_reflection_property_lazy_result(
             )?;
             return values.bool_value(false).map(Some);
         }
-        eval_reflection_property_validate_object(&declaring_class, object, context, values)?;
+        if eval_reflection_class_like_exists(&declaring_class, context) {
+            eval_reflection_property_validate_object(&declaring_class, object, context, values)?;
+        } else {
+            eval_reflection_aot_instance_property_validate_object(
+                &declaring_class,
+                object,
+                context,
+                values,
+            )?;
+        }
         return values.bool_value(false).map(Some);
     }
     if method_name.eq_ignore_ascii_case("skipLazyInitialization") {
@@ -1474,15 +1483,24 @@ pub(in crate::interpreter) fn eval_reflection_property_lazy_result(
             )?;
             return Err(EvalStatus::RuntimeFatal);
         }
-        let (_, property) = eval_reflection_instance_property_target(
-            &declaring_class,
-            &property_name,
-            object,
-            context,
-            values,
-        )?;
-        if property.is_virtual() {
-            return Err(EvalStatus::RuntimeFatal);
+        if eval_reflection_class_like_exists(&declaring_class, context) {
+            let (_, property) = eval_reflection_instance_property_target(
+                &declaring_class,
+                &property_name,
+                object,
+                context,
+                values,
+            )?;
+            if property.is_virtual() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+        } else {
+            eval_reflection_aot_instance_property_validate_object(
+                &declaring_class,
+                object,
+                context,
+                values,
+            )?;
         }
         return values.null().map(Some);
     }

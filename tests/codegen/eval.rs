@@ -10585,6 +10585,8 @@ $name->setRawValue($object, "Grace");
 echo $object->name . ":";
 echo $secret->getRawValue($object) . ":";
 $secret->setRawValue($object, 9);
+echo $typed->isLazy($object) ? "L:" : "l:";
+$typed->skipLazyInitialization(object: $object);
 $typed->setRawValueWithoutLazyInitialization(object: $object, value: 11);
 echo $object->reveal();
 ');
@@ -10595,7 +10597,7 @@ echo $object->reveal();
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "Ada:Grace:3:9:11");
+    assert_eq!(out.stdout, "Ada:Grace:3:l:9:11");
 }
 
 /// Verifies eval ReflectionProperty exposes property hook metadata and hook methods.

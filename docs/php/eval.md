@@ -459,7 +459,8 @@ eval-declared backed instance properties, including backed property hooks, and
 for bridge-supported generated/AOT instance properties. Raw access bypasses
 concrete eval property hook accessors. Virtual property hooks reject raw
 access like PHP. `ReflectionProperty::isLazy()` reports `false` for
-eval-declared properties because eval does not implement lazy properties;
+eval-declared and bridge-supported generated/AOT properties because eval does
+not implement lazy properties;
 `skipLazyInitialization()` is a no-op for supported non-static backed
 properties, and `setRawValueWithoutLazyInitialization()` follows the same raw
 storage write path as `setRawValue()`.
