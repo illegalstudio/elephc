@@ -5854,6 +5854,26 @@ return $afterMutate . ":" . $payload->value;');
     assert_eq!(out, "7:9");
 }
 
+/// Verifies eval dispatches generated/AOT instance methods with iterable by-reference params.
+#[test]
+fn test_eval_fragment_dispatches_aot_instance_method_with_iterable_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotIterableRefMethodBox {
+    public function replace(iterable &$items): void {
+        $items = [4, 5];
+    }
+}
+
+echo eval('$box = new EvalAotIterableRefMethodBox();
+$items = [1, 2];
+$box->replace($items);
+return is_iterable($items) . ":" . count($items) . ":" . $items[0] . ":" . $items[1];');
+"#,
+    );
+    assert_eq!(out, "1:2:4:5");
+}
+
 /// Verifies eval preserves string values passed through an untyped AOT method parameter.
 #[test]
 fn test_eval_fragment_dispatches_aot_instance_method_with_mixed_string_arg() {
@@ -6006,6 +6026,25 @@ return $payload->value;');
 "#,
     );
     assert_eq!(out, "8");
+}
+
+/// Verifies eval dispatches generated/AOT static methods with iterable by-reference params.
+#[test]
+fn test_eval_fragment_dispatches_aot_static_method_with_iterable_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotIterableRefStaticBox {
+    public static function replace(iterable &$items): void {
+        $items = ["name" => "static"];
+    }
+}
+
+echo eval('$items = [6, 7];
+EvalAotIterableRefStaticBox::replace($items);
+return is_iterable($items) . ":" . $items["name"];');
+"#,
+    );
+    assert_eq!(out, "1:static");
 }
 
 /// Verifies eval binds named arguments before dispatching an AOT constructor.
@@ -12902,6 +12941,25 @@ return $payload->value;');
 "#,
     );
     assert_eq!(out, "11");
+}
+
+/// Verifies eval dispatches generated/AOT constructors with iterable by-reference params.
+#[test]
+fn test_eval_dynamic_new_runs_constructor_with_iterable_by_ref_arg() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDynamicNewIterableRefCtor {
+    public function __construct(iterable &$items) {
+        $items = [12, 13];
+    }
+}
+
+echo eval('$items = [1, 2];
+$box = new EvalDynamicNewIterableRefCtor($items);
+return is_iterable($items) . ":" . count($items) . ":" . $items[0] . ":" . $items[1];');
+"#,
+    );
+    assert_eq!(out, "1:2:12:13");
 }
 
 /// Verifies eval object construction can call private AOT constructors from the declaring scope.

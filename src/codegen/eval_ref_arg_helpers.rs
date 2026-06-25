@@ -11,8 +11,8 @@
 //! - The generated eval bridge writes back through the original eval `Mixed`
 //!   cells after native AOT methods mutate by-reference argument storage.
 //! - Boxed `Mixed`/union references use a pointer slot; supported typed scalar,
-//!   string, array, and object references use raw ABI storage that is boxed
-//!   again during writeback.
+//!   string, array, iterable, and object references use raw ABI storage that is
+//!   boxed again during writeback.
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
@@ -41,6 +41,7 @@ pub(crate) fn eval_ref_param_supported(ty: &PhpType) -> bool {
             | PhpType::Str
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
+            | PhpType::Iterable
             | PhpType::Object(_)
             | PhpType::TaggedScalar
     )
@@ -179,7 +180,7 @@ fn emit_x86_64_write_back_mixed_ref_arg(
     emitter.label(&done_label);
 }
 
-/// Boxes one ARM64 typed scalar ref slot and replaces the original eval Mixed cell.
+/// Boxes one ARM64 typed raw ref slot and replaces the original eval Mixed cell.
 fn emit_aarch64_write_back_typed_ref_arg(
     emitter: &mut Emitter,
     slot: &EvalRefArgSlot,
@@ -194,7 +195,7 @@ fn emit_aarch64_write_back_typed_ref_arg(
     emit_aarch64_release_typed_ref_slot(emitter, slot, stack_offset, label_prefix);
 }
 
-/// Boxes one x86_64 typed scalar ref slot and replaces the original eval Mixed cell.
+/// Boxes one x86_64 typed raw ref slot and replaces the original eval Mixed cell.
 fn emit_x86_64_write_back_typed_ref_arg(
     emitter: &mut Emitter,
     slot: &EvalRefArgSlot,
@@ -209,7 +210,7 @@ fn emit_x86_64_write_back_typed_ref_arg(
     emit_x86_64_release_typed_ref_slot(emitter, slot, stack_offset, label_prefix);
 }
 
-/// Loads one ARM64 typed scalar ref slot into the canonical result registers.
+/// Loads one ARM64 typed raw ref slot into the canonical result registers.
 fn emit_aarch64_load_typed_ref_slot(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
         PhpType::Str => {
@@ -226,14 +227,17 @@ fn emit_aarch64_load_typed_ref_slot(emitter: &mut Emitter, ty: &PhpType, offset:
         PhpType::Int | PhpType::Bool => {
             abi::emit_load_temporary_stack_slot(emitter, "x0", offset);
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Iterable
+        | PhpType::Object(_) => {
             abi::emit_load_temporary_stack_slot(emitter, "x0", offset);
         }
         _ => {}
     }
 }
 
-/// Loads one x86_64 typed scalar ref slot into the canonical result registers.
+/// Loads one x86_64 typed raw ref slot into the canonical result registers.
 fn emit_x86_64_load_typed_ref_slot(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     match ty.codegen_repr() {
         PhpType::Str => {
@@ -250,7 +254,10 @@ fn emit_x86_64_load_typed_ref_slot(emitter: &mut Emitter, ty: &PhpType, offset: 
         PhpType::Int | PhpType::Bool => {
             abi::emit_load_temporary_stack_slot(emitter, "rax", offset);
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Iterable
+        | PhpType::Object(_) => {
             abi::emit_load_temporary_stack_slot(emitter, "rax", offset);
         }
         _ => {}
@@ -270,7 +277,10 @@ fn emit_aarch64_release_typed_ref_slot(
             abi::emit_load_temporary_stack_slot(emitter, "x0", raw_offset);
             abi::emit_call_label(emitter, "__rt_heap_free_safe");
         }
-        ty @ (PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)) => {
+        ty @ (PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Iterable
+            | PhpType::Object(_)) => {
             emit_aarch64_release_refcounted_raw_slot(emitter, slot, stack_offset, label_prefix, &ty);
         }
         _ => {}
@@ -290,7 +300,10 @@ fn emit_x86_64_release_typed_ref_slot(
             abi::emit_load_temporary_stack_slot(emitter, "rax", raw_offset);
             abi::emit_call_label(emitter, "__rt_heap_free_safe");
         }
-        ty @ (PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)) => {
+        ty @ (PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Iterable
+            | PhpType::Object(_)) => {
             emit_x86_64_release_refcounted_raw_slot(emitter, slot, stack_offset, label_prefix, &ty);
         }
         _ => {}
