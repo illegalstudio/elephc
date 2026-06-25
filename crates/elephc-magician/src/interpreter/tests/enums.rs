@@ -168,6 +168,75 @@ return EvalTraitEnum::Ready->label();"#,
     assert_eq!(values.get(result), FakeValue::String("Ready".to_string()));
 }
 
+/// Verifies enum synthetic methods hide conflicting trait imports like PHP.
+#[test]
+fn execute_program_uses_enum_synthetic_methods_over_trait_imports() {
+    let program = parse_fragment(
+        br#"trait EvalEnumSyntheticTrait {
+    public function cases() { return "trait-cases"; }
+    public static function from($value) { return "trait-from"; }
+    public static function tryFrom($value) { return "trait-try"; }
+}
+enum EvalPureSynthetic {
+    use EvalEnumSyntheticTrait {
+        cases as traitCases;
+    }
+    case Ready;
+}
+enum EvalBackedSynthetic: string {
+    use EvalEnumSyntheticTrait {
+        cases as traitCases;
+        from as traitFrom;
+    }
+    case Ready = "ready";
+}
+echo is_array(EvalPureSynthetic::Ready->cases()) ? "cases" : "bad"; echo ":";
+echo EvalPureSynthetic::Ready->traitCases(); echo ":";
+echo EvalPureSynthetic::from("x"); echo ":";
+echo EvalPureSynthetic::Ready->from("x"); echo ":";
+echo EvalPureSynthetic::tryFrom("x"); echo ":";
+echo EvalBackedSynthetic::from("ready")->value; echo ":";
+echo EvalBackedSynthetic::Ready->from("ready")->value; echo ":";
+echo EvalBackedSynthetic::tryFrom("missing") === null ? "null" : "bad"; echo ":";
+echo EvalBackedSynthetic::traitFrom("x"); echo ":";
+echo EvalBackedSynthetic::Ready->traitCases(); echo ":";
+echo is_callable([EvalBackedSynthetic::Ready, "cases"]) ? "callable" : "bad";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "cases:trait-cases:trait-from:trait-from:trait-try:ready:ready:null:trait-from:trait-cases:callable"
+    );
+}
+
+/// Verifies pure eval enums may declare `from` and `tryFrom` methods directly.
+#[test]
+fn execute_program_allows_pure_eval_enum_direct_from_methods() {
+    let program = parse_fragment(
+        br#"enum EvalPureDirectFrom {
+    case Ready;
+    public static function from($value) { return "from:" . $value; }
+    public static function tryFrom($value) { return "try:" . $value; }
+}
+echo EvalPureDirectFrom::from("x"); echo ":";
+echo EvalPureDirectFrom::Ready->tryFrom("y"); echo ":";
+return is_callable([EvalPureDirectFrom::Ready, "from"]);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "from:x:try:y:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval enum interfaces can inherit PHP's native enum marker interfaces.
 #[test]
 fn execute_program_allows_eval_enum_marker_interface_inheritance() {
@@ -225,6 +294,14 @@ fn execute_program_rejects_invalid_eval_enum_members() {
     public static function cases() { return []; }
 }"#,
         "reserved enum method should fail",
+    );
+
+    assert_invalid_enum_fragment(
+        br#"enum EvalInvalidBackedEnumMethod: string {
+    case Ready = "ready";
+    public static function from($value) { return self::Ready; }
+}"#,
+        "backed enum from method should fail",
     );
 
     assert_invalid_enum_fragment(

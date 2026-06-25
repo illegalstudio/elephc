@@ -715,6 +715,7 @@ pub(in crate::interpreter) fn execute_enum_decl_stmt(
     {
         return Err(EvalStatus::RuntimeFatal);
     }
+    validate_eval_enum_direct_method_declarations(enum_decl)?;
     let enum_decl = expand_eval_enum_traits(enum_decl, context)?;
     let enum_decl = &enum_decl;
     validate_eval_enum_decl(enum_decl, context, values)?;
@@ -742,7 +743,8 @@ fn expand_eval_enum_traits(
     }
     let enum_class = enum_decl.as_class_metadata();
     validate_eval_trait_adaptations(&enum_class, context)?;
-    let enum_method_names = class_method_name_set(&enum_class);
+    let mut enum_method_names = class_method_name_set(&enum_class);
+    insert_eval_enum_synthetic_method_names(enum_decl, &mut enum_method_names);
     let mut trait_method_names = std::collections::HashSet::new();
     let mut trait_properties = std::collections::HashMap::new();
     let mut trait_constants = std::collections::HashMap::new();
@@ -795,6 +797,18 @@ fn expand_eval_enum_traits(
     Ok(expanded)
 }
 
+/// Adds PHP's enum-provided method names to the set that hides trait imports.
+fn insert_eval_enum_synthetic_method_names(
+    enum_decl: &EvalEnum,
+    method_names: &mut std::collections::HashSet<String>,
+) {
+    method_names.insert(String::from("cases"));
+    if enum_decl.backing_type().is_some() {
+        method_names.insert(String::from("from"));
+        method_names.insert(String::from("tryfrom"));
+    }
+}
+
 /// Validates enum metadata before it is inserted into the dynamic context.
 fn validate_eval_enum_decl(
     enum_decl: &EvalEnum,
@@ -803,7 +817,7 @@ fn validate_eval_enum_decl(
 ) -> Result<(), EvalStatus> {
     validate_eval_declared_constants(enum_decl.constants())?;
     validate_eval_enum_case_declarations(enum_decl)?;
-    validate_eval_enum_method_declarations(enum_decl)?;
+    validate_eval_enum_forbidden_magic_methods(enum_decl)?;
     let enum_class = enum_decl.as_class_metadata();
     validate_eval_class_modifiers(&enum_class, context)?;
     validate_eval_enum_interfaces(enum_decl, &enum_class, context, values)?;
@@ -858,14 +872,29 @@ fn validate_eval_enum_case_declarations(enum_decl: &EvalEnum) -> Result<(), Eval
     Ok(())
 }
 
-/// Validates enum method declarations that PHP reserves or forbids on enums.
-fn validate_eval_enum_method_declarations(enum_decl: &EvalEnum) -> Result<(), EvalStatus> {
+/// Validates direct enum methods that PHP reserves on enum declarations.
+fn validate_eval_enum_direct_method_declarations(enum_decl: &EvalEnum) -> Result<(), EvalStatus> {
     for method in enum_decl.methods() {
-        if method.name().eq_ignore_ascii_case("cases")
-            || method.name().eq_ignore_ascii_case("from")
-            || method.name().eq_ignore_ascii_case("tryFrom")
-            || is_forbidden_eval_enum_magic_method(method.name())
+        if method.name().eq_ignore_ascii_case("cases") {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if enum_decl.backing_type().is_some()
+            && (method.name().eq_ignore_ascii_case("from")
+                || method.name().eq_ignore_ascii_case("tryFrom"))
         {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if is_forbidden_eval_enum_magic_method(method.name()) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
+}
+
+/// Validates enum methods, including trait imports, that PHP forbids by magic name.
+fn validate_eval_enum_forbidden_magic_methods(enum_decl: &EvalEnum) -> Result<(), EvalStatus> {
+    for method in enum_decl.methods() {
+        if is_forbidden_eval_enum_magic_method(method.name()) {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -3727,7 +3756,7 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
     )? {
         return Ok(result);
     }
-    if context.has_enum(&class_name) && eval_enum_static_builtin_name(method_name).is_some() {
+    if eval_enum_static_builtin_applies(&class_name, method_name, context).is_some() {
         return eval_enum_builtin_static_method_result(
             &class_name,
             method_name,
@@ -3885,6 +3914,21 @@ fn eval_enum_static_builtin_name(method_name: &str) -> Option<&'static str> {
         Some("tryFrom")
     } else {
         None
+    }
+}
+
+/// Returns a synthetic enum method only when that enum actually provides it.
+pub(in crate::interpreter) fn eval_enum_static_builtin_applies(
+    enum_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<&'static str> {
+    let enum_decl = context.enum_decl(enum_name)?;
+    match eval_enum_static_builtin_name(method_name)? {
+        "cases" => Some("cases"),
+        "from" if enum_decl.backing_type().is_some() => Some("from"),
+        "tryFrom" if enum_decl.backing_type().is_some() => Some("tryFrom"),
+        _ => None,
     }
 }
 
@@ -4700,6 +4744,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         );
     };
     let called_class_name = class.name().to_string();
+    if eval_enum_static_builtin_applies(&called_class_name, method_name, context).is_some() {
+        return eval_enum_builtin_static_method_result(
+            &called_class_name,
+            method_name,
+            evaluated_args,
+            context,
+            values,
+        );
+    }
     if let Some((class_name, method)) =
         eval_dynamic_method_for_call(&called_class_name, method_name, context)
     {

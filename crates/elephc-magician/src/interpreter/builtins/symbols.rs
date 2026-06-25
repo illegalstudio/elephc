@@ -784,12 +784,15 @@ fn eval_object_method_callable_probe(
     let Some(class) = context.dynamic_object_class(identity) else {
         return Ok(false);
     };
+    if eval_enum_static_builtin_applies(class.name(), method_name, context).is_some() {
+        return Ok(true);
+    }
     let Some((declaring_class, method)) =
         eval_dynamic_method_for_call(class.name(), method_name, context)
     else {
         return Ok(false);
     };
-    if method.is_static() || method.is_abstract() {
+    if method.is_abstract() {
         return Ok(false);
     }
     if method_name.eq_ignore_ascii_case("__invoke") {
@@ -804,6 +807,9 @@ fn eval_static_method_callable_probe(
     method_name: &str,
     context: &ElephcEvalContext,
 ) -> bool {
+    if eval_enum_static_builtin_applies(class_name, method_name, context).is_some() {
+        return true;
+    }
     let Some((declaring_class, method)) = context.class_method(class_name, method_name) else {
         return false;
     };
