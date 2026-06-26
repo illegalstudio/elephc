@@ -306,7 +306,8 @@ class EvalByRefPublicPropertyBox {
 class EvalByRefPrivatePropertyBox {
     private string $value = "private";
     public function update($changer) {
-        $changer->set($this->value, "secret");
+        $name = "value";
+        $changer->set($this->{$name}, "secret");
         return $this->value;
     }
 }
@@ -314,6 +315,8 @@ $changer = new EvalByRefPropertyChanger();
 $public = new EvalByRefPublicPropertyBox();
 $changer->set($public->value, "changed");
 $changer->variadic($public->value);
+$name = "value";
+$changer->set($public->{$name}, "dynamic");
 echo $public->value; echo ":";
 $private = new EvalByRefPrivatePropertyBox();
 return $private->update($changer);"#,
@@ -324,7 +327,7 @@ return $private->update($changer);"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "variadic:");
+    assert_eq!(values.output, "dynamic:");
     assert_eq!(values.get(result), FakeValue::String("secret".to_string()));
 }
 

@@ -9395,6 +9395,8 @@ $items = ["k" => "C"];
 $box->change($items["k"]);
 $prop = new EvalByRefPropertyBox();
 $box->change($prop->value);
+$propName = "value";
+$box->change($prop->{$propName});
 echo $ctor . ":" . $value . ":" . $named . ":" . $items["k"] . ":" . $prop->value;');
 "#,
     );
@@ -9405,7 +9407,7 @@ echo $ctor . ":" . $value . ":" . $named . ":" . $items["k"] . ":" . $prop->valu
     );
     assert_eq!(
         out.stdout,
-        "Z-ctor:A-method-static-variadic:B-named:C-method:D-method"
+        "Z-ctor:A-method-static-variadic:B-named:C-method:D-method-method"
     );
 }
 
