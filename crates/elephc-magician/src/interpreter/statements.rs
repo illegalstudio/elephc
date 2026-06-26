@@ -3729,9 +3729,18 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
     if eval_static_member_context_owns_class(&class_name, context) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    values
-        .class_constant_get(&class_name, constant_name)?
-        .ok_or(EvalStatus::RuntimeFatal)
+    if let Some(value) = values.class_constant_get(&class_name, constant_name)? {
+        return Ok(value);
+    }
+    eval_throw_error(
+        &format!(
+            "Undefined constant {}::{}",
+            class_name.trim_start_matches('\\'),
+            constant_name
+        ),
+        context,
+        values,
+    )
 }
 
 /// Resolves eval-visible built-in Reflection class constants.

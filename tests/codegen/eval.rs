@@ -5559,7 +5559,7 @@ return "";');
 /// Verifies eval rejects direct fetches of private AOT constants through child names.
 #[test]
 fn test_eval_rejects_private_inherited_aot_class_constant_fetch() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class EvalAotPrivateConstFetchBase {
     private const HIDDEN = "hidden";
@@ -5567,12 +5567,16 @@ class EvalAotPrivateConstFetchBase {
 
 class EvalAotPrivateConstFetchChild extends EvalAotPrivateConstFetchBase {}
 
-eval('return EvalAotPrivateConstFetchChild::HIDDEN;');
+echo eval('try {
+    return EvalAotPrivateConstFetchChild::HIDDEN;
+} catch (Error $e) {
+    return get_class($e) . ":" . $e->getMessage();
+}');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "unexpected stderr: {err}"
+    assert_eq!(
+        out,
+        "Error:Undefined constant EvalAotPrivateConstFetchChild::HIDDEN"
     );
 }
 
