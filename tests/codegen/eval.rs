@@ -7921,6 +7921,45 @@ echo $object->parentView();');
     );
 }
 
+/// Verifies AOT `get_object_vars()` lets parent scopes see shadowed private slots.
+#[test]
+fn test_eval_get_object_vars_uses_aot_private_parent_shadowing_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotShadowVarsParent {
+    private $value = "p";
+    public function parentView() {
+        return eval('$vars = get_object_vars($this);
+ksort($vars);
+echo implode(",", array_keys($vars)); echo ":";
+return $vars["value"];');
+    }
+}
+class EvalAotShadowVarsChild extends EvalAotShadowVarsParent {
+    public $value = "c";
+    public function childView() {
+        return eval('$vars = get_object_vars($this);
+ksort($vars);
+echo implode(",", array_keys($vars)); echo ":";
+return $vars["value"];');
+    }
+}
+$object = new EvalAotShadowVarsChild();
+eval('$vars = get_object_vars($object);
+ksort($vars);
+echo implode(",", array_keys($vars)); echo ":"; echo $vars["value"]; echo "|";
+echo $object->childView(); echo "|";
+echo $object->parentView();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "value:c|value:c|value:p");
+}
+
 /// Verifies eval-declared private parent properties keep separate storage when a child shadows them.
 #[test]
 fn test_eval_declared_private_parent_property_shadowing() {
