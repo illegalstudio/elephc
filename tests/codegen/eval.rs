@@ -12152,6 +12152,65 @@ echo $param->allowsNull() ? "N" : "n";
     );
 }
 
+/// Verifies eval ReflectionParameter construction errors are catchable objects.
+#[test]
+fn test_eval_reflection_parameter_constructor_throws_reflection_exceptions() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('function eval_dyn_reflect_param_error_function($known) {}
+class EvalDynReflectParamErrorTarget {
+    public function run($known) {}
+}
+try {
+    new ReflectionParameter("eval_dyn_reflect_param_error_function", "missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionParameter(["EvalDynReflectParamErrorTarget", "run"], "missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionParameter(["EvalDynReflectParamErrorTarget", "run"], 3);
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionParameter(["EvalDynReflectParamErrorTarget", "missing"], "known");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionParameter(["EvalDynReflectParamErrorTarget", "run"], -1);
+    echo "bad";
+} catch (ValueError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+echo (new ReflectionParameter(["EvalDynReflectParamErrorTarget", "run"], "known"))->getName();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "ReflectionException:The parameter specified by its name could not be found|The parameter specified by its name could not be found|The parameter specified by its offset could not be found|Method EvalDynReflectParamErrorTarget::missing() does not exist|ValueError:ReflectionParameter::__construct(): Argument #2 ($param) must be greater than or equal to 0|known"
+    );
+}
+
 /// Verifies eval ReflectionParameter exposes PHP constant-default metadata.
 #[test]
 fn test_eval_reflection_parameter_reports_default_constant_metadata() {

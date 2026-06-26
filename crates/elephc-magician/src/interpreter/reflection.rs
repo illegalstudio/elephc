@@ -148,6 +148,7 @@ enum EvalReflectionPropertyHook {
 }
 
 /// Constructor selector accepted by `ReflectionParameter`.
+#[derive(Clone)]
 enum EvalReflectionParameterSelector {
     Name(String),
     Position(i64),
@@ -3073,11 +3074,127 @@ fn eval_reflection_parameter_new(
     )?;
     let selector = eval_reflection_parameter_selector(args[1], values)?;
     let Some(parameter) =
-        eval_reflection_parameter_constructor_metadata(args[0], selector, context, values)?
+        eval_reflection_parameter_constructor_metadata(args[0], selector.clone(), context, values)?
     else {
-        return Ok(None);
+        return eval_reflection_parameter_constructor_error(args[0], &selector, context, values);
     };
     eval_reflection_parameter_object_result(&parameter, context, values).map(Some)
+}
+
+/// Throws the PHP constructor error for eval-backed `ReflectionParameter` misses.
+fn eval_reflection_parameter_constructor_error(
+    target: RuntimeCellHandle,
+    selector: &EvalReflectionParameterSelector,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if values.is_array_like(target)? {
+        return eval_reflection_method_parameter_constructor_error(target, selector, context, values);
+    }
+    if values.type_tag(target)? == EVAL_TAG_STRING {
+        return eval_reflection_function_parameter_constructor_error(
+            target, selector, context, values,
+        );
+    }
+    Err(EvalStatus::RuntimeFatal)
+}
+
+/// Throws the PHP constructor error for eval-backed function parameter misses.
+fn eval_reflection_function_parameter_constructor_error(
+    target: RuntimeCellHandle,
+    selector: &EvalReflectionParameterSelector,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let requested_name = eval_reflection_string_arg(target, values)?;
+    let lookup_name = requested_name.trim_start_matches('\\').to_ascii_lowercase();
+    if context.function(&lookup_name).is_some() || context.native_function(&lookup_name).is_some() {
+        return eval_reflection_parameter_selector_error(selector, context, values);
+    }
+    Ok(None)
+}
+
+/// Throws the PHP constructor error for eval-backed method parameter misses.
+fn eval_reflection_method_parameter_constructor_error(
+    target: RuntimeCellHandle,
+    selector: &EvalReflectionParameterSelector,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if values.array_len(target)? != 2 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let zero = values.int(0)?;
+    let one = values.int(1)?;
+    let receiver = values.array_get(target, zero)?;
+    let method = values.array_get(target, one)?;
+    let method_name = eval_reflection_string_arg(method, values)?;
+    let class_name = match values.type_tag(receiver)? {
+        EVAL_TAG_OBJECT => eval_reflection_object_class_name(receiver, context, values)?,
+        EVAL_TAG_STRING => eval_reflection_string_arg(receiver, values)?,
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    let reflected_name = context
+        .resolve_class_like_name(&class_name)
+        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    if eval_reflection_class_like_exists(&reflected_name, context) {
+        let Some(reflected_method_name) = eval_reflection_member_name(
+            EVAL_REFLECTION_OWNER_METHOD,
+            &reflected_name,
+            &method_name,
+            context,
+        ) else {
+            return eval_throw_reflection_exception(
+                &format!("Method {}::{}() does not exist", reflected_name, method_name),
+                context,
+                values,
+            );
+        };
+        if eval_reflection_method_metadata(&reflected_name, &reflected_method_name, context)
+            .is_some()
+        {
+            return eval_reflection_parameter_selector_error(selector, context, values);
+        }
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if eval_reflection_aot_method_metadata_with_signature_if_exists(
+        &reflected_name,
+        &method_name,
+        context,
+        values,
+    )?
+    .is_some()
+    {
+        return eval_reflection_parameter_selector_error(selector, context, values);
+    }
+    Ok(None)
+}
+
+/// Throws PHP's selector-specific ReflectionParameter constructor error.
+fn eval_reflection_parameter_selector_error(
+    selector: &EvalReflectionParameterSelector,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    match selector {
+        EvalReflectionParameterSelector::Name(_) => eval_throw_reflection_exception(
+            "The parameter specified by its name could not be found",
+            context,
+            values,
+        ),
+        EvalReflectionParameterSelector::Position(position) if *position < 0 => {
+            eval_throw_value_error(
+                "ReflectionParameter::__construct(): Argument #2 ($param) must be greater than or equal to 0",
+                context,
+                values,
+            )
+        }
+        EvalReflectionParameterSelector::Position(_) => eval_throw_reflection_exception(
+            "The parameter specified by its offset could not be found",
+            context,
+            values,
+        ),
+    }
 }
 
 /// Resolves `ReflectionParameter` constructor target metadata.
@@ -3161,19 +3278,28 @@ fn eval_reflection_method_parameter_metadata(
         EVAL_TAG_STRING => eval_reflection_string_arg(receiver, values)?,
         _ => return Err(EvalStatus::RuntimeFatal),
     };
-    let member = if eval_reflection_class_like_exists(&class_name, context) {
+    let reflected_name = context
+        .resolve_class_like_name(&class_name)
+        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    let member = if eval_reflection_class_like_exists(&reflected_name, context) {
         let reflected_method_name = eval_reflection_member_name(
             EVAL_REFLECTION_OWNER_METHOD,
-            &class_name,
+            &reflected_name,
             &method_name,
             context,
-        )
-        .ok_or(EvalStatus::RuntimeFatal)?;
-        eval_reflection_method_metadata(&class_name, &reflected_method_name, context)
-            .ok_or(EvalStatus::RuntimeFatal)?
+        );
+        let Some(reflected_method_name) = reflected_method_name else {
+            return Ok(None);
+        };
+        let Some(method) =
+            eval_reflection_method_metadata(&reflected_name, &reflected_method_name, context)
+        else {
+            return Ok(None);
+        };
+        method
     } else {
         let Some(member) = eval_reflection_aot_method_metadata_with_signature_if_exists(
-            &class_name,
+            &reflected_name,
             &method_name,
             context,
             values,
@@ -6575,6 +6701,20 @@ fn eval_throw_reflection_exception(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let exception = values.new_object("ReflectionException")?;
+    let message = values.string(message)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
+}
+
+/// Creates a catchable `ValueError` and propagates it through eval throw state.
+fn eval_throw_value_error(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let exception = values.new_object("ValueError")?;
     let message = values.string(message)?;
     let code = values.int(0)?;
     values.construct_object(exception, vec![message, code])?;

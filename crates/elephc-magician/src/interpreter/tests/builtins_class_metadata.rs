@@ -2889,6 +2889,70 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionParameter construction throws catchable PHP reflection errors.
+#[test]
+fn execute_program_reflection_parameter_constructor_throws_reflection_exceptions() {
+    let program = parse_fragment(
+        br#"function eval_reflect_param_error_function($known) {}
+class EvalReflectParamErrorTarget {
+    public function run($known) {}
+}
+try {
+    new ReflectionParameter("eval_reflect_param_error_function", "missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionParameter(["EvalReflectParamErrorTarget", "run"], "missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionParameter(["EvalReflectParamErrorTarget", "run"], 3);
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionParameter(["EvalReflectParamErrorTarget", "missing"], "known");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionParameter(["EvalReflectParamErrorTarget", "run"], -1);
+    echo "bad";
+} catch (ValueError $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo "|";
+echo (new ReflectionParameter(["EvalReflectParamErrorTarget", "run"], "known"))->getName();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values);
+    assert!(
+        result.is_ok(),
+        "execute eval ir failed after output {:?}",
+        values.output
+    );
+
+    assert_eq!(
+        values.output,
+        "ReflectionException:The parameter specified by its name could not be found|The parameter specified by its name could not be found|The parameter specified by its offset could not be found|Method EvalReflectParamErrorTarget::missing() does not exist|ValueError:ReflectionParameter::__construct(): Argument #2 ($param) must be greater than or equal to 0|known"
+    );
+    assert_eq!(values.get(result.expect("execute eval ir")), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass::getMethods preserves eval method parameter metadata.
 #[test]
 fn execute_program_reflection_class_lists_eval_method_parameters() {
