@@ -20,9 +20,10 @@ use crate::codegen::abi;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Function, LocalKind, Module};
 use crate::names::{method_symbol, php_symbol_key};
-use crate::parser::ast::Visibility;
+use crate::parser::ast::{ExprKind, Visibility};
 use crate::types::{ClassInfo, FunctionSig, PhpType};
 
 use super::eval_ref_arg_helpers::{
@@ -66,6 +67,8 @@ struct EvalConstructorSlot {
     params: Vec<PhpType>,
     ref_params: Vec<bool>,
     supported: bool,
+    runtime_helper: Option<&'static str>,
+    zero_default_first_arg: bool,
 }
 
 /// Emits eval constructor helpers when any lowered function owns an eval context.
@@ -110,7 +113,7 @@ fn function_uses_eval(function: &Function) -> bool {
     })
 }
 
-/// Collects AOT constructors backed by emitted EIR symbols in stable class-id order.
+/// Collects AOT and runtime-backed constructors in stable class-id order.
 fn collect_eval_constructor_slots(module: &Module) -> Vec<EvalConstructorSlot> {
     let emitted_methods = super::eir_class_method_keys(module);
     let mut slots = Vec::new();
@@ -134,7 +137,7 @@ fn collect_builtin_throwable_constructor_class_ids(module: &Module) -> Vec<u64> 
     class_ids
 }
 
-/// Adds one constructor slot for a class when the constructor has emitted code.
+/// Adds one constructor slot for a class when the constructor has emitted code or a runtime helper.
 fn collect_class_constructor_slot(
     module: &Module,
     class_name: &str,
@@ -151,7 +154,10 @@ fn collect_class_constructor_slot(
         .get(&method_key)
         .map(String::as_str)
         .unwrap_or(class_name);
-    if !emitted_methods.contains(&(impl_class.to_string(), method_key.clone(), false)) {
+    let runtime_helper = eval_runtime_backed_constructor_helper(class_name, &method_key);
+    if runtime_helper.is_none()
+        && !emitted_methods.contains(&(impl_class.to_string(), method_key.clone(), false))
+    {
         return;
     }
     let visibility = constructor_visibility(class_info, &method_key);
@@ -176,7 +182,42 @@ fn collect_class_constructor_slot(
         params,
         ref_params,
         supported,
+        runtime_helper,
+        zero_default_first_arg: constructor_uses_zero_default_first_arg(
+            class_name,
+            &method_key,
+            sig,
+            runtime_helper,
+        ),
     });
+}
+
+/// Returns a normal-ABI runtime helper for builtin constructors that eval can bridge.
+fn eval_runtime_backed_constructor_helper(
+    class_name: &str,
+    method_key: &str,
+) -> Option<&'static str> {
+    if class_name.trim_start_matches('\\') != "SplFixedArray" || method_key != "__construct" {
+        return None;
+    }
+    IntrinsicCall::instance_method(class_name, method_key)?.runtime_helper()
+}
+
+/// Returns true when the first constructor parameter has PHP's builtin zero default.
+fn constructor_uses_zero_default_first_arg(
+    class_name: &str,
+    method_key: &str,
+    sig: &FunctionSig,
+    runtime_helper: Option<&'static str>,
+) -> bool {
+    runtime_helper.is_some()
+        && class_name.trim_start_matches('\\') == "SplFixedArray"
+        && method_key == "__construct"
+        && matches!(sig.params.first().map(|(_, ty)| ty.codegen_repr()), Some(PhpType::Int))
+        && matches!(
+            sig.defaults.first().and_then(Option::as_ref).map(|expr| &expr.kind),
+            Some(ExprKind::IntLiteral(0))
+        )
 }
 
 /// Returns the declared constructor visibility, defaulting to public metadata.
@@ -560,7 +601,11 @@ fn emit_aarch64_constructor_body(
         emit_aarch64_prepare_constructor_args(module, emitter, slot, fail_label);
     let caller_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
     abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
-    abi::emit_call_label(emitter, &method_symbol(&slot.impl_class, "__construct"));
+    let callee = slot
+        .runtime_helper
+        .map(str::to_string)
+        .unwrap_or_else(|| method_symbol(&slot.impl_class, "__construct"));
+    abi::emit_call_label(emitter, &callee);
     abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
     emit_aarch64_write_back_ref_args(
@@ -596,7 +641,11 @@ fn emit_x86_64_constructor_body(
         emit_x86_64_prepare_constructor_args(module, emitter, slot, fail_label);
     let caller_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
     abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
-    abi::emit_call_label(emitter, &method_symbol(&slot.impl_class, "__construct"));
+    let callee = slot
+        .runtime_helper
+        .map(str::to_string)
+        .unwrap_or_else(|| method_symbol(&slot.impl_class, "__construct"));
+    abi::emit_call_label(emitter, &callee);
     abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
     emit_x86_64_write_back_ref_args(
@@ -667,9 +716,19 @@ fn emit_aarch64_validate_constructor_arg_count(
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the eval argument array for arity validation
     let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
+    emitter.instruction("str x0, [sp, #32]");                                   // save the supplied constructor argument count
     abi::emit_load_int_immediate(emitter, "x9", slot.params.len() as i64);
     emitter.instruction("cmp x0, x9");                                          // compare supplied eval argument count with the constructor signature
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject constructor dispatch when arity differs
+    if slot.zero_default_first_arg {
+        let ok_label = format!("{}_argc_ok", constructor_body_label(module, slot));
+        emitter.instruction(&format!("b.eq {}", ok_label));                     // explicit argument count matches the constructor signature
+        emitter.instruction("cmp x0, #0");                                      // did eval omit the optional builtin constructor argument?
+        emitter.instruction(&format!("b.eq {}", ok_label));                     // accept the builtin zero-default constructor call
+        emitter.instruction(&format!("b {}", fail_label));                      // reject constructor dispatch when arity differs
+        emitter.label(&ok_label);
+    } else {
+        emitter.instruction(&format!("b.ne {}", fail_label));                   // reject constructor dispatch when arity differs
+    }
 }
 
 /// Emits x86_64 arity validation for one constructor body.
@@ -682,9 +741,19 @@ fn emit_x86_64_validate_constructor_arg_count(
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the eval argument array for arity validation
     let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the supplied constructor argument count
     abi::emit_load_int_immediate(emitter, "r10", slot.params.len() as i64);
     emitter.instruction("cmp rax, r10");                                        // compare supplied eval argument count with the constructor signature
-    emitter.instruction(&format!("jne {}", fail_label));                        // reject constructor dispatch when arity differs
+    if slot.zero_default_first_arg {
+        let ok_label = format!("{}_argc_ok", constructor_body_label(module, slot));
+        emitter.instruction(&format!("je {}", ok_label));                       // explicit argument count matches the constructor signature
+        emitter.instruction("test rax, rax");                                   // did eval omit the optional builtin constructor argument?
+        emitter.instruction(&format!("je {}", ok_label));                       // accept the builtin zero-default constructor call
+        emitter.instruction(&format!("jmp {}", fail_label));                    // reject constructor dispatch when arity differs
+        emitter.label(&ok_label);
+    } else {
+        emitter.instruction(&format!("jne {}", fail_label));                    // reject constructor dispatch when arity differs
+    }
 }
 
 /// Prepares ARM64 constructor ABI registers for the supported argument shapes.
@@ -709,7 +778,21 @@ fn emit_aarch64_prepare_constructor_args(
     abi::emit_push_result_value(emitter, &receiver_ty);
     let mut arg_temp_bytes = eval_arg_temp_slot_size(&receiver_ty);
     for (index, param_ty) in slot.params.iter().enumerate() {
-        if let Some(ref_slot) = ref_slots.iter().find(|ref_slot| ref_slot.param_index == index) {
+        if slot.zero_default_first_arg && index == 0 {
+            let default_label = format!("{}_arg_{}_default", body_label, index);
+            let done_label = format!("{}_arg_{}_done", body_label, index);
+            emitter.instruction("ldr x9, [sp, #32]");                           // reload argc before selecting the optional constructor default
+            emitter.instruction(&format!("cbz x9, {}", default_label));         // omitted SplFixedArray size uses PHP's zero default
+            emit_aarch64_load_eval_arg(module, emitter, index);
+            let label_prefix = format!("{}_arg_{}", body_label, index);
+            emit_aarch64_cast_eval_arg(module, emitter, param_ty, &label_prefix, fail_label);
+            abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
+            emitter.instruction(&format!("b {}", done_label));                  // skip default materialization after an explicit argument
+            emitter.label(&default_label);
+            abi::emit_load_int_immediate(emitter, "x0", 0);
+            abi::emit_push_result_value(emitter, &PhpType::Int);
+            emitter.label(&done_label);
+        } else if let Some(ref_slot) = ref_slots.iter().find(|ref_slot| ref_slot.param_index == index) {
             abi::emit_temporary_stack_address(
                 emitter,
                 abi::int_result_reg(emitter),
@@ -758,7 +841,22 @@ fn emit_x86_64_prepare_constructor_args(
     abi::emit_push_result_value(emitter, &receiver_ty);
     let mut arg_temp_bytes = eval_arg_temp_slot_size(&receiver_ty);
     for (index, param_ty) in slot.params.iter().enumerate() {
-        if let Some(ref_slot) = ref_slots.iter().find(|ref_slot| ref_slot.param_index == index) {
+        if slot.zero_default_first_arg && index == 0 {
+            let default_label = format!("{}_arg_{}_default", body_label, index);
+            let done_label = format!("{}_arg_{}_done", body_label, index);
+            emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload argc before selecting the optional constructor default
+            emitter.instruction("test r10, r10");                               // did eval pass an explicit constructor argument?
+            emitter.instruction(&format!("jz {}", default_label));              // omitted SplFixedArray size uses PHP's zero default
+            emit_x86_64_load_eval_arg(module, emitter, index);
+            let label_prefix = format!("{}_arg_{}", body_label, index);
+            emit_x86_64_cast_eval_arg(module, emitter, param_ty, &label_prefix, fail_label);
+            abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
+            emitter.instruction(&format!("jmp {}", done_label));                // skip default materialization after an explicit argument
+            emitter.label(&default_label);
+            abi::emit_load_int_immediate(emitter, "rax", 0);
+            abi::emit_push_result_value(emitter, &PhpType::Int);
+            emitter.label(&done_label);
+        } else if let Some(ref_slot) = ref_slots.iter().find(|ref_slot| ref_slot.param_index == index) {
             abi::emit_temporary_stack_address(
                 emitter,
                 abi::int_result_reg(emitter),

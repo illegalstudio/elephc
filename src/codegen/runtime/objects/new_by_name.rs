@@ -90,6 +90,7 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("ldr x13, [x10, #24]");                                 // obj_size
     emitter.instruction("str x12, [sp, #32]");                                  // save class_id across the heap call
     emitter.instruction("str x13, [sp, #40]");                                  // save obj_size across the heap call
+    emit_runtime_managed_match_aarch64(emitter);
 
     // -- allocate the object payload --
     emitter.instruction("mov x0, x13");                                         // allocation size
@@ -119,6 +120,7 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("blr x10");                                             // _class_propinit_<id>(this = object in x0)
     emitter.instruction("ldr x0, [sp, #40]");                                   // restore the object pointer (the thunk may clobber x0)
     emitter.label("__rt_nbn_no_propinit");
+    emitter.label("__rt_nbn_return_allocated");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the frame
     emitter.instruction("ret");                                                 // return the object pointer
@@ -184,6 +186,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [r10 + 24]");                       // obj_size
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // stash class_id
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // stash obj_size
+    emit_runtime_managed_match_x86_64(emitter);
 
     // -- allocate the object payload --
     emitter.instruction("mov rax, rdx");                                        // allocation size
@@ -215,6 +218,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call r10");                                            // _class_propinit_<id>(this)
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // restore the object pointer (the thunk may clobber rax)
     emitter.label("__rt_nbn_no_propinit_x86");
+    emitter.label("__rt_nbn_return_allocated_x86");
     emitter.instruction("add rsp, 48");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the object pointer
@@ -224,4 +228,64 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return null
+}
+
+/// Emits ARM64 class-id checks for runtime-managed builtin payload layouts.
+fn emit_runtime_managed_match_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("ldr x12, [sp, #32]");                                  // reload matched class id for runtime-managed allocation checks
+    abi::emit_symbol_address(emitter, "x10", "_spl_dll_class_id");
+    emitter.instruction("ldr x10, [x10]");                                      // load SplDoublyLinkedList class id
+    emitter.instruction("cmp x12, x10");                                        // is the requested class SplDoublyLinkedList?
+    emitter.instruction("b.eq __rt_nbn_alloc_spl_dll");                         // allocate the SPL list payload for SplDoublyLinkedList
+    abi::emit_symbol_address(emitter, "x10", "_spl_stack_class_id");
+    emitter.instruction("ldr x10, [x10]");                                      // load SplStack class id
+    emitter.instruction("cmp x12, x10");                                        // is the requested class SplStack?
+    emitter.instruction("b.eq __rt_nbn_alloc_spl_dll");                         // allocate the shared SPL list payload for SplStack
+    abi::emit_symbol_address(emitter, "x10", "_spl_queue_class_id");
+    emitter.instruction("ldr x10, [x10]");                                      // load SplQueue class id
+    emitter.instruction("cmp x12, x10");                                        // is the requested class SplQueue?
+    emitter.instruction("b.eq __rt_nbn_alloc_spl_dll");                         // allocate the shared SPL list payload for SplQueue
+    abi::emit_symbol_address(emitter, "x10", "_spl_fixed_array_class_id");
+    emitter.instruction("ldr x10, [x10]");                                      // load SplFixedArray class id
+    emitter.instruction("cmp x12, x10");                                        // is the requested class SplFixedArray?
+    emitter.instruction("b.eq __rt_nbn_alloc_spl_fixed");                       // allocate the SPL fixed-array payload with size zero
+    emitter.instruction("b __rt_nbn_generic_alloc");                            // continue with the generic property-object allocator
+    emitter.label("__rt_nbn_alloc_spl_dll");
+    emitter.instruction("mov x0, x12");                                         // pass the matched concrete SPL list class id
+    emitter.instruction("bl __rt_spl_dll_new");                                 // allocate the runtime-managed SPL list object layout
+    emitter.instruction("b __rt_nbn_return_allocated");                         // return the initialized runtime-managed object
+    emitter.label("__rt_nbn_alloc_spl_fixed");
+    emitter.instruction("mov x0, x12");                                         // pass the matched SplFixedArray class id
+    emitter.instruction("mov x1, xzr");                                         // default dynamic size is zero before constructor dispatch
+    emitter.instruction("bl __rt_spl_fixed_new");                               // allocate the runtime-managed fixed-array object layout
+    emitter.instruction("b __rt_nbn_return_allocated");                         // return the initialized runtime-managed object
+    emitter.label("__rt_nbn_generic_alloc");
+}
+
+/// Emits x86_64 class-id checks for runtime-managed builtin payload layouts.
+fn emit_runtime_managed_match_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload matched class id for runtime-managed allocation checks
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_dll_class_id", 0);
+    emitter.instruction("cmp rcx, r10");                                        // is the requested class SplDoublyLinkedList?
+    emitter.instruction("je __rt_nbn_alloc_spl_dll_x86");                       // allocate the SPL list payload for SplDoublyLinkedList
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_stack_class_id", 0);
+    emitter.instruction("cmp rcx, r10");                                        // is the requested class SplStack?
+    emitter.instruction("je __rt_nbn_alloc_spl_dll_x86");                       // allocate the shared SPL list payload for SplStack
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_queue_class_id", 0);
+    emitter.instruction("cmp rcx, r10");                                        // is the requested class SplQueue?
+    emitter.instruction("je __rt_nbn_alloc_spl_dll_x86");                       // allocate the shared SPL list payload for SplQueue
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_fixed_array_class_id", 0);
+    emitter.instruction("cmp rcx, r10");                                        // is the requested class SplFixedArray?
+    emitter.instruction("je __rt_nbn_alloc_spl_fixed_x86");                     // allocate the SPL fixed-array payload with size zero
+    emitter.instruction("jmp __rt_nbn_generic_alloc_x86");                      // continue with the generic property-object allocator
+    emitter.label("__rt_nbn_alloc_spl_dll_x86");
+    emitter.instruction("mov rdi, rcx");                                        // pass the matched concrete SPL list class id
+    emitter.instruction("call __rt_spl_dll_new");                               // allocate the runtime-managed SPL list object layout
+    emitter.instruction("jmp __rt_nbn_return_allocated_x86");                   // return the initialized runtime-managed object
+    emitter.label("__rt_nbn_alloc_spl_fixed_x86");
+    emitter.instruction("mov rdi, rcx");                                        // pass the matched SplFixedArray class id
+    emitter.instruction("xor esi, esi");                                        // default dynamic size is zero before constructor dispatch
+    emitter.instruction("call __rt_spl_fixed_new");                             // allocate the runtime-managed fixed-array object layout
+    emitter.instruction("jmp __rt_nbn_return_allocated_x86");                   // return the initialized runtime-managed object
+    emitter.label("__rt_nbn_generic_alloc_x86");
 }
