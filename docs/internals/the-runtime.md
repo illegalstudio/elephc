@@ -503,6 +503,7 @@ The first table covers the file/filesystem core; the subsections after it cover 
 | `__rt_realpath` | Canonicalize an existing path, returning a null pointer on failure so codegen can box PHP `false` |
 | `__rt_pathinfo_str` / `__rt_pathinfo_array` | Return one `pathinfo()` component for component flags, or build the associative-array `PATHINFO_ALL` shape |
 | `__rt_chmod` / `__rt_chown` / `__rt_lchown` / name-resolving variants | File ownership and mode modification helpers, including symlink-aware ownership updates |
+| `__rt_lookup_passwd_uid` / `__rt_lookup_group_gid` | Resolve local user/group names by scanning `/etc/passwd` and `/etc/group` without calling NSS, so static Linux binaries do not require glibc NSS modules at runtime |
 | `__rt_umask` / `__rt_ftruncate` | Process umask and file truncation helpers |
 | `__rt_fsync` / `__rt_fflush` / `__rt_fdatasync` | File descriptor flush helpers; `fflush()` maps to `fsync()` because elephc has no userspace stdio buffer |
 | `__rt_touch` | Create missing files and update access/modification timestamps |
@@ -780,6 +781,13 @@ _heap_max:
 .comm _cstr_buf, 4096        ; 4KB C-string conversion buffer
 .comm _cstr_buf2, 4096       ; 4KB second C-string buffer
 .comm _eof_flags, 256        ; EOF flag per file descriptor
+.comm _principal_lookup_buf, 4096 ; passwd/group lookup line buffer
+_etc_passwd_path:
+    .asciz "/etc/passwd"     ; passwd database path for name lookups
+_etc_group_path:
+    .asciz "/etc/group"      ; group database path for name lookups
+_principal_lookup_read_mode:
+    .asciz "r"               ; fopen() mode for principal lookup files
 ; Per-program: global variable storage (one per `global $var` used)
 .comm _gvar_x, 16            ; 16 bytes per global variable
 ; Per-program: static variable storage (one pair per `static $var`)
