@@ -815,6 +815,14 @@ impl Parser {
             TokenKind::DollarIdent(property) => {
                 let property = property.clone();
                 self.advance();
+                if matches!(self.current(), TokenKind::LParen) {
+                    let args = self.parse_call_args()?;
+                    return Ok(EvalExpr::DynamicStaticMethodCall {
+                        class_name: Box::new(EvalExpr::ClassNameFetch { class_name }),
+                        method: Box::new(EvalExpr::LoadVar(property)),
+                        args,
+                    });
+                }
                 Ok(EvalExpr::StaticPropertyGet {
                     class_name,
                     property,

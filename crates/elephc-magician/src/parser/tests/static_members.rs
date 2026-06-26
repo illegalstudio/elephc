@@ -115,6 +115,23 @@ fn parse_fragment_accepts_dynamic_static_method_name() {
     );
 }
 
+/// Verifies named static receivers support variable method names.
+#[test]
+fn parse_fragment_accepts_named_receiver_dynamic_static_method_name() {
+    let program =
+        parse_fragment(br#"return EvalStaticBox::$method(2);"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::DynamicStaticMethodCall {
+            class_name: Box::new(EvalExpr::ClassNameFetch {
+                class_name: "EvalStaticBox".to_string(),
+            }),
+            method: Box::new(EvalExpr::LoadVar("method".to_string())),
+            args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::Int(2)))],
+        }))]
+    );
+}
+
 /// Verifies runtime-valued static receivers support properties, constants, and `::class`.
 #[test]
 fn parse_fragment_accepts_dynamic_static_metadata_receiver() {
