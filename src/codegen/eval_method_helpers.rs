@@ -60,7 +60,6 @@ struct EvalStaticMethodSlot {
     return_ty: PhpType,
 }
 
-const MAX_EVAL_METHOD_ARGS: usize = 8;
 const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
     "Error",
     "TypeError",
@@ -367,8 +366,7 @@ fn method_visibility_supported(visibility: &Visibility) -> bool {
 
 /// Returns true for method signatures supported by the eval bridge.
 fn method_signature_supported(sig: &crate::types::FunctionSig) -> bool {
-    sig.params.len() <= MAX_EVAL_METHOD_ARGS
-        && eval_signature_ref_params_supported(sig)
+    eval_signature_ref_params_supported(sig)
         && sig.params.iter().all(|(_, ty)| method_param_supported(ty))
 }
 

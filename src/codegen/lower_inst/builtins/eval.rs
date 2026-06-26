@@ -50,7 +50,6 @@ const EVAL_CALLED_CLASS_PTR_OFFSET: usize = 72;
 const EVAL_CALLED_CLASS_LEN_OFFSET: usize = 80;
 const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
-const MAX_EVAL_NATIVE_METHOD_PARAMS: usize = 8;
 const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
 const NATIVE_DEFAULT_NULL: i64 = 0;
 const NATIVE_DEFAULT_BOOL: i64 = 1;
@@ -1098,8 +1097,7 @@ fn function_signature_can_bridge_with_eval(function: &Function) -> bool {
 
 /// Returns true when eval can dispatch a native method through the generated bridge.
 fn method_signature_can_bridge_with_eval(signature: &FunctionSig) -> bool {
-    signature.params.len() <= MAX_EVAL_NATIVE_METHOD_PARAMS
-        && eval_signature_ref_params_supported(signature)
+    eval_signature_ref_params_supported(signature)
         && signature
             .params
             .iter()
@@ -1109,8 +1107,7 @@ fn method_signature_can_bridge_with_eval(signature: &FunctionSig) -> bool {
 
 /// Returns true when eval can dispatch a native constructor through the generated bridge.
 fn constructor_signature_can_bridge_with_eval(signature: &FunctionSig) -> bool {
-    signature.params.len() <= MAX_EVAL_NATIVE_METHOD_PARAMS
-        && eval_signature_ref_params_supported(signature)
+    eval_signature_ref_params_supported(signature)
         && signature
             .params
             .iter()

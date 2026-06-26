@@ -806,11 +806,14 @@ particular, advanced native callable descriptors and full `Closure` object
 semantics for callback values are still outside eval fragments. Runtime/AOT object-method, static-method, and
 constructor fallback from eval can bind registered names, defaults, positional
 variadic tails, and by-reference lvalue metadata. Generated AOT bridge dispatch
-is limited to visibility-checked non-by-reference scalar/nullable scalar/Mixed/array/iterable/object
-parameter signatures plus `mixed`/untyped, scalar including string, nullable scalar, array, iterable, and object by-reference
-method and constructor parameters, including the generated positional variadic
-array slot when present. Broader parameter/return ABI shapes are still outside
-those bridge paths.
+is limited to visibility-checked
+non-by-reference scalar/nullable scalar/Mixed/array/iterable/object parameter
+signatures plus `mixed`/untyped, scalar including string, nullable scalar,
+array, iterable, and object by-reference method and constructor parameters,
+including the generated positional variadic array slot when present. Those
+supported method and constructor shapes use normal target ABI materialization
+for arguments beyond the register set instead of a fixed eval arity cap. Broader
+parameter/return ABI shapes are still outside those bridge paths.
 
 Eval class support is still smaller than the full static class system.
 Eval-declared `__destruct()` hooks run when an eval-owned dynamic object reaches
@@ -827,7 +830,8 @@ parameter and generated property default-value materialization beyond scalar,
 null, empty-array, supported array-valued defaults, and supported object-valued parameter defaults during generated/AOT invocation,
 and broader generated/AOT method and constructor bridge signatures beyond the current visibility-checked
 scalar/nullable scalar/Mixed/array/iterable/object parameter slice plus scalar/nullable scalar/Mixed/array/iterable/object returns and
-`__clone()` hooks. Generated/AOT free-function and method type metadata,
+`__clone()` hooks; the remaining limit there is the supported type slice rather
+than a fixed parameter count. Generated/AOT free-function and method type metadata,
 return metadata, by-reference and variadic parameter flags, and generated/AOT
 class/method/property/class-constant attributes are exposed for registered
 metadata slices, while other unsupported bridge shapes remain metadata-only

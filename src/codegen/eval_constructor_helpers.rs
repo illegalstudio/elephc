@@ -32,7 +32,6 @@ use super::eval_ref_arg_helpers::{
     emit_aarch64_write_back_ref_args, emit_x86_64_write_back_ref_args,
 };
 
-const MAX_EVAL_CONSTRUCTOR_ARGS: usize = 8;
 const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "Error",
     "TypeError",
@@ -238,8 +237,7 @@ fn constructor_visibility_supported(visibility: &Visibility) -> bool {
 
 /// Returns true for constructor signatures supported by this eval bridge slice.
 fn constructor_signature_supported(sig: &FunctionSig) -> bool {
-    sig.params.len() <= MAX_EVAL_CONSTRUCTOR_ARGS
-        && eval_signature_ref_params_supported(sig)
+    eval_signature_ref_params_supported(sig)
         && sig
             .params
             .iter()
