@@ -7839,6 +7839,38 @@ echo property_exists($object, "childSecret") ? "objectChildPrivateProperty" : "b
     );
 }
 
+/// Verifies eval `get_object_vars()` skips uninitialized typed properties like PHP.
+#[test]
+fn test_eval_get_object_vars_skips_uninitialized_declared_properties() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalUninitializedObjectVars {
+    public int $a;
+    public ?int $b = null;
+}
+$object = new EvalUninitializedObjectVars();
+echo property_exists($object, "a") ? "PA" : "pa"; echo ":";
+$vars = get_object_vars($object);
+ksort($vars);
+echo implode(",", array_keys($vars)); echo ":";
+$object->a = 5;
+$vars = get_object_vars($object);
+ksort($vars);
+echo implode(",", array_keys($vars)); echo ":";
+unset($object->a);
+$vars = get_object_vars($object);
+ksort($vars);
+echo implode(",", array_keys($vars));');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "PA:b:a,b:b");
+}
+
 /// Verifies eval-declared private parent properties keep separate storage when a child shadows them.
 #[test]
 fn test_eval_declared_private_parent_property_shadowing() {
