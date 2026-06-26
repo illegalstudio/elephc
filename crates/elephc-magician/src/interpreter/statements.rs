@@ -3923,6 +3923,22 @@ fn eval_throw_undefined_method_call_error<T>(
     )
 }
 
+/// Throws PHP's error for invoking an object without `__invoke()`.
+pub(in crate::interpreter) fn eval_throw_object_not_callable_error<T>(
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Object of type {} is not callable",
+            class_name.trim_start_matches('\\')
+        ),
+        context,
+        values,
+    )
+}
+
 /// Reads one eval-declared static property after resolving the class-like receiver.
 pub(in crate::interpreter) fn eval_static_property_get_result(
     class_name: &str,
@@ -5432,7 +5448,7 @@ pub(in crate::interpreter) fn eval_invokable_object_call_result(
     let called_class_name = class.name().to_string();
     let Some((declaring_class, method)) = context.class_method(&called_class_name, "__invoke")
     else {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_object_not_callable_error(&called_class_name, context, values);
     };
     if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
@@ -5446,6 +5462,28 @@ pub(in crate::interpreter) fn eval_invokable_object_call_result(
         context,
         values,
     )
+}
+
+/// Rejects non-invokable eval-declared objects before dynamic-call arguments are evaluated.
+pub(in crate::interpreter) fn eval_invokable_object_precheck(
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Ok(identity) = values.object_identity(object) else {
+        return Ok(());
+    };
+    let Some(class) = context.dynamic_object_class(identity) else {
+        return Ok(());
+    };
+    let called_class_name = class.name().to_string();
+    let Some((_, method)) = context.class_method(&called_class_name, "__invoke") else {
+        return eval_throw_object_not_callable_error(&called_class_name, context, values);
+    };
+    if method.is_static() || method.is_abstract() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(())
 }
 
 /// Dispatches a missing or inaccessible eval instance method through `__call()`.

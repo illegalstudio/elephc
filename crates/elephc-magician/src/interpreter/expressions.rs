@@ -561,6 +561,11 @@ pub(in crate::interpreter) fn eval_dynamic_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_expr(callee, context, scope, values)?;
+    if values.type_tag(callback)? == EVAL_TAG_OBJECT {
+        eval_invokable_object_precheck(callback, context, values)?;
+        let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
+        return eval_invokable_object_call_result(callback, evaluated_args, context, values);
+    }
     let callback = eval_callable(callback, context, values)?;
     let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
     eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)

@@ -8777,7 +8777,11 @@ echo $named(right: "H", left: "G");');
 fn test_eval_declared_invokable_object_dynamic_callables() {
     let out = compile_and_run_capture(
         r#"<?php
-eval('class EvalInvokableBox {
+eval('function eval_plain_call_side_effect() {
+    echo "bad";
+    return "x";
+}
+class EvalInvokableBox {
     public function __construct($label = "box") {
         $this->label = $label;
     }
@@ -8791,6 +8795,13 @@ $plain = new EvalPlainCallableProbe();
 echo is_callable($box) ? "Y:" : "N:";
 echo is_callable($plain) ? "bad:" : "plain:";
 echo $box(right: "D", left: "C") . ":";
+try {
+    $plain(eval_plain_call_side_effect());
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo ":";
 echo (new EvalInvokableBox("new"))("E", "F") . ":";
 echo call_user_func($box, "G", "H") . ":";
 echo call_user_func_array($box, ["right" => "J", "left" => "I"]);');
@@ -8801,7 +8812,10 @@ echo call_user_func_array($box, ["right" => "J", "left" => "I"]);');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "Y:plain:box:CD:new:EF:box:GH:box:IJ");
+    assert_eq!(
+        out.stdout,
+        "Y:plain:box:CD:Error:Object of type EvalPlainCallableProbe is not callable:new:EF:box:GH:box:IJ"
+    );
 }
 
 /// Verifies eval object method fallback dispatches missing and inaccessible methods through `__call`.

@@ -205,7 +205,11 @@ return $named(right: "H", left: "G");"#,
 #[test]
 fn execute_program_invokes_eval_object_callables() {
     let program = parse_fragment(
-        br#"class EvalInvokableBox {
+        br#"function eval_plain_call_side_effect() {
+    echo "bad";
+    return "x";
+}
+class EvalInvokableBox {
     public function __construct($label = "box") {
         $this->label = $label;
     }
@@ -219,6 +223,13 @@ $plain = new EvalPlainCallableProbe();
 echo is_callable($box) ? "Y:" : "N:";
 echo is_callable($plain) ? "bad:" : "plain:";
 echo $box(right: "D", left: "C"); echo ":";
+try {
+    $plain(eval_plain_call_side_effect());
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo ":";
 echo (new EvalInvokableBox("new"))("E", "F"); echo ":";
 echo call_user_func($box, "G", "H"); echo ":";
 return call_user_func_array($box, ["right" => "J", "left" => "I"]);"#,
@@ -229,7 +240,10 @@ return call_user_func_array($box, ["right" => "J", "left" => "I"]);"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "Y:plain:box:CD:new:EF:box:GH:");
+    assert_eq!(
+        values.output,
+        "Y:plain:box:CD:Error:Object of type EvalPlainCallableProbe is not callable:new:EF:box:GH:"
+    );
     assert_eq!(values.get(result), FakeValue::String("box:IJ".to_string()));
 }
 
