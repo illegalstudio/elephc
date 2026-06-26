@@ -10223,6 +10223,46 @@ echo (eval_expression_static_receiver_writes())::$items[1];');
     assert_eq!(out.stdout, "6|5:4");
 }
 
+/// Verifies eval supports `${...}` static property names for reads and writes.
+#[test]
+fn test_eval_dynamic_static_property_name_expressions() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalDynamicStaticPropertyNameExpression {
+    public static $count = 1;
+    public static $items = [];
+}
+
+function eval_dynamic_static_property_name_expression() {
+    return "count";
+}
+
+function eval_dynamic_static_property_items_expression() {
+    return "items";
+}
+
+$class = "EvalDynamicStaticPropertyNameExpression";
+$name = "count";
+echo EvalDynamicStaticPropertyNameExpression::${$name} . "|";
+$class::${eval_dynamic_static_property_name_expression()} = 2;
+$class::${eval_dynamic_static_property_name_expression()} += 3;
+++$class::${eval_dynamic_static_property_name_expression()};
+$class::${eval_dynamic_static_property_items_expression()} = [1];
+$class::${eval_dynamic_static_property_items_expression()}[] = 4;
+$class::${eval_dynamic_static_property_items_expression()}[0] = 5;
+echo $class::${eval_dynamic_static_property_name_expression()} . "|";
+echo $class::${eval_dynamic_static_property_items_expression()}[0] . ":";
+echo $class::${eval_dynamic_static_property_items_expression()}[1];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "1|6|5:4");
+}
+
 /// Verifies eval AOT method fallback dispatches missing and inaccessible methods through `__call`.
 #[test]
 fn test_eval_aot_magic_call_method_fallback() {

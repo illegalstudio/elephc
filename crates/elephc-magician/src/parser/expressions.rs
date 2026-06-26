@@ -832,6 +832,15 @@ impl Parser {
                     property,
                 })
             }
+            TokenKind::DollarLBrace => {
+                self.advance();
+                let property = self.parse_expr()?;
+                self.expect(TokenKind::RBrace)?;
+                Ok(EvalExpr::DynamicStaticPropertyNameGet {
+                    class_name: Box::new(EvalExpr::ClassNameFetch { class_name }),
+                    property: Box::new(property),
+                })
+            }
             TokenKind::Ident(name)
                 if ident_eq(name, "class") && !matches!(self.peek(), TokenKind::LParen) =>
             {
@@ -897,6 +906,15 @@ impl Parser {
                 Ok(EvalExpr::DynamicStaticPropertyGet {
                     class_name: Box::new(class_name),
                     property: member,
+                })
+            }
+            TokenKind::DollarLBrace => {
+                self.advance();
+                let property = self.parse_expr()?;
+                self.expect(TokenKind::RBrace)?;
+                Ok(EvalExpr::DynamicStaticPropertyNameGet {
+                    class_name: Box::new(class_name),
+                    property: Box::new(property),
                 })
             }
             TokenKind::Ident(name)

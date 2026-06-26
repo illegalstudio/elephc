@@ -389,6 +389,75 @@ pub(in crate::interpreter) fn execute_stmt(
             )?;
             Ok(EvalControl::None)
         }
+        EvalStmt::DynamicStaticPropertyNameSet {
+            class_name,
+            property,
+            value,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            let value = eval_expr(value, context, scope, values)?;
+            eval_static_property_set_result(&class_name, &property, value, context, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::DynamicStaticPropertyNameArrayAppend {
+            class_name,
+            property,
+            value,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_static_property_array_append_result(
+                &class_name,
+                &property,
+                value,
+                context,
+                scope,
+                values,
+            )?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::DynamicStaticPropertyNameArraySet {
+            class_name,
+            property,
+            index,
+            op,
+            value,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_static_property_array_set_result(
+                &class_name,
+                &property,
+                index,
+                *op,
+                value,
+                context,
+                scope,
+                values,
+            )?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::DynamicStaticPropertyNameIncDec {
+            class_name,
+            property,
+            increment,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_static_property_inc_dec_result(
+                &class_name,
+                &property,
+                *increment,
+                context,
+                values,
+            )?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::StoreVar { name, value } => {
             let value = eval_expr(value, context, scope, values)?;
             for replaced in set_scope_cell(
@@ -634,6 +703,21 @@ fn eval_array_unset_element_stmt(
                 eval_array_unset_target_result(array, index, context, scope, values)?
             {
                 eval_static_property_set_result(&class_name, property, array, context, values)?;
+            }
+            return Ok(());
+        }
+        EvalExpr::DynamicStaticPropertyNameGet {
+            class_name,
+            property,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            let array = eval_static_property_get_result(&class_name, &property, context, values)?;
+            if let Some(array) =
+                eval_array_unset_target_result(array, index, context, scope, values)?
+            {
+                eval_static_property_set_result(&class_name, &property, array, context, values)?;
             }
             return Ok(());
         }

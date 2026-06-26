@@ -1137,6 +1137,10 @@ fn visit_static_var_declarations(
             | EvalStmt::DynamicStaticPropertyArrayAppend { .. }
             | EvalStmt::DynamicStaticPropertyArraySet { .. }
             | EvalStmt::DynamicStaticPropertyIncDec { .. }
+            | EvalStmt::DynamicStaticPropertyNameArrayAppend { .. }
+            | EvalStmt::DynamicStaticPropertyNameArraySet { .. }
+            | EvalStmt::DynamicStaticPropertyNameIncDec { .. }
+            | EvalStmt::DynamicStaticPropertyNameSet { .. }
             | EvalStmt::DynamicStaticPropertySet { .. }
             | EvalStmt::PropertyReferenceBind { .. }
             | EvalStmt::PropertyArrayAppend { .. }

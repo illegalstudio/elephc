@@ -44,6 +44,7 @@ impl Token {
 /// Token kinds used by the initial eval fragment parser.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum TokenKind {
+    DollarLBrace,
     DollarIdent(String),
     Ident(String),
     Magic(EvalMagicConst),

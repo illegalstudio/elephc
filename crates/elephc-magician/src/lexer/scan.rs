@@ -318,6 +318,10 @@ impl<'a> Lexer<'a> {
     /// Reads a `$name` token.
     fn lex_variable(&mut self) -> Result<TokenKind, EvalParseError> {
         self.bump_char();
+        if self.peek_char() == Some('{') {
+            self.bump_char();
+            return Ok(TokenKind::DollarLBrace);
+        }
         let name = self.lex_ident();
         if name.is_empty() {
             return Err(EvalParseError::ExpectedVariable);

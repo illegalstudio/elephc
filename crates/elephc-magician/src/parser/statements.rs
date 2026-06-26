@@ -2851,12 +2851,20 @@ impl Parser {
         let increment = matches!(self.current(), TokenKind::PlusPlus);
         self.advance();
         if let TokenKind::DollarIdent(name) = self.current() {
-            let name = name.clone();
-            self.advance();
-            if require_semicolon {
-                self.expect_semicolon()?;
+            if !matches!(
+                self.peek(),
+                TokenKind::DoubleColon
+                    | TokenKind::Arrow
+                    | TokenKind::QuestionArrow
+                    | TokenKind::LBracket
+            ) {
+                let name = name.clone();
+                self.advance();
+                if require_semicolon {
+                    self.expect_semicolon()?;
+                }
+                return Ok(vec![inc_dec_store(name, increment)]);
             }
-            return Ok(vec![inc_dec_store(name, increment)]);
         }
         let target = self.parse_expr()?;
         if require_semicolon {
@@ -3001,6 +3009,32 @@ impl Parser {
                     None => value,
                 };
                 Ok(vec![EvalStmt::DynamicStaticPropertySet {
+                    class_name,
+                    property,
+                    value,
+                }])
+            }
+            (
+                EvalExpr::DynamicStaticPropertyNameGet {
+                    class_name,
+                    property,
+                },
+                op,
+            ) => {
+                let class_name = *class_name;
+                let property = *property;
+                let value = match op {
+                    Some(op) => EvalExpr::Binary {
+                        op,
+                        left: Box::new(EvalExpr::DynamicStaticPropertyNameGet {
+                            class_name: Box::new(class_name.clone()),
+                            property: Box::new(property.clone()),
+                        }),
+                        right: Box::new(value),
+                    },
+                    None => value,
+                };
+                Ok(vec![EvalStmt::DynamicStaticPropertyNameSet {
                     class_name,
                     property,
                     value,
@@ -3352,6 +3386,14 @@ fn property_inc_dec_stmt(target: EvalExpr, increment: bool) -> Result<EvalStmt, 
             property,
             increment,
         }),
+        EvalExpr::DynamicStaticPropertyNameGet {
+            class_name,
+            property,
+        } => Ok(EvalStmt::DynamicStaticPropertyNameIncDec {
+            class_name: *class_name,
+            property: *property,
+            increment,
+        }),
         _ => Err(EvalParseError::UnexpectedToken),
     }
 }
@@ -3377,6 +3419,14 @@ fn property_array_append_stmt(target: EvalExpr, value: EvalExpr) -> Result<EvalS
         } => Ok(EvalStmt::DynamicStaticPropertyArrayAppend {
             class_name: *class_name,
             property,
+            value,
+        }),
+        EvalExpr::DynamicStaticPropertyNameGet {
+            class_name,
+            property,
+        } => Ok(EvalStmt::DynamicStaticPropertyNameArrayAppend {
+            class_name: *class_name,
+            property: *property,
             value,
         }),
         _ => Err(EvalParseError::UnexpectedToken),
@@ -3411,6 +3461,16 @@ fn property_array_set_stmt(
         } => Ok(EvalStmt::DynamicStaticPropertyArraySet {
             class_name: *class_name,
             property,
+            index,
+            op,
+            value,
+        }),
+        EvalExpr::DynamicStaticPropertyNameGet {
+            class_name,
+            property,
+        } => Ok(EvalStmt::DynamicStaticPropertyNameArraySet {
+            class_name: *class_name,
+            property: *property,
             index,
             op,
             value,
@@ -3664,6 +3724,40 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
         EvalStmt::DynamicStaticPropertyIncDec { class_name, .. } => {
             eval_expr_uses_this_property(class_name, property_name)
         }
+        EvalStmt::DynamicStaticPropertyNameSet {
+            class_name,
+            property,
+            value,
+        }
+        | EvalStmt::DynamicStaticPropertyNameArrayAppend {
+            class_name,
+            property,
+            value,
+        } => {
+            eval_expr_uses_this_property(class_name, property_name)
+                || eval_expr_uses_this_property(property, property_name)
+                || eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::DynamicStaticPropertyNameArraySet {
+            class_name,
+            property,
+            index,
+            value,
+            ..
+        } => {
+            eval_expr_uses_this_property(class_name, property_name)
+                || eval_expr_uses_this_property(property, property_name)
+                || eval_expr_uses_this_property(index, property_name)
+                || eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::DynamicStaticPropertyNameIncDec {
+            class_name,
+            property,
+            ..
+        } => {
+            eval_expr_uses_this_property(class_name, property_name)
+                || eval_expr_uses_this_property(property, property_name)
+        }
         EvalStmt::StaticPropertySet { value, .. }
         | EvalStmt::StaticPropertyArrayAppend { value, .. }
         | EvalStmt::StoreVar { value, .. } => {
@@ -3750,6 +3844,13 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
         | EvalExpr::DynamicClassConstantFetch { class_name, .. }
         | EvalExpr::DynamicClassNameFetch { class_name } => {
             eval_expr_uses_this_property(class_name, property_name)
+        }
+        EvalExpr::DynamicStaticPropertyNameGet {
+            class_name,
+            property,
+        } => {
+            eval_expr_uses_this_property(class_name, property_name)
+                || eval_expr_uses_this_property(property, property_name)
         }
         EvalExpr::DynamicClassConstantNameFetch {
             class_name,

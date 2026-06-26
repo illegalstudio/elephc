@@ -241,6 +241,28 @@ pub enum EvalStmt {
         property: String,
         increment: bool,
     },
+    DynamicStaticPropertyNameSet {
+        class_name: EvalExpr,
+        property: EvalExpr,
+        value: EvalExpr,
+    },
+    DynamicStaticPropertyNameArrayAppend {
+        class_name: EvalExpr,
+        property: EvalExpr,
+        value: EvalExpr,
+    },
+    DynamicStaticPropertyNameArraySet {
+        class_name: EvalExpr,
+        property: EvalExpr,
+        index: EvalExpr,
+        op: Option<EvalBinOp>,
+        value: EvalExpr,
+    },
+    DynamicStaticPropertyNameIncDec {
+        class_name: EvalExpr,
+        property: EvalExpr,
+        increment: bool,
+    },
     StaticVar {
         name: String,
         init: EvalExpr,
@@ -2400,6 +2422,10 @@ pub enum EvalExpr {
     DynamicStaticPropertyGet {
         class_name: Box<EvalExpr>,
         property: String,
+    },
+    DynamicStaticPropertyNameGet {
+        class_name: Box<EvalExpr>,
+        property: Box<EvalExpr>,
     },
     DynamicClassConstantFetch {
         class_name: Box<EvalExpr>,
