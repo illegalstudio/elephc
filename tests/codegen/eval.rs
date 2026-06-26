@@ -14020,18 +14020,22 @@ class EvalCloneAotPrivateOutsideBox {
 }
 
 $object = new EvalCloneAotPrivateOutsideBox("A");
-eval('$copy = clone $object; echo $copy->name;');
+eval('try {
+    $copy = clone $object;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
 "#,
     );
     assert!(
-        !out.success,
-        "program unexpectedly succeeded: stdout={:?} stderr={}",
+        out.success,
+        "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert!(
-        out.stderr.contains("eval() runtime failed"),
-        "expected eval runtime failure for private clone hook, got stderr={}",
-        out.stderr
+    assert_eq!(
+        out.stdout,
+        "Error:Call to private EvalCloneAotPrivateOutsideBox::__clone() from global scope"
     );
 }
 
@@ -14049,18 +14053,22 @@ class EvalCloneAotPrivateDirectBox {
 }
 
 $object = new EvalCloneAotPrivateDirectBox();
-eval('$object->__clone();');
+eval('try {
+    $object->__clone();
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
 "#,
     );
     assert!(
-        !out.success,
-        "program unexpectedly succeeded: stdout={:?} stderr={}",
+        out.success,
+        "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert!(
-        out.stderr.contains("eval() runtime failed"),
-        "expected eval runtime failure for private __clone call, got stderr={}",
-        out.stderr
+    assert_eq!(
+        out.stdout,
+        "Error:Call to private method EvalCloneAotPrivateDirectBox::__clone() from global scope"
     );
 }
 
