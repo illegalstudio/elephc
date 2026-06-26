@@ -777,9 +777,9 @@ Eval class support is still smaller than the full static class system.
 Eval-declared `__destruct()` hooks run when an eval-owned dynamic object reaches
 final release through ordinary eval statement execution, such as `unset($obj)` or
 a discarded temporary expression, and through the native runtime final-release
-path after an eval-owned object escapes back into compiled code; destructor
-execution from runtime cycle collection is still outside the bridge. The main
-remaining class-system gaps are
+path after an eval-owned object escapes back into compiled code, including
+runtime cycle collection of eval-owned object graphs. The main remaining
+class-system gaps are
 broader reflection APIs beyond the supported
 ReflectionClass/Object/Function/Method/Parameter/Property/NamedType/UnionType/IntersectionType
 and Enum/attribute slice, Reflection type APIs beyond retained parameter, generated

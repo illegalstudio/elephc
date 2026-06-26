@@ -16012,6 +16012,24 @@ echo "after";
     assert_eq!(out, "before:drop:A:after");
 }
 
+/// Verifies eval-declared object destructors run when cycle collection releases them.
+#[test]
+fn test_eval_dynamic_object_runs_destructor_after_cycle_collection() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalCycleDropBox {
+    public function __construct($name) { $this->name = $name; }
+    public function __destruct() { echo "drop:" . $this->name . ":"; }
+}
+$box = new EvalCycleDropBox("A");
+$box->self = $box;
+unset($box);
+echo "after";');
+"#,
+    );
+    assert_eq!(out, "drop:A:after");
+}
+
 /// Verifies eval `clone` shallow-copies ordinary emitted AOT objects.
 #[test]
 fn test_eval_clone_aot_object_expression() {
