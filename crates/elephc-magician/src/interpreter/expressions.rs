@@ -59,7 +59,7 @@ pub(in crate::interpreter) fn eval_expr(
         }
         EvalExpr::DynamicNewObject { class_name, args } => {
             let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_new_object_class_name(class_name, context, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
             let args = eval_method_call_arg_values(args, context, scope, values)?;
             eval_new_object_result(&class_name, args, context, scope, values)
         }
@@ -67,6 +67,37 @@ pub(in crate::interpreter) fn eval_expr(
             let object = eval_expr(object, context, scope, values)?;
             let property = eval_dynamic_member_name(property, context, scope, values)?;
             eval_property_get_result(object, &property, context, values)
+        }
+        EvalExpr::DynamicStaticMethodCall {
+            class_name,
+            method,
+            args,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let method = eval_dynamic_member_name(method, context, scope, values)?;
+            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
+            eval_static_method_call_result(&class_name, &method, evaluated_args, context, values)
+        }
+        EvalExpr::DynamicStaticPropertyGet {
+            class_name,
+            property,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            eval_static_property_get_result(&class_name, property, context, values)
+        }
+        EvalExpr::DynamicClassConstantFetch {
+            class_name,
+            constant,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            eval_class_constant_fetch_result(&class_name, constant, context, values)
+        }
+        EvalExpr::DynamicClassNameFetch { class_name } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            eval_dynamic_class_name_fetch_result(class_name, context, values)
         }
         EvalExpr::Include {
             path,
@@ -408,8 +439,8 @@ fn eval_new_object_class_name(
     }
 }
 
-/// Resolves a runtime class-name value used by `new $class(...)`.
-fn eval_dynamic_new_object_class_name(
+/// Resolves a runtime class-name value used by dynamic class operations.
+fn eval_dynamic_class_name(
     class_name: RuntimeCellHandle,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -418,10 +449,47 @@ fn eval_dynamic_new_object_class_name(
         EVAL_TAG_STRING => {
             let bytes = values.string_bytes(class_name)?;
             let class_name = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
-            eval_new_object_class_name(&class_name, context)
+            Ok(context
+                .resolve_class_like_name(&class_name)
+                .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string()))
         }
         EVAL_TAG_OBJECT => eval_instanceof_object_target_name(class_name, context, values),
         _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Returns the runtime class name for `$object::class` and rejects non-object dynamic receivers.
+fn eval_dynamic_class_name_fetch_result(
+    class_name: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let tag = values.type_tag(class_name)?;
+    if tag == EVAL_TAG_OBJECT {
+        let class_name = eval_instanceof_object_target_name(class_name, context, values)?;
+        return values.string(&class_name);
+    }
+    eval_throw_type_error(
+        &format!(
+            "Cannot use \"::class\" on {}",
+            eval_class_name_fetch_type_error_name(tag)
+        ),
+        context,
+        values,
+    )
+}
+
+/// Returns PHP's type label for dynamic `::class` TypeError diagnostics.
+fn eval_class_name_fetch_type_error_name(tag: u64) -> &'static str {
+    match tag {
+        EVAL_TAG_INT => "int",
+        EVAL_TAG_FLOAT => "float",
+        EVAL_TAG_STRING => "string",
+        EVAL_TAG_BOOL => "bool",
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array",
+        EVAL_TAG_RESOURCE => "resource",
+        EVAL_TAG_NULL => "null",
+        _ => "null",
     }
 }
 

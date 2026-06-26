@@ -625,7 +625,12 @@ impl Parser {
             TokenKind::DollarIdent(name) => {
                 let name = name.clone();
                 self.advance();
-                Ok(EvalExpr::LoadVar(name))
+                let expr = EvalExpr::LoadVar(name);
+                if self.consume(TokenKind::DoubleColon) {
+                    self.parse_dynamic_static_member_expr(expr)
+                } else {
+                    Ok(expr)
+                }
             }
             TokenKind::Magic(EvalMagicConst::Namespace) => {
                 let namespace = self.namespace.clone();
@@ -826,6 +831,58 @@ impl Parser {
                 self.advance();
                 Ok(EvalExpr::ClassConstantFetch {
                     class_name,
+                    constant,
+                })
+            }
+            _ => Err(EvalParseError::UnsupportedConstruct),
+        }
+    }
+
+    /// Parses `$class::member` expressions whose static receiver is runtime-valued.
+    fn parse_dynamic_static_member_expr(
+        &mut self,
+        class_name: EvalExpr,
+    ) -> Result<EvalExpr, EvalParseError> {
+        match self.current() {
+            TokenKind::DollarIdent(member) => {
+                let member = member.clone();
+                self.advance();
+                if matches!(self.current(), TokenKind::LParen) {
+                    let args = self.parse_call_args()?;
+                    return Ok(EvalExpr::DynamicStaticMethodCall {
+                        class_name: Box::new(class_name),
+                        method: Box::new(EvalExpr::LoadVar(member)),
+                        args,
+                    });
+                }
+                Ok(EvalExpr::DynamicStaticPropertyGet {
+                    class_name: Box::new(class_name),
+                    property: member,
+                })
+            }
+            TokenKind::Ident(name)
+                if ident_eq(name, "class") && !matches!(self.peek(), TokenKind::LParen) =>
+            {
+                self.advance();
+                Ok(EvalExpr::DynamicClassNameFetch {
+                    class_name: Box::new(class_name),
+                })
+            }
+            TokenKind::Ident(method) if matches!(self.peek(), TokenKind::LParen) => {
+                let method = method.clone();
+                self.advance();
+                let args = self.parse_call_args()?;
+                Ok(EvalExpr::DynamicStaticMethodCall {
+                    class_name: Box::new(class_name),
+                    method: Box::new(EvalExpr::Const(EvalConst::String(method))),
+                    args,
+                })
+            }
+            TokenKind::Ident(constant) => {
+                let constant = constant.clone();
+                self.advance();
+                Ok(EvalExpr::DynamicClassConstantFetch {
+                    class_name: Box::new(class_name),
                     constant,
                 })
             }

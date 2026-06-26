@@ -2299,6 +2299,22 @@ pub enum EvalExpr {
         object: Box<EvalExpr>,
         property: Box<EvalExpr>,
     },
+    DynamicStaticMethodCall {
+        class_name: Box<EvalExpr>,
+        method: Box<EvalExpr>,
+        args: Vec<EvalCallArg>,
+    },
+    DynamicStaticPropertyGet {
+        class_name: Box<EvalExpr>,
+        property: String,
+    },
+    DynamicClassConstantFetch {
+        class_name: Box<EvalExpr>,
+        constant: String,
+    },
+    DynamicClassNameFetch {
+        class_name: Box<EvalExpr>,
+    },
     Include {
         path: Box<EvalExpr>,
         required: bool,
