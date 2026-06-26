@@ -9054,6 +9054,42 @@ echo $label->text;');
     assert_eq!(out.stdout, "[Ada]:HI");
 }
 
+/// Verifies eval-declared nullsafe and mixed-case property hook reads stay routed.
+#[test]
+fn test_eval_declared_nullsafe_and_mixed_case_property_hooks() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalNullsafeHookPerson {
+    public string $first = "Ada";
+    public string $last = "Lovelace";
+    public string $full {
+        get => $this->first . " " . $this->last;
+    }
+}
+class EvalMixedCaseHookBox {
+    private int $store = 0;
+    public int $Total {
+        get { return $this->store; }
+    }
+    public function set(int $value) { $this->store = $value; }
+}
+function eval_hook_describe($person) {
+    return $person?->full ?? "(none)";
+}
+$person = new EvalNullsafeHookPerson();
+$box = new EvalMixedCaseHookBox();
+$box->set(5);
+echo eval_hook_describe($person) . "|" . eval_hook_describe(null) . "|" . $box->Total;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Ada Lovelace|(none)|5");
+}
+
 /// Verifies eval-declared magic property methods handle missing and inaccessible properties.
 #[test]
 fn test_eval_declared_magic_property_methods() {

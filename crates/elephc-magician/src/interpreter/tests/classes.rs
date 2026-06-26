@@ -1305,6 +1305,43 @@ return $label->text;"#,
     assert_eq!(values.get(result), FakeValue::String("HI".to_string()));
 }
 
+/// Verifies nullsafe reads and mixed-case names still route through eval property hooks.
+#[test]
+fn execute_program_routes_eval_nullsafe_and_mixed_case_property_hooks() {
+    let program = parse_fragment(
+        br#"class EvalNullsafeHookPerson {
+    public string $first = "Ada";
+    public string $last = "Lovelace";
+    public string $full {
+        get => $this->first . " " . $this->last;
+    }
+}
+class EvalMixedCaseHookBox {
+    private int $store = 0;
+    public int $Total {
+        get { return $this->store; }
+    }
+    public function set(int $value) { $this->store = $value; }
+}
+function eval_hook_describe($person) {
+    return $person?->full ?? "(none)";
+}
+$person = new EvalNullsafeHookPerson();
+$box = new EvalMixedCaseHookBox();
+$box->set(5);
+echo eval_hook_describe($person) . "|" . eval_hook_describe(null) . "|" . $box->Total;
+return $box->Total;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Ada Lovelace|(none)|5");
+    assert_eq!(values.get(result), FakeValue::Int(5));
+}
+
 /// Verifies undefined eval property reads and writes dispatch through `__get` and `__set`.
 #[test]
 fn execute_program_dispatches_eval_magic_get_and_set() {
