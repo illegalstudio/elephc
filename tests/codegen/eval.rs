@@ -9021,6 +9021,30 @@ try {
     assert_eq!(err.stdout, "Error:Property EvalHookReadOnly::$answer is read-only");
 }
 
+/// Verifies eval-declared by-reference get hook syntax reads through the accessor.
+#[test]
+fn test_eval_declared_by_ref_get_property_hook() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalByRefGetHookPerson {
+    public string $first = "Ada";
+    public string $last = "Lovelace";
+    public string $full {
+        &get => $this->first . " " . $this->last;
+    }
+}
+$person = new EvalByRefGetHookPerson();
+echo $person->full;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Ada Lovelace");
+}
+
 /// Verifies eval-declared short set property hooks store their expression result.
 #[test]
 fn test_eval_declared_short_set_property_hooks() {

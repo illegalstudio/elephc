@@ -372,7 +372,7 @@ fn parse_fragment_accepts_interface_property_hook_contracts() {
     let program = parse_fragment(
         br#"interface DynEvalHookIface {
     public string $value { get; set; }
-    public int $id { get; }
+    public int $id { &get; }
 }"#,
     )
     .expect("fragment should parse");
@@ -769,7 +769,7 @@ fn parse_fragment_accepts_concrete_class_property_hooks() {
     let program = parse_fragment(
         br#"class DynEvalHooked {
     public int $value {
-        get => 7;
+        &get => 7;
         set => $value + 1;
     }
 }"#,
@@ -901,6 +901,8 @@ fn parse_fragment_rejects_invalid_property_hooks() {
         .expect_err("hooked properties cannot have defaults in eval");
     parse_fragment(b"class DynEvalHookStatic { public static int $id { get => 1; } }")
         .expect_err("static properties cannot have hooks in eval");
+    parse_fragment(b"class DynEvalHookByRefSet { public int $id { &set => 1; } }")
+        .expect_err("set property hooks cannot return by reference");
     parse_fragment(
         b"abstract class DynEvalHookAbstractDefault { abstract public int $id = 1 { get; } }",
     )
@@ -920,6 +922,8 @@ fn parse_fragment_rejects_invalid_interface_property_hooks() {
         .expect_err("interface property hooks cannot repeat contracts");
     parse_fragment(b"interface DynEvalIfaceHookEmpty { public int $id { } }")
         .expect_err("interface property hooks require at least one contract");
+    parse_fragment(b"interface DynEvalIfaceHookByRefSet { public int $id { &set; } }")
+        .expect_err("set interface property hooks cannot return by reference");
     parse_fragment(b"interface DynEvalIfaceHookDefault { public int $id = 1 { get; } }")
         .expect_err("interface property hook contracts cannot have defaults");
     parse_fragment(

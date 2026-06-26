@@ -1217,15 +1217,16 @@ impl Parser {
         &mut self,
         property_name: &str,
     ) -> Result<(bool, EvalClassMethod), EvalParseError> {
-        if self.consume(TokenKind::Ampersand) {
-            return Err(EvalParseError::UnsupportedConstruct);
-        }
+        let returns_by_ref = self.consume(TokenKind::Ampersand);
         let TokenKind::Ident(hook_name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
         let is_get = ident_eq(hook_name, "get");
         let is_set = ident_eq(hook_name, "set");
         if !is_get && !is_set {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        if returns_by_ref && !is_get {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         let source_start_line = self.current_line();
@@ -1799,15 +1800,16 @@ impl Parser {
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
-            if self.consume(TokenKind::Ampersand) {
-                return Err(EvalParseError::UnsupportedConstruct);
-            }
+            let returns_by_ref = self.consume(TokenKind::Ampersand);
             let TokenKind::Ident(hook_name) = self.current() else {
                 return Err(EvalParseError::UnexpectedToken);
             };
             let is_get = ident_eq(hook_name, "get");
             let is_set = ident_eq(hook_name, "set");
             if !is_get && !is_set {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            if returns_by_ref && !is_get {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
             self.advance();

@@ -1246,6 +1246,34 @@ return $person->full;"#,
     );
 }
 
+/// Verifies by-reference get hook syntax routes through the concrete eval get accessor.
+#[test]
+fn execute_program_reads_eval_by_ref_get_property_hook() {
+    let program = parse_fragment(
+        br#"class EvalByRefGetHookPerson {
+    public string $first = "Ada";
+    public string $last = "Lovelace";
+    public string $full {
+        &get => $this->first . " " . $this->last;
+    }
+}
+$person = new EvalByRefGetHookPerson();
+echo $person->full;
+return $person->full;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Ada Lovelace");
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("Ada Lovelace".to_string())
+    );
+}
+
 /// Verifies get/set property hooks can use the raw backing slot from inside accessors.
 #[test]
 fn execute_program_routes_eval_property_get_and_set_hooks() {
