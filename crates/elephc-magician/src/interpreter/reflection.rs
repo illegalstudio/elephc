@@ -124,11 +124,21 @@ struct EvalReflectionParameterMetadata {
     default_value_constant_name: Option<String>,
 }
 
+/// PHP-visible magic constant scope for one reflected parameter default.
+#[derive(Clone)]
+struct EvalReflectionParameterMagicScope {
+    function_name: String,
+    method_name: String,
+    class_name: Option<String>,
+    trait_name: Option<String>,
+}
+
 /// Eval metadata needed for `ReflectionParameter::getDeclaringFunction()`.
 #[derive(Clone)]
 struct EvalReflectionDeclaringFunctionMetadata {
     name: String,
     declaring_class_name: Option<String>,
+    magic_scope: Option<EvalReflectionParameterMagicScope>,
     attributes: Vec<EvalAttribute>,
     flags: u64,
     required_parameter_count: usize,
@@ -4113,6 +4123,7 @@ fn eval_reflection_native_callable_parameters(
     let declaring_function = EvalReflectionDeclaringFunctionMetadata {
         name: method_name.to_ascii_lowercase(),
         declaring_class_name: Some(declaring_class_name.trim_start_matches('\\').to_string()),
+        magic_scope: None,
         attributes: Vec::new(),
         flags,
         required_parameter_count: signature.required_param_count(),
@@ -5317,7 +5328,7 @@ fn eval_reflection_parameter_class_name(
     }
 }
 
-/// Materializes one ReflectionParameter default using the declaring class scope when present.
+/// Materializes one ReflectionParameter default using declaring class and magic scopes.
 fn eval_reflection_parameter_default_value(
     parameter: &EvalReflectionParameterMetadata,
     context: &mut ElephcEvalContext,
@@ -5326,14 +5337,30 @@ fn eval_reflection_parameter_default_value(
     let Some(default) = parameter.default_value.as_ref() else {
         return values.null();
     };
-    let Some(class_name) = parameter.declaring_class_name.as_deref() else {
-        return eval_method_parameter_default(default, context, values);
-    };
-    context.push_class_scope(class_name.to_string());
-    context.push_called_class_scope(class_name.to_string());
+    if let Some(class_name) = parameter.declaring_class_name.as_deref() {
+        context.push_class_scope(class_name.to_string());
+        context.push_called_class_scope(class_name.to_string());
+    }
+    let magic_scope = parameter
+        .declaring_function
+        .as_ref()
+        .and_then(|function| function.magic_scope.as_ref());
+    if let Some(magic_scope) = magic_scope {
+        context.push_callable_magic_scope(
+            &magic_scope.function_name,
+            &magic_scope.method_name,
+            magic_scope.class_name.as_deref(),
+            magic_scope.trait_name.as_deref(),
+        );
+    }
     let result = eval_method_parameter_default(default, context, values);
-    context.pop_called_class_scope();
-    context.pop_class_scope();
+    if magic_scope.is_some() {
+        context.pop_magic_scope();
+    }
+    if parameter.declaring_class_name.is_some() {
+        context.pop_called_class_scope();
+        context.pop_class_scope();
+    }
     result
 }
 
@@ -6999,6 +7026,11 @@ fn eval_reflection_method_metadata(
             let declaring_function = EvalReflectionDeclaringFunctionMetadata {
                 name: method.name().to_string(),
                 declaring_class_name: Some(declaring_class.clone()),
+                magic_scope: Some(eval_reflection_eval_method_parameter_magic_scope(
+                    &declaring_class,
+                    &method,
+                    None,
+                )),
                 attributes: method.attributes().to_vec(),
                 flags,
                 required_parameter_count,
@@ -7071,6 +7103,12 @@ fn eval_reflection_method_metadata(
                 let declaring_function = EvalReflectionDeclaringFunctionMetadata {
                     name: method.name().to_string(),
                     declaring_class_name: Some(class_name.to_string()),
+                    magic_scope: Some(eval_reflection_method_parameter_magic_scope(
+                        class_name,
+                        method.name(),
+                        &format!("{}::{}", class_name.trim_start_matches('\\'), method.name()),
+                        None,
+                    )),
                     attributes: method.attributes().to_vec(),
                     flags,
                     required_parameter_count,
@@ -7137,6 +7175,11 @@ fn eval_reflection_method_metadata(
                 let declaring_function = EvalReflectionDeclaringFunctionMetadata {
                     name: method.name().to_string(),
                     declaring_class_name: Some(trait_decl.name().to_string()),
+                    magic_scope: Some(eval_reflection_eval_method_parameter_magic_scope(
+                        trait_decl.name(),
+                        method,
+                        Some(trait_decl.name()),
+                    )),
                     attributes: method.attributes().to_vec(),
                     flags,
                     required_parameter_count,
@@ -7232,6 +7275,7 @@ fn eval_reflection_enum_synthetic_method_metadata(
     let declaring_function = EvalReflectionDeclaringFunctionMetadata {
         name: synthetic_name.to_string(),
         declaring_class_name: Some(declaring_class_name.clone()),
+        magic_scope: None,
         attributes: Vec::new(),
         flags,
         required_parameter_count,
@@ -7809,6 +7853,7 @@ fn eval_reflection_property_hook_parameters(
     let declaring_function = EvalReflectionDeclaringFunctionMetadata {
         name: hook.reflected_method_name(property.name()),
         declaring_class_name: Some(declaring_class.to_string()),
+        magic_scope: None,
         attributes: Vec::new(),
         flags: eval_reflection_member_flags(property.visibility(), false, false, false, false),
         required_parameter_count: 1,
@@ -8516,6 +8561,49 @@ fn eval_reflection_required_parameter_count(
         .map_or(0, |position| position + 1)
 }
 
+/// Builds PHP magic scope metadata for a reflected function parameter default.
+fn eval_reflection_function_parameter_magic_scope(
+    function_name: &str,
+) -> EvalReflectionParameterMagicScope {
+    EvalReflectionParameterMagicScope {
+        function_name: function_name.to_string(),
+        method_name: function_name.to_string(),
+        class_name: None,
+        trait_name: None,
+    }
+}
+
+/// Builds PHP magic scope metadata for a reflected method parameter default.
+fn eval_reflection_method_parameter_magic_scope(
+    class_name: &str,
+    function_name: &str,
+    method_name: &str,
+    trait_name: Option<&str>,
+) -> EvalReflectionParameterMagicScope {
+    EvalReflectionParameterMagicScope {
+        function_name: function_name.to_string(),
+        method_name: method_name.to_string(),
+        class_name: Some(class_name.trim_start_matches('\\').to_string()),
+        trait_name: trait_name.map(|trait_name| trait_name.trim_start_matches('\\').to_string()),
+    }
+}
+
+/// Builds PHP magic scope metadata for an eval method's reflected parameter default.
+fn eval_reflection_eval_method_parameter_magic_scope(
+    class_name: &str,
+    method: &EvalClassMethod,
+    fallback_trait_name: Option<&str>,
+) -> EvalReflectionParameterMagicScope {
+    eval_reflection_method_parameter_magic_scope(
+        class_name,
+        method.magic_function_name(),
+        &method.magic_method_name(class_name),
+        method
+            .trait_origin()
+            .or(fallback_trait_name),
+    )
+}
+
 /// Builds parameter reflection metadata from eval parameter names and type flags.
 fn eval_reflection_parameters_from_names_and_type_flags(
     declaring_class_name: Option<&str>,
@@ -8624,6 +8712,7 @@ fn eval_reflection_function_parameters(
     let declaring_function = EvalReflectionDeclaringFunctionMetadata {
         name: function_name.to_string(),
         declaring_class_name: None,
+        magic_scope: Some(eval_reflection_function_parameter_magic_scope(function_name)),
         attributes: function_attributes,
         flags,
         required_parameter_count: eval_reflection_required_parameter_count(

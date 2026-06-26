@@ -2807,6 +2807,26 @@ impl ElephcEvalContext {
         });
     }
 
+    /// Pushes PHP-visible callable magic constants for reflected parameter defaults.
+    pub fn push_callable_magic_scope(
+        &mut self,
+        function_name: &str,
+        method_name: &str,
+        class_name: Option<&str>,
+        trait_name: Option<&str>,
+    ) {
+        self.magic_stack.push(EvalMagicScope {
+            function_name: function_name.to_string(),
+            method_name: method_name.to_string(),
+            class_name: class_name
+                .map(|class_name| class_name.trim_start_matches('\\').to_string())
+                .unwrap_or_default(),
+            trait_name: trait_name
+                .map(|trait_name| trait_name.trim_start_matches('\\').to_string())
+                .unwrap_or_default(),
+        });
+    }
+
     /// Pops the current PHP-visible eval magic-constant scope.
     pub fn pop_magic_scope(&mut self) {
         self.magic_stack.pop();

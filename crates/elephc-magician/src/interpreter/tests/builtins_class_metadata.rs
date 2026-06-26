@@ -2476,6 +2476,66 @@ return true;"##,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionParameter default magic constants use declaring callable scopes.
+#[test]
+fn execute_program_reflection_parameter_resolves_default_magic_constants() {
+    let program = parse_fragment(
+        br##"namespace EvalReflectParamMagicNs;
+function eval_reflect_param_magic($fn = __FUNCTION__, $m = __METHOD__, $c = __CLASS__, $t = __TRAIT__, $n = __NAMESPACE__) {}
+interface EvalReflectParamMagicIface {
+    public function read($c = __CLASS__, $m = __METHOD__, $fn = __FUNCTION__, $t = __TRAIT__, $n = __NAMESPACE__);
+}
+trait EvalReflectParamMagicTrait {
+    public function source($c = __CLASS__, $t = __TRAIT__, $m = __METHOD__, $fn = __FUNCTION__, $n = __NAMESPACE__) {}
+}
+class EvalReflectParamMagicBox {
+    use EvalReflectParamMagicTrait { source as aliasSource; }
+    public function own($c = __CLASS__, $t = __TRAIT__, $m = __METHOD__, $fn = __FUNCTION__, $n = __NAMESPACE__) {}
+}
+function eval_param_magic_dump($ref) {
+    foreach ($ref->getParameters() as $param) {
+        echo "[" . $param->getDefaultValue() . "]";
+    }
+    echo ":";
+}
+eval_param_magic_dump(new \ReflectionFunction(__NAMESPACE__ . "\\eval_reflect_param_magic"));
+eval_param_magic_dump(new \ReflectionMethod(EvalReflectParamMagicBox::class, "own"));
+eval_param_magic_dump(new \ReflectionMethod(EvalReflectParamMagicBox::class, "aliasSource"));
+eval_param_magic_dump(new \ReflectionMethod(EvalReflectParamMagicIface::class, "read"));
+return true;"##,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        concat!(
+            "[EvalReflectParamMagicNs\\eval_reflect_param_magic]",
+            "[EvalReflectParamMagicNs\\eval_reflect_param_magic]",
+            "[][][EvalReflectParamMagicNs]:",
+            "[EvalReflectParamMagicNs\\EvalReflectParamMagicBox]",
+            "[]",
+            "[EvalReflectParamMagicNs\\EvalReflectParamMagicBox::own]",
+            "[own]",
+            "[EvalReflectParamMagicNs]:",
+            "[EvalReflectParamMagicNs\\EvalReflectParamMagicBox]",
+            "[EvalReflectParamMagicNs\\EvalReflectParamMagicTrait]",
+            "[EvalReflectParamMagicNs\\EvalReflectParamMagicTrait::source]",
+            "[source]",
+            "[EvalReflectParamMagicNs]:",
+            "[EvalReflectParamMagicNs\\EvalReflectParamMagicIface]",
+            "[EvalReflectParamMagicNs\\EvalReflectParamMagicIface::read]",
+            "[read]",
+            "[]",
+            "[EvalReflectParamMagicNs]:"
+        )
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionClass exposes eval property default metadata as an associative map.
 #[test]
 fn execute_program_reflection_class_get_default_properties_metadata() {
