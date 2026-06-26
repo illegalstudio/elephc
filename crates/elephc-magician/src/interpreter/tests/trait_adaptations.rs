@@ -46,7 +46,7 @@ return $box->talk();"#,
     assert_eq!(values.get(result), FakeValue::String("A".to_string()));
 }
 
-/// Verifies visibility-only `as private` hides the imported method from global calls.
+/// Verifies visibility-only `as private` throws when called from global scope.
 #[test]
 fn execute_program_applies_eval_trait_visibility_adaptation() {
     let program = parse_fragment(
@@ -68,7 +68,7 @@ return $box->hidden();"#,
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("private adapted trait method should fail from global scope");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(err, EvalStatus::UncaughtThrowable);
 }
 
 /// Verifies trait aliases that collide with class methods or no-op names follow PHP rules.
