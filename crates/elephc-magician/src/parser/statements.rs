@@ -3688,6 +3688,13 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
         | EvalExpr::DynamicClassNameFetch { class_name } => {
             eval_expr_uses_this_property(class_name, property_name)
         }
+        EvalExpr::DynamicClassConstantNameFetch {
+            class_name,
+            constant,
+        } => {
+            eval_expr_uses_this_property(class_name, property_name)
+                || eval_expr_uses_this_property(constant, property_name)
+        }
         EvalExpr::DynamicMethodCall {
             object,
             method,

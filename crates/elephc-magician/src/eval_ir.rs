@@ -2405,6 +2405,10 @@ pub enum EvalExpr {
         class_name: Box<EvalExpr>,
         constant: String,
     },
+    DynamicClassConstantNameFetch {
+        class_name: Box<EvalExpr>,
+        constant: Box<EvalExpr>,
+    },
     DynamicClassNameFetch {
         class_name: Box<EvalExpr>,
     },
