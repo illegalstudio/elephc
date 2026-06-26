@@ -1234,14 +1234,22 @@ impl Parser {
         };
         let (body, source_end_line) = match self.current() {
             TokenKind::Semicolon => return Err(EvalParseError::UnsupportedConstruct),
-            TokenKind::FatArrow if is_get => {
+            TokenKind::FatArrow => {
                 self.advance();
                 let expr = self.parse_expr()?;
                 let source_end_line = self.current_line();
                 self.expect_semicolon()?;
-                (vec![EvalStmt::Return(Some(expr))], source_end_line)
+                let body = if is_get {
+                    vec![EvalStmt::Return(Some(expr))]
+                } else {
+                    vec![EvalStmt::PropertySet {
+                        object: EvalExpr::LoadVar("this".to_string()),
+                        property: property_name.to_string(),
+                        value: expr,
+                    }]
+                };
+                (body, source_end_line)
             }
-            TokenKind::FatArrow => return Err(EvalParseError::UnsupportedConstruct),
             TokenKind::LBrace => self.parse_block_with_end_line()?,
             _ => return Err(EvalParseError::UnexpectedToken),
         };

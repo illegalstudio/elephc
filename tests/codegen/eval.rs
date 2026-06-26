@@ -9021,6 +9021,39 @@ try {
     assert_eq!(err.stdout, "Error:Property EvalHookReadOnly::$answer is read-only");
 }
 
+/// Verifies eval-declared short set property hooks store their expression result.
+#[test]
+fn test_eval_declared_short_set_property_hooks() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalShortSetHookName {
+    public string $value {
+        get => $this->value;
+        set => trim($value);
+    }
+}
+class EvalShortSetHookLabel {
+    public string $text {
+        get => $this->text;
+        set(string $raw) => strtoupper($raw);
+    }
+}
+$name = new EvalShortSetHookName();
+$name->value = "  Ada  ";
+echo "[" . $name->value . "]:";
+$label = new EvalShortSetHookLabel();
+$label->text = "hi";
+echo $label->text;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "[Ada]:HI");
+}
+
 /// Verifies eval-declared magic property methods handle missing and inaccessible properties.
 #[test]
 fn test_eval_declared_magic_property_methods() {
