@@ -10155,6 +10155,39 @@ echo $class::{"FALLBACK"};');
     assert_eq!(out.stdout, "read|fallback");
 }
 
+/// Verifies eval supports parenthesized expression static receivers for reads and calls.
+#[test]
+fn test_eval_expression_static_receiver_members() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalExpressionStaticReceiver {
+    public static $count = 5;
+    public const WORD = "word";
+
+    public static function read($value) {
+        return "read:" . $value;
+    }
+}
+
+function eval_expression_static_receiver() {
+    return "EvalExpressionStaticReceiver";
+}
+
+$constant = "WORD";
+echo (eval_expression_static_receiver())::read("A") . "|";
+echo (eval_expression_static_receiver())::WORD . "|";
+echo (eval_expression_static_receiver())::{$constant} . "|";
+echo (eval_expression_static_receiver())::$count;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "read:A|word|word|5");
+}
+
 /// Verifies eval AOT method fallback dispatches missing and inaccessible methods through `__call`.
 #[test]
 fn test_eval_aot_magic_call_method_fallback() {

@@ -182,6 +182,41 @@ fn parse_fragment_accepts_braced_dynamic_class_constant_name() {
     );
 }
 
+/// Verifies parenthesized static receivers parse through the dynamic receiver path.
+#[test]
+fn parse_fragment_accepts_expression_static_receiver_members() {
+    let program = parse_fragment(
+        br#"return [($class)::read(2), (factory())::VALUE, (factory())::{"VALUE"}, (factory())::$count];"#,
+    )
+    .expect("fragment should parse");
+    let factory_call = || EvalExpr::Call {
+        name: "factory".to_string(),
+        args: Vec::new(),
+    };
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Array(vec![
+            EvalArrayElement::Value(EvalExpr::DynamicStaticMethodCall {
+                class_name: Box::new(EvalExpr::LoadVar("class".to_string())),
+                method: Box::new(EvalExpr::Const(EvalConst::String("read".to_string()))),
+                args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::Int(2)))],
+            }),
+            EvalArrayElement::Value(EvalExpr::DynamicClassConstantFetch {
+                class_name: Box::new(factory_call()),
+                constant: "VALUE".to_string(),
+            }),
+            EvalArrayElement::Value(EvalExpr::DynamicClassConstantNameFetch {
+                class_name: Box::new(factory_call()),
+                constant: Box::new(EvalExpr::Const(EvalConst::String("VALUE".to_string()))),
+            }),
+            EvalArrayElement::Value(EvalExpr::DynamicStaticPropertyGet {
+                class_name: Box::new(factory_call()),
+                property: "count".to_string(),
+            }),
+        ])))]
+    );
+}
+
 /// Verifies runtime-valued static receivers support properties, constants, and `::class`.
 #[test]
 fn parse_fragment_accepts_dynamic_static_metadata_receiver() {

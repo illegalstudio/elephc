@@ -502,6 +502,10 @@ impl Parser {
                 };
                 continue;
             }
+            if self.consume(TokenKind::DoubleColon) {
+                expr = self.parse_dynamic_static_member_expr(expr)?;
+                continue;
+            }
             let nullsafe = if self.consume(TokenKind::Arrow) {
                 false
             } else if self.consume(TokenKind::QuestionArrow) {
