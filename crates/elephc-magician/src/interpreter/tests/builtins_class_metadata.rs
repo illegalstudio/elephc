@@ -142,6 +142,74 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies `get_class_vars()` materializes visible defaults for eval class-like metadata.
+#[test]
+fn execute_program_dispatches_get_class_vars_builtin() {
+    let program = parse_fragment(
+        br#"trait EvalClassVarsTrait {
+    public $traitPublic = "tp";
+    protected $traitProtected = "tq";
+}
+enum EvalClassVarsBacked: int { case Ready = 1; }
+class EvalClassVarsBase {
+    public $basePublic = "bp";
+    protected $baseProtected = "bq";
+    private $basePrivate = "bs";
+    public static $baseStatic = "static";
+    public int $typed;
+}
+class EvalClassVarsChild extends EvalClassVarsBase {
+    use EvalClassVarsTrait;
+    public $childPublic = "cp";
+    protected $childProtected = "cq";
+    private $childPrivate = "cs";
+    public function childView() {
+        $vars = get_class_vars(self::class);
+        ksort($vars);
+        foreach ($vars as $name => $value) {
+            echo $name . "=" . (is_null($value) ? "null" : $value) . "|";
+        }
+    }
+    public function baseView() {
+        $vars = get_class_vars(EvalClassVarsBase::class);
+        ksort($vars);
+        foreach ($vars as $name => $value) {
+            echo $name . "=" . (is_null($value) ? "null" : $value) . "|";
+        }
+    }
+}
+$outside = get_class_vars("EvalClassVarsChild");
+ksort($outside);
+foreach ($outside as $name => $value) { echo $name . "=" . (is_null($value) ? "null" : $value) . "|"; }
+echo ":";
+(new EvalClassVarsChild())->childView();
+echo ":";
+(new EvalClassVarsChild())->baseView();
+echo ":";
+$trait = call_user_func("get_class_vars", "EvalClassVarsTrait");
+ksort($trait);
+foreach ($trait as $name => $value) { echo $name . "=" . (is_null($value) ? "null" : $value) . "|"; }
+echo ":";
+$enum = call_user_func_array("get_class_vars", ["class" => "EvalClassVarsBacked"]);
+ksort($enum);
+foreach ($enum as $name => $value) { echo $name . "=" . (is_null($value) ? "null" : $value) . "|"; }
+echo ":";
+echo function_exists("get_class_vars") ? "F" : "f";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "basePublic=bp|baseStatic=static|childPublic=cp|traitPublic=tp|typed=null|:baseProtected=bq|basePublic=bp|baseStatic=static|childPrivate=cs|childProtected=cq|childPublic=cp|traitProtected=tq|traitPublic=tp|typed=null|:baseProtected=bq|basePublic=bp|baseStatic=static|typed=null|:traitPublic=tp|:name=null|value=null|:F"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies class attribute helpers expose eval class-level metadata.
 #[test]
 fn execute_program_dispatches_class_attribute_metadata_builtins() {

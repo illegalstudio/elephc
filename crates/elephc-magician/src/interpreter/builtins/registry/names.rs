@@ -154,6 +154,7 @@ pub(in crate::interpreter) fn eval_php_visible_builtin_exists(name: &str) -> boo
             | "get_called_class"
             | "get_class"
             | "get_class_methods"
+            | "get_class_vars"
             | "get_declared_classes"
             | "get_declared_interfaces"
             | "get_declared_traits"

@@ -8798,6 +8798,73 @@ echo function_exists("get_class_methods"); echo function_exists("get_object_vars
     );
 }
 
+/// Verifies eval `get_class_vars()` exposes visible class-like defaults like PHP.
+#[test]
+fn test_eval_declared_get_class_vars_builtin() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('trait EvalClassVarsTrait {
+    public $traitPublic = "tp";
+    protected $traitProtected = "tq";
+}
+enum EvalClassVarsBacked: int { case Ready = 1; }
+class EvalClassVarsBase {
+    public $basePublic = "bp";
+    protected $baseProtected = "bq";
+    private $basePrivate = "bs";
+    public static $baseStatic = "static";
+    public int $typed;
+}
+class EvalClassVarsChild extends EvalClassVarsBase {
+    use EvalClassVarsTrait;
+    public $childPublic = "cp";
+    protected $childProtected = "cq";
+    private $childPrivate = "cs";
+    public function childView() {
+        $vars = get_class_vars(self::class);
+        ksort($vars);
+        foreach ($vars as $name => $value) {
+            echo $name . "=" . (is_null($value) ? "null" : $value) . "|";
+        }
+    }
+    public function baseView() {
+        $vars = get_class_vars(EvalClassVarsBase::class);
+        ksort($vars);
+        foreach ($vars as $name => $value) {
+            echo $name . "=" . (is_null($value) ? "null" : $value) . "|";
+        }
+    }
+}
+$outside = get_class_vars("EvalClassVarsChild");
+ksort($outside);
+foreach ($outside as $name => $value) { echo $name . "=" . (is_null($value) ? "null" : $value) . "|"; }
+echo ":";
+(new EvalClassVarsChild())->childView();
+echo ":";
+(new EvalClassVarsChild())->baseView();
+echo ":";
+$trait = call_user_func("get_class_vars", "EvalClassVarsTrait");
+ksort($trait);
+foreach ($trait as $name => $value) { echo $name . "=" . (is_null($value) ? "null" : $value) . "|"; }
+echo ":";
+$enum = call_user_func_array("get_class_vars", ["class" => "EvalClassVarsBacked"]);
+ksort($enum);
+foreach ($enum as $name => $value) { echo $name . "=" . (is_null($value) ? "null" : $value) . "|"; }
+echo ":";
+echo function_exists("get_class_vars") ? "F" : "f";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "basePublic=bp|baseStatic=static|childPublic=cp|traitPublic=tp|typed=null|:baseProtected=bq|basePublic=bp|baseStatic=static|childPrivate=cs|childProtected=cq|childPublic=cp|traitProtected=tq|traitPublic=tp|typed=null|:baseProtected=bq|basePublic=bp|baseStatic=static|typed=null|:traitPublic=tp|:name=null|value=null|:F"
+    );
+}
+
 /// Verifies eval OOP introspection builtins honor AOT inherited private-member rules.
 #[test]
 fn test_eval_oop_introspection_builtins_for_aot_inherited_private_members() {

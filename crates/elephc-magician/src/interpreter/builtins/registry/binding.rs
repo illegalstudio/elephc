@@ -140,6 +140,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "get_called_class" => Some(&[]),
         "get_class" => Some(&["object"]),
         "get_class_methods" => Some(&["object_or_class"]),
+        "get_class_vars" => Some(&["class"]),
         "get_object_vars" => Some(&["object"]),
         "get_parent_class" => Some(&["object_or_class"]),
         "call_user_func" => Some(&["callback"]),

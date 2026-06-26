@@ -8683,7 +8683,7 @@ fn eval_visibility_label(visibility: EvalVisibility) -> &'static str {
 }
 
 /// Allocates a fresh runtime cell for one invocation-safe native AOT default.
-fn materialize_native_callable_default(
+pub(in crate::interpreter) fn materialize_native_callable_default(
     default: &NativeCallableDefault,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
