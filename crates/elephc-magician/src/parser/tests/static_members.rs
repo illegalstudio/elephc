@@ -225,7 +225,9 @@ fn parse_fragment_accepts_expression_static_receiver_property_writes() {
 (factory())::$count += 3;
 (factory())::$items[] = 4;
 (factory())::$items[0] = 5;
-(factory())::$count++;"#,
+(factory())::$count++;
+++ (factory())::$count;
+-- (factory())::$count;"#,
     )
     .expect("fragment should parse");
     let factory_call = || EvalExpr::Call {
@@ -268,6 +270,16 @@ fn parse_fragment_accepts_expression_static_receiver_property_writes() {
                 class_name: factory_call(),
                 property: "count".to_string(),
                 increment: true,
+            },
+            EvalStmt::DynamicStaticPropertyIncDec {
+                class_name: factory_call(),
+                property: "count".to_string(),
+                increment: true,
+            },
+            EvalStmt::DynamicStaticPropertyIncDec {
+                class_name: factory_call(),
+                property: "count".to_string(),
+                increment: false,
             },
         ]
     );

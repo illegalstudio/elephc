@@ -2843,22 +2843,26 @@ impl Parser {
         }])
     }
 
-    /// Parses prefix `++$name` and `--$name` as simple statement effects.
+    /// Parses prefix `++$name` / `--$name` and supported property-like prefix mutations.
     pub(super) fn parse_prefix_inc_dec_stmt(
         &mut self,
         require_semicolon: bool,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let increment = matches!(self.current(), TokenKind::PlusPlus);
         self.advance();
-        let TokenKind::DollarIdent(name) = self.current() else {
-            return Err(EvalParseError::ExpectedVariable);
-        };
-        let name = name.clone();
-        self.advance();
+        if let TokenKind::DollarIdent(name) = self.current() {
+            let name = name.clone();
+            self.advance();
+            if require_semicolon {
+                self.expect_semicolon()?;
+            }
+            return Ok(vec![inc_dec_store(name, increment)]);
+        }
+        let target = self.parse_expr()?;
         if require_semicolon {
             self.expect_semicolon()?;
         }
-        Ok(vec![inc_dec_store(name, increment)])
+        property_inc_dec_stmt(target, increment).map(|stmt| vec![stmt])
     }
 
     /// Parses postfix `$name++` and `$name--` as simple statement effects.
