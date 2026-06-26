@@ -10188,6 +10188,39 @@ echo (eval_expression_static_receiver())::$count;');
     assert_eq!(out.stdout, "read:A|word|word|5");
 }
 
+/// Verifies eval supports expression static receivers for static property writes.
+#[test]
+fn test_eval_expression_static_receiver_property_writes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalExpressionStaticReceiverWrites {
+    public static $count = 1;
+    public static $items = [];
+}
+
+function eval_expression_static_receiver_writes() {
+    return "EvalExpressionStaticReceiverWrites";
+}
+
+(eval_expression_static_receiver_writes())::$count = 2;
+(eval_expression_static_receiver_writes())::$count += 3;
+(eval_expression_static_receiver_writes())::$items = [1];
+(eval_expression_static_receiver_writes())::$items[] = 4;
+(eval_expression_static_receiver_writes())::$items[0] = 5;
+(eval_expression_static_receiver_writes())::$count++;
+echo (eval_expression_static_receiver_writes())::$count . "|";
+echo (eval_expression_static_receiver_writes())::$items[0] . ":";
+echo (eval_expression_static_receiver_writes())::$items[1];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "6|5:4");
+}
+
 /// Verifies eval AOT method fallback dispatches missing and inaccessible methods through `__call`.
 #[test]
 fn test_eval_aot_magic_call_method_fallback() {

@@ -186,8 +186,7 @@ impl Parser {
             TokenKind::Eof => Err(EvalParseError::UnexpectedEof),
             _ => {
                 let expr = self.parse_expr()?;
-                self.expect_semicolon()?;
-                Ok(vec![EvalStmt::Expr(expr)])
+                self.parse_property_like_stmt_tail(expr, true)
             }
         }
     }
@@ -2564,7 +2563,7 @@ impl Parser {
             }
             _ => {
                 let expr = self.parse_expr()?;
-                Ok(vec![EvalStmt::Expr(expr)])
+                self.parse_property_like_stmt_tail(expr, false)
             }
         }
     }
@@ -2897,6 +2896,15 @@ impl Parser {
         require_semicolon: bool,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let target = self.parse_expr()?;
+        self.parse_property_like_stmt_tail(target, require_semicolon)
+    }
+
+    /// Parses assignment, array-write, or inc/dec tails after a parsed property-like target.
+    fn parse_property_like_stmt_tail(
+        &mut self,
+        target: EvalExpr,
+        require_semicolon: bool,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
         if matches!(self.current(), TokenKind::PlusPlus | TokenKind::MinusMinus) {
             let increment = matches!(self.current(), TokenKind::PlusPlus);
             self.advance();
@@ -2966,6 +2974,31 @@ impl Parser {
                     object: *object,
                     property: *property,
                     op,
+                    value,
+                }])
+            }
+            (
+                EvalExpr::DynamicStaticPropertyGet {
+                    class_name,
+                    property,
+                },
+                op,
+            ) => {
+                let class_name = *class_name;
+                let value = match op {
+                    Some(op) => EvalExpr::Binary {
+                        op,
+                        left: Box::new(EvalExpr::DynamicStaticPropertyGet {
+                            class_name: Box::new(class_name.clone()),
+                            property: property.clone(),
+                        }),
+                        right: Box::new(value),
+                    },
+                    None => value,
+                };
+                Ok(vec![EvalStmt::DynamicStaticPropertySet {
+                    class_name,
+                    property,
                     value,
                 }])
             }
@@ -3307,6 +3340,14 @@ fn property_inc_dec_stmt(target: EvalExpr, increment: bool) -> Result<EvalStmt, 
             property: *property,
             increment,
         }),
+        EvalExpr::DynamicStaticPropertyGet {
+            class_name,
+            property,
+        } => Ok(EvalStmt::DynamicStaticPropertyIncDec {
+            class_name: *class_name,
+            property,
+            increment,
+        }),
         _ => Err(EvalParseError::UnexpectedToken),
     }
 }
@@ -3326,6 +3367,14 @@ fn property_array_append_stmt(target: EvalExpr, value: EvalExpr) -> Result<EvalS
                 value,
             })
         }
+        EvalExpr::DynamicStaticPropertyGet {
+            class_name,
+            property,
+        } => Ok(EvalStmt::DynamicStaticPropertyArrayAppend {
+            class_name: *class_name,
+            property,
+            value,
+        }),
         _ => Err(EvalParseError::UnexpectedToken),
     }
 }
@@ -3348,6 +3397,16 @@ fn property_array_set_stmt(
         EvalExpr::DynamicPropertyGet { object, property } => Ok(EvalStmt::DynamicPropertyArraySet {
             object: *object,
             property: *property,
+            index,
+            op,
+            value,
+        }),
+        EvalExpr::DynamicStaticPropertyGet {
+            class_name,
+            property,
+        } => Ok(EvalStmt::DynamicStaticPropertyArraySet {
+            class_name: *class_name,
+            property,
             index,
             op,
             value,

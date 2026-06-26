@@ -217,6 +217,62 @@ fn parse_fragment_accepts_expression_static_receiver_members() {
     );
 }
 
+/// Verifies expression static receivers support property write statement lowering.
+#[test]
+fn parse_fragment_accepts_expression_static_receiver_property_writes() {
+    let program = parse_fragment(
+        br#"(factory())::$count = 2;
+(factory())::$count += 3;
+(factory())::$items[] = 4;
+(factory())::$items[0] = 5;
+(factory())::$count++;"#,
+    )
+    .expect("fragment should parse");
+    let factory_call = || EvalExpr::Call {
+        name: "factory".to_string(),
+        args: Vec::new(),
+    };
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::DynamicStaticPropertySet {
+                class_name: factory_call(),
+                property: "count".to_string(),
+                value: EvalExpr::Const(EvalConst::Int(2)),
+            },
+            EvalStmt::DynamicStaticPropertySet {
+                class_name: factory_call(),
+                property: "count".to_string(),
+                value: EvalExpr::Binary {
+                    op: EvalBinOp::Add,
+                    left: Box::new(EvalExpr::DynamicStaticPropertyGet {
+                        class_name: Box::new(factory_call()),
+                        property: "count".to_string(),
+                    }),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(3))),
+                },
+            },
+            EvalStmt::DynamicStaticPropertyArrayAppend {
+                class_name: factory_call(),
+                property: "items".to_string(),
+                value: EvalExpr::Const(EvalConst::Int(4)),
+            },
+            EvalStmt::DynamicStaticPropertyArraySet {
+                class_name: factory_call(),
+                property: "items".to_string(),
+                index: EvalExpr::Const(EvalConst::Int(0)),
+                op: None,
+                value: EvalExpr::Const(EvalConst::Int(5)),
+            },
+            EvalStmt::DynamicStaticPropertyIncDec {
+                class_name: factory_call(),
+                property: "count".to_string(),
+                increment: true,
+            },
+        ]
+    );
+}
+
 /// Verifies runtime-valued static receivers support properties, constants, and `::class`.
 #[test]
 fn parse_fragment_accepts_dynamic_static_metadata_receiver() {
