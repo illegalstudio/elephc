@@ -73,6 +73,37 @@ return $self instanceof EvalRelativeFactoryBase
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval classes can extend runtime/AOT classes through the dynamic backing object.
+#[test]
+fn execute_program_extends_runtime_class_from_eval_declaration() {
+    let program = parse_fragment(
+        br#"class EvalRuntimeParentChild extends KnownClass {
+    public function own() { return $this->read_x() + 1; }
+}
+$box = new EvalRuntimeParentChild(9);
+echo get_class($box); echo ":";
+echo get_parent_class($box); echo ":";
+echo is_a($box, "EvalRuntimeParentChild") ? "D" : "d"; echo ":";
+echo is_a($box, "KnownClass") ? "K" : "k"; echo ":";
+echo is_a($box, "KnownInterface") ? "I" : "i"; echo ":";
+echo is_subclass_of($box, "KnownClass") ? "S" : "s"; echo ":";
+echo is_subclass_of("EvalRuntimeParentChild", "KnownClass") ? "N" : "n"; echo ":";
+echo $box->read_x(); echo ":";
+return $box->own();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "EvalRuntimeParentChild:KnownClass:D:K:I:S:N:9:"
+    );
+    assert_eq!(values.get(result), FakeValue::Int(10));
+}
+
 /// Verifies eval classes cannot directly implement PHP's special Throwable contract.
 #[test]
 fn execute_program_rejects_eval_class_implementing_throwable_contracts() {

@@ -7639,6 +7639,43 @@ echo 7 instanceof MissingEvalInstance ? "bad" : "S";');
     assert_eq!(out.stdout, "APICBFDTXOS");
 }
 
+/// Verifies eval-declared classes can extend generated/AOT classes at runtime.
+#[test]
+fn test_eval_declared_class_extends_aot_parent() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalRuntimeParentBase {
+    public int $x;
+    public function __construct($x) { $this->x = $x; }
+    public function read() { return $this->x; }
+}
+eval('class EvalRuntimeParentChild extends EvalRuntimeParentBase {
+    public function own() { return $this->read() + 1; }
+}
+$box = new EvalRuntimeParentChild(6);
+echo get_class($box); echo ":";
+echo get_parent_class($box); echo ":";
+echo is_a($box, "EvalRuntimeParentChild") ? "D" : "d"; echo ":";
+echo is_a($box, "EvalRuntimeParentBase") ? "P" : "p"; echo ":";
+echo is_subclass_of($box, "EvalRuntimeParentBase") ? "S" : "s"; echo ":";
+echo is_subclass_of("EvalRuntimeParentChild", "EvalRuntimeParentBase") ? "N" : "n"; echo ":";
+echo $box->read(); echo ":";
+echo $box->own(); echo ":";
+$parent = (new ReflectionClass("EvalRuntimeParentChild"))->getParentClass();
+echo $parent ? $parent->getName() : "missing";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalRuntimeParentChild:EvalRuntimeParentBase:D:P:S:N:6:7:EvalRuntimeParentBase"
+    );
+}
+
 /// Verifies eval-declared class inheritance uses dynamic methods and metadata.
 #[test]
 fn test_eval_declared_class_inherits_methods_and_metadata() {

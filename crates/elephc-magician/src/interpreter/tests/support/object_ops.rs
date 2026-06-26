@@ -1193,7 +1193,9 @@ impl FakeOps {
             return Ok(None);
         }
         match method_name.to_ascii_lowercase().as_str() {
-            "run" => Ok(Some(EVAL_REFLECTION_MEMBER_FLAG_PUBLIC)),
+            "answer" | "add_x" | "add2_x" | "read_x" | "run" => {
+                Ok(Some(EVAL_REFLECTION_MEMBER_FLAG_PUBLIC))
+            }
             "helper" => Ok(Some(
                 EVAL_REFLECTION_MEMBER_FLAG_STATIC | EVAL_REFLECTION_MEMBER_FLAG_PROTECTED,
             )),
@@ -1213,7 +1215,9 @@ impl FakeOps {
             return Ok(None);
         }
         match method_name.to_ascii_lowercase().as_str() {
-            "run" | "helper" | "locked" => Ok(Some("KnownClass".to_string())),
+            "answer" | "add_x" | "add2_x" | "read_x" | "run" | "helper" | "locked" => {
+                Ok(Some("KnownClass".to_string()))
+            }
             _ => Ok(None),
         }
     }

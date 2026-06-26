@@ -524,9 +524,18 @@ pub(in crate::interpreter) fn dynamic_object_is_a(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<bool>, EvalStatus> {
     let identity = values.object_identity(object)?;
-    Ok(context
-        .dynamic_object_class(identity)
-        .map(|class| context.class_is_a(class.name(), target_class, exclude_self)))
+    let Some(class) = context.dynamic_object_class(identity) else {
+        return Ok(None);
+    };
+    if context.class_is_a(class.name(), target_class, exclude_self) {
+        return Ok(Some(true));
+    }
+    if context.class_native_parent_name(class.name()).is_some() {
+        return values
+            .object_is_a(object, target_class, exclude_self)
+            .map(Some);
+    }
+    Ok(Some(false))
 }
 
 /// Evaluates PHP's `isset(...)` language construct over eval-visible values.
