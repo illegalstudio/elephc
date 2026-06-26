@@ -2307,6 +2307,11 @@ pub enum EvalExpr {
         method: String,
         args: Vec<EvalCallArg>,
     },
+    NullsafeMethodCall {
+        object: Box<EvalExpr>,
+        method: String,
+        args: Vec<EvalCallArg>,
+    },
     Magic(EvalMagicConst),
     NewObject {
         class_name: String,
@@ -2335,6 +2340,10 @@ pub enum EvalExpr {
     NullCoalesce {
         value: Box<EvalExpr>,
         default: Box<EvalExpr>,
+    },
+    NullsafePropertyGet {
+        object: Box<EvalExpr>,
+        property: String,
     },
     PropertyGet {
         object: Box<EvalExpr>,

@@ -245,7 +245,11 @@ impl<'a> Lexer<'a> {
             }
             '?' => {
                 self.bump_char();
-                if self.peek_char() == Some('?') {
+                if self.peek_char() == Some('-') && self.peek_next_char() == Some('>') {
+                    self.bump_char();
+                    self.bump_char();
+                    Ok(TokenKind::QuestionArrow)
+                } else if self.peek_char() == Some('?') {
                     self.bump_char();
                     Ok(TokenKind::QuestionQuestion)
                 } else {

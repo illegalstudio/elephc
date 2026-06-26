@@ -135,6 +135,31 @@ fn parse_fragment_accepts_method_call_source() {
         }))]
     );
 }
+/// Verifies nullsafe object property reads parse as dedicated postfix EvalIR expressions.
+#[test]
+fn parse_fragment_accepts_nullsafe_property_read_source() {
+    let program = parse_fragment(br#"return $this?->x;"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::NullsafePropertyGet {
+            object: Box::new(EvalExpr::LoadVar("this".to_string())),
+            property: "x".to_string(),
+        }))]
+    );
+}
+/// Verifies nullsafe object method calls parse as dedicated postfix EvalIR call expressions.
+#[test]
+fn parse_fragment_accepts_nullsafe_method_call_source() {
+    let program = parse_fragment(br#"return $this?->Answer();"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::NullsafeMethodCall {
+            object: Box::new(EvalExpr::LoadVar("this".to_string())),
+            method: "Answer".to_string(),
+            args: Vec::new(),
+        }))]
+    );
+}
 /// Verifies object construction parses as a named EvalIR expression.
 #[test]
 fn parse_fragment_accepts_new_object_source() {

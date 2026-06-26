@@ -3124,6 +3124,12 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
                     .iter()
                     .any(|arg| eval_expr_uses_this_property(arg.value(), property_name))
         }
+        EvalExpr::NullsafeMethodCall { object, args, .. } => {
+            eval_expr_uses_this_property(object, property_name)
+                || args
+                    .iter()
+                    .any(|arg| eval_expr_uses_this_property(arg.value(), property_name))
+        }
         EvalExpr::NewAnonymousClass { args, .. } => args
             .iter()
             .any(|arg| eval_expr_uses_this_property(arg.value(), property_name)),
@@ -3132,6 +3138,10 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
                 || eval_expr_uses_this_property(default, property_name)
         }
         EvalExpr::PropertyGet { object, property } => {
+            eval_is_this_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+        }
+        EvalExpr::NullsafePropertyGet { object, property } => {
             eval_is_this_property(object, property, property_name)
                 || eval_expr_uses_this_property(object, property_name)
         }

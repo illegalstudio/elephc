@@ -139,6 +139,24 @@ pub(in crate::interpreter) fn eval_expr(
                 values,
             )
         }
+        EvalExpr::NullsafeMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            let object = eval_expr(object, context, scope, values)?;
+            if values.is_null(object)? {
+                return values.null();
+            }
+            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
+            eval_method_call_result_with_evaluated_args(
+                object,
+                method,
+                evaluated_args,
+                context,
+                values,
+            )
+        }
         EvalExpr::NullCoalesce { value, default } => {
             let value = eval_expr(value, context, scope, values)?;
             if values.is_null(value)? {
@@ -146,6 +164,13 @@ pub(in crate::interpreter) fn eval_expr(
             } else {
                 Ok(value)
             }
+        }
+        EvalExpr::NullsafePropertyGet { object, property } => {
+            let object = eval_expr(object, context, scope, values)?;
+            if values.is_null(object)? {
+                return values.null();
+            }
+            eval_property_get_result(object, property, context, values)
         }
         EvalExpr::PropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
