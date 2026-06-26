@@ -8818,6 +8818,40 @@ echo call_user_func_array($box, ["right" => "J", "left" => "I"]);');
     );
 }
 
+/// Verifies eval call_user_func rejects non-invokable objects with PHP's TypeError.
+#[test]
+fn test_eval_call_user_func_rejects_non_invokable_object() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalPlainCallbackError {}
+$plain = new EvalPlainCallbackError();
+try {
+    call_user_func($plain);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    call_user_func_array($plain, []);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, no array or string given|\
+TypeError:call_user_func_array(): Argument #1 ($callback) must be a valid callback, no array or string given"
+    );
+}
+
 /// Verifies eval object method fallback dispatches missing and inaccessible methods through `__call`.
 #[test]
 fn test_eval_declared_magic_call_method_fallback() {

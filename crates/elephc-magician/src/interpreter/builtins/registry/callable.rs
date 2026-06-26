@@ -50,7 +50,7 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_callable(callback, context, values)?;
+    let callback = eval_call_user_func_callback(callback, "call_user_func_array", context, values)?;
     if !values.is_array_like(arg_array)? {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -67,8 +67,31 @@ pub(in crate::interpreter) fn eval_call_user_func_with_values(
     let Some((callback, callback_args)) = evaluated_args.split_first() else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let callback = eval_callable(*callback, context, values)?;
+    let callback = eval_call_user_func_callback(*callback, "call_user_func", context, values)?;
     eval_evaluated_callable_with_values(&callback, callback_args.to_vec(), context, values)
+}
+
+/// Normalizes a `call_user_func*` callback and maps non-invokable objects to PHP's TypeError.
+fn eval_call_user_func_callback(
+    callback: RuntimeCellHandle,
+    function_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvaluatedCallable, EvalStatus> {
+    match eval_callable(callback, context, values) {
+        Ok(callback) => Ok(callback),
+        Err(EvalStatus::UnsupportedConstruct) if values.type_tag(callback)? == EVAL_TAG_OBJECT => {
+            eval_throw_type_error(
+                &format!(
+                    "{}(): Argument #1 ($callback) must be a valid callback, no array or string given",
+                    function_name
+                ),
+                context,
+                values,
+            )
+        }
+        Err(status) => Err(status),
+    }
 }
 
 /// Normalizes one PHP callback value for eval dynamic callable dispatch.

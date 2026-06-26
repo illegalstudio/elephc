@@ -247,6 +247,41 @@ return call_user_func_array($box, ["right" => "J", "left" => "I"]);"#,
     assert_eq!(values.get(result), FakeValue::String("box:IJ".to_string()));
 }
 
+/// Verifies call_user_func rejects non-invokable eval objects with PHP's TypeError.
+#[test]
+fn execute_program_call_user_func_rejects_non_invokable_eval_object() {
+    let program = parse_fragment(
+        br#"class EvalPlainCallbackError {}
+$plain = new EvalPlainCallbackError();
+try {
+    call_user_func($plain);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    call_user_func_array($plain, []);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, no array or string given|\
+TypeError:call_user_func_array(): Argument #1 ($callback) must be a valid callback, no array or string given"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies object-method callable arrays preserve eval named-argument binding.
 #[test]
 fn execute_program_object_method_callable_array_binds_eval_named_args() {
