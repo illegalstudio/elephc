@@ -9762,13 +9762,22 @@ echo empty($evalClass::$empty) ? "eval-empty" : "bad"; echo "|";
 echo empty($evalClass::$value) ? "bad" : "eval-value"; echo "|";
 echo isset($evalClass::$missing) ? "bad" : "eval-missing"; echo "|";
 echo empty($evalClass::$missing) ? "eval-missing-empty" : "bad"; echo "|";
+$propName = "value";
+$emptyName = "empty";
+$missingName = "missing";
+echo isset($evalClass::${$propName}) ? "eval-name-set" : "bad"; echo "|";
+echo empty($evalClass::${$emptyName}) ? "eval-name-empty" : "bad"; echo "|";
+echo empty($evalClass::${$missingName}) ? "eval-name-missing-empty" : "bad"; echo "|";
 $aotClass = "EvalAotStaticProbe";
 echo isset($aotClass::$value) ? "aot-set" : "bad"; echo "|";
 echo isset($aotClass::$nullish) ? "bad" : "aot-null"; echo "|";
 echo empty($aotClass::$empty) ? "aot-empty" : "bad"; echo "|";
 echo empty($aotClass::$value) ? "bad" : "aot-value"; echo "|";
 echo isset($aotClass::$missing) ? "bad" : "aot-missing"; echo "|";
-echo empty($aotClass::$missing) ? "aot-missing-empty" : "bad";');
+echo empty($aotClass::$missing) ? "aot-missing-empty" : "bad"; echo "|";
+echo isset($aotClass::${$propName}) ? "aot-name-set" : "bad"; echo "|";
+echo empty($aotClass::${$emptyName}) ? "aot-name-empty" : "bad"; echo "|";
+echo empty($aotClass::${$missingName}) ? "aot-name-missing-empty" : "bad";');
 "#,
     );
     assert!(
@@ -9778,7 +9787,7 @@ echo empty($aotClass::$missing) ? "aot-missing-empty" : "bad";');
     );
     assert_eq!(
         out.stdout,
-        "nominal|eval-set|eval-null|eval-empty|eval-value|eval-missing|eval-missing-empty|aot-set|aot-null|aot-empty|aot-value|aot-missing|aot-missing-empty"
+        "nominal|eval-set|eval-null|eval-empty|eval-value|eval-missing|eval-missing-empty|eval-name-set|eval-name-empty|eval-name-missing-empty|aot-set|aot-null|aot-empty|aot-value|aot-missing|aot-missing-empty|aot-name-set|aot-name-empty|aot-name-missing-empty"
     );
 }
 
