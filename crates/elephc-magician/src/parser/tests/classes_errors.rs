@@ -128,6 +128,22 @@ fn parse_fragment_rejects_invalid_type_atom_forms() {
     }
 }
 
+/// Verifies eval rejects PHP's reserved `class` class-constant name.
+#[test]
+fn parse_fragment_rejects_reserved_class_constant_name() {
+    for source in [
+        b"class DynEvalBadConstName { const class = 1; }" as &[u8],
+        b"interface DynEvalBadIfaceConstName { const class = 1; }",
+        b"trait DynEvalBadTraitConstName { const class = 1; }",
+        b"enum DynEvalBadEnumConstName { const class = 1; }",
+    ] {
+        assert_eq!(
+            parse_fragment(source),
+            Err(EvalParseError::UnsupportedConstruct)
+        );
+    }
+}
+
 /// Verifies class attributes lower to eval class metadata with supported literal args.
 #[test]
 fn parse_fragment_accepts_class_attribute_metadata() {

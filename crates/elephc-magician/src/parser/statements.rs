@@ -763,6 +763,9 @@ impl Parser {
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
+        if ident_eq(name, "class") {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::Equal)?;

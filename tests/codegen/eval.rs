@@ -11124,6 +11124,39 @@ echo EvalConstChild::hidden();');
     assert_eq!(out.stdout, "2:7:9:2:5");
 }
 
+/// Verifies eval rejects PHP's reserved `class` class-constant name.
+#[test]
+fn test_eval_declared_reserved_class_constant_name_fails() {
+    for source in [
+        r#"<?php
+eval('class EvalBadConstName {
+    const class = 1;
+}');
+"#,
+        r#"<?php
+eval('interface EvalBadIfaceConstName {
+    const class = 1;
+}');
+"#,
+        r#"<?php
+eval('trait EvalBadTraitConstName {
+    const class = 1;
+}');
+"#,
+        r#"<?php
+eval('enum EvalBadEnumConstName {
+    const class = 1;
+}');
+"#,
+    ] {
+        let err = compile_and_run_expect_failure(source);
+        assert!(
+            err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+            "stderr did not contain eval unsupported-construct diagnostic: {err}"
+        );
+    }
+}
+
 /// Verifies eval-declared final class constants cannot be redeclared.
 #[test]
 fn test_eval_declared_final_class_constant_override_fails() {
