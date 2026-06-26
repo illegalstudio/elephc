@@ -2749,6 +2749,20 @@ impl Parser {
                         property: *property,
                     }
                 }
+                EvalExpr::StaticPropertyGet {
+                    class_name,
+                    property,
+                } => EvalStmt::UnsetStaticProperty {
+                    class_name,
+                    property,
+                },
+                EvalExpr::DynamicStaticPropertyGet {
+                    class_name,
+                    property,
+                } => EvalStmt::UnsetDynamicStaticProperty {
+                    class_name: *class_name,
+                    property,
+                },
                 _ => return Err(EvalParseError::ExpectedVariable),
             };
             statements.push(stmt);
@@ -3087,6 +3101,10 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
                 || eval_expr_uses_this_property(object, property_name)
                 || eval_expr_uses_this_property(property, property_name)
         }
+        EvalStmt::UnsetDynamicStaticProperty { class_name, .. } => {
+            eval_expr_uses_this_property(class_name, property_name)
+        }
+        EvalStmt::UnsetStaticProperty { .. } => false,
         EvalStmt::DynamicPropertySet {
             object,
             property,

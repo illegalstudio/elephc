@@ -9371,6 +9371,55 @@ echo empty($aotClass::$missing) ? "aot-missing-empty" : "bad";');
     );
 }
 
+/// Verifies eval static property unsets throw PHP's catchable Error.
+#[test]
+fn test_eval_static_property_unset_throws_error() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotStaticUnset {
+    public static $value = "aot";
+}
+eval('class EvalDynamicStaticUnset {
+    public static $value = "eval";
+}
+try {
+    unset(EvalDynamicStaticUnset::$value);
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+$class = "EvalDynamicStaticUnset";
+try {
+    unset($class::$value);
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+$aot = "EvalAotStaticUnset";
+try {
+    unset($aot::$value);
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    unset(EvalMissingStaticUnset::$value);
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Error:Attempt to unset static property EvalDynamicStaticUnset::$value|Error:Attempt to unset static property EvalDynamicStaticUnset::$value|Error:Attempt to unset static property EvalAotStaticUnset::$value|Error:Class \"EvalMissingStaticUnset\" not found"
+    );
+}
+
 /// Verifies eval invokable objects dispatch through variable and callback call paths.
 #[test]
 fn test_eval_declared_invokable_object_dynamic_callables() {
