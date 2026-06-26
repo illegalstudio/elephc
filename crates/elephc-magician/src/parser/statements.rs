@@ -4010,6 +4010,9 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
         | EvalExpr::Magic(_)
         | EvalExpr::NamespacedConstFetch { .. }
         | EvalExpr::StaticPropertyGet { .. } => false,
+        EvalExpr::StaticMethodCallable { method, .. } => {
+            eval_expr_uses_this_property(method, property_name)
+        }
         EvalExpr::Include { path, .. }
         | EvalExpr::Cast { expr: path, .. }
         | EvalExpr::Clone(path)

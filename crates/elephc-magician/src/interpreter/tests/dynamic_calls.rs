@@ -277,6 +277,44 @@ return EvalFirstClassCallableChild::relay("ok");"#,
     );
 }
 
+/// Verifies first-class static callables preserve late-static forwarding metadata.
+#[test]
+fn execute_program_first_class_static_callables_preserve_called_class() {
+    let program = parse_fragment(
+        br#"class EvalFirstClassStaticForwardBase {
+    public static function who() {
+        return static::tag();
+    }
+    public static function tag() {
+        return "base";
+    }
+    public static function relaySelf() {
+        $fn = self::who(...);
+        return $fn();
+    }
+}
+class EvalFirstClassStaticForwardChild extends EvalFirstClassStaticForwardBase {
+    public static function relayParent() {
+        $fn = parent::who(...);
+        return $fn();
+    }
+    public static function tag() {
+        return "child";
+    }
+}
+echo EvalFirstClassStaticForwardChild::relayParent(); echo ":";
+return EvalFirstClassStaticForwardChild::relaySelf();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "child:");
+    assert_eq!(values.get(result), FakeValue::String("child".to_string()));
+}
+
 /// Verifies invokable eval objects dispatch through variable and callback call paths.
 #[test]
 fn execute_program_invokes_eval_object_callables() {

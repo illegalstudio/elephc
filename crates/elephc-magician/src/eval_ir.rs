@@ -2427,6 +2427,10 @@ pub enum EvalExpr {
         name: String,
         fallback_name: Option<String>,
     },
+    StaticMethodCallable {
+        class_name: String,
+        method: Box<EvalExpr>,
+    },
     DynamicCall {
         callee: Box<EvalExpr>,
         args: Vec<EvalCallArg>,

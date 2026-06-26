@@ -42,6 +42,9 @@ pub(in crate::interpreter) fn eval_expr(
             name,
             fallback_name,
         } => eval_function_callable_expr(name, fallback_name.as_deref(), context, values),
+        EvalExpr::StaticMethodCallable { class_name, method } => {
+            eval_static_method_callable_expr(class_name, method, context, scope, values)
+        }
         EvalExpr::DynamicCall { callee, args } => {
             eval_dynamic_call(callee, args, context, scope, values)
         }
@@ -786,6 +789,32 @@ fn eval_function_callable_expr(
         context,
         values,
     )
+}
+
+/// Materializes a first-class static method callable while retaining late-static metadata.
+fn eval_static_method_callable_expr(
+    class_name: &str,
+    method: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let receiver = resolve_eval_static_method_receiver(class_name, context)?;
+    let method = eval_dynamic_member_name(method, context, scope, values)?;
+    let mut array = values.array_new(2)?;
+    let zero = values.int(0)?;
+    let one = values.int(1)?;
+    let class_value = values.string(&receiver.dispatch_class)?;
+    let method_value = values.string(&method)?;
+    array = values.array_set(array, zero, class_value)?;
+    array = values.array_set(array, one, method_value)?;
+    context.register_eval_static_callable(
+        array,
+        &receiver.dispatch_class,
+        &method,
+        &receiver.called_class,
+    );
+    Ok(array)
 }
 
 /// Evaluates a variable or expression callable and dispatches it with source-order arguments.

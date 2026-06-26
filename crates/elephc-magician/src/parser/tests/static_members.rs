@@ -64,19 +64,17 @@ fn parse_fragment_accepts_static_method_call_expression() {
     );
 }
 
-/// Verifies first-class static method syntax lowers to a PHP callable array.
+/// Verifies first-class static method syntax retains static callable metadata.
 #[test]
 fn parse_fragment_accepts_first_class_static_method_callable_source() {
     let program =
         parse_fragment(br#"return EvalStaticBox::Read(...);"#).expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::Return(Some(EvalExpr::Array(vec![
-            EvalArrayElement::Value(EvalExpr::ClassNameFetch {
-                class_name: "EvalStaticBox".to_string(),
-            }),
-            EvalArrayElement::Value(EvalExpr::Const(EvalConst::String("Read".to_string()))),
-        ])))]
+        &[EvalStmt::Return(Some(EvalExpr::StaticMethodCallable {
+            class_name: "EvalStaticBox".to_string(),
+            method: Box::new(EvalExpr::Const(EvalConst::String("Read".to_string()))),
+        }))]
     );
 }
 

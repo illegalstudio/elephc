@@ -56,6 +56,7 @@ pub(super) enum EvaluatedCallable {
     StaticMethod {
         class_name: String,
         method: String,
+        called_class: Option<String>,
     },
 }
 

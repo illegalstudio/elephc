@@ -895,7 +895,9 @@ fn eval_callable_probe_exists(
         EvaluatedCallable::ObjectMethod { object, method } => {
             eval_object_method_callable_probe(*object, method, context, values)
         }
-        EvaluatedCallable::StaticMethod { class_name, method } => {
+        EvaluatedCallable::StaticMethod {
+            class_name, method, ..
+        } => {
             eval_static_method_callable_probe(class_name, method, context, values)
         }
     }

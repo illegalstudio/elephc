@@ -105,7 +105,7 @@ pub(in crate::interpreter) fn eval_callable(
         return eval_object_callable(callback, context, values);
     }
     if values.is_array_like(callback)? {
-        return eval_array_callable(callback, values);
+        return eval_array_callable(callback, context, values);
     }
     eval_string_callable(callback, values)
 }
@@ -132,6 +132,7 @@ pub(in crate::interpreter) fn eval_object_callable(
 /// Normalizes one two-element object-method or static-method callable array.
 pub(in crate::interpreter) fn eval_array_callable(
     callback: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvaluatedCallable, EvalStatus> {
     if values.array_len(callback)? != 2 {
@@ -151,7 +152,14 @@ pub(in crate::interpreter) fn eval_array_callable(
         EVAL_TAG_STRING => {
             let class_name = String::from_utf8(values.string_bytes(receiver)?)
                 .map_err(|_| EvalStatus::RuntimeFatal)?;
-            Ok(EvaluatedCallable::StaticMethod { class_name, method })
+            let called_class = context
+                .eval_static_callable_called_class(callback, &class_name, &method)
+                .map(str::to_string);
+            Ok(EvaluatedCallable::StaticMethod {
+                class_name,
+                method,
+                called_class,
+            })
         }
         _ => Err(EvalStatus::UnsupportedConstruct),
     }
@@ -171,6 +179,7 @@ pub(in crate::interpreter) fn eval_string_callable(
         return Ok(EvaluatedCallable::StaticMethod {
             class_name: class_name.trim_start_matches('\\').to_string(),
             method: method.to_string(),
+            called_class: None,
         });
     }
     Ok(EvaluatedCallable::Named(
@@ -214,13 +223,27 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
         EvaluatedCallable::ObjectMethod { object, method } => {
             eval_method_call_result(*object, method, evaluated_args, context, values)
         }
-        EvaluatedCallable::StaticMethod { class_name, method } => eval_static_method_call_result(
+        EvaluatedCallable::StaticMethod {
             class_name,
             method,
-            positional_args(evaluated_args),
-            context,
-            values,
-        ),
+            called_class,
+        } => match called_class {
+            Some(called_class) => eval_static_method_call_result_with_called_class(
+                class_name,
+                called_class,
+                method,
+                positional_args(evaluated_args),
+                context,
+                values,
+            ),
+            None => eval_static_method_call_result(
+                class_name,
+                method,
+                positional_args(evaluated_args),
+                context,
+                values,
+            ),
+        },
     }
 }
 
@@ -247,9 +270,23 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                 values,
             )
         }
-        EvaluatedCallable::StaticMethod { class_name, method } => {
-            eval_static_method_call_result(class_name, method, evaluated_args, context, values)
-        }
+        EvaluatedCallable::StaticMethod {
+            class_name,
+            method,
+            called_class,
+        } => match called_class {
+            Some(called_class) => eval_static_method_call_result_with_called_class(
+                class_name,
+                called_class,
+                method,
+                evaluated_args,
+                context,
+                values,
+            ),
+            None => {
+                eval_static_method_call_result(class_name, method, evaluated_args, context, values)
+            }
+        },
     }
 }
 
