@@ -1243,6 +1243,7 @@ fn visit_static_var_declarations(
             | EvalStmt::UnsetArrayElement { .. }
             | EvalStmt::UnsetDynamicProperty { .. }
             | EvalStmt::UnsetDynamicStaticProperty { .. }
+            | EvalStmt::UnsetDynamicStaticPropertyName { .. }
             | EvalStmt::UnsetProperty { .. }
             | EvalStmt::UnsetStaticProperty { .. }
             | EvalStmt::UnsetVar { .. } => {}

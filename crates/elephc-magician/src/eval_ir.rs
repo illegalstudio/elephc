@@ -321,6 +321,10 @@ pub enum EvalStmt {
         class_name: EvalExpr,
         property: String,
     },
+    UnsetDynamicStaticPropertyName {
+        class_name: EvalExpr,
+        property: EvalExpr,
+    },
     UnsetVar {
         name: String,
     },
