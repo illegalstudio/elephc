@@ -11591,6 +11591,62 @@ try {
     );
 }
 
+/// Verifies eval ReflectionProperty construction errors are catchable ReflectionException objects.
+#[test]
+fn test_eval_reflection_property_constructor_throws_reflection_exceptions() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectMissingPropertyTarget {
+    public $known = 1;
+}
+eval('
+try {
+    new ReflectionProperty("EvalAotReflectMissingPropertyTarget", "missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+class EvalDynReflectMissingPropertyTarget {}
+$object = new EvalDynReflectMissingPropertyTarget();
+$object->dynamic = 1;
+try {
+    new ReflectionProperty("EvalDynReflectMissingPropertyTarget", "missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionProperty("EvalDynReflectMissingPropertyClass", "value");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionProperty($object, "missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+echo (new ReflectionProperty($object, "dynamic"))->getName() . ":";
+echo (new ReflectionProperty("EvalAotReflectMissingPropertyTarget", "known"))->getName();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "ReflectionException:Property EvalAotReflectMissingPropertyTarget::$missing does not exist|Property EvalDynReflectMissingPropertyTarget::$missing does not exist|Class \"EvalDynReflectMissingPropertyClass\" does not exist|Property EvalDynReflectMissingPropertyTarget::$missing does not exist|dynamic:known"
+    );
+}
+
 /// Verifies eval-declared final properties cannot be redeclared by subclasses.
 #[test]
 fn test_eval_declared_final_property_override_fails() {

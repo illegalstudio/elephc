@@ -1815,6 +1815,56 @@ return true;"#,
     assert_eq!(values.get(result.expect("execute eval ir")), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionProperty construction throws catchable PHP reflection errors.
+#[test]
+fn execute_program_reflection_property_constructor_throws_reflection_exceptions() {
+    let program = parse_fragment(
+        br#"class EvalReflectMissingPropertyTarget {}
+$object = new EvalReflectMissingPropertyTarget();
+$object->dynamic = 1;
+try {
+    new ReflectionProperty("EvalReflectMissingPropertyTarget", "missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionProperty("EvalReflectMissingPropertyClass", "value");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionProperty($object, "missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+$property = new ReflectionProperty($object, "dynamic");
+echo $property->getName();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values);
+    assert!(
+        result.is_ok(),
+        "execute eval ir failed after output {:?}",
+        values.output
+    );
+
+    assert_eq!(
+        values.output,
+        "ReflectionException:Property EvalReflectMissingPropertyTarget::$missing does not exist|Class \"EvalReflectMissingPropertyClass\" does not exist|Property EvalReflectMissingPropertyTarget::$missing does not exist|dynamic"
+    );
+    assert_eq!(values.get(result.expect("execute eval ir")), FakeValue::Bool(true));
+}
+
 /// Verifies eval member and enum-case reflectors expose their declaring class.
 #[test]
 fn execute_program_reflects_eval_declaring_class_metadata() {

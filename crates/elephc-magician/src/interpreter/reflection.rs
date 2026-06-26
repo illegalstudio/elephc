@@ -3411,34 +3411,83 @@ fn eval_reflection_property_new(
         return eval_reflection_property_new_for_object(args[0], &property_name, context, values);
     }
     let class_name = eval_reflection_string_arg(args[0], values)?;
-    if !eval_reflection_class_like_exists(&class_name, context) {
-        if let Some(property) = eval_reflection_aot_property_metadata_if_exists(
-            &class_name,
-            &property_name,
+    eval_reflection_property_object_result_or_throw(&class_name, &property_name, context, values)
+}
+
+/// Builds a `ReflectionProperty` object when the reflected property exists.
+fn eval_reflection_property_object_result_if_exists(
+    class_name: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let reflected_name = context
+        .resolve_class_like_name(class_name)
+        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    if !eval_reflection_class_like_exists(&reflected_name, context) {
+        let Some(property) = eval_reflection_aot_property_metadata_if_exists(
+            &reflected_name,
+            property_name,
             context,
             values,
-        )? {
-            return eval_reflection_member_object_result(
-                EVAL_REFLECTION_OWNER_PROPERTY,
-                &property_name,
-                &property,
-                context,
-                values,
-            )
-            .map(Some);
-        }
-        return Ok(None);
+        )?
+        else {
+            return Ok(None);
+        };
+        return eval_reflection_member_object_result(
+            EVAL_REFLECTION_OWNER_PROPERTY,
+            property_name,
+            &property,
+            context,
+            values,
+        )
+        .map(Some);
     }
-    let property = eval_reflection_property_metadata(&class_name, &property_name, context)
-        .ok_or(EvalStatus::RuntimeFatal)?;
+    let Some(property) = eval_reflection_property_metadata(&reflected_name, property_name, context)
+    else {
+        return Ok(None);
+    };
     eval_reflection_member_object_result(
         EVAL_REFLECTION_OWNER_PROPERTY,
-        &property_name,
+        property_name,
         &property,
         context,
         values,
     )
     .map(Some)
+}
+
+/// Builds a `ReflectionProperty` object or throws PHP's catchable reflection error.
+fn eval_reflection_property_object_result_or_throw(
+    class_name: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if let Some(result) = eval_reflection_property_object_result_if_exists(
+        class_name,
+        property_name,
+        context,
+        values,
+    )? {
+        return Ok(Some(result));
+    }
+    let reflected_name = context
+        .resolve_class_like_name(class_name)
+        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    if !eval_reflection_class_like_or_runtime_exists(&reflected_name, context, values)? {
+        return eval_throw_reflection_exception(
+            &format!("Class \"{}\" does not exist", reflected_name),
+            context,
+            values,
+        );
+    }
+    let message = eval_reflection_missing_member_message(
+        EVAL_REFLECTION_OWNER_PROPERTY,
+        &reflected_name,
+        property_name,
+    );
+    eval_throw_reflection_exception(&message, context, values)
 }
 
 /// Builds a ReflectionProperty from an object argument, including dynamic properties.
@@ -3460,7 +3509,12 @@ fn eval_reflection_property_new_for_object(
         .map(Some);
     }
     if !eval_reflection_object_dynamic_property_exists(object, property_name, values)? {
-        return Ok(None);
+        let message = eval_reflection_missing_member_message(
+            EVAL_REFLECTION_OWNER_PROPERTY,
+            &class_name,
+            property_name,
+        );
+        return eval_throw_reflection_exception(&message, context, values);
     }
     let property = eval_reflection_dynamic_property_metadata(&class_name);
     eval_reflection_member_object_result(
