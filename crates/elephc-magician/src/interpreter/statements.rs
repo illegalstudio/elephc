@@ -2473,6 +2473,7 @@ fn validate_eval_class_modifiers(
             return Err(EvalStatus::RuntimeFatal);
         }
         validate_method_parent_override(class, method, context)?;
+        validate_eval_override_attribute(class, method, context)?;
     }
     Ok(())
 }
@@ -2483,6 +2484,67 @@ fn eval_class_has_allow_dynamic_properties_attribute(class: &EvalClass) -> bool 
         .attributes()
         .iter()
         .any(|attribute| attribute.name().eq_ignore_ascii_case("AllowDynamicProperties"))
+}
+
+/// Validates PHP's global `#[Override]` marker on one eval-declared method.
+fn validate_eval_override_attribute(
+    class: &EvalClass,
+    method: &EvalClassMethod,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    if !eval_method_has_global_builtin_attribute(method, "Override") {
+        return Ok(());
+    }
+    if eval_method_overrides_parent(class, method, context)
+        || eval_method_implements_interface(class, method, context)
+    {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Returns whether a method has an unqualified global builtin marker attribute.
+fn eval_method_has_global_builtin_attribute(method: &EvalClassMethod, builtin: &str) -> bool {
+    method
+        .attributes()
+        .iter()
+        .any(|attribute| attribute.name().eq_ignore_ascii_case(builtin))
+}
+
+/// Returns whether one method overrides a non-private parent method.
+fn eval_method_overrides_parent(
+    class: &EvalClass,
+    method: &EvalClassMethod,
+    context: &ElephcEvalContext,
+) -> bool {
+    class
+        .parent()
+        .and_then(|parent| context.class_method(parent, method.name()))
+        .is_some_and(|(_, parent_method)| {
+            parent_method.visibility() != EvalVisibility::Private
+                && parent_method.is_static() == method.is_static()
+        })
+}
+
+/// Returns whether one method implements a direct or inherited interface method.
+fn eval_method_implements_interface(
+    class: &EvalClass,
+    method: &EvalClassMethod,
+    context: &ElephcEvalContext,
+) -> bool {
+    pending_class_interface_names(class, context)
+        .iter()
+        .filter(|interface| context.has_interface(interface))
+        .any(|interface| {
+            context
+                .interface_method_requirements_with_owners(interface)
+                .into_iter()
+                .any(|(_, requirement)| {
+                    requirement.name().eq_ignore_ascii_case(method.name())
+                        && requirement.is_static() == method.is_static()
+                })
+        })
 }
 
 /// Validates PHP magic-method contracts for one eval class-like method list.

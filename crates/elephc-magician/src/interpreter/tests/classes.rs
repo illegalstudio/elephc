@@ -543,6 +543,48 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval validates PHP's global `#[Override]` method marker.
+#[test]
+fn execute_program_validates_override_attribute_targets() {
+    let valid = parse_fragment(
+        br#"interface EvalOverrideContract {
+    public function label(): string;
+}
+class EvalOverrideBase {
+    public function name(): string { return "base"; }
+}
+class EvalOverrideChild extends EvalOverrideBase implements EvalOverrideContract {
+    #[\Override]
+    public function name(): string { return "child"; }
+    #[Override]
+    public function label(): string { return "contract"; }
+}
+$box = new EvalOverrideChild();
+echo $box->name() . ":" . $box->label();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&valid, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "child:contract");
+
+    let invalid = parse_fragment(
+        br#"class EvalOverrideMissing {
+    #[\Override]
+    public function missing(): string { return "bad"; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&invalid, &mut scope, &mut values)
+        .expect_err("override marker without target should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies readonly classes leave static properties mutable like ordinary classes.
 #[test]
 fn execute_program_allows_readonly_class_static_property() {

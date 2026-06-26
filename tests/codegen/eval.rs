@@ -10781,6 +10781,43 @@ fn test_eval_rejects_invalid_magic_method_contracts() {
     }
 }
 
+/// Verifies eval-declared `#[Override]` methods require a parent or interface target.
+#[test]
+fn test_eval_declared_override_attribute_validation() {
+    let out = compile_and_run(
+        r#"<?php
+eval('interface EvalOverrideContract {
+    public function label(): string;
+}
+class EvalOverrideBase {
+    public function name(): string { return "base"; }
+}
+class EvalOverrideChild extends EvalOverrideBase implements EvalOverrideContract {
+    #[\Override]
+    public function name(): string { return "child"; }
+    #[Override]
+    public function label(): string { return "contract"; }
+}
+$box = new EvalOverrideChild();
+echo $box->name() . ":" . $box->label();');
+"#,
+    );
+    assert_eq!(out, "child:contract");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalOverrideMissing {
+    #[\Override]
+    public function missing(): string { return "bad"; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval object-method callable arrays bind named arguments.
 #[test]
 fn test_eval_declared_object_method_callable_array_named_args() {
