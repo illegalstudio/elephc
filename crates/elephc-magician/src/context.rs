@@ -1428,20 +1428,60 @@ impl ElephcEvalContext {
     /// Returns direct and inherited parent class names for an eval-declared class.
     pub fn class_parent_names(&self, class_name: &str) -> Vec<String> {
         let mut parents = Vec::new();
-        let mut current = self.class(class_name).and_then(EvalClass::parent);
+        let mut current = self
+            .class(class_name)
+            .and_then(EvalClass::parent)
+            .map(str::to_string)
+            .or_else(|| self.native_class_parent(class_name).map(str::to_string));
         let mut seen = HashSet::new();
         while let Some(parent) = current {
-            let Some(parent_class) = self.class(parent) else {
-                break;
-            };
-            let key = normalize_class_name(parent_class.name());
+            let parent = self
+                .resolve_class_name(&parent)
+                .unwrap_or_else(|| parent.trim_start_matches('\\').to_string());
+            let key = normalize_class_name(&parent);
             if !seen.insert(key) {
                 break;
             }
-            parents.push(parent_class.name().trim_start_matches('\\').to_string());
-            current = parent_class.parent();
+            if let Some(parent_class) = self.class(&parent) {
+                parents.push(parent_class.name().trim_start_matches('\\').to_string());
+                current = parent_class
+                    .parent()
+                    .map(str::to_string)
+                    .or_else(|| self.native_class_parent(parent_class.name()).map(str::to_string));
+            } else {
+                parents.push(parent);
+                current = parents
+                    .last()
+                    .and_then(|parent| self.native_class_parent(parent))
+                    .map(str::to_string);
+            }
         }
         parents
+    }
+
+    /// Returns the nearest runtime/AOT parent backing an eval class hierarchy.
+    pub fn class_native_parent_name(&self, class_name: &str) -> Option<String> {
+        let mut current = self
+            .resolve_class_name(class_name)
+            .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+        let mut seen = HashSet::new();
+        loop {
+            if !seen.insert(normalize_class_name(&current)) {
+                return None;
+            }
+            let parent = self
+                .class(&current)
+                .and_then(EvalClass::parent)
+                .map(str::to_string)
+                .or_else(|| self.native_class_parent(&current).map(str::to_string))?;
+            let parent = self
+                .resolve_class_name(&parent)
+                .unwrap_or_else(|| parent.trim_start_matches('\\').to_string());
+            if self.class(&parent).is_none() {
+                return Some(parent);
+            }
+            current = parent;
+        }
     }
 
     /// Returns direct and inherited interface names for an eval-declared class.

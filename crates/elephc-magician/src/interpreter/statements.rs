@@ -1357,17 +1357,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     let class = expand_eval_class_traits(class, context)?.with_readonly_properties();
     let class = &class;
     validate_eval_class_modifiers(class, context)?;
-    if let Some(parent) = class.parent() {
-        let Some(parent_class) = context.class(parent) else {
-            return Err(EvalStatus::RuntimeFatal);
-        };
-        if parent_class.is_final()
-            || parent_class.is_readonly_class() != class.is_readonly_class()
-            || context.class_is_a(parent, name, false)
-        {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-    }
+    let native_parent = validate_eval_class_parent(class, context, values)?;
     for interface in class.interfaces() {
         if !context.has_interface(interface) && !eval_runtime_interface_exists(interface, values)? {
             return Err(EvalStatus::RuntimeFatal);
@@ -1382,6 +1372,11 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         validate_concrete_class_builtin_interface_requirements(class, context)?;
     }
     if context.define_class(class.clone()) {
+        if let Some(parent) = native_parent.as_deref() {
+            if !context.define_native_class_parent(class.name(), parent) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+        }
         initialize_eval_declared_constants(
             class.name(),
             class.constants(),
@@ -1393,6 +1388,41 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
+}
+
+/// Validates an eval class parent and returns an AOT parent name when the parent is runtime-backed.
+fn validate_eval_class_parent(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let Some(parent) = class.parent() else {
+        return Ok(None);
+    };
+    let parent = context
+        .resolve_class_name(parent)
+        .unwrap_or_else(|| parent.trim_start_matches('\\').to_string());
+    if let Some(parent_class) = context.class(&parent) {
+        if parent_class.is_final()
+            || parent_class.is_readonly_class() != class.is_readonly_class()
+            || context.class_is_a(&parent, class.name(), false)
+        {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        return Ok(None);
+    }
+    let Some((parent_is_final, parent_is_readonly)) =
+        eval_reflection_aot_class_inheritance_modifiers(&parent, values)?
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if parent_is_final
+        || parent_is_readonly != class.is_readonly_class()
+        || native_class_is_a(&parent, class.name(), context)
+    {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(Some(parent))
 }
 
 /// Registers one eval anonymous class expression if this execution has not seen it yet.
@@ -3063,7 +3093,7 @@ fn validate_declared_class_builtin_interface_members(
         };
         if method.visibility() != EvalVisibility::Public
             || method.is_static() != requirement.is_static()
-            || !class_method_satisfies_interface_signature(
+            || !class_method_satisfies_builtin_interface_signature(
                 &method,
                 &declaring_class,
                 &requirement,
@@ -3268,7 +3298,7 @@ fn validate_concrete_class_builtin_interface_requirements(
     for (requirement_owner, requirement) in
         pending_class_builtin_interface_method_requirements(class, context)
     {
-        if !class_has_interface_method(class, &requirement_owner, &requirement, context) {
+        if !class_has_builtin_interface_method(class, &requirement_owner, &requirement, context) {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -3507,6 +3537,44 @@ fn validate_class_implements_eval_interface(
     Ok(())
 }
 
+/// Returns whether a class or its eval parents satisfy one builtin interface method signature.
+fn class_has_builtin_interface_method(
+    class: &EvalClass,
+    requirement_owner: &str,
+    requirement: &EvalInterfaceMethod,
+    context: &ElephcEvalContext,
+) -> bool {
+    if let Some(method) = class.method(requirement.name()) {
+        return method.visibility() == EvalVisibility::Public
+            && method.is_static() == requirement.is_static()
+            && !method.is_abstract()
+            && class_method_satisfies_builtin_interface_signature(
+                method,
+                class.name(),
+                requirement,
+                requirement_owner,
+                Some(class),
+                context,
+            );
+    }
+    class
+        .parent()
+        .and_then(|parent| context.class_method(parent, requirement.name()))
+        .is_some_and(|(declaring_class, method)| {
+            method.visibility() == EvalVisibility::Public
+                && method.is_static() == requirement.is_static()
+                && !method.is_abstract()
+                && class_method_satisfies_builtin_interface_signature(
+                    &method,
+                    &declaring_class,
+                    requirement,
+                    requirement_owner,
+                    Some(class),
+                    context,
+                )
+        })
+}
+
 /// Returns whether a class or its eval parents satisfy one interface method signature.
 fn class_has_interface_method(
     class: &EvalClass,
@@ -3554,6 +3622,47 @@ fn class_method_satisfies_interface_signature(
     pending_class: Option<&EvalClass>,
     context: &ElephcEvalContext,
 ) -> bool {
+    class_method_satisfies_interface_signature_with_return_mode(
+        method,
+        method_owner,
+        requirement,
+        requirement_owner,
+        pending_class,
+        context,
+        false,
+    )
+}
+
+/// Returns whether one class method can satisfy a PHP builtin interface method contract.
+fn class_method_satisfies_builtin_interface_signature(
+    method: &EvalClassMethod,
+    method_owner: &str,
+    requirement: &EvalInterfaceMethod,
+    requirement_owner: &str,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+) -> bool {
+    class_method_satisfies_interface_signature_with_return_mode(
+        method,
+        method_owner,
+        requirement,
+        requirement_owner,
+        pending_class,
+        context,
+        true,
+    )
+}
+
+/// Returns whether one class method satisfies an interface signature with configurable return checks.
+fn class_method_satisfies_interface_signature_with_return_mode(
+    method: &EvalClassMethod,
+    method_owner: &str,
+    requirement: &EvalInterfaceMethod,
+    requirement_owner: &str,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+    allow_missing_return_type: bool,
+) -> bool {
     method_signature_accepts(
         method.params().len(),
         method.parameter_defaults(),
@@ -3573,14 +3682,15 @@ fn class_method_satisfies_interface_signature(
         requirement.params().len(),
         pending_class,
         context,
-    ) && method_return_type_signature_accepts(
-        method.return_type(),
-        method_owner,
-        requirement.return_type(),
-        requirement_owner,
-        pending_class,
-        context,
-    )
+    ) && ((allow_missing_return_type && method.return_type().is_none())
+        || method_return_type_signature_accepts(
+            method.return_type(),
+            method_owner,
+            requirement.return_type(),
+            requirement_owner,
+            pending_class,
+            context,
+        ))
 }
 
 /// Returns whether one class property is compatible with one interface property contract.
@@ -4231,6 +4341,13 @@ pub(in crate::interpreter) fn eval_property_isset_result(
         eval_dynamic_property_for_access(&object_class_name, property_name, context)
     {
         if validate_eval_member_access(&declaring_class, property.visibility(), context).is_ok() {
+            let storage_property_name =
+                eval_instance_property_storage_name(&declaring_class, &property);
+            if property.property_type().is_some()
+                && !context.dynamic_property_is_initialized(identity, &storage_property_name)
+            {
+                return Ok(false);
+            }
             let value = eval_property_get_result(object, property_name, context, values)?;
             return Ok(!values.is_null(value)?);
         }
@@ -5618,6 +5735,21 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
             values,
         );
     }
+    if let Some(parent) = context.class_native_parent_name(&class_name) {
+        let has_native_method =
+            eval_aot_method_dispatch_metadata_in_hierarchy(&parent, method_name, context, values)?
+                .is_some()
+                || eval_native_static_magic_method_available(&parent, context, values)?;
+        if has_native_method {
+            return eval_native_static_method_with_evaluated_args(
+                &parent,
+                method_name,
+                evaluated_args,
+                context,
+                values,
+            );
+        }
+    }
     if context.has_class(&class_name)
         || context.has_interface(&class_name)
         || context.has_trait(&class_name)
@@ -5957,7 +6089,11 @@ pub(in crate::interpreter) fn resolve_eval_static_class_name(
             context
                 .class(current)
                 .and_then(EvalClass::parent)
-                .map(str::to_string)
+                .map(|parent| {
+                    context
+                        .resolve_class_name(parent)
+                        .unwrap_or_else(|| parent.trim_start_matches('\\').to_string())
+                })
                 .or_else(|| context.native_class_parent(current).map(str::to_string))
                 .ok_or(EvalStatus::RuntimeFatal)
         }
@@ -6057,7 +6193,34 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
         )?;
         eval_release_value(context, values, result)?;
     } else if !evaluated_args.is_empty() {
-        return Err(EvalStatus::RuntimeFatal);
+        if let Some(parent) = context.class_native_parent_name(class.name()) {
+            eval_native_constructor_with_evaluated_args(
+                &parent,
+                object,
+                evaluated_args,
+                context,
+                values,
+            )?;
+        } else {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    } else if let Some(parent) = context.class_native_parent_name(class.name()) {
+        if eval_aot_method_dispatch_metadata_in_hierarchy(
+            &parent,
+            "__construct",
+            context,
+            values,
+        )?
+        .is_some()
+        {
+            eval_native_constructor_with_evaluated_args(
+                &parent,
+                object,
+                Vec::new(),
+                context,
+                values,
+            )?;
+        }
     }
     Ok(object)
 }
@@ -6157,7 +6320,10 @@ fn eval_dynamic_class_allocate_object(
     if class.is_abstract() || context.has_enum(class.name()) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let object = values.new_object("stdClass")?;
+    let backing_class = context
+        .class_native_parent_name(class.name())
+        .unwrap_or_else(|| String::from("stdClass"));
+    let object = values.new_object(&backing_class)?;
     let identity = values.object_identity(object)?;
     context.register_dynamic_object(identity, class.name());
     let mut class_chain = context.class_chain(class.name());
@@ -6684,6 +6850,29 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
             );
         }
         inaccessible_method = Some((class_name, method));
+    }
+    if inaccessible_method.is_none() {
+        if let Some(parent) = context.class_native_parent_name(&called_class_name) {
+            let has_native_method =
+                eval_aot_method_dispatch_metadata_in_hierarchy(
+                    &parent,
+                    method_name,
+                    context,
+                    values,
+                )?
+                .is_some()
+                    || eval_native_instance_magic_method_available(&parent, context, values)?;
+            if has_native_method {
+                return eval_native_method_with_evaluated_args(
+                    object,
+                    &parent,
+                    method_name,
+                    evaluated_args,
+                    context,
+                    values,
+                );
+            }
+        }
     }
     if let Some(result) = eval_magic_instance_method_call(
         object,

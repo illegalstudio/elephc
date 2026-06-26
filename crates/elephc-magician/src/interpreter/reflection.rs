@@ -2931,6 +2931,28 @@ fn eval_reflection_aot_class_flags(
     Ok(Some((flags, modifiers)))
 }
 
+/// Returns AOT class modifiers relevant to validating an eval `extends` clause.
+pub(in crate::interpreter) fn eval_reflection_aot_class_inheritance_modifiers(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(bool, bool)>, EvalStatus> {
+    let Some((flags, _)) = eval_reflection_aot_class_flags(class_name, values)? else {
+        return Ok(None);
+    };
+    if flags
+        & (EVAL_REFLECTION_CLASS_FLAG_INTERFACE
+            | EVAL_REFLECTION_CLASS_FLAG_TRAIT
+            | EVAL_REFLECTION_CLASS_FLAG_ENUM)
+        != 0
+    {
+        return Ok(None);
+    }
+    Ok(Some((
+        flags & EVAL_REFLECTION_CLASS_FLAG_FINAL != 0,
+        flags & EVAL_REFLECTION_CLASS_FLAG_READONLY != 0,
+    )))
+}
+
 /// Returns the catchable error for generated/AOT allocation without constructor, if any.
 pub(in crate::interpreter) fn eval_reflection_aot_class_without_constructor_error(
     class_name: &str,
@@ -5882,16 +5904,12 @@ fn eval_reflection_class_like_attributes(
         })
 }
 
-/// Returns the canonical eval parent class name for ReflectionClass metadata.
+/// Returns the PHP-visible parent class name for ReflectionClass metadata.
 fn eval_reflection_parent_class_name(
     class: &EvalClass,
     context: &ElephcEvalContext,
 ) -> Option<String> {
-    let parent = class.parent()?;
-    context
-        .class(parent)
-        .map(|parent_class| parent_class.name().trim_start_matches('\\').to_string())
-        .or_else(|| Some(parent.trim_start_matches('\\').to_string()))
+    context.class_parent_names(class.name()).into_iter().next()
 }
 
 /// Returns PHP's `ReflectionClass::isInstantiable()` value for eval class metadata.
