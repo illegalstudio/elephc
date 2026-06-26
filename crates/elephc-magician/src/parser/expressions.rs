@@ -950,7 +950,16 @@ impl Parser {
         if let TokenKind::DollarIdent(name) = self.current() {
             let class_name = EvalExpr::LoadVar(name.clone());
             self.advance();
-            let args = self.parse_call_args()?;
+            let args = self.parse_optional_constructor_args()?;
+            return Ok(EvalExpr::DynamicNewObject {
+                class_name: Box::new(class_name),
+                args,
+            });
+        }
+        if self.consume(TokenKind::LParen) {
+            let class_name = self.parse_expr()?;
+            self.expect(TokenKind::RParen)?;
+            let args = self.parse_optional_constructor_args()?;
             return Ok(EvalExpr::DynamicNewObject {
                 class_name: Box::new(class_name),
                 args,
@@ -958,8 +967,17 @@ impl Parser {
         }
         let class_name = self.parse_qualified_name()?;
         let class_name = self.resolve_class_name(class_name);
-        let args = self.parse_call_args()?;
+        let args = self.parse_optional_constructor_args()?;
         Ok(EvalExpr::NewObject { class_name, args })
+    }
+
+    /// Parses an optional constructor argument list after `new` class targets.
+    fn parse_optional_constructor_args(&mut self) -> Result<Vec<EvalCallArg>, EvalParseError> {
+        if matches!(self.current(), TokenKind::LParen) {
+            self.parse_call_args()
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     /// Parses a simple or explicitly qualified PHP name.

@@ -6817,6 +6817,33 @@ echo $copy->label;');
     assert_eq!(out, "eval:Ada|aot:Turing|eval:Grace");
 }
 
+/// Verifies eval object construction accepts parenthesized class expressions and optional constructor parentheses.
+#[test]
+fn test_eval_dynamic_new_accepts_expression_class_name() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalExpressionNewTarget {
+    public $label;
+
+    public function __construct($label = "default") {
+        $this->label = $label;
+    }
+}
+
+function eval_expression_new_target() {
+    return "EvalExpressionNewTarget";
+}
+
+$direct = new (eval_expression_new_target())("Ada");
+$class = "EvalExpressionNewTarget";
+$withoutDynamicParens = new $class;
+$withoutNamedParens = new EvalExpressionNewTarget;
+return $direct->label . "|" . $withoutDynamicParens->label . "|" . $withoutNamedParens->label;');
+"#,
+    );
+    assert_eq!(out, "Ada|default|default");
+}
+
 /// Verifies eval object construction passes object-typed arguments to AOT constructors.
 #[test]
 fn test_eval_dynamic_new_passes_object_arg_to_constructor() {

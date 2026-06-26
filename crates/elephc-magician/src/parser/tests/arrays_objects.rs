@@ -237,6 +237,45 @@ fn parse_fragment_accepts_dynamic_new_object_source() {
         }))]
     );
 }
+/// Verifies object construction accepts a parenthesized runtime class-name expression.
+#[test]
+fn parse_fragment_accepts_expression_new_object_source() {
+    let program =
+        parse_fragment(br#"return new ($factory->className)("Ada");"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::DynamicNewObject {
+            class_name: Box::new(EvalExpr::PropertyGet {
+                object: Box::new(EvalExpr::LoadVar("factory".to_string())),
+                property: "className".to_string(),
+            }),
+            args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::String(
+                "Ada".to_string()
+            )))],
+        }))]
+    );
+}
+/// Verifies PHP constructor parentheses are optional for named and runtime class targets.
+#[test]
+fn parse_fragment_accepts_new_object_without_constructor_parentheses_source() {
+    let named = parse_fragment(br#"return new Box;"#).expect("fragment should parse");
+    assert_eq!(
+        named.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::NewObject {
+            class_name: "Box".to_string(),
+            args: Vec::new(),
+        }))]
+    );
+
+    let dynamic = parse_fragment(br#"return new $className;"#).expect("fragment should parse");
+    assert_eq!(
+        dynamic.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::DynamicNewObject {
+            class_name: Box::new(EvalExpr::LoadVar("className".to_string())),
+            args: Vec::new(),
+        }))]
+    );
+}
 /// Verifies object construction accepts explicitly qualified class names.
 #[test]
 fn parse_fragment_accepts_qualified_new_object_source() {
