@@ -12512,7 +12512,10 @@ eval('$case = EvalAotCaseEnum::Ready;
 echo get_class($case) . ":";
 $uses = class_uses($case);
 ksort($uses);
-echo count($uses) . ":" . $uses["EvalAotCaseTrait"];');
+echo count($uses) . ":" . $uses["EvalAotCaseTrait"] . ":";
+$stringUses = class_uses("EvalAotCaseEnum");
+ksort($stringUses);
+echo count($stringUses) . ":" . $stringUses["EvalAotCaseTrait"];');
 "#,
     );
     assert!(
@@ -12520,7 +12523,10 @@ echo count($uses) . ":" . $uses["EvalAotCaseTrait"];');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "EvalAotCaseEnum:1:EvalAotCaseTrait");
+    assert_eq!(
+        out.stdout,
+        "EvalAotCaseEnum:1:EvalAotCaseTrait:1:EvalAotCaseTrait"
+    );
 }
 
 /// Verifies generated enum trait metadata emits one runtime reflection row per direct trait.
