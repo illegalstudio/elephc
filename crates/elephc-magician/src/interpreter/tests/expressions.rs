@@ -199,6 +199,28 @@ return function_exists("var_dump");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval `var_dump()` keeps eval-declared and runtime object class names.
+#[test]
+fn execute_program_var_dump_prints_object_class_names() {
+    let program = parse_fragment(
+        br#"class EvalDumpBox {}
+var_dump(new EvalDumpBox());
+var_dump(new KnownClass());"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "object(EvalDumpBox)\nobject(KnownClass)\n"
+    );
+    assert_eq!(values.get(result), FakeValue::Null);
+}
+
 /// Verifies eval property reads and writes dispatch through runtime hooks.
 #[test]
 fn execute_program_reads_and_writes_object_property() {

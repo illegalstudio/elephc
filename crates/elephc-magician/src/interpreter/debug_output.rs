@@ -5,7 +5,8 @@
 //! - `crate::interpreter::eval_positional_expr_call()` for debug-output builtin dispatch.
 //!
 //! Key details:
-//! - Output formatting walks runtime arrays and scalar values only through `RuntimeValueOps`.
+//! - Output formatting walks runtime arrays, scalars, and AOT object names through `RuntimeValueOps`.
+//! - Eval-declared object names come from the interpreter context's dynamic object registry.
 //! - The builtins either echo output directly or return captured string output according to PHP flags.
 
 use super::*;
@@ -49,17 +50,18 @@ pub(super) fn eval_builtin_var_dump(
         return Err(EvalStatus::RuntimeFatal);
     };
     let value = eval_expr(value, context, scope, values)?;
-    eval_var_dump_result(value, values)
+    eval_var_dump_result(value, context, values)
 }
 
 /// Emits one eval value using PHP-style `var_dump()` debug formatting.
 pub(in crate::interpreter) fn eval_var_dump_result(
     value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut output = Vec::new();
     let mut arrays_seen = Vec::new();
-    eval_var_dump_append_value(value, values, 0, &mut arrays_seen, &mut output)?;
+    eval_var_dump_append_value(value, context, values, 0, &mut arrays_seen, &mut output)?;
     let output = values.string_bytes_value(&output)?;
     values.echo(output)?;
     values.null()
@@ -68,6 +70,7 @@ pub(in crate::interpreter) fn eval_var_dump_result(
 /// Appends one value and its nested array entries to a `var_dump()` byte buffer.
 fn eval_var_dump_append_value(
     value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     depth: usize,
     arrays_seen: &mut Vec<usize>,
@@ -79,13 +82,9 @@ fn eval_var_dump_append_value(
         EVAL_TAG_FLOAT => eval_var_dump_append_scalar(b"float", value, values, depth, output),
         EVAL_TAG_BOOL => eval_var_dump_append_bool(value, values, depth, output),
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
-            eval_var_dump_append_array(value, values, depth, arrays_seen, output)
+            eval_var_dump_append_array(value, context, values, depth, arrays_seen, output)
         }
-        EVAL_TAG_OBJECT => {
-            eval_var_dump_append_indent(depth, output);
-            output.extend_from_slice(b"object(Object)\n");
-            Ok(())
-        }
+        EVAL_TAG_OBJECT => eval_var_dump_append_object(value, context, values, depth, output),
         EVAL_TAG_NULL => {
             eval_var_dump_append_indent(depth, output);
             output.extend_from_slice(b"NULL\n");
@@ -152,6 +151,7 @@ fn eval_var_dump_append_bool(
 /// Appends one array shell and recursively emits foreach-visible entries.
 fn eval_var_dump_append_array(
     value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     depth: usize,
     arrays_seen: &mut Vec<usize>,
@@ -174,12 +174,42 @@ fn eval_var_dump_append_array(
         let key = values.array_iter_key(value, position)?;
         let element = values.array_get(value, key)?;
         eval_var_dump_append_key(key, values, depth + 1, output)?;
-        eval_var_dump_append_value(element, values, depth + 1, arrays_seen, output)?;
+        eval_var_dump_append_value(element, context, values, depth + 1, arrays_seen, output)?;
     }
     eval_var_dump_append_indent(depth, output);
     output.extend_from_slice(b"}\n");
     arrays_seen.pop();
     Ok(())
+}
+
+/// Appends one object line while preserving eval-declared and runtime class names.
+fn eval_var_dump_append_object(
+    value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    depth: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    eval_var_dump_append_indent(depth, output);
+    output.extend_from_slice(b"object(");
+    if let Ok(identity) = values.object_identity(value) {
+        if let Some(class) = context.dynamic_object_class(identity) {
+            output.extend_from_slice(class.name().trim_start_matches('\\').as_bytes());
+            output.extend_from_slice(b")\n");
+            return Ok(());
+        }
+    }
+    let class_name = values.object_class_name(value)?;
+    let bytes = values.string_bytes(class_name)?;
+    values.release(class_name)?;
+    output.extend_from_slice(trim_leading_namespace_separator(&bytes));
+    output.extend_from_slice(b")\n");
+    Ok(())
+}
+
+/// Removes a leading PHP namespace separator from a runtime class-name byte slice.
+fn trim_leading_namespace_separator(bytes: &[u8]) -> &[u8] {
+    bytes.strip_prefix(b"\\").unwrap_or(bytes)
 }
 
 /// Appends one array key line for an indexed or associative `var_dump()` entry.

@@ -30,7 +30,7 @@ pub(in crate::interpreter) fn eval_core_builtin_with_values(
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_var_dump_result(*value, values)?
+            eval_var_dump_result(*value, context, values)?
         }
         "call_user_func" => {
             return eval_call_user_func_with_values(evaluated_args.to_vec(), context, values)

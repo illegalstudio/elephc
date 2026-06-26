@@ -161,6 +161,23 @@ echo function_exists("var_dump");');
     );
 }
 
+/// Verifies eval `var_dump()` prints eval-declared and generated object class names.
+#[test]
+fn test_eval_var_dump_prints_object_class_names() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotDumpBox {}
+eval('class EvalDynamicDumpBox {}
+var_dump(new EvalDynamicDumpBox());
+var_dump(new EvalAotDumpBox());');
+"#,
+    );
+    assert_eq!(
+        out,
+        "object(EvalDynamicDumpBox)\nobject(EvalAotDumpBox)\n"
+    );
+}
+
 /// Verifies eval fragments accept PHP comments and keep line metadata aligned.
 #[test]
 fn test_eval_comments_execute_through_bridge() {

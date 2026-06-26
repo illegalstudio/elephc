@@ -751,8 +751,9 @@ output path as `echo`, boolean false and null print nothing, and arrays print
 the same `Array\n` header shape as elephc's native `print_r()` subset.
 
 Eval `var_dump()` supports the one-argument form. Scalars print typed
-diagnostic lines, and indexed or associative arrays print foreach-visible keys
-and nested values through eval value hooks.
+diagnostic lines, indexed or associative arrays print foreach-visible keys and
+nested values through eval value hooks, and eval-declared or generated/AOT
+objects print their PHP-visible class names.
 
 ## Current limitations
 
@@ -775,8 +776,10 @@ those bridge paths.
 Eval class support is still smaller than the full static class system.
 Eval-declared `__destruct()` hooks run when an eval-owned dynamic object reaches
 final release through ordinary eval statement execution, such as `unset($obj)` or
-a discarded temporary expression; destructor execution from runtime cycle
-collection is still outside the bridge. The main remaining class-system gaps are
+a discarded temporary expression, and through the native runtime final-release
+path after an eval-owned object escapes back into compiled code; destructor
+execution from runtime cycle collection is still outside the bridge. The main
+remaining class-system gaps are
 broader reflection APIs beyond the supported
 ReflectionClass/Object/Function/Method/Parameter/Property/NamedType/UnionType/IntersectionType
 and Enum/attribute slice, Reflection type APIs beyond retained parameter, generated
