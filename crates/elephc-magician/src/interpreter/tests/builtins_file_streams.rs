@@ -100,6 +100,26 @@ echo flock($h, LOCK_EX, $would) ? "lock" : "bad"; echo ":";
 echo $would === false ? "would0" : "bad"; echo ":";
 echo flock(stream: $h, operation: LOCK_UN, would_block: $would) ? "unlock" : "bad"; echo ":";
 echo $would === false ? "would1" : "bad"; echo ":";
+class EvalFlockWouldBlockBox {{
+    public bool $value = true;
+    public static bool $staticValue = true;
+}}
+$box = new EvalFlockWouldBlockBox();
+echo flock($h, LOCK_SH, $box->value) ? "proplock" : "bad"; echo ":";
+echo $box->value === false ? "prop0" : "bad"; echo ":";
+flock($h, LOCK_UN);
+$name = "value";
+echo flock($h, LOCK_EX, $box->{{$name}}) ? "dynlock" : "bad"; echo ":";
+echo $box->value === false ? "dyn0" : "bad"; echo ":";
+flock($h, LOCK_UN);
+echo flock($h, LOCK_SH, EvalFlockWouldBlockBox::$staticValue) ? "staticlock" : "bad"; echo ":";
+echo EvalFlockWouldBlockBox::$staticValue === false ? "static0" : "bad"; echo ":";
+flock($h, LOCK_UN);
+$class = "EvalFlockWouldBlockBox";
+$staticName = "staticValue";
+echo flock($h, LOCK_EX, $class::${{$staticName}}) ? "dynstaticlock" : "bad"; echo ":";
+echo EvalFlockWouldBlockBox::$staticValue === false ? "dynstatic0" : "bad"; echo ":";
+flock($h, LOCK_UN);
 echo call_user_func("flock", $h, LOCK_SH) ? "calllock" : "bad"; echo ":";
 flock($h, LOCK_UN);
 echo flock($h, 99) === false ? "invalid" : "bad"; echo ":";
@@ -120,7 +140,7 @@ return true;"#
     let _ = std::fs::remove_file(&file);
     assert_eq!(
         values.output,
-        "lock:would0:unlock:would1:calllock:invalid:cleanup:11111:locks=1234"
+        "lock:would0:unlock:would1:proplock:prop0:dynlock:dyn0:staticlock:static0:dynstaticlock:dynstatic0:calllock:invalid:cleanup:11111:locks=1234"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
