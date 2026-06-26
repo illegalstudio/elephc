@@ -41,6 +41,7 @@ struct EvalMethodSlot {
     params: Vec<PhpType>,
     ref_params: Vec<bool>,
     return_ty: PhpType,
+    is_hidden_shadow: bool,
 }
 
 /// Static method metadata needed by eval static method-call bridge dispatch.
@@ -171,6 +172,13 @@ fn collect_class_method_slots(
     emitted_methods: &std::collections::HashSet<(String, String, bool)>,
     slots: &mut Vec<EvalMethodSlot>,
 ) {
+    collect_hidden_private_ancestor_method_slots(
+        module,
+        class_name,
+        class_info,
+        emitted_methods,
+        slots,
+    );
     let mut methods = class_info.methods.iter().collect::<Vec<_>>();
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method, sig) in methods {
@@ -199,7 +207,54 @@ fn collect_class_method_slots(
             params: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
             return_ty: sig.return_type.codegen_repr(),
+            is_hidden_shadow: false,
         });
+    }
+}
+
+/// Adds private ancestor instance methods hidden by descendant class method lookup.
+fn collect_hidden_private_ancestor_method_slots(
+    module: &Module,
+    class_name: &str,
+    class_info: &ClassInfo,
+    emitted_methods: &std::collections::HashSet<(String, String, bool)>,
+    slots: &mut Vec<EvalMethodSlot>,
+) {
+    for (ancestor_name, ancestor_info) in class_ancestry(module, class_name) {
+        if ancestor_name == class_name {
+            continue;
+        }
+        let mut methods = ancestor_info.methods.iter().collect::<Vec<_>>();
+        methods.sort_by_key(|(method, _)| method.as_str());
+        for (method, sig) in methods {
+            let visibility = method_visibility(ancestor_info, method);
+            if visibility != &Visibility::Private
+                || !method_signature_supported(sig)
+                || !method_return_supported(&sig.return_type)
+            {
+                continue;
+            }
+            let impl_class = ancestor_info
+                .method_impl_classes
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(ancestor_name);
+            if !emitted_methods.contains(&(impl_class.to_string(), method.clone(), false)) {
+                continue;
+            }
+            slots.push(EvalMethodSlot {
+                class_id: class_info.class_id,
+                class_name: class_name.to_string(),
+                method: method.clone(),
+                impl_class: impl_class.to_string(),
+                visibility: visibility.clone(),
+                allowed_scopes: visibility_scope_names(module, impl_class, visibility),
+                params: sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect(),
+                ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
+                return_ty: sig.return_type.codegen_repr(),
+                is_hidden_shadow: true,
+            });
+        }
     }
 }
 
@@ -257,6 +312,28 @@ fn static_method_visibility<'a>(class_info: &'a ClassInfo, method: &str) -> &'a 
         .static_method_visibilities
         .get(method)
         .unwrap_or(&Visibility::Public)
+}
+
+/// Returns class metadata from root parent to the requested class.
+fn class_ancestry<'a>(module: &'a Module, class_name: &'a str) -> Vec<(&'a str, &'a ClassInfo)> {
+    let mut chain = Vec::new();
+    collect_class_ancestry(module, class_name, &mut chain);
+    chain
+}
+
+/// Recursively collects class metadata from parent to child.
+fn collect_class_ancestry<'a>(
+    module: &'a Module,
+    class_name: &'a str,
+    chain: &mut Vec<(&'a str, &'a ClassInfo)>,
+) {
+    let Some(class_info) = module.class_infos.get(class_name) else {
+        return;
+    };
+    if let Some(parent) = class_info.parent.as_deref() {
+        collect_class_ancestry(module, parent, chain);
+    }
+    chain.push((class_name, class_info));
 }
 
 /// Returns true when the eval method bridge can enforce this visibility.
@@ -731,7 +808,19 @@ fn emit_aarch64_method_name_compare(
     }
     let miss_label = method_access_miss_label(module, slot);
     emitter.instruction(&format!("cbnz x0, {}", miss_label));                   // continue method dispatch when names differ
-    emit_aarch64_method_scope_check(emitter, data, &slot.allowed_scopes, false, &target_label, fail_label);
+    let scope_fail_label = if slot.is_hidden_shadow {
+        miss_label.as_str()
+    } else {
+        fail_label
+    };
+    emit_aarch64_method_scope_check(
+        emitter,
+        data,
+        &slot.allowed_scopes,
+        false,
+        &target_label,
+        scope_fail_label,
+    );
     emitter.label(&miss_label);
 }
 
@@ -757,7 +846,19 @@ fn emit_x86_64_method_name_compare(
     }
     let miss_label = method_access_miss_label(module, slot);
     emitter.instruction(&format!("jne {}", miss_label));                        // continue method dispatch when names differ
-    emit_x86_64_method_scope_check(emitter, data, &slot.allowed_scopes, false, &target_label, fail_label);
+    let scope_fail_label = if slot.is_hidden_shadow {
+        miss_label.as_str()
+    } else {
+        fail_label
+    };
+    emit_x86_64_method_scope_check(
+        emitter,
+        data,
+        &slot.allowed_scopes,
+        false,
+        &target_label,
+        scope_fail_label,
+    );
     emitter.label(&miss_label);
 }
 
