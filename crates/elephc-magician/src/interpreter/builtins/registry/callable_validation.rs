@@ -28,7 +28,9 @@ pub(in crate::interpreter) fn eval_validate_call_user_func_callback(
                 values,
             )
         }
-        EvaluatedCallable::StaticMethod { class_name, method } => {
+        EvaluatedCallable::StaticMethod {
+            class_name, method, ..
+        } => {
             eval_validate_call_user_func_static_method(
                 class_name,
                 method,

@@ -10101,6 +10101,44 @@ echo EvalFirstClassCallableChild::relay("ok");');
     assert_eq!(out.stdout, "8:4:7:8:AB:45:2:9:a1:321:child:ok");
 }
 
+/// Verifies eval first-class static callables preserve late-static forwarding metadata.
+#[test]
+fn test_eval_first_class_static_callables_preserve_called_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalFirstClassStaticForwardBase {
+    public static function who() {
+        return static::tag();
+    }
+    public static function tag() {
+        return "base";
+    }
+    public static function relaySelf() {
+        $fn = self::who(...);
+        return $fn();
+    }
+}
+class EvalFirstClassStaticForwardChild extends EvalFirstClassStaticForwardBase {
+    public static function relayParent() {
+        $fn = parent::who(...);
+        return $fn();
+    }
+    public static function tag() {
+        return "child";
+    }
+}
+echo EvalFirstClassStaticForwardChild::relayParent() . ":";
+echo EvalFirstClassStaticForwardChild::relaySelf();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "child:child");
+}
+
 /// Verifies eval dynamic static receivers dispatch methods, properties, constants, and `::class`.
 #[test]
 fn test_eval_dynamic_static_receivers() {

@@ -842,10 +842,10 @@ impl Parser {
                 self.advance();
                 if matches!(self.current(), TokenKind::LParen) {
                     if self.consume_first_class_callable_marker() {
-                        return Ok(Self::callable_array_expr(
-                            EvalExpr::ClassNameFetch { class_name },
-                            EvalExpr::LoadVar(property),
-                        ));
+                        return Ok(EvalExpr::StaticMethodCallable {
+                            class_name,
+                            method: Box::new(EvalExpr::LoadVar(property)),
+                        });
                     }
                     let args = self.parse_call_args()?;
                     return Ok(EvalExpr::DynamicStaticMethodCall {
@@ -878,10 +878,10 @@ impl Parser {
                 let method = method.clone();
                 self.advance();
                 if self.consume_first_class_callable_marker() {
-                    return Ok(Self::callable_array_expr(
-                        EvalExpr::ClassNameFetch { class_name },
-                        EvalExpr::Const(EvalConst::String(method)),
-                    ));
+                    return Ok(EvalExpr::StaticMethodCallable {
+                        class_name,
+                        method: Box::new(EvalExpr::Const(EvalConst::String(method))),
+                    });
                 }
                 let args = self.parse_call_args()?;
                 Ok(EvalExpr::StaticMethodCall {
@@ -896,10 +896,10 @@ impl Parser {
                 self.expect(TokenKind::RBrace)?;
                 if matches!(self.current(), TokenKind::LParen) {
                     if self.consume_first_class_callable_marker() {
-                        return Ok(Self::callable_array_expr(
-                            EvalExpr::ClassNameFetch { class_name },
-                            member,
-                        ));
+                        return Ok(EvalExpr::StaticMethodCallable {
+                            class_name,
+                            method: Box::new(member),
+                        });
                     }
                     let args = self.parse_call_args()?;
                     return Ok(EvalExpr::DynamicStaticMethodCall {

@@ -67,6 +67,14 @@ pub enum EvalReferenceTarget {
     },
 }
 
+/// Late-static dispatch metadata attached to eval-created static callable arrays.
+#[derive(Clone)]
+struct EvalStaticCallableMetadata {
+    class_name: String,
+    method: String,
+    called_class: String,
+}
+
 /// Native AOT function callback metadata visible to runtime eval fragments.
 #[derive(Clone)]
 pub struct NativeFunction {
@@ -446,6 +454,7 @@ pub struct ElephcEvalContext {
     eval_reflection_properties: HashMap<u64, (String, String)>,
     eval_dynamic_reflection_properties: HashSet<u64>,
     eval_reflection_class_constants: HashMap<u64, (String, String, u64)>,
+    eval_static_callables: HashMap<usize, EvalStaticCallableMetadata>,
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
     class_stack: Vec<String>,
@@ -507,6 +516,7 @@ impl ElephcEvalContext {
             eval_reflection_properties: HashMap::new(),
             eval_dynamic_reflection_properties: HashSet::new(),
             eval_reflection_class_constants: HashMap::new(),
+            eval_static_callables: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
             class_stack: Vec::new(),
@@ -569,6 +579,7 @@ impl ElephcEvalContext {
             eval_reflection_properties: HashMap::new(),
             eval_dynamic_reflection_properties: HashSet::new(),
             eval_reflection_class_constants: HashMap::new(),
+            eval_static_callables: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
             class_stack: Vec::new(),
@@ -647,6 +658,38 @@ impl ElephcEvalContext {
             )
             .then(|| alias.target.clone())
         })
+    }
+
+    /// Registers one eval-created static callable array with late-static dispatch metadata.
+    pub fn register_eval_static_callable(
+        &mut self,
+        callable: RuntimeCellHandle,
+        class_name: &str,
+        method: &str,
+        called_class: &str,
+    ) {
+        self.eval_static_callables.insert(
+            callable.as_ptr() as usize,
+            EvalStaticCallableMetadata {
+                class_name: class_name.trim_start_matches('\\').to_string(),
+                method: method.to_string(),
+                called_class: called_class.trim_start_matches('\\').to_string(),
+            },
+        );
+    }
+
+    /// Returns the captured late-static called class for one matching static callable array.
+    pub fn eval_static_callable_called_class(
+        &self,
+        callable: RuntimeCellHandle,
+        class_name: &str,
+        method: &str,
+    ) -> Option<&str> {
+        let metadata = self.eval_static_callables.get(&(callable.as_ptr() as usize))?;
+        let class_name = class_name.trim_start_matches('\\');
+        (metadata.class_name.eq_ignore_ascii_case(class_name)
+            && metadata.method.eq_ignore_ascii_case(method))
+        .then_some(metadata.called_class.as_str())
     }
 
     /// Resolves a PHP class-like name to eval class, interface, trait, or alias spelling.

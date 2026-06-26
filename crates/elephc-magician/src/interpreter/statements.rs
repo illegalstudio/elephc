@@ -5662,8 +5662,48 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let receiver = resolve_eval_static_method_receiver(class_name, context)?;
-    let class_name = receiver.dispatch_class;
-    let called_class_name = receiver.called_class;
+    eval_static_method_call_result_resolved(
+        receiver.dispatch_class,
+        receiver.called_class,
+        method_name,
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Dispatches a static method call using a first-class callable's captured called class.
+pub(in crate::interpreter) fn eval_static_method_call_result_with_called_class(
+    class_name: &str,
+    called_class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let class_name = resolve_eval_static_member_class_name(class_name, context)?;
+    let called_class_name = context
+        .resolve_class_name(called_class_name)
+        .unwrap_or_else(|| called_class_name.trim_start_matches('\\').to_string());
+    eval_static_method_call_result_resolved(
+        class_name,
+        called_class_name,
+        method_name,
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Dispatches a static method call after lookup and late-static names have been resolved.
+fn eval_static_method_call_result_resolved(
+    class_name: String,
+    called_class_name: String,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if let Some(result) = eval_builtin_property_hook_type_static_method_result(
         &class_name,
         method_name,
@@ -6113,13 +6153,13 @@ pub(in crate::interpreter) fn resolve_eval_static_class_name(
 }
 
 /// Resolved static method dispatch metadata preserving PHP late-static forwarding.
-struct EvalStaticMethodReceiver {
-    dispatch_class: String,
-    called_class: String,
+pub(in crate::interpreter) struct EvalStaticMethodReceiver {
+    pub(in crate::interpreter) dispatch_class: String,
+    pub(in crate::interpreter) called_class: String,
 }
 
 /// Resolves static method receivers into lookup and late-static called-class names.
-fn resolve_eval_static_method_receiver(
+pub(in crate::interpreter) fn resolve_eval_static_method_receiver(
     class_name: &str,
     context: &ElephcEvalContext,
 ) -> Result<EvalStaticMethodReceiver, EvalStatus> {
