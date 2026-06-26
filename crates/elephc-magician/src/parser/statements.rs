@@ -12,8 +12,8 @@ use super::cursor::*;
 use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalCallArg, EvalCatch, EvalClass,
-    EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst, EvalEnum,
+    EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalBinOp, EvalCallArg, EvalCatch,
+    EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst, EvalEnum,
     EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalInstanceOfTarget, EvalInterface,
     EvalInterfaceMethod, EvalInterfaceProperty, EvalParameterType, EvalParameterTypeVariant,
     EvalSourceLocation, EvalStmt, EvalSwitchCase, EvalTrait, EvalTraitAdaptation, EvalUnaryOp,
@@ -137,10 +137,32 @@ impl Parser {
             {
                 self.parse_static_property_set_stmt(true)
             }
+            TokenKind::Ident(_) | TokenKind::Backslash
+                if self.current_starts_static_property_postfix_inc_dec() =>
+            {
+                self.parse_static_property_inc_dec_stmt(false, true)
+            }
             TokenKind::DollarIdent(_) if self.current_starts_dynamic_static_property_assignment() => {
                 self.parse_dynamic_static_property_set_stmt(true)
             }
-            TokenKind::PlusPlus | TokenKind::MinusMinus => self.parse_prefix_inc_dec_stmt(true),
+            TokenKind::DollarIdent(_)
+                if self.current_starts_dynamic_static_property_postfix_inc_dec() =>
+            {
+                self.parse_dynamic_static_property_inc_dec_stmt(false, true)
+            }
+            TokenKind::PlusPlus | TokenKind::MinusMinus
+                if self.current_starts_prefixed_static_property_inc_dec() =>
+            {
+                self.parse_static_property_inc_dec_stmt(true, true)
+            }
+            TokenKind::PlusPlus | TokenKind::MinusMinus
+                if self.current_starts_prefixed_dynamic_static_property_inc_dec() =>
+            {
+                self.parse_dynamic_static_property_inc_dec_stmt(true, true)
+            }
+            TokenKind::PlusPlus | TokenKind::MinusMinus => {
+                self.parse_prefix_inc_dec_stmt(true)
+            }
             TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
                 self.parse_property_stmt(true)
             }
@@ -285,6 +307,67 @@ impl Parser {
                 .tokens
                 .get(self.pos + 3)
                 .is_some_and(|token| assignment_op(token).is_some())
+    }
+
+    /// Returns true when the current tokens form `Class::$property++` or `Class::$property--`.
+    pub(super) fn current_starts_static_property_postfix_inc_dec(&self) -> bool {
+        self.static_property_tokens_end(self.pos).is_some_and(|pos| {
+            matches!(
+                self.tokens.get(pos),
+                Some(TokenKind::PlusPlus | TokenKind::MinusMinus)
+            )
+        })
+    }
+
+    /// Returns true when the current tokens form `$class::$property++` or `$class::$property--`.
+    pub(super) fn current_starts_dynamic_static_property_postfix_inc_dec(&self) -> bool {
+        matches!(self.current(), TokenKind::DollarIdent(_))
+            && matches!(self.peek(), TokenKind::DoubleColon)
+            && matches!(self.tokens.get(self.pos + 2), Some(TokenKind::DollarIdent(_)))
+            && matches!(
+                self.tokens.get(self.pos + 3),
+                Some(TokenKind::PlusPlus | TokenKind::MinusMinus)
+            )
+    }
+
+    /// Returns true when the current tokens form `++Class::$property` or `--Class::$property`.
+    pub(super) fn current_starts_prefixed_static_property_inc_dec(&self) -> bool {
+        matches!(self.current(), TokenKind::PlusPlus | TokenKind::MinusMinus)
+            && self.static_property_tokens_end(self.pos + 1).is_some()
+    }
+
+    /// Returns true when the current tokens form `++$class::$property` or `--$class::$property`.
+    pub(super) fn current_starts_prefixed_dynamic_static_property_inc_dec(&self) -> bool {
+        matches!(self.current(), TokenKind::PlusPlus | TokenKind::MinusMinus)
+            && matches!(self.tokens.get(self.pos + 1), Some(TokenKind::DollarIdent(_)))
+            && matches!(self.tokens.get(self.pos + 2), Some(TokenKind::DoubleColon))
+            && matches!(self.tokens.get(self.pos + 3), Some(TokenKind::DollarIdent(_)))
+    }
+
+    /// Returns the token position after `Class::$property` when present at `pos`.
+    fn static_property_tokens_end(&self, mut pos: usize) -> Option<usize> {
+        if matches!(self.tokens.get(pos), Some(TokenKind::Backslash)) {
+            pos += 1;
+        }
+        if !matches!(self.tokens.get(pos), Some(TokenKind::Ident(_))) {
+            return None;
+        }
+        pos += 1;
+        while matches!(self.tokens.get(pos), Some(TokenKind::Backslash)) {
+            pos += 1;
+            if !matches!(self.tokens.get(pos), Some(TokenKind::Ident(_))) {
+                return None;
+            }
+            pos += 1;
+        }
+        if !matches!(self.tokens.get(pos), Some(TokenKind::DoubleColon)) {
+            return None;
+        }
+        pos += 1;
+        if !matches!(self.tokens.get(pos), Some(TokenKind::DollarIdent(_))) {
+            return None;
+        }
+        Some(pos + 1)
     }
 
     /// Parses `do { ... } while (expr);`.
@@ -2417,9 +2500,31 @@ impl Parser {
     /// Parses one statement-like `for` clause without consuming a delimiter.
     pub(super) fn parse_for_clause_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         match self.current() {
-            TokenKind::PlusPlus | TokenKind::MinusMinus => self.parse_prefix_inc_dec_stmt(false),
+            TokenKind::PlusPlus | TokenKind::MinusMinus
+                if self.current_starts_prefixed_static_property_inc_dec() =>
+            {
+                self.parse_static_property_inc_dec_stmt(true, false)
+            }
+            TokenKind::PlusPlus | TokenKind::MinusMinus
+                if self.current_starts_prefixed_dynamic_static_property_inc_dec() =>
+            {
+                self.parse_dynamic_static_property_inc_dec_stmt(true, false)
+            }
+            TokenKind::PlusPlus | TokenKind::MinusMinus => {
+                self.parse_prefix_inc_dec_stmt(false)
+            }
+            TokenKind::Ident(_) | TokenKind::Backslash
+                if self.current_starts_static_property_postfix_inc_dec() =>
+            {
+                self.parse_static_property_inc_dec_stmt(false, false)
+            }
             TokenKind::DollarIdent(name) if matches!(self.peek(), TokenKind::LBracket) => {
                 self.parse_array_set_clause(name.clone())
+            }
+            TokenKind::DollarIdent(_)
+                if self.current_starts_dynamic_static_property_postfix_inc_dec() =>
+            {
+                self.parse_dynamic_static_property_inc_dec_stmt(false, false)
             }
             TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
                 self.parse_property_stmt(false)
@@ -2571,6 +2676,97 @@ impl Parser {
             class_name,
             property,
             value,
+        }])
+    }
+
+    /// Parses static property increment/decrement as read-modify-write.
+    pub(super) fn parse_static_property_inc_dec_stmt(
+        &mut self,
+        prefixed: bool,
+        require_semicolon: bool,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let prefix_increment = if prefixed {
+            let increment = matches!(self.current(), TokenKind::PlusPlus);
+            self.advance();
+            Some(increment)
+        } else {
+            None
+        };
+        let class_name = self.parse_qualified_name()?;
+        let class_name = self.resolve_static_class_name(class_name);
+        self.expect(TokenKind::DoubleColon)?;
+        let TokenKind::DollarIdent(property) = self.current() else {
+            return Err(EvalParseError::ExpectedVariable);
+        };
+        let property = property.clone();
+        self.advance();
+        let increment = if let Some(increment) = prefix_increment {
+            increment
+        } else {
+            let increment = matches!(self.current(), TokenKind::PlusPlus);
+            self.advance();
+            increment
+        };
+        if require_semicolon {
+            self.expect_semicolon()?;
+        }
+        Ok(vec![EvalStmt::StaticPropertySet {
+            value: inc_dec_static_property_value(
+                EvalExpr::StaticPropertyGet {
+                    class_name: class_name.clone(),
+                    property: property.clone(),
+                },
+                increment,
+            ),
+            class_name,
+            property,
+        }])
+    }
+
+    /// Parses dynamic static property increment/decrement as read-modify-write.
+    pub(super) fn parse_dynamic_static_property_inc_dec_stmt(
+        &mut self,
+        prefixed: bool,
+        require_semicolon: bool,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let prefix_increment = if prefixed {
+            let increment = matches!(self.current(), TokenKind::PlusPlus);
+            self.advance();
+            Some(increment)
+        } else {
+            None
+        };
+        let TokenKind::DollarIdent(class_name) = self.current() else {
+            return Err(EvalParseError::ExpectedVariable);
+        };
+        let class_name = EvalExpr::LoadVar(class_name.clone());
+        self.advance();
+        self.expect(TokenKind::DoubleColon)?;
+        let TokenKind::DollarIdent(property) = self.current() else {
+            return Err(EvalParseError::ExpectedVariable);
+        };
+        let property = property.clone();
+        self.advance();
+        let increment = if let Some(increment) = prefix_increment {
+            increment
+        } else {
+            let increment = matches!(self.current(), TokenKind::PlusPlus);
+            self.advance();
+            increment
+        };
+        if require_semicolon {
+            self.expect_semicolon()?;
+        }
+        Ok(vec![EvalStmt::DynamicStaticPropertySet {
+            value: inc_dec_static_property_value(
+                EvalExpr::DynamicStaticPropertyGet {
+                    class_name: Box::new(class_name.clone()),
+                    property: property.clone(),
+                },
+                increment,
+            ),
+            class_name,
+            property,
         }])
     }
 
@@ -2959,6 +3155,19 @@ fn eval_default_class_receiver_is_supported(class_name: &str) -> bool {
     !class_name
         .trim_start_matches('\\')
         .eq_ignore_ascii_case("static")
+}
+
+/// Builds the right-hand value for static property increment/decrement statements.
+fn inc_dec_static_property_value(target: EvalExpr, increment: bool) -> EvalExpr {
+    EvalExpr::Binary {
+        op: if increment {
+            EvalBinOp::Add
+        } else {
+            EvalBinOp::Sub
+        },
+        left: Box::new(target),
+        right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+    }
 }
 
 /// Converts a parsed attribute argument expression into retained literal metadata.

@@ -9328,6 +9328,46 @@ echo $aotClass::$count;');
     assert_eq!(out.stdout, "set:tail|5|AB|15");
 }
 
+/// Verifies eval static property increment/decrement works with nominal and dynamic receivers.
+#[test]
+fn test_eval_static_property_inc_dec_statements() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotStaticIncDec {
+    public static $count = 10;
+}
+eval('class EvalDynamicStaticIncDec {
+    public static $count = 1;
+}
+EvalDynamicStaticIncDec::$count++;
+++EvalDynamicStaticIncDec::$count;
+$evalClass = "EvalDynamicStaticIncDec";
+$evalClass::$count++;
+--$evalClass::$count;
+$i = 0;
+for (; $i < 3; $evalClass::$count++) {
+    $i++;
+}
+echo EvalDynamicStaticIncDec::$count; echo "|";
+EvalAotStaticIncDec::$count++;
+$aot = "EvalAotStaticIncDec";
+$aot::$count--;
+--$aot::$count;
+$j = 0;
+for (; $j < 2; EvalAotStaticIncDec::$count++) {
+    $j++;
+}
+echo EvalAotStaticIncDec::$count;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "6|11");
+}
+
 /// Verifies eval `isset()` and `empty()` probe static properties without normal read fatals.
 #[test]
 fn test_eval_static_property_isset_empty_probes() {

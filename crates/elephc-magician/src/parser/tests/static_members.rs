@@ -204,6 +204,79 @@ fn parse_fragment_accepts_dynamic_static_property_unset() {
     );
 }
 
+/// Verifies static property increment/decrement parse as read-modify-write assignments.
+#[test]
+fn parse_fragment_accepts_static_property_inc_dec() {
+    let program =
+        parse_fragment(br#"EvalStaticBox::$count++; --EvalStaticBox::$count;"#)
+            .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::StaticPropertySet {
+                class_name: "EvalStaticBox".to_string(),
+                property: "count".to_string(),
+                value: EvalExpr::Binary {
+                    op: EvalBinOp::Add,
+                    left: Box::new(EvalExpr::StaticPropertyGet {
+                        class_name: "EvalStaticBox".to_string(),
+                        property: "count".to_string(),
+                    }),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                },
+            },
+            EvalStmt::StaticPropertySet {
+                class_name: "EvalStaticBox".to_string(),
+                property: "count".to_string(),
+                value: EvalExpr::Binary {
+                    op: EvalBinOp::Sub,
+                    left: Box::new(EvalExpr::StaticPropertyGet {
+                        class_name: "EvalStaticBox".to_string(),
+                        property: "count".to_string(),
+                    }),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                },
+            },
+        ]
+    );
+}
+
+/// Verifies dynamic static property increment/decrement preserves the receiver expression.
+#[test]
+fn parse_fragment_accepts_dynamic_static_property_inc_dec() {
+    let program =
+        parse_fragment(br#"$class::$count++; --$class::$count;"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::DynamicStaticPropertySet {
+                class_name: EvalExpr::LoadVar("class".to_string()),
+                property: "count".to_string(),
+                value: EvalExpr::Binary {
+                    op: EvalBinOp::Add,
+                    left: Box::new(EvalExpr::DynamicStaticPropertyGet {
+                        class_name: Box::new(EvalExpr::LoadVar("class".to_string())),
+                        property: "count".to_string(),
+                    }),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                },
+            },
+            EvalStmt::DynamicStaticPropertySet {
+                class_name: EvalExpr::LoadVar("class".to_string()),
+                property: "count".to_string(),
+                value: EvalExpr::Binary {
+                    op: EvalBinOp::Sub,
+                    left: Box::new(EvalExpr::DynamicStaticPropertyGet {
+                        class_name: Box::new(EvalExpr::LoadVar("class".to_string())),
+                        property: "count".to_string(),
+                    }),
+                    right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+                },
+            },
+        ]
+    );
+}
+
 /// Verifies static property compound assignments lower to one read-modify-write statement.
 #[test]
 fn parse_fragment_accepts_static_property_compound_assignment() {
