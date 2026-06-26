@@ -7871,6 +7871,56 @@ echo implode(",", array_keys($vars));');
     assert_eq!(out.stdout, "PA:b:a,b:b");
 }
 
+/// Verifies eval `get_object_vars()` exposes initialized generated/AOT properties by scope.
+#[test]
+fn test_eval_get_object_vars_exposes_initialized_aot_properties_by_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotObjectVarsBase {
+    private $baseSecret = "bp";
+    protected $baseProtected = "bq";
+    public $basePublic = "br";
+    public int $baseTyped;
+    public ?int $baseNullable = null;
+    public function parentView() {
+        return eval('$vars = get_object_vars($this);
+ksort($vars);
+return implode(",", array_keys($vars));');
+    }
+}
+class EvalAotObjectVarsChild extends EvalAotObjectVarsBase {
+    private $childSecret = "cp";
+    protected $childProtected = "cq";
+    public $childPublic = "cr";
+    public int $childTyped;
+    public ?string $childNullable = null;
+    public $implicit;
+    public static $static = "s";
+    public function childView() {
+        return eval('$vars = get_object_vars($this);
+ksort($vars);
+return implode(",", array_keys($vars));');
+    }
+}
+$object = new EvalAotObjectVarsChild();
+eval('$vars = get_object_vars($object);
+ksort($vars);
+echo implode(",", array_keys($vars)); echo ":";
+echo $object->childView(); echo ":";
+echo $object->parentView();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "baseNullable,basePublic,childNullable,childPublic,implicit:baseNullable,baseProtected,basePublic,childNullable,childProtected,childPublic,childSecret,implicit:baseNullable,baseProtected,basePublic,baseSecret,childNullable,childProtected,childPublic,implicit"
+    );
+}
+
 /// Verifies eval-declared private parent properties keep separate storage when a child shadows them.
 #[test]
 fn test_eval_declared_private_parent_property_shadowing() {

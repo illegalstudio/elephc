@@ -15,7 +15,9 @@ use super::super::super::*;
 use super::{eval_class_metadata_name, eval_class_relation_name_exists};
 use std::collections::HashSet;
 
+const EVAL_CLASS_METADATA_FLAG_STATIC: u64 = 1;
 const EVAL_CLASS_METADATA_FLAG_PUBLIC: u64 = 2;
+const EVAL_CLASS_METADATA_FLAG_PROTECTED: u64 = 4;
 const EVAL_CLASS_METADATA_FLAG_PRIVATE: u64 = 8;
 
 /// Evaluates `method_exists()` or `property_exists()` from eval expressions.
@@ -114,7 +116,8 @@ pub(in crate::interpreter) fn eval_get_object_vars_result(
         return eval_public_object_vars_result(*object, values);
     };
     let Some(class) = context.dynamic_object_class(identity) else {
-        return eval_public_object_vars_result(*object, values);
+        let class_name = eval_object_class_metadata_name(*object, context, values)?;
+        return eval_runtime_object_vars_result(*object, &class_name, context, values);
     };
     let class_name = class.name().to_string();
     eval_dynamic_object_vars_result(*object, &class_name, context, values)
@@ -390,6 +393,92 @@ fn eval_dynamic_object_vars_result(
         values,
     )?;
     eval_add_dynamic_object_vars(result, object, &mut emitted_keys, &storage_keys, values)
+}
+
+/// Builds `get_object_vars()` for generated/AOT objects from reflection metadata.
+fn eval_runtime_object_vars_result(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let property_names = values.reflection_property_names(class_name)?;
+    let declared_names = eval_runtime_string_array_to_vec(property_names, values)?;
+    values.release(property_names)?;
+    let property_count = values.object_property_len(object)?;
+    let mut result = values.assoc_new(declared_names.len() + property_count)?;
+    let mut emitted_keys = HashSet::new();
+    result = eval_add_runtime_declared_object_vars(
+        result,
+        object,
+        class_name,
+        &declared_names,
+        &mut emitted_keys,
+        context,
+        values,
+    )?;
+    eval_add_dynamic_object_vars(result, object, &mut emitted_keys, &HashSet::new(), values)
+}
+
+/// Adds generated/AOT declared instance properties visible from the current eval scope.
+fn eval_add_runtime_declared_object_vars(
+    mut result: RuntimeCellHandle,
+    object: RuntimeCellHandle,
+    class_name: &str,
+    property_names: &[String],
+    emitted_keys: &mut HashSet<String>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    for property_name in property_names {
+        let Some((declaring_class, visibility, is_static)) =
+            eval_runtime_property_access_metadata(class_name, property_name, values)?
+        else {
+            continue;
+        };
+        if is_static
+            || validate_eval_member_access(&declaring_class, visibility, context).is_err()
+            || emitted_keys.contains(property_name)
+            || !values.property_is_initialized(object, property_name)?
+        {
+            continue;
+        }
+        emitted_keys.insert(property_name.clone());
+        let key = values.string(property_name)?;
+        let value = values.property_get(object, property_name)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
+}
+
+/// Returns access metadata for one generated/AOT property name, if reflection exposes it.
+fn eval_runtime_property_access_metadata(
+    class_name: &str,
+    property_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, EvalVisibility, bool)>, EvalStatus> {
+    let Some(flags) = values.reflection_property_flags(class_name, property_name)? else {
+        return Ok(None);
+    };
+    let declaring_class = values
+        .reflection_property_declaring_class(class_name, property_name)?
+        .unwrap_or_else(|| class_name.to_string());
+    Ok(Some((
+        declaring_class,
+        eval_runtime_property_visibility(flags),
+        flags & EVAL_CLASS_METADATA_FLAG_STATIC != 0,
+    )))
+}
+
+/// Converts generated/AOT reflection property flags into eval visibility metadata.
+fn eval_runtime_property_visibility(flags: u64) -> EvalVisibility {
+    if flags & EVAL_CLASS_METADATA_FLAG_PRIVATE != 0 {
+        EvalVisibility::Private
+    } else if flags & EVAL_CLASS_METADATA_FLAG_PROTECTED != 0 {
+        EvalVisibility::Protected
+    } else {
+        EvalVisibility::Public
+    }
 }
 
 /// Adds synthetic enum properties exposed by PHP enum case objects.
