@@ -8865,6 +8865,61 @@ echo function_exists("get_class_vars") ? "F" : "f";');
     );
 }
 
+/// Verifies eval `get_class_vars()` exposes generated/AOT class defaults by scope.
+#[test]
+fn test_eval_get_class_vars_exposes_aot_defaults_by_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotClassVarsBase {
+    public $basePublic = "bp";
+    protected $baseProtected = "bq";
+    private $basePrivate = "bs";
+    public static $baseStatic = "static";
+    public int $baseTyped;
+    public ?int $baseNullable = null;
+    public function parentView() {
+        return eval('$vars = get_class_vars(EvalAotClassVarsChild::class);
+ksort($vars);
+foreach ($vars as $name => $value) {
+    echo $name . "=" . (is_null($value) ? "null" : $value) . "|";
+}');
+    }
+}
+class EvalAotClassVarsChild extends EvalAotClassVarsBase {
+    public $childPublic = "cp";
+    protected $childProtected = "cq";
+    private $childPrivate = "cs";
+    public static $childStatic = "childStatic";
+    public function childView() {
+        return eval('$vars = get_class_vars(self::class);
+ksort($vars);
+foreach ($vars as $name => $value) {
+    echo $name . "=" . (is_null($value) ? "null" : $value) . "|";
+}');
+    }
+}
+eval('$outside = get_class_vars(EvalAotClassVarsChild::class);
+ksort($outside);
+foreach ($outside as $name => $value) {
+    echo $name . "=" . (is_null($value) ? "null" : $value) . "|";
+}
+echo ":";');
+(new EvalAotClassVarsChild())->childView();
+echo ":";
+(new EvalAotClassVarsChild())->parentView();
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "baseNullable=null|basePublic=bp|baseStatic=static|baseTyped=null|childPublic=cp|childStatic=childStatic|:baseNullable=null|baseProtected=bq|basePublic=bp|baseStatic=static|baseTyped=null|childPrivate=cs|childProtected=cq|childPublic=cp|childStatic=childStatic|:baseNullable=null|basePrivate=bs|baseProtected=bq|basePublic=bp|baseStatic=static|baseTyped=null|childProtected=cq|childPublic=cp|childStatic=childStatic|"
+    );
+}
+
 /// Verifies eval OOP introspection builtins honor AOT inherited private-member rules.
 #[test]
 fn test_eval_oop_introspection_builtins_for_aot_inherited_private_members() {
