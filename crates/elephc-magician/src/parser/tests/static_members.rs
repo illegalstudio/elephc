@@ -204,38 +204,23 @@ fn parse_fragment_accepts_dynamic_static_property_unset() {
     );
 }
 
-/// Verifies static property increment/decrement parse as read-modify-write assignments.
+/// Verifies static property increment/decrement parse as dedicated member updates.
 #[test]
 fn parse_fragment_accepts_static_property_inc_dec() {
-    let program =
-        parse_fragment(br#"EvalStaticBox::$count++; --EvalStaticBox::$count;"#)
-            .expect("fragment should parse");
+    let program = parse_fragment(br#"EvalStaticBox::$count++; --EvalStaticBox::$count;"#)
+        .expect("fragment should parse");
     assert_eq!(
         program.statements(),
         &[
-            EvalStmt::StaticPropertySet {
+            EvalStmt::StaticPropertyIncDec {
                 class_name: "EvalStaticBox".to_string(),
                 property: "count".to_string(),
-                value: EvalExpr::Binary {
-                    op: EvalBinOp::Add,
-                    left: Box::new(EvalExpr::StaticPropertyGet {
-                        class_name: "EvalStaticBox".to_string(),
-                        property: "count".to_string(),
-                    }),
-                    right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
-                },
+                increment: true,
             },
-            EvalStmt::StaticPropertySet {
+            EvalStmt::StaticPropertyIncDec {
                 class_name: "EvalStaticBox".to_string(),
                 property: "count".to_string(),
-                value: EvalExpr::Binary {
-                    op: EvalBinOp::Sub,
-                    left: Box::new(EvalExpr::StaticPropertyGet {
-                        class_name: "EvalStaticBox".to_string(),
-                        property: "count".to_string(),
-                    }),
-                    right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
-                },
+                increment: false,
             },
         ]
     );
@@ -249,29 +234,15 @@ fn parse_fragment_accepts_dynamic_static_property_inc_dec() {
     assert_eq!(
         program.statements(),
         &[
-            EvalStmt::DynamicStaticPropertySet {
+            EvalStmt::DynamicStaticPropertyIncDec {
                 class_name: EvalExpr::LoadVar("class".to_string()),
                 property: "count".to_string(),
-                value: EvalExpr::Binary {
-                    op: EvalBinOp::Add,
-                    left: Box::new(EvalExpr::DynamicStaticPropertyGet {
-                        class_name: Box::new(EvalExpr::LoadVar("class".to_string())),
-                        property: "count".to_string(),
-                    }),
-                    right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
-                },
+                increment: true,
             },
-            EvalStmt::DynamicStaticPropertySet {
+            EvalStmt::DynamicStaticPropertyIncDec {
                 class_name: EvalExpr::LoadVar("class".to_string()),
                 property: "count".to_string(),
-                value: EvalExpr::Binary {
-                    op: EvalBinOp::Sub,
-                    left: Box::new(EvalExpr::DynamicStaticPropertyGet {
-                        class_name: Box::new(EvalExpr::LoadVar("class".to_string())),
-                        property: "count".to_string(),
-                    }),
-                    right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
-                },
+                increment: false,
             },
         ]
     );

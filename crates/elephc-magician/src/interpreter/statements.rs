@@ -177,6 +177,16 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_property_set_result(object, &property, value, context, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::DynamicPropertyIncDec {
+            object,
+            property,
+            increment,
+        } => {
+            let object = eval_expr(object, context, scope, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_property_inc_dec_result(object, &property, *increment, context, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::StaticVar { name, init } => {
             execute_static_var_stmt(name, init, context, scope, values)?;
             Ok(EvalControl::None)
@@ -191,6 +201,15 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_property_set_result(object, property, value, context, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::PropertyIncDec {
+            object,
+            property,
+            increment,
+        } => {
+            let object = eval_expr(object, context, scope, values)?;
+            eval_property_inc_dec_result(object, property, *increment, context, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::StaticPropertySet {
             class_name,
             property,
@@ -198,6 +217,16 @@ pub(in crate::interpreter) fn execute_stmt(
         } => {
             let value = eval_expr(value, context, scope, values)?;
             eval_static_property_set_result(class_name, property, value, context, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::StaticPropertyIncDec {
+            class_name,
+            property,
+            increment,
+        } => {
+            eval_static_property_inc_dec_result(
+                class_name, property, *increment, context, values,
+            )?;
             Ok(EvalControl::None)
         }
         EvalStmt::DynamicStaticPropertySet {
@@ -209,6 +238,22 @@ pub(in crate::interpreter) fn execute_stmt(
             let class_name = eval_dynamic_class_name(class_name, context, values)?;
             let value = eval_expr(value, context, scope, values)?;
             eval_static_property_set_result(&class_name, property, value, context, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::DynamicStaticPropertyIncDec {
+            class_name,
+            property,
+            increment,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            eval_static_property_inc_dec_result(
+                &class_name,
+                property,
+                *increment,
+                context,
+                values,
+            )?;
             Ok(EvalControl::None)
         }
         EvalStmt::StoreVar { name, value } => {
@@ -297,6 +342,46 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
     }
+}
+
+/// Applies member increment/decrement to a runtime value using PHP numeric semantics.
+fn eval_inc_dec_value(
+    current: RuntimeCellHandle,
+    increment: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let one = values.int(1)?;
+    if increment {
+        values.add(current, one)
+    } else {
+        values.sub(current, one)
+    }
+}
+
+/// Reads, updates, and writes one object property after the receiver/name are evaluated.
+fn eval_property_inc_dec_result(
+    object: RuntimeCellHandle,
+    property: &str,
+    increment: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let current = eval_property_get_result(object, property, context, values)?;
+    let value = eval_inc_dec_value(current, increment, values)?;
+    eval_property_set_result(object, property, value, context, values)
+}
+
+/// Reads, updates, and writes one static property after the receiver/name are resolved.
+fn eval_static_property_inc_dec_result(
+    class_name: &str,
+    property: &str,
+    increment: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let current = eval_static_property_get_result(class_name, property, context, values)?;
+    let value = eval_inc_dec_value(current, increment, values)?;
+    eval_static_property_set_result(class_name, property, value, context, values)
 }
 
 /// Releases one eval-owned value after running an eval-declared dynamic destructor if needed.

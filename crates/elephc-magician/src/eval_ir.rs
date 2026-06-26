@@ -146,20 +146,40 @@ pub enum EvalStmt {
         property: EvalExpr,
         value: EvalExpr,
     },
+    DynamicPropertyIncDec {
+        object: EvalExpr,
+        property: EvalExpr,
+        increment: bool,
+    },
     PropertySet {
         object: EvalExpr,
         property: String,
         value: EvalExpr,
+    },
+    PropertyIncDec {
+        object: EvalExpr,
+        property: String,
+        increment: bool,
     },
     StaticPropertySet {
         class_name: String,
         property: String,
         value: EvalExpr,
     },
+    StaticPropertyIncDec {
+        class_name: String,
+        property: String,
+        increment: bool,
+    },
     DynamicStaticPropertySet {
         class_name: EvalExpr,
         property: String,
         value: EvalExpr,
+    },
+    DynamicStaticPropertyIncDec {
+        class_name: EvalExpr,
+        property: String,
+        increment: bool,
     },
     StaticVar {
         name: String,

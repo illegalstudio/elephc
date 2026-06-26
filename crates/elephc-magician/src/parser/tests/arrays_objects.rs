@@ -370,6 +370,27 @@ fn parse_fragment_accepts_property_write_source() {
     );
 }
 
+/// Verifies object property increment/decrement parses as dedicated member updates.
+#[test]
+fn parse_fragment_accepts_property_inc_dec_source() {
+    let program = parse_fragment(br#"$this->x++; --$this->x;"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::PropertyIncDec {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: "x".to_string(),
+                increment: true,
+            },
+            EvalStmt::PropertyIncDec {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: "x".to_string(),
+                increment: false,
+            },
+        ]
+    );
+}
+
 /// Verifies dynamic object property writes parse as runtime-name EvalIR statements.
 #[test]
 fn parse_fragment_accepts_dynamic_property_write_source() {
@@ -381,6 +402,28 @@ fn parse_fragment_accepts_dynamic_property_write_source() {
             property: EvalExpr::LoadVar("name".to_string()),
             value: EvalExpr::Const(EvalConst::Int(7)),
         }]
+    );
+}
+
+/// Verifies dynamic object property increment/decrement keeps the runtime property expression.
+#[test]
+fn parse_fragment_accepts_dynamic_property_inc_dec_source() {
+    let program =
+        parse_fragment(br#"$this->{$name}++; --$this->{$name};"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::DynamicPropertyIncDec {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: EvalExpr::LoadVar("name".to_string()),
+                increment: true,
+            },
+            EvalStmt::DynamicPropertyIncDec {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: EvalExpr::LoadVar("name".to_string()),
+                increment: false,
+            },
+        ]
     );
 }
 

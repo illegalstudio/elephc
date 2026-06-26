@@ -1129,12 +1129,16 @@ fn visit_static_var_declarations(
             | EvalStmt::Expr(_)
             | EvalStmt::Global { .. }
             | EvalStmt::InterfaceDecl(_)
+            | EvalStmt::DynamicPropertyIncDec { .. }
             | EvalStmt::DynamicPropertySet { .. }
+            | EvalStmt::DynamicStaticPropertyIncDec { .. }
             | EvalStmt::DynamicStaticPropertySet { .. }
             | EvalStmt::PropertyReferenceBind { .. }
+            | EvalStmt::PropertyIncDec { .. }
             | EvalStmt::PropertySet { .. }
             | EvalStmt::ReferenceAssign { .. }
             | EvalStmt::Return(_)
+            | EvalStmt::StaticPropertyIncDec { .. }
             | EvalStmt::StaticPropertySet { .. }
             | EvalStmt::StoreVar { .. }
             | EvalStmt::Throw(_)

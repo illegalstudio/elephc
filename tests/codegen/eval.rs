@@ -3458,6 +3458,51 @@ echo empty($missing?->{eval_dynamic_write_bad()}) ? "nullempty" : "bad";');
     );
 }
 
+/// Verifies eval object property increment/decrement works with named and dynamic properties.
+#[test]
+fn test_eval_object_property_inc_dec_statements() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotPropertyIncDec {
+    public int $count = 10;
+}
+eval('class EvalDynamicPropertyIncDec {
+    public $count = 1;
+}
+function eval_property_inc_name() {
+    echo "n|";
+    return "count";
+}
+$box = new EvalDynamicPropertyIncDec();
+$box->count++;
+++$box->count;
+$name = "count";
+$box->{$name}++;
+--$box->{$name};
+++$box->{$name};
+$box->{eval_property_inc_name()}++;
+--$box->{eval_property_inc_name()};
+$i = 0;
+for (; $i < 3; $box->count++) {
+    $i++;
+}
+echo $box->count; echo "|";
+$aot = new EvalAotPropertyIncDec();
+$aot->count++;
+++$aot->count;
+$aot->count--;
+--$aot->count;
+echo $aot->count;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "n|n|7|10");
+}
+
 /// Verifies eval string contexts dispatch AOT `__toString()` through the runtime method bridge.
 #[test]
 fn test_eval_aot_tostring_string_contexts() {

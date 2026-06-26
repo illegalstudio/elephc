@@ -12,8 +12,8 @@ use super::cursor::*;
 use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalBinOp, EvalCallArg, EvalCatch,
-    EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst, EvalEnum,
+    EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalCallArg, EvalCatch, EvalClass,
+    EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst, EvalEnum,
     EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalInstanceOfTarget, EvalInterface,
     EvalInterfaceMethod, EvalInterfaceProperty, EvalParameterType, EvalParameterTypeVariant,
     EvalSourceLocation, EvalStmt, EvalSwitchCase, EvalTrait, EvalTraitAdaptation, EvalUnaryOp,
@@ -159,6 +159,11 @@ impl Parser {
                 if self.current_starts_prefixed_dynamic_static_property_inc_dec() =>
             {
                 self.parse_dynamic_static_property_inc_dec_stmt(true, true)
+            }
+            TokenKind::PlusPlus | TokenKind::MinusMinus
+                if self.current_starts_prefixed_property_inc_dec() =>
+            {
+                self.parse_prefixed_property_inc_dec_stmt(true)
             }
             TokenKind::PlusPlus | TokenKind::MinusMinus => {
                 self.parse_prefix_inc_dec_stmt(true)
@@ -342,6 +347,13 @@ impl Parser {
             && matches!(self.tokens.get(self.pos + 1), Some(TokenKind::DollarIdent(_)))
             && matches!(self.tokens.get(self.pos + 2), Some(TokenKind::DoubleColon))
             && matches!(self.tokens.get(self.pos + 3), Some(TokenKind::DollarIdent(_)))
+    }
+
+    /// Returns true when the current tokens form `++$object->property` or `--$object->property`.
+    pub(super) fn current_starts_prefixed_property_inc_dec(&self) -> bool {
+        matches!(self.current(), TokenKind::PlusPlus | TokenKind::MinusMinus)
+            && matches!(self.tokens.get(self.pos + 1), Some(TokenKind::DollarIdent(_)))
+            && matches!(self.tokens.get(self.pos + 2), Some(TokenKind::Arrow))
     }
 
     /// Returns the token position after `Class::$property` when present at `pos`.
@@ -2510,6 +2522,11 @@ impl Parser {
             {
                 self.parse_dynamic_static_property_inc_dec_stmt(true, false)
             }
+            TokenKind::PlusPlus | TokenKind::MinusMinus
+                if self.current_starts_prefixed_property_inc_dec() =>
+            {
+                self.parse_prefixed_property_inc_dec_stmt(false)
+            }
             TokenKind::PlusPlus | TokenKind::MinusMinus => {
                 self.parse_prefix_inc_dec_stmt(false)
             }
@@ -2710,16 +2727,10 @@ impl Parser {
         if require_semicolon {
             self.expect_semicolon()?;
         }
-        Ok(vec![EvalStmt::StaticPropertySet {
-            value: inc_dec_static_property_value(
-                EvalExpr::StaticPropertyGet {
-                    class_name: class_name.clone(),
-                    property: property.clone(),
-                },
-                increment,
-            ),
+        Ok(vec![EvalStmt::StaticPropertyIncDec {
             class_name,
             property,
+            increment,
         }])
     }
 
@@ -2757,16 +2768,10 @@ impl Parser {
         if require_semicolon {
             self.expect_semicolon()?;
         }
-        Ok(vec![EvalStmt::DynamicStaticPropertySet {
-            value: inc_dec_static_property_value(
-                EvalExpr::DynamicStaticPropertyGet {
-                    class_name: Box::new(class_name.clone()),
-                    property: property.clone(),
-                },
-                increment,
-            ),
+        Ok(vec![EvalStmt::DynamicStaticPropertyIncDec {
             class_name,
             property,
+            increment,
         }])
     }
 
@@ -2803,12 +2808,34 @@ impl Parser {
         Ok(vec![inc_dec_store(name, increment)])
     }
 
+    /// Parses prefix property increment/decrement as read-modify-write.
+    pub(super) fn parse_prefixed_property_inc_dec_stmt(
+        &mut self,
+        require_semicolon: bool,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let increment = matches!(self.current(), TokenKind::PlusPlus);
+        self.advance();
+        let target = self.parse_expr()?;
+        if require_semicolon {
+            self.expect_semicolon()?;
+        }
+        property_inc_dec_stmt(target, increment).map(|stmt| vec![stmt])
+    }
+
     /// Parses `$object->property` as either an expression statement or property write.
     pub(super) fn parse_property_stmt(
         &mut self,
         require_semicolon: bool,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let target = self.parse_expr()?;
+        if matches!(self.current(), TokenKind::PlusPlus | TokenKind::MinusMinus) {
+            let increment = matches!(self.current(), TokenKind::PlusPlus);
+            self.advance();
+            if require_semicolon {
+                self.expect_semicolon()?;
+            }
+            return property_inc_dec_stmt(target, increment).map(|stmt| vec![stmt]);
+        }
         if !self.consume(TokenKind::Equal) {
             if require_semicolon {
                 self.expect_semicolon()?;
@@ -3157,16 +3184,20 @@ fn eval_default_class_receiver_is_supported(class_name: &str) -> bool {
         .eq_ignore_ascii_case("static")
 }
 
-/// Builds the right-hand value for static property increment/decrement statements.
-fn inc_dec_static_property_value(target: EvalExpr, increment: bool) -> EvalExpr {
-    EvalExpr::Binary {
-        op: if increment {
-            EvalBinOp::Add
-        } else {
-            EvalBinOp::Sub
-        },
-        left: Box::new(target),
-        right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+/// Builds an object-property increment/decrement statement from a parsed property target.
+fn property_inc_dec_stmt(target: EvalExpr, increment: bool) -> Result<EvalStmt, EvalParseError> {
+    match target {
+        EvalExpr::PropertyGet { object, property } => Ok(EvalStmt::PropertyIncDec {
+            object: *object,
+            property,
+            increment,
+        }),
+        EvalExpr::DynamicPropertyGet { object, property } => Ok(EvalStmt::DynamicPropertyIncDec {
+            object: *object,
+            property: *property,
+            increment,
+        }),
+        _ => Err(EvalParseError::UnexpectedToken),
     }
 }
 
@@ -3313,7 +3344,7 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
         EvalStmt::UnsetDynamicStaticProperty { class_name, .. } => {
             eval_expr_uses_this_property(class_name, property_name)
         }
-        EvalStmt::UnsetStaticProperty { .. } => false,
+        EvalStmt::StaticPropertyIncDec { .. } | EvalStmt::UnsetStaticProperty { .. } => false,
         EvalStmt::DynamicPropertySet {
             object,
             property,
@@ -3324,6 +3355,13 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
                 || eval_expr_uses_this_property(property, property_name)
                 || eval_expr_uses_this_property(value, property_name)
         }
+        EvalStmt::DynamicPropertyIncDec {
+            object, property, ..
+        } => {
+            eval_is_this_dynamic_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(property, property_name)
+        }
         EvalStmt::PropertySet {
             object,
             property,
@@ -3333,11 +3371,20 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
                 || eval_expr_uses_this_property(object, property_name)
                 || eval_expr_uses_this_property(value, property_name)
         }
+        EvalStmt::PropertyIncDec {
+            object, property, ..
+        } => {
+            eval_is_this_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+        }
         EvalStmt::DynamicStaticPropertySet {
             class_name, value, ..
         } => {
             eval_expr_uses_this_property(class_name, property_name)
                 || eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::DynamicStaticPropertyIncDec { class_name, .. } => {
+            eval_expr_uses_this_property(class_name, property_name)
         }
         EvalStmt::StaticPropertySet { value, .. } | EvalStmt::StoreVar { value, .. } => {
             eval_expr_uses_this_property(value, property_name)
