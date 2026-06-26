@@ -12,11 +12,15 @@
 use super::super::*;
 use super::support::*;
 
-/// Verifies class-relation helpers return empty arrays for known eval classes.
+/// Verifies class-relation helpers handle eval class and trait targets.
 #[test]
 fn execute_program_dispatches_class_relation_builtins() {
     let program = parse_fragment(
         br#"class EvalMeta {}
+trait EvalMetaInnerTrait {}
+trait EvalMetaOuterTrait {
+    use EvalMetaInnerTrait;
+}
 $object = new EvalMeta();
 $implements = class_implements("EvalMeta");
 echo is_array($implements) && count($implements) === 0 ? "impl" : "bad"; echo ":";
@@ -29,6 +33,11 @@ $call = call_user_func("class_implements", "EvalMeta");
 echo is_array($call) && count($call) === 0 ? "call" : "bad"; echo ":";
 $named = call_user_func_array("class_parents", ["object_or_class" => "EvalMeta"]);
 echo is_array($named) && count($named) === 0 ? "named" : "bad"; echo ":";
+$trait_uses = class_uses("EvalMetaOuterTrait");
+echo $trait_uses["EvalMetaInnerTrait"]; echo ":";
+class_alias("EvalMetaOuterTrait", "EvalMetaOuterTraitAlias");
+$alias_uses = class_uses("EvalMetaOuterTraitAlias");
+echo $alias_uses["EvalMetaInnerTrait"]; echo ":";
 echo function_exists("class_implements"); echo function_exists("class_parents");
 echo function_exists("class_uses");
 return true;"#,
@@ -39,7 +48,10 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "impl:parents:uses:missing:call:named:111");
+    assert_eq!(
+        values.output,
+        "impl:parents:uses:missing:call:named:EvalMetaInnerTrait:EvalMetaInnerTrait:111"
+    );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval-declared parent and interface metadata is exposed to relation builtins.

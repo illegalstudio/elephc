@@ -7821,6 +7821,30 @@ foreach ($aliasParents as $name) { echo $name . ","; }');
     );
 }
 
+/// Verifies eval `class_uses()` accepts eval-declared trait targets and aliases.
+#[test]
+fn test_eval_class_uses_exposes_eval_trait_targets() {
+    let out = compile_and_run(
+        r#"<?php
+eval('trait EvalRelationInnerTrait {}
+trait EvalRelationOuterTrait {
+    use EvalRelationInnerTrait;
+}
+$uses = class_uses("EvalRelationOuterTrait");
+echo count($uses) . ":";
+echo $uses["EvalRelationInnerTrait"] . ":";
+class_alias("EvalRelationOuterTrait", "EvalRelationOuterTraitAlias");
+$aliasUses = call_user_func("class_uses", "EvalRelationOuterTraitAlias");
+echo count($aliasUses) . ":";
+echo $aliasUses["EvalRelationInnerTrait"];');
+"#,
+    );
+    assert_eq!(
+        out,
+        "1:EvalRelationInnerTrait:1:EvalRelationInnerTrait"
+    );
+}
+
 /// Verifies eval `instanceof` probes AOT and eval-declared class metadata.
 #[test]
 fn test_eval_fragment_instanceof_probes_class_metadata() {

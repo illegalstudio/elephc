@@ -87,6 +87,15 @@ pub(in crate::interpreter) fn eval_class_relation_target_result(
             _ => Err(EvalStatus::RuntimeFatal),
         };
     }
+    if context.trait_decl(&target).is_some() {
+        return match name {
+            "class_uses" => {
+                eval_class_relation_names_result(context.trait_trait_names(&target), values)
+            }
+            "class_implements" | "class_parents" => values.assoc_new(0),
+            _ => Err(EvalStatus::RuntimeFatal),
+        };
+    }
     match name {
         "class_implements" => eval_runtime_class_interface_names_result(&target, values),
         "class_parents" => {
