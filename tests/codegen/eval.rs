@@ -8965,6 +8965,39 @@ TypeError:call_user_func_array(): Argument #1 ($callback) must be a valid callba
     );
 }
 
+/// Verifies eval `is_callable()` probes method callable arrays for AOT classes.
+#[test]
+fn test_eval_is_callable_checks_aot_method_callable_arrays() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotCallableProbe {
+    public function inst() {}
+    public static function stat() {}
+    private function hidden() {}
+}
+class EvalAotCallableMagicProbe {
+    public function __call($method, $args) {}
+    public static function __callStatic($method, $args) {}
+}
+
+eval('$probe = new EvalAotCallableProbe();
+$magic = new EvalAotCallableMagicProbe();
+echo is_callable([$probe, "inst"]) ? "OI" : "bad"; echo ":";
+echo is_callable(["EvalAotCallableProbe", "stat"]) ? "SS" : "bad"; echo ":";
+echo is_callable(["EvalAotCallableProbe", "inst"]) ? "bad" : "NS"; echo ":";
+echo is_callable([$probe, "hidden"]) ? "bad" : "PV"; echo ":";
+echo is_callable([$magic, "missing"]) ? "OM" : "bad"; echo ":";
+echo is_callable(["EvalAotCallableMagicProbe", "static_missing"]) ? "SM" : "bad";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "OI:SS:NS:PV:OM:SM");
+}
+
 /// Verifies eval callable arrays use `__call` and `__callStatic` magic fallbacks.
 #[test]
 fn test_eval_call_user_func_method_callable_arrays_use_magic_fallbacks() {
