@@ -140,6 +140,14 @@ pub(crate) fn literal_default_value(
                 entries,
             })
         }
+        (PhpType::Array(elem_type), ExprKind::ArrayLiteralAssoc(entries)) => {
+            let value_type = elem_type.as_ref().codegen_repr();
+            let entries = literal_assoc_array_entries(context, &value_type, entries, op_name)?;
+            Ok(LiteralDefaultValue::AssocArrayEntries {
+                value_type,
+                entries,
+            })
+        }
         (PhpType::AssocArray { value, .. }, ExprKind::ArrayLiteral(items)) => {
             let value_type = value.as_ref().codegen_repr();
             if items.is_empty() {

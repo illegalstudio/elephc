@@ -4927,6 +4927,17 @@ fn emit_loaded_indexed_array_to_mixed(
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
 }
 
+/// Converts the currently loaded associative-array argument into boxed Mixed values.
+fn emit_loaded_assoc_array_to_mixed(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {}
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the loaded associative-array argument to the Mixed conversion helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+}
+
 /// Loads method call arguments for lexical `self::`/`parent::` instance calls using local `this`.
 fn materialize_method_call_args_with_receiver_local_and_refs(
     ctx: &mut FunctionContext<'_>,

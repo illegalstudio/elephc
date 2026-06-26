@@ -8875,13 +8875,15 @@ class EvalAotClassVarsBase {
     protected $baseProtected = "bq";
     private $basePrivate = "bs";
     public static $baseStatic = "static";
+    public array $baseArray = ["a" => 1];
     public int $baseTyped;
     public ?int $baseNullable = null;
     public function parentView() {
         return eval('$vars = get_class_vars(EvalAotClassVarsChild::class);
 ksort($vars);
 foreach ($vars as $name => $value) {
-    echo $name . "=" . (is_null($value) ? "null" : $value) . "|";
+    $rendered = is_array($value) ? $value["a"] : (is_null($value) ? "null" : $value);
+    echo $name . "=" . $rendered . "|";
 }');
     }
 }
@@ -8894,14 +8896,16 @@ class EvalAotClassVarsChild extends EvalAotClassVarsBase {
         return eval('$vars = get_class_vars(self::class);
 ksort($vars);
 foreach ($vars as $name => $value) {
-    echo $name . "=" . (is_null($value) ? "null" : $value) . "|";
+    $rendered = is_array($value) ? $value["a"] : (is_null($value) ? "null" : $value);
+    echo $name . "=" . $rendered . "|";
 }');
     }
 }
 eval('$outside = get_class_vars(EvalAotClassVarsChild::class);
 ksort($outside);
 foreach ($outside as $name => $value) {
-    echo $name . "=" . (is_null($value) ? "null" : $value) . "|";
+    $rendered = is_array($value) ? $value["a"] : (is_null($value) ? "null" : $value);
+    echo $name . "=" . $rendered . "|";
 }
 echo ":";');
 (new EvalAotClassVarsChild())->childView();
@@ -8916,7 +8920,7 @@ echo ":";
     );
     assert_eq!(
         out.stdout,
-        "baseNullable=null|basePublic=bp|baseStatic=static|baseTyped=null|childPublic=cp|childStatic=childStatic|:baseNullable=null|baseProtected=bq|basePublic=bp|baseStatic=static|baseTyped=null|childPrivate=cs|childProtected=cq|childPublic=cp|childStatic=childStatic|:baseNullable=null|basePrivate=bs|baseProtected=bq|basePublic=bp|baseStatic=static|baseTyped=null|childProtected=cq|childPublic=cp|childStatic=childStatic|"
+        "baseArray=1|baseNullable=null|basePublic=bp|baseStatic=static|baseTyped=null|childPublic=cp|childStatic=childStatic|:baseArray=1|baseNullable=null|baseProtected=bq|basePublic=bp|baseStatic=static|baseTyped=null|childPrivate=cs|childProtected=cq|childPublic=cp|childStatic=childStatic|:baseArray=1|baseNullable=null|basePrivate=bs|baseProtected=bq|basePublic=bp|baseStatic=static|baseTyped=null|childProtected=cq|childPublic=cp|childStatic=childStatic|"
     );
 }
 
