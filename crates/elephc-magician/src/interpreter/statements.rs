@@ -579,6 +579,16 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_static_property_unset_result(&class_name, property, context, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::UnsetDynamicStaticPropertyName {
+            class_name,
+            property,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_static_property_unset_result(&class_name, &property, context, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::UnsetVar { name } => {
             if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
                 eval_release_value(context, values, replaced)?;

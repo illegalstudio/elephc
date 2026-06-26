@@ -441,13 +441,20 @@ fn parse_fragment_accepts_static_property_unset() {
 /// Verifies runtime-valued static property unsets preserve the class receiver expression.
 #[test]
 fn parse_fragment_accepts_dynamic_static_property_unset() {
-    let program = parse_fragment(br#"unset($class::$count);"#).expect("fragment should parse");
+    let program = parse_fragment(br#"unset($class::$count, $class::${$name});"#)
+        .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::UnsetDynamicStaticProperty {
-            class_name: EvalExpr::LoadVar("class".to_string()),
-            property: "count".to_string(),
-        }]
+        &[
+            EvalStmt::UnsetDynamicStaticProperty {
+                class_name: EvalExpr::LoadVar("class".to_string()),
+                property: "count".to_string(),
+            },
+            EvalStmt::UnsetDynamicStaticPropertyName {
+                class_name: EvalExpr::LoadVar("class".to_string()),
+                property: EvalExpr::LoadVar("name".to_string()),
+            },
+        ]
     );
 }
 

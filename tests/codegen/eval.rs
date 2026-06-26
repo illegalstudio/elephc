@@ -9815,9 +9815,22 @@ try {
     echo get_class($e) . ":" . $e->getMessage();
 }
 echo "|";
+$name = "value";
+try {
+    unset($class::${$name});
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
 $aot = "EvalAotStaticUnset";
 try {
     unset($aot::$value);
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    unset($aot::${$name});
 } catch (Error $e) {
     echo get_class($e) . ":" . $e->getMessage();
 }
@@ -9836,7 +9849,7 @@ try {
     );
     assert_eq!(
         out.stdout,
-        "Error:Attempt to unset static property EvalDynamicStaticUnset::$value|Error:Attempt to unset static property EvalDynamicStaticUnset::$value|Error:Attempt to unset static property EvalAotStaticUnset::$value|Error:Class \"EvalMissingStaticUnset\" not found"
+        "Error:Attempt to unset static property EvalDynamicStaticUnset::$value|Error:Attempt to unset static property EvalDynamicStaticUnset::$value|Error:Attempt to unset static property EvalDynamicStaticUnset::$value|Error:Attempt to unset static property EvalAotStaticUnset::$value|Error:Attempt to unset static property EvalAotStaticUnset::$value|Error:Class \"EvalMissingStaticUnset\" not found"
     );
 }
 
