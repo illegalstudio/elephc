@@ -8428,6 +8428,53 @@ Error:Access to undeclared static property EvalInvalidStaticPropBox::$missing"
     );
 }
 
+/// Verifies invalid eval-declared static method calls throw catchable Error objects.
+#[test]
+fn test_eval_declared_invalid_static_method_calls_throw_error() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalInvalidStaticCallBox {
+    public function read() { return 1; }
+}
+class EvalMissingStaticCallBox {}
+abstract class EvalAbstractStaticCallBox {
+    abstract public static function abs();
+}
+try {
+    EvalInvalidStaticCallBox::read();
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    EvalMissingStaticCallBox::missing();
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    EvalAbstractStaticCallBox::abs();
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Error:Non-static method EvalInvalidStaticCallBox::read() cannot be called statically|\
+Error:Call to undefined method EvalMissingStaticCallBox::missing()|\
+Error:Cannot call abstract method EvalAbstractStaticCallBox::abs()"
+    );
+}
+
 /// Verifies eval-declared static interface methods are validated and reflected.
 #[test]
 fn test_eval_declared_static_interface_methods() {

@@ -3763,6 +3763,60 @@ fn eval_throw_method_access_error<T>(
     )
 }
 
+/// Throws PHP's error for calling an instance method through static syntax.
+fn eval_throw_non_static_method_call_error<T>(
+    declaring_class: &str,
+    method_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Non-static method {}::{}() cannot be called statically",
+            declaring_class.trim_start_matches('\\'),
+            method_name
+        ),
+        context,
+        values,
+    )
+}
+
+/// Throws PHP's error for calling an abstract method directly.
+fn eval_throw_abstract_method_call_error<T>(
+    declaring_class: &str,
+    method_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Cannot call abstract method {}::{}()",
+            declaring_class.trim_start_matches('\\'),
+            method_name
+        ),
+        context,
+        values,
+    )
+}
+
+/// Throws PHP's undefined method error after static magic fallback misses.
+fn eval_throw_undefined_method_call_error<T>(
+    class_name: &str,
+    method_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Call to undefined method {}::{}()",
+            class_name.trim_start_matches('\\'),
+            method_name
+        ),
+        context,
+        values,
+    )
+}
+
 /// Reads one eval-declared static property after resolving the class-like receiver.
 pub(in crate::interpreter) fn eval_static_property_get_result(
     class_name: &str,
@@ -4123,8 +4177,21 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
     if let Some((declaring_class, method)) =
         eval_dynamic_static_method_for_call(&class_name, method_name, context)
     {
-        if !method.is_static() || method.is_abstract() {
-            return Err(EvalStatus::RuntimeFatal);
+        if !method.is_static() {
+            return eval_throw_non_static_method_call_error(
+                &declaring_class,
+                method.name(),
+                context,
+                values,
+            );
+        }
+        if method.is_abstract() {
+            return eval_throw_abstract_method_call_error(
+                &declaring_class,
+                method.name(),
+                context,
+                values,
+            );
         }
         if validate_eval_member_access(&declaring_class, method.visibility(), context).is_err() {
             if let Some(result) = eval_magic_static_method_call(
@@ -4167,7 +4234,12 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
         )? {
             return Ok(result);
         }
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_undefined_method_call_error(
+            &class_name,
+            method_name,
+            context,
+            values,
+        );
     }
     eval_native_static_method_with_evaluated_args(
         &class_name,

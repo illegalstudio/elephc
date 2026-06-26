@@ -180,21 +180,52 @@ Error:Class \"MissingRuntimeStaticClass\" not found"
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies eval rejects static-style calls to non-static methods.
+/// Verifies invalid eval-declared static method calls throw PHP-compatible Error values.
 #[test]
-fn execute_program_rejects_static_call_to_eval_instance_method() {
+fn execute_program_invalid_static_method_calls_throw_error() {
     let program = parse_fragment(
         br#"class EvalStaticCallRules {
     public function read() { return 1; }
 }
-return EvalStaticCallRules::read();"#,
+class EvalStaticMissingRules {}
+abstract class EvalStaticAbstractRules {
+    abstract public static function abs();
+}
+try {
+    EvalStaticCallRules::read();
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo "|";
+try {
+    EvalStaticMissingRules::missing();
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo "|";
+try {
+    EvalStaticAbstractRules::abs();
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+return true;"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    execute_program(&program, &mut scope, &mut values)
-        .expect_err("static call to instance method should fail");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Error:Non-static method EvalStaticCallRules::read() cannot be called statically|\
+Error:Call to undefined method EvalStaticMissingRules::missing()|\
+Error:Cannot call abstract method EvalStaticAbstractRules::abs()"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies eval allows object-style calls to accessible static methods.
