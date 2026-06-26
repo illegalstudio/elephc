@@ -698,6 +698,31 @@ impl Parser {
             return Ok(());
         }
 
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "var")) {
+            if visibility.is_some()
+                || is_static
+                || is_abstract
+                || is_final
+                || is_readonly
+                || set_visibility.is_some()
+            {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            self.advance();
+            let (property, mut hook_methods) = self.parse_class_property_decl(
+                EvalVisibility::Public,
+                None,
+                false,
+                false,
+                false,
+                is_readonly_class,
+                false,
+            )?;
+            properties.push(property.with_attributes(attributes));
+            methods.append(&mut hook_methods);
+            return Ok(());
+        }
+
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "const")) {
             if is_static || is_abstract || is_readonly || set_visibility.is_some() {
                 return Err(EvalParseError::UnsupportedConstruct);

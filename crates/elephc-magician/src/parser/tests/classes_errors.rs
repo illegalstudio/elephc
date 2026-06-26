@@ -268,6 +268,51 @@ fn parse_fragment_accepts_class_member_attribute_metadata() {
     );
 }
 
+/// Verifies PHP's legacy `var` property marker parses as public property syntax.
+#[test]
+fn parse_fragment_accepts_legacy_var_properties() {
+    let program = parse_fragment(
+        br#"class DynEvalVarProps {
+    var $plain = "p";
+    var ?int $count = null;
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::ClassDecl(EvalClass::new(
+            "DynEvalVarProps",
+            vec![
+                EvalClassProperty::new(
+                    "plain",
+                    Some(EvalExpr::Const(EvalConst::String("p".to_string())))
+                ),
+                EvalClassProperty::new("count", Some(EvalExpr::Const(EvalConst::Null)))
+                    .with_type(Some(EvalParameterType::new(
+                        vec![EvalParameterTypeVariant::Int],
+                        true
+                    )))
+            ],
+            Vec::new(),
+        ))]
+    );
+}
+
+/// Verifies legacy `var` cannot be combined with other property modifiers.
+#[test]
+fn parse_fragment_rejects_legacy_var_modifier_combinations() {
+    for source in [
+        b"class DynEvalBadPublicVar { public var $value; }" as &[u8],
+        b"class DynEvalBadStaticVar { static var $value; }",
+        b"class DynEvalBadReadonlyVar { readonly var $value; }",
+    ] {
+        assert_eq!(
+            parse_fragment(source),
+            Err(EvalParseError::UnsupportedConstruct)
+        );
+    }
+}
+
 /// Verifies interface, trait, and enum member attributes are retained.
 #[test]
 fn parse_fragment_accepts_class_like_member_attribute_metadata() {

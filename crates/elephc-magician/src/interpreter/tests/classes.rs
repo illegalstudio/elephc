@@ -73,6 +73,37 @@ return $self instanceof EvalRelativeFactoryBase
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies PHP legacy `var` properties behave as public eval properties.
+#[test]
+fn execute_program_supports_legacy_var_properties() {
+    let program = parse_fragment(
+        br#"class EvalLegacyVarProperty {
+    var $plain = "p";
+    var ?int $count = null;
+}
+$object = new EvalLegacyVarProperty();
+$plain = new ReflectionProperty("EvalLegacyVarProperty", "plain");
+$count = new ReflectionProperty("EvalLegacyVarProperty", "count");
+$defaults = (new ReflectionClass("EvalLegacyVarProperty"))->getDefaultProperties();
+echo $object->plain; echo ":";
+echo $plain->isPublic() ? "P" : "p"; echo ":";
+echo $plain->hasType() ? "T" : "t"; echo ":";
+echo $count->isPublic() ? "C" : "c"; echo ":";
+echo $count->hasType() ? $count->getType()->getName() : "none"; echo ":";
+echo $count->getType()->allowsNull() ? "N" : "n"; echo ":";
+echo is_null($defaults["count"]) ? "null" : "bad";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "p:P:t:C:int:N:null");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval static method calls preserve PHP late-static forwarding rules.
 #[test]
 fn execute_program_forwards_eval_static_method_called_class() {
