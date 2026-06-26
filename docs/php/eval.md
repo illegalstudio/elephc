@@ -619,10 +619,12 @@ visible inside eval through `enum_exists()` and through class-like probes such
 as `class_exists()`.
 `method_exists()` and `property_exists()` inspect eval-declared class/interface/
 trait/enum metadata and generated runtime metadata. Object targets also see
-dynamic public properties. `get_class_methods()`, `get_class_vars()`, and
-`get_object_vars()` follow PHP visibility from the current eval class scope for
-eval-declared metadata and objects, and use generated/AOT runtime metadata when
-available through the bridge-visible hook slice.
+dynamic public properties, and `property_exists()` follows PHP's current-scope
+visibility for inherited private instance properties on object targets while
+leaving class-string targets hidden. `get_class_methods()`, `get_class_vars()`,
+and `get_object_vars()` follow PHP visibility from the current eval class scope
+for eval-declared metadata and objects, and use generated/AOT runtime metadata
+when available through the bridge-visible hook slice.
 
 Eval-declared enums share the dynamic class-like metadata path used by
 eval-declared classes. Pure and backed enum cases are singleton objects,

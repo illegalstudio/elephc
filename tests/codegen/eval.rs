@@ -8966,6 +8966,88 @@ echo property_exists($object, "childSecret") ? "objectChildPrivateProperty" : "b
     );
 }
 
+/// Verifies eval `property_exists()` exposes parent private object properties only from parent scope.
+#[test]
+fn test_eval_property_exists_exposes_declared_parent_private_object_property_by_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalPropertyExistsScopeBase {
+    private $basePrivate;
+    private static $baseStatic;
+    public function parentView() {
+        echo property_exists($this, "basePrivate") ? "parentPrivate" : "bad";
+        echo ",";
+        echo property_exists($this, "baseStatic") ? "bad" : "noParentStatic";
+        echo ",";
+        echo property_exists(EvalPropertyExistsScopeChild::class, "basePrivate") ? "bad" : "noClassPrivate";
+    }
+}
+class EvalPropertyExistsScopeChild extends EvalPropertyExistsScopeBase {
+    public function childView() {
+        echo property_exists($this, "basePrivate") ? "bad" : "noChildParentPrivate";
+    }
+}
+$object = new EvalPropertyExistsScopeChild();
+echo property_exists($object, "basePrivate") ? "bad" : "noOutsideObject";
+echo ":";
+echo property_exists(EvalPropertyExistsScopeChild::class, "basePrivate") ? "bad" : "noOutsideClass";
+echo ":";
+$object->childView();
+echo ":";
+$object->parentView();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "noOutsideObject:noOutsideClass:noChildParentPrivate:parentPrivate,noParentStatic,noClassPrivate"
+    );
+}
+
+/// Verifies eval `property_exists()` applies parent private object-property scope to AOT metadata.
+#[test]
+fn test_eval_property_exists_exposes_aot_parent_private_object_property_by_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotPropertyExistsScopeBase {
+    private $basePrivate;
+    private static $baseStatic;
+    public function parentView() {
+        return eval('return (property_exists($this, "basePrivate") ? "parentPrivate" : "bad")
+            . "," . (property_exists($this, "baseStatic") ? "bad" : "noParentStatic")
+            . "," . (property_exists(EvalAotPropertyExistsScopeChild::class, "basePrivate") ? "bad" : "noClassPrivate");');
+    }
+}
+class EvalAotPropertyExistsScopeChild extends EvalAotPropertyExistsScopeBase {
+    public function childView() {
+        return eval('return property_exists($this, "basePrivate") ? "bad" : "noChildParentPrivate";');
+    }
+}
+eval('$object = new EvalAotPropertyExistsScopeChild();
+echo property_exists($object, "basePrivate") ? "bad" : "noOutsideObject";
+echo ":";
+echo property_exists(EvalAotPropertyExistsScopeChild::class, "basePrivate") ? "bad" : "noOutsideClass";
+echo ":";
+echo $object->childView();
+echo ":";
+echo $object->parentView();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "noOutsideObject:noOutsideClass:noChildParentPrivate:parentPrivate,noParentStatic,noClassPrivate"
+    );
+}
+
 /// Verifies eval `get_class_methods()` follows PHP scope visibility for eval-declared metadata.
 #[test]
 fn test_eval_get_class_methods_exposes_declared_methods_by_scope() {

@@ -196,6 +196,14 @@ fn eval_property_exists_target(
             if eval_property_exists_on_class(&class_name, property_name, context, values)? {
                 return Ok(true);
             }
+            if eval_current_scope_private_property_exists_on_object(
+                &class_name,
+                property_name,
+                context,
+                values,
+            )? {
+                return Ok(true);
+            }
             eval_object_public_property_exists(target, property_name, values)
         }
         EVAL_TAG_STRING => {
@@ -303,6 +311,42 @@ fn eval_property_exists_on_class(
     Ok(declaring_class
         .trim_start_matches('\\')
         .eq_ignore_ascii_case(class_name.trim_start_matches('\\')))
+}
+
+/// Checks private instance properties declared by the current scope for object targets.
+fn eval_current_scope_private_property_exists_on_object(
+    class_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some(current_class) = context.current_class_scope() else {
+        return Ok(false);
+    };
+    if !eval_class_metadata_is_a(class_name, current_class, context) {
+        return Ok(false);
+    }
+    if let Some(class) = context.class(current_class) {
+        return Ok(class.properties().iter().any(|property| {
+            property.name() == property_name
+                && property.visibility() == EvalVisibility::Private
+                && !property.is_static()
+        }));
+    }
+    if context.has_interface(current_class) || context.has_trait(current_class) {
+        return Ok(false);
+    }
+    if !eval_class_relation_name_exists(current_class, context, values)? {
+        return Ok(false);
+    }
+    let Some((declaring_class, visibility, is_static)) =
+        eval_runtime_property_access_metadata(current_class, property_name, values)?
+    else {
+        return Ok(false);
+    };
+    Ok(visibility == EvalVisibility::Private
+        && !is_static
+        && eval_same_class_metadata_name(&declaring_class, current_class))
 }
 
 /// Resolves an object-or-class argument to a PHP class name and records whether it was an object.
