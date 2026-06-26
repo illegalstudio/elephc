@@ -14772,6 +14772,35 @@ return $target->collect("H", "A", "B") . "|" . EvalAotVariadicBridgeTarget::coll
     assert_eq!(out, "H:2:A:B|2:S:T|C:2:D:E");
 }
 
+/// Verifies eval can dispatch generated/AOT methods and constructors beyond register-only arity.
+#[test]
+fn test_eval_aot_wide_method_and_constructor_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotWideMethodBridgeTarget {
+    public string $label = "";
+
+    public function __construct($a, $b, $c, $d, $e, $f, $g, $h, $i) {
+        $this->label = $a . $b . $c . $d . $e . $f . $g . $h . $i;
+    }
+
+    public function join($a, $b, $c, $d, $e, $f, $g, $h, $i): string {
+        return $a . $b . $c . $d . $e . $f . $g . $h . $i;
+    }
+
+    public static function joinStatic($a, $b, $c, $d, $e, $f, $g, $h, $i): string {
+        return $a . $b . $c . $d . $e . $f . $g . $h . $i;
+    }
+}
+echo eval('$target = new EvalAotWideMethodBridgeTarget("A", "B", "C", "D", "E", "F", "G", "H", "I");
+return $target->join("1", "2", "3", "4", "5", "6", "7", "8", "9")
+    . "|" . EvalAotWideMethodBridgeTarget::joinStatic("a", "b", "c", "d", "e", "f", "g", "h", "i")
+    . "|" . $target->label;');
+"#,
+    );
+    assert_eq!(out, "123456789|abcdefghi|ABCDEFGHI");
+}
+
 /// Verifies generated/AOT variadic bridge rejects named arguments captured by the tail.
 #[test]
 fn test_eval_aot_variadic_method_rejects_named_tail() {
