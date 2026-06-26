@@ -3052,7 +3052,14 @@ pub(in crate::interpreter) fn eval_property_set_result(
                 values,
             );
         }
-        validate_eval_readonly_property_write(&declaring_class, &property, context)?;
+        if validate_eval_readonly_property_write(&declaring_class, &property, context).is_err() {
+            return eval_throw_readonly_property_modification_error(
+                &declaring_class,
+                property.name(),
+                context,
+                values,
+            );
+        }
         storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
         if property.has_set_hook() {
             if !current_eval_property_hook_is(
@@ -3100,7 +3107,12 @@ pub(in crate::interpreter) fn eval_property_set_result(
         return Ok(());
     }
     if !declared_property_found && class_is_readonly {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_dynamic_property_creation_error(
+            &object_class_name,
+            property_name,
+            context,
+            values,
+        );
     }
     if let Some(target) = context
         .dynamic_property_alias(identity, &storage_property_name)
@@ -3290,7 +3302,14 @@ pub(in crate::interpreter) fn eval_property_unset_result(
     {
         if validate_eval_member_access(&declaring_class, property.visibility(), context).is_ok() {
             validate_eval_property_write_access(&declaring_class, &property, context)?;
-            validate_eval_readonly_property_write(&declaring_class, &property, context)?;
+            if validate_eval_readonly_property_write(&declaring_class, &property, context).is_err() {
+                return eval_throw_readonly_property_unset_error(
+                    &declaring_class,
+                    property.name(),
+                    context,
+                    values,
+                );
+            }
             let storage_property_name =
                 eval_instance_property_storage_name(&declaring_class, &property);
             context.remove_dynamic_property_alias(identity, &storage_property_name);
@@ -3600,6 +3619,60 @@ fn eval_throw_property_access_error<T>(
     )
 }
 
+/// Throws PHP's readonly property assignment error for eval-declared properties.
+fn eval_throw_readonly_property_modification_error<T>(
+    declaring_class: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Cannot modify readonly property {}::${}",
+            declaring_class.trim_start_matches('\\'),
+            property_name
+        ),
+        context,
+        values,
+    )
+}
+
+/// Throws PHP's readonly property unset error for eval-declared properties.
+fn eval_throw_readonly_property_unset_error<T>(
+    declaring_class: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Cannot unset readonly property {}::${}",
+            declaring_class.trim_start_matches('\\'),
+            property_name
+        ),
+        context,
+        values,
+    )
+}
+
+/// Throws PHP's dynamic property creation error for readonly eval-declared classes.
+fn eval_throw_dynamic_property_creation_error<T>(
+    class_name: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Cannot create dynamic property {}::${}",
+            class_name.trim_start_matches('\\'),
+            property_name
+        ),
+        context,
+        values,
+    )
+}
+
 /// Throws PHP's inaccessible constant error for eval-declared class constants.
 fn eval_throw_constant_access_error<T>(
     declaring_class: &str,
@@ -3875,7 +3948,14 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                 values,
             );
         }
-        validate_eval_readonly_property_write(&declaring_class, &property, context)?;
+        if validate_eval_readonly_property_write(&declaring_class, &property, context).is_err() {
+            return eval_throw_readonly_property_modification_error(
+                &declaring_class,
+                property.name(),
+                context,
+                values,
+            );
+        }
         if let Some(replaced) = context.set_static_property(&declaring_class, property.name(), value) {
             values.release(replaced)?;
         }
