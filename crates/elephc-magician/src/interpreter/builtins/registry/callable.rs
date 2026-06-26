@@ -304,6 +304,9 @@ pub(in crate::interpreter) fn eval_callable_with_values(
         return eval_dynamic_function_with_values(&function, evaluated_args, context, values);
     }
     if let Some(function) = context.native_function(name) {
+        let evaluated_args = positional_args(evaluated_args);
+        let evaluated_args =
+            bind_evaluated_native_function_args(&function, evaluated_args, context, values)?;
         return eval_native_function_with_values(function, evaluated_args, values);
     }
     Err(EvalStatus::UnsupportedConstruct)
@@ -336,10 +339,8 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
         );
     }
     if let Some(function) = context.native_function(name) {
-        if function.param_names().len() != function.param_count() {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        let evaluated_args = bind_evaluated_function_args(function.param_names(), evaluated_args)?;
+        let evaluated_args =
+            bind_evaluated_native_function_args(&function, evaluated_args, context, values)?;
         return eval_native_function_with_values(function, evaluated_args, values);
     }
     Err(EvalStatus::UnsupportedConstruct)

@@ -1555,6 +1555,19 @@ fn register_eval_native_function(
             param_name,
         );
     }
+    for (index, default) in registration.signature.defaults.iter().enumerate() {
+        let Some(default) = default.as_ref().and_then(eval_native_callable_default) else {
+            continue;
+        };
+        register_eval_native_function_param_default(
+            ctx,
+            context_offset,
+            &name_label,
+            name_len,
+            index,
+            &default,
+        );
+    }
     Ok(())
 }
 
@@ -2644,6 +2657,101 @@ fn register_eval_native_function_param(
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_function_param");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native function parameter-default registration call.
+fn register_eval_native_function_param_default(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    function_name_label: &str,
+    function_name_len: usize,
+    param_index: usize,
+    default: &EvalNativeCallableDefault,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        function_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        function_name_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        param_index as i64,
+    );
+    let symbol = match default {
+        EvalNativeCallableDefault::Scalar { kind, payload } => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 4),
+                *kind,
+            );
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 5),
+                *payload,
+            );
+            ctx.emitter
+                .target
+                .extern_symbol("__elephc_eval_register_native_function_param_default_scalar")
+        }
+        EvalNativeCallableDefault::String(value) => {
+            let (default_label, default_len) = ctx.data.add_string(value.as_bytes());
+            abi::emit_symbol_address(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 4),
+                &default_label,
+            );
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 5),
+                default_len as i64,
+            );
+            ctx.emitter
+                .target
+                .extern_symbol("__elephc_eval_register_native_function_param_default_string")
+        }
+        EvalNativeCallableDefault::Object { .. } => {
+            let spec = encode_eval_native_object_default(default);
+            let (default_label, default_len) = ctx.data.add_string(&spec);
+            abi::emit_symbol_address(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 4),
+                &default_label,
+            );
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 5),
+                default_len as i64,
+            );
+            ctx.emitter
+                .target
+                .extern_symbol("__elephc_eval_register_native_function_param_default_object")
+        }
+        EvalNativeCallableDefault::Array(_) => {
+            let spec = encode_eval_native_array_default(default);
+            let (default_label, default_len) = ctx.data.add_string(&spec);
+            abi::emit_symbol_address(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 4),
+                &default_label,
+            );
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_arg_reg_name(ctx.emitter.target, 5),
+                default_len as i64,
+            );
+            ctx.emitter
+                .target
+                .extern_symbol("__elephc_eval_register_native_function_param_default_array")
+        }
+    };
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 

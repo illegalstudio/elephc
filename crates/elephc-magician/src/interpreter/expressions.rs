@@ -666,26 +666,6 @@ pub(in crate::interpreter) fn positional_call_arg_exprs(
     Ok(args.iter().map(|arg| arg.value().clone()).collect())
 }
 
-/// Evaluates a positional-only call argument list in source order.
-pub(in crate::interpreter) fn eval_positional_call_arg_values(
-    args: &[EvalCallArg],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    if args
-        .iter()
-        .any(|arg| arg.name().is_some() || arg.is_spread())
-    {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let mut evaluated_args = Vec::with_capacity(args.len());
-    for arg in args {
-        evaluated_args.push(eval_expr(arg.value(), context, scope, values)?);
-    }
-    Ok(evaluated_args)
-}
-
 /// Evaluates method-call arguments, preserving named metadata for eval method binding.
 pub(in crate::interpreter) fn eval_method_call_arg_values(
     args: &[EvalCallArg],

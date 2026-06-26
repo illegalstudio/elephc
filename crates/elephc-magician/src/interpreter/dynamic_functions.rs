@@ -22,16 +22,16 @@ pub(in crate::interpreter) fn eval_dynamic_function(
     eval_dynamic_function_with_evaluated_args(function, evaluated_args, context, values)
 }
 
-/// Evaluates and binds function-like arguments to parameter order.
-pub(in crate::interpreter) fn eval_function_call_args(
-    params: &[String],
+/// Evaluates and binds native AOT function arguments, filling registered defaults.
+pub(in crate::interpreter) fn eval_native_function_call_args(
+    function: &NativeFunction,
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     let evaluated_args = eval_call_arg_values(args, context, caller_scope, values)?;
-    bind_evaluated_function_args(params, evaluated_args)
+    bind_evaluated_native_function_args(function, evaluated_args, context, values)
 }
 
 /// Evaluates source-order call arguments while preserving named-argument metadata.
@@ -315,6 +315,47 @@ pub(in crate::interpreter) fn bind_evaluated_function_args(
         } else {
             bind_dynamic_positional_arg(&mut bound_args, &mut next_positional, arg.value)?;
         }
+    }
+
+    bound_args
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or(EvalStatus::RuntimeFatal)
+}
+
+/// Binds already evaluated native AOT function args and fills omitted defaults.
+pub(in crate::interpreter) fn bind_evaluated_native_function_args(
+    function: &NativeFunction,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    let mut bound_args = vec![None; function.param_count()];
+    let has_param_names = function.param_names().len() == function.param_count();
+    let mut next_positional = 0;
+
+    for arg in evaluated_args {
+        if let Some(name) = arg.name {
+            if !has_param_names {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            bind_dynamic_named_arg(function.param_names(), &mut bound_args, &name, arg.value)?;
+        } else {
+            bind_dynamic_positional_arg(&mut bound_args, &mut next_positional, arg.value)?;
+        }
+    }
+
+    for (position, value) in bound_args.iter_mut().enumerate() {
+        if value.is_some() {
+            continue;
+        }
+        if position < function.required_param_count() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let Some(default) = function.param_default(position) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        *value = Some(materialize_native_callable_default(default, context, values)?);
     }
 
     bound_args
@@ -1291,11 +1332,8 @@ pub(super) fn eval_native_function(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args = if function.param_names().len() == function.param_count() {
-        eval_function_call_args(function.param_names(), args, context, caller_scope, values)?
-    } else {
-        eval_positional_call_arg_values(args, context, caller_scope, values)?
-    };
+    let evaluated_args =
+        eval_native_function_call_args(&function, args, context, caller_scope, values)?;
     eval_native_function_with_values(function, evaluated_args, values)
 }
 
