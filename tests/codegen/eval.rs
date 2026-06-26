@@ -17115,6 +17115,30 @@ echo $mutate->invoke($value) . ":" . $value;');
     assert_eq!(out.stdout, "121X:341Y:Q!:Q");
 }
 
+/// Verifies eval ReflectionFunction::invokeArgs accepts runtime-built AOT argument arrays.
+#[test]
+fn test_eval_reflection_function_invoke_args_accepts_runtime_aot_arg_arrays() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function eval_aot_reflect_function_join(string $left, string $right = "B"): string {
+    return $left . $right;
+}
+echo eval('$ref = new ReflectionFunction("eval_aot_reflect_function_join");
+$args = [];
+$args["right"] = "Y";
+$args["left"] = "X";
+echo $ref->invokeArgs($args) . ":";
+return $ref->invoke(left: "Q");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "XY:QB");
+}
+
 /// Verifies eval ReflectionClass::isCloneable uses eval class metadata through the bridge.
 #[test]
 fn test_eval_reflection_class_cloneable_predicate() {

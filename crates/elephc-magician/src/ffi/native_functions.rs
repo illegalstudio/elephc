@@ -1,7 +1,7 @@
 //! Purpose:
 //! Exports registration of generated native PHP callbacks into an eval context.
 //! Eval fragments use this metadata to call AOT functions through descriptor
-//! invokers while preserving PHP-visible parameter names.
+//! invokers while preserving PHP-visible parameter names and defaults.
 //!
 //! Called from:
 //! - Generated EIR backend assembly before fragments can call AOT functions.
@@ -10,9 +10,12 @@
 //! - Invalid names, handles, descriptors, or indexes fail closed as `false`.
 //! - Function names are stored under their PHP case-insensitive folded key.
 
+use super::native_methods::{
+    native_callable_array_default, native_callable_object_default, native_callable_scalar_default,
+};
 use super::util::abi_name_to_string;
 use crate::abi::{ElephcEvalContext, ABI_VERSION};
-use crate::context::{NativeFunction, NativeFunctionInvoker};
+use crate::context::{NativeCallableDefault, NativeFunction, NativeFunctionInvoker};
 use std::ffi::c_void;
 
 /// Registers a generated native PHP function callback in an eval context.
@@ -58,6 +61,114 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_param(
             param_index,
             param_name_ptr,
             param_name_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP function scalar parameter default in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Function name must be readable for
+/// its declared byte length.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_param_default_scalar(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    default_kind: u64,
+    default_payload: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_function_param_default_scalar_inner(
+            ctx,
+            function_name_ptr,
+            function_name_len,
+            param_index,
+            default_kind,
+            default_payload,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP function string parameter default in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Function name and default string
+/// pointers must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_param_default_string(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    default_ptr: *const u8,
+    default_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_function_param_default_string_inner(
+            ctx,
+            function_name_ptr,
+            function_name_len,
+            param_index,
+            default_ptr,
+            default_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP function object parameter default in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Function name and encoded default
+/// pointers must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_param_default_object(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    spec_ptr: *const u8,
+    spec_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_function_param_default_object_inner(
+            ctx,
+            function_name_ptr,
+            function_name_len,
+            param_index,
+            spec_ptr,
+            spec_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP function array parameter default in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Function name and encoded default
+/// pointers must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_param_default_array(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    spec_ptr: *const u8,
+    spec_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_function_param_default_array_inner(
+            ctx,
+            function_name_ptr,
+            function_name_len,
+            param_index,
+            spec_ptr,
+            spec_len,
         )
     })
     .unwrap_or(0)
@@ -131,5 +242,136 @@ unsafe fn register_native_function_param_inner(
         &function_name.to_ascii_lowercase(),
         param_index,
         param_name,
+    ))
+}
+
+/// Runs native function scalar-default registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_function_param_default_scalar`; invalid
+/// handles, names, indexes, or default kinds fail closed as `false`.
+unsafe fn register_native_function_param_default_scalar_inner(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    default_kind: u64,
+    default_payload: u64,
+) -> i32 {
+    let Some(default) = native_callable_scalar_default(default_kind, default_payload) else {
+        return 0;
+    };
+    register_native_function_param_default_inner(
+        ctx,
+        function_name_ptr,
+        function_name_len,
+        param_index,
+        default,
+    )
+}
+
+/// Runs native function string-default registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_function_param_default_string`; invalid
+/// handles, names, or indexes fail closed as `false`.
+unsafe fn register_native_function_param_default_string_inner(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    default_ptr: *const u8,
+    default_len: u64,
+) -> i32 {
+    let Ok(default) = abi_name_to_string(default_ptr, default_len) else {
+        return 0;
+    };
+    register_native_function_param_default_inner(
+        ctx,
+        function_name_ptr,
+        function_name_len,
+        param_index,
+        NativeCallableDefault::String(default),
+    )
+}
+
+/// Runs native function object-default registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_function_param_default_object`; invalid
+/// handles, names, indexes, or object specs fail closed as `false`.
+unsafe fn register_native_function_param_default_object_inner(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    spec_ptr: *const u8,
+    spec_len: u64,
+) -> i32 {
+    let Some(default) = native_callable_object_default(spec_ptr, spec_len) else {
+        return 0;
+    };
+    register_native_function_param_default_inner(
+        ctx,
+        function_name_ptr,
+        function_name_len,
+        param_index,
+        default,
+    )
+}
+
+/// Runs native function array-default registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_function_param_default_array`; invalid
+/// handles, names, indexes, or array specs fail closed as `false`.
+unsafe fn register_native_function_param_default_array_inner(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    spec_ptr: *const u8,
+    spec_len: u64,
+) -> i32 {
+    let Some(default) = native_callable_array_default(spec_ptr, spec_len) else {
+        return 0;
+    };
+    register_native_function_param_default_inner(
+        ctx,
+        function_name_ptr,
+        function_name_len,
+        param_index,
+        default,
+    )
+}
+
+/// Records a native function parameter default by folded function name.
+///
+/// # Safety
+/// `ctx` and `function_name_ptr` must be valid for their declared use; callers
+/// are the exported ABI wrappers above.
+unsafe fn register_native_function_param_default_inner(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    default: NativeCallableDefault,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(function_name) = abi_name_to_string(function_name_ptr, function_name_len) else {
+        return 0;
+    };
+    let Ok(param_index) = usize::try_from(param_index) else {
+        return 0;
+    };
+    i32::from(context.define_native_function_param_default(
+        &function_name.to_ascii_lowercase(),
+        param_index,
+        default,
     ))
 }

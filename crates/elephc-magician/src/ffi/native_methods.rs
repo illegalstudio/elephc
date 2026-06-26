@@ -1978,7 +1978,7 @@ fn native_attribute_take_bytes<'a>(
 }
 
 /// Decodes tagged default kind/payload ABI fields into native callable metadata.
-fn native_callable_scalar_default(
+pub(super) fn native_callable_scalar_default(
     default_kind: u64,
     default_payload: u64,
 ) -> Option<NativeCallableDefault> {
@@ -1998,7 +1998,7 @@ fn native_callable_scalar_default(
 ///
 /// # Safety
 /// `spec_ptr` must be readable for `spec_len` bytes when non-null.
-unsafe fn native_callable_object_default(
+pub(super) unsafe fn native_callable_object_default(
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> Option<NativeCallableDefault> {
@@ -2013,7 +2013,7 @@ unsafe fn native_callable_object_default(
 ///
 /// # Safety
 /// `spec_ptr` must be readable for `spec_len` bytes when non-null.
-unsafe fn native_callable_array_default(
+pub(super) unsafe fn native_callable_array_default(
     spec_ptr: *const u8,
     spec_len: u64,
 ) -> Option<NativeCallableDefault> {

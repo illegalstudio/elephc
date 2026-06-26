@@ -396,7 +396,7 @@ fn dynamic_class_exists_reports_declared_eval_class() {
     assert_eq!(missing_result, 0);
 }
 
-/// Verifies native AOT registration records function and parameter metadata.
+/// Verifies native AOT registration records function parameter metadata and defaults.
 #[test]
 fn register_native_function_reports_function_exists() {
     let mut ctx = ElephcEvalContext::new();
@@ -424,6 +424,16 @@ fn register_native_function_reports_function_exists() {
             param.len() as u64,
         )
     };
+    let param_default_registered = unsafe {
+        __elephc_eval_register_native_function_param_default_scalar(
+            &mut ctx,
+            name.as_ptr(),
+            name.len() as u64,
+            0,
+            TEST_NATIVE_DEFAULT_INT,
+            42,
+        )
+    };
     let exists = unsafe { __elephc_eval_function_exists(&ctx, b"native_probe".as_ptr(), 12) };
 
     assert_eq!(registered, 1);
@@ -432,8 +442,10 @@ fn register_native_function_reports_function_exists() {
         .expect("native function should be registered");
 
     assert_eq!(param_registered, 1);
+    assert_eq!(param_default_registered, 1);
     assert_eq!(exists, 1);
     assert_eq!(native.param_names(), &["value".to_string()]);
+    assert_eq!(native.param_default(0), Some(&NativeCallableDefault::Int(42)));
 }
 
 /// Verifies native AOT method registration records instance/static/constructor parameters.

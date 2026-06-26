@@ -91,6 +91,7 @@ pub struct NativeFunction {
     invoker: NativeFunctionInvoker,
     param_count: usize,
     param_names: Vec<String>,
+    param_defaults: Vec<Option<NativeCallableDefault>>,
 }
 
 impl NativeFunction {
@@ -105,6 +106,7 @@ impl NativeFunction {
             invoker,
             param_count,
             param_names: Vec::new(),
+            param_defaults: Vec::new(),
         }
     }
 
@@ -128,6 +130,30 @@ impl NativeFunction {
     /// Returns the PHP-visible parameter names registered for this callback.
     pub fn param_names(&self) -> &[String] {
         &self.param_names
+    }
+
+    /// Records a PHP default value for one positional callback slot.
+    pub fn set_param_default(&mut self, index: usize, default: NativeCallableDefault) -> bool {
+        if index >= self.param_count {
+            return false;
+        }
+        if self.param_defaults.len() < self.param_count {
+            self.param_defaults.resize(self.param_count, None);
+        }
+        self.param_defaults[index] = Some(default);
+        true
+    }
+
+    /// Returns the registered default for one parameter slot, if any.
+    pub fn param_default(&self, index: usize) -> Option<&NativeCallableDefault> {
+        self.param_defaults.get(index).and_then(Option::as_ref)
+    }
+
+    /// Returns the minimum number of required parameters implied by defaults.
+    pub fn required_param_count(&self) -> usize {
+        (0..self.param_count)
+            .rfind(|index| self.param_default(*index).is_none())
+            .map_or(0, |index| index + 1)
     }
 
     /// Invokes the descriptor-compatible callback with a boxed Mixed arg array.
@@ -2105,6 +2131,18 @@ impl ElephcEvalContext {
         self.native_functions
             .get_mut(function_name)
             .is_some_and(|function| function.set_param_name(index, param_name))
+    }
+
+    /// Records one parameter default for an already registered native AOT callback.
+    pub fn define_native_function_param_default(
+        &mut self,
+        function_name: &str,
+        index: usize,
+        default: NativeCallableDefault,
+    ) -> bool {
+        self.native_functions
+            .get_mut(function_name)
+            .is_some_and(|function| function.set_param_default(index, default))
     }
 
     /// Defines native AOT instance-method signature metadata for eval named-argument binding.
