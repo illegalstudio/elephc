@@ -1754,13 +1754,36 @@ fn initialize_eval_declared_constants(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for constant in constants {
-        let value = eval_expr(constant.value(), context, scope, values)?;
+        let value = eval_class_like_member_default(
+            owner_name,
+            constant.trait_origin(),
+            constant.value(),
+            context,
+            scope,
+            values,
+        )?;
         if let Some(replaced) = context.set_class_constant_cell(owner_name, constant.name(), value)
         {
             values.release(replaced)?;
         }
     }
     Ok(())
+}
+
+/// Evaluates a class-like constant or property initializer with PHP magic scope.
+fn eval_class_like_member_default(
+    owner_name: &str,
+    trait_origin: Option<&str>,
+    default: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let trait_name = trait_origin.or_else(|| context.has_trait(owner_name).then_some(owner_name));
+    context.push_class_like_member_magic_scope(owner_name, trait_name);
+    let result = eval_expr(default, context, scope, values);
+    context.pop_magic_scope();
+    result
 }
 
 /// Initializes static property cells for a newly declared eval class.
@@ -1776,7 +1799,14 @@ fn initialize_eval_static_properties(
         .filter(|property| property.is_static())
     {
         let value = if let Some(default) = property.default() {
-            Some(eval_expr(default, context, scope, values)?)
+            Some(eval_class_like_member_default(
+                class.name(),
+                property.trait_origin(),
+                default,
+                context,
+                scope,
+                values,
+            )?)
         } else if property.property_type().is_none() {
             Some(values.null()?)
         } else {
@@ -2194,8 +2224,11 @@ fn append_eval_trait_constants(
             validate_eval_trait_constant_compatibility(existing, constant)?;
             continue;
         }
+        let constant = constant
+            .clone()
+            .with_trait_origin(trait_decl.name().to_string());
         trait_constants.insert(constant.name().to_string(), constant.clone());
-        constants.push(constant.clone());
+        constants.push(constant);
     }
     Ok(())
 }
@@ -2243,8 +2276,11 @@ fn append_eval_trait_properties(
             }
             continue;
         }
+        let property = property
+            .clone()
+            .with_trait_origin(trait_decl.name().to_string());
         trait_properties.insert(property.name().to_string(), property.clone());
-        properties.push(property.clone());
+        properties.push(property);
     }
     Ok(())
 }
@@ -6417,7 +6453,14 @@ fn eval_dynamic_class_allocate_object(
             .filter(|property| !property.is_static() && !property.is_abstract())
         {
             let value = if let Some(default) = property.default() {
-                Some(eval_expr(default, context, caller_scope, values)?)
+                Some(eval_class_like_member_default(
+                    class.name(),
+                    property.trait_origin(),
+                    default,
+                    context,
+                    caller_scope,
+                    values,
+                )?)
             } else if property.property_type().is_none() {
                 Some(values.null()?)
             } else {

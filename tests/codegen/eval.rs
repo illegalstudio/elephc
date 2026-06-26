@@ -4635,6 +4635,60 @@ echo Box::aliasStat();');
     );
 }
 
+/// Verifies eval trait member defaults expose PHP magic constants through the bridge.
+#[test]
+fn test_eval_trait_member_default_magic_constants_execute_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+eval('namespace EvalBridgeDefaultMagic;
+trait Inner {
+    public const C = __CLASS__;
+    public const T = __TRAIT__;
+    public string $p = __CLASS__;
+    public string $pt = __TRAIT__;
+    public static string $sp = __CLASS__;
+    public static string $st = __TRAIT__;
+}
+trait Outer {
+    use Inner;
+}
+class Base {
+    use Outer;
+}
+class Child extends Base {}
+class Direct {
+    public const C = __CLASS__;
+    public const T = __TRAIT__;
+    public string $p = __CLASS__;
+    public string $pt = __TRAIT__;
+    public static string $sp = __CLASS__;
+    public static string $st = __TRAIT__;
+}
+$object = new Child();
+$traitProps = (new \ReflectionClass(Inner::class))->getDefaultProperties();
+echo Base::C . "|" . Base::T . "|";
+echo Child::C . "|" . Child::T . "|";
+echo $object->p . "|" . $object->pt . "|";
+echo Child::$sp . "|" . Child::$st . "|";
+echo $traitProps["p"] . "|" . $traitProps["pt"] . ":";
+$direct = new Direct();
+echo Direct::C . "|" . Direct::T . "|" . $direct->p . "|" . $direct->pt . "|" . Direct::$sp . "|" . Direct::$st;');
+"#,
+    );
+    let expected = concat!(
+        "EvalBridgeDefaultMagic\\Base|EvalBridgeDefaultMagic\\Inner|",
+        "EvalBridgeDefaultMagic\\Base|EvalBridgeDefaultMagic\\Inner|",
+        "EvalBridgeDefaultMagic\\Base|EvalBridgeDefaultMagic\\Inner|",
+        "EvalBridgeDefaultMagic\\Base|EvalBridgeDefaultMagic\\Inner|",
+        "EvalBridgeDefaultMagic\\Inner|EvalBridgeDefaultMagic\\Inner:",
+        "EvalBridgeDefaultMagic\\Direct||",
+        "EvalBridgeDefaultMagic\\Direct||",
+        "EvalBridgeDefaultMagic\\Direct|"
+    );
+
+    assert_eq!(out, expected);
+}
+
 /// Verifies eval-declared functions persist across eval calls in the same generated context.
 #[test]
 fn test_eval_declared_function_persists_across_eval_calls() {

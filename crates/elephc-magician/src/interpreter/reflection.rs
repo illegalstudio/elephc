@@ -99,6 +99,7 @@ struct EvalReflectionMemberMetadata {
     type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     default_value: Option<EvalExpr>,
+    default_value_trait_origin: Option<String>,
     required_parameter_count: usize,
     parameters: Vec<EvalReflectionParameterMetadata>,
 }
@@ -967,7 +968,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_default_properties_resul
             continue;
         };
         let key = values.string(&name)?;
-        let value = eval_method_parameter_default(default, context, values)?;
+        let value = eval_reflection_member_default_value(&member, default, context, values)?;
         result = values.array_set(result, key, value)?;
     }
     Ok(Some(result))
@@ -2597,6 +2598,7 @@ fn eval_reflection_class_constant_object_result(
         &[],
         None,
         None,
+        None,
         flags,
         modifiers,
         0,
@@ -2753,6 +2755,7 @@ fn eval_reflection_class_owner_object_result(
             &[],
             None,
             None,
+            None,
             flags,
             modifiers,
             0,
@@ -2773,6 +2776,7 @@ fn eval_reflection_class_owner_object_result(
         &metadata.property_names,
         metadata.parent_class_name.as_deref(),
         &[],
+        None,
         None,
         None,
         metadata.flags,
@@ -2843,6 +2847,7 @@ fn eval_reflection_enum_object_result(
         &metadata.property_names,
         metadata.parent_class_name.as_deref(),
         &[],
+        None,
         None,
         None,
         metadata.flags,
@@ -3141,6 +3146,7 @@ fn eval_reflection_function_object_result(
         &[],
         None,
         parameters,
+        None,
         None,
         None,
         eval_reflection_callable_flags(attributes),
@@ -3922,6 +3928,7 @@ fn eval_reflection_dynamic_property_metadata(class_name: &str) -> EvalReflection
         type_metadata: None,
         return_type_metadata: None,
         default_value: None,
+        default_value_trait_origin: None,
         required_parameter_count: 0,
         parameters: Vec::new(),
     }
@@ -4044,6 +4051,7 @@ fn eval_reflection_aot_method_metadata(
         type_metadata: None,
         return_type_metadata,
         default_value: None,
+        default_value_trait_origin: None,
         required_parameter_count,
         parameters,
     }
@@ -4416,6 +4424,7 @@ fn eval_reflection_aot_property_metadata(
         type_metadata,
         return_type_metadata: None,
         default_value,
+        default_value_trait_origin: None,
         required_parameter_count: 0,
         parameters: Vec::new(),
     }
@@ -4475,6 +4484,7 @@ fn eval_reflection_class_constant_object_result_or_throw(
         &[],
         Some(&declaring_class_name),
         &[],
+        None,
         None,
         None,
         flags,
@@ -4649,6 +4659,7 @@ fn eval_reflection_enum_case_object_result(
         &[],
         None,
         None,
+        None,
         flags,
         modifiers,
         0,
@@ -4700,6 +4711,7 @@ fn eval_reflection_owner_object(
     parameter_metadata: &[EvalReflectionParameterMetadata],
     type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
     default_value: Option<&EvalExpr>,
+    default_value_trait_origin: Option<&str>,
     flags: u64,
     modifiers: u64,
     method_modifiers: u64,
@@ -4720,6 +4732,7 @@ fn eval_reflection_owner_object(
         parameter_metadata,
         type_metadata,
         default_value,
+        default_value_trait_origin,
         flags,
         modifiers,
         method_modifiers,
@@ -4744,6 +4757,7 @@ fn eval_reflection_owner_object_with_members(
     parameter_metadata: &[EvalReflectionParameterMetadata],
     type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
     default_value: Option<&EvalExpr>,
+    default_value_trait_origin: Option<&str>,
     flags: u64,
     modifiers: u64,
     method_modifiers: u64,
@@ -4821,7 +4835,13 @@ fn eval_reflection_owner_object_with_members(
         }
     } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
         match default_value {
-            Some(default) => eval_method_parameter_default(default, context, values)?,
+            Some(default) => eval_reflection_class_like_default_value(
+                parent_class_name,
+                default_value_trait_origin,
+                default,
+                context,
+                values,
+            )?,
             None => values.null()?,
         }
     } else {
@@ -4997,6 +5017,7 @@ fn eval_reflection_full_class_object_result(
             &[],
             None,
             None,
+            None,
             flags,
             modifiers,
             0,
@@ -5016,6 +5037,7 @@ fn eval_reflection_full_class_object_result(
         &metadata.property_names,
         metadata.parent_class_name.as_deref(),
         &[],
+        None,
         None,
         None,
         metadata.flags,
@@ -5052,6 +5074,7 @@ fn eval_reflection_shallow_class_object_result(
             &[],
             None,
             None,
+            None,
             flags,
             modifiers,
             0,
@@ -5072,6 +5095,7 @@ fn eval_reflection_shallow_class_object_result(
         &[],
         None,
         &[],
+        None,
         None,
         None,
         metadata.flags,
@@ -5313,6 +5337,41 @@ fn eval_reflection_parameter_default_value(
     result
 }
 
+/// Evaluates one reflected property default with its declaring class-like magic scope.
+fn eval_reflection_member_default_value(
+    member: &EvalReflectionMemberMetadata,
+    default: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_reflection_class_like_default_value(
+        member.declaring_class_name.as_deref(),
+        member.default_value_trait_origin.as_deref(),
+        default,
+        context,
+        values,
+    )
+}
+
+/// Evaluates one class-like default expression with PHP `__CLASS__` and `__TRAIT__`.
+fn eval_reflection_class_like_default_value(
+    declaring_class: Option<&str>,
+    trait_origin: Option<&str>,
+    default: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(declaring_class) = declaring_class else {
+        return eval_method_parameter_default(default, context, values);
+    };
+    let trait_name =
+        trait_origin.or_else(|| context.has_trait(declaring_class).then_some(declaring_class));
+    context.push_class_like_member_magic_scope(declaring_class, trait_name);
+    let result = eval_method_parameter_default(default, context, values);
+    context.pop_magic_scope();
+    result
+}
+
 /// Builds a shallow ReflectionMethod object for a parameter's declaring function metadata.
 fn eval_reflection_declaring_function_object_result(
     metadata: &EvalReflectionDeclaringFunctionMetadata,
@@ -5339,6 +5398,7 @@ fn eval_reflection_declaring_function_object_result(
         &[],
         metadata.declaring_class_name.as_deref(),
         &[],
+        None,
         None,
         None,
         metadata.flags,
@@ -5622,6 +5682,7 @@ fn eval_reflection_member_object_result(
         &member.parameters,
         member.type_metadata.as_ref(),
         member.default_value.as_ref(),
+        member.default_value_trait_origin.as_deref(),
         flags,
         owner_modifiers,
         method_modifiers,
@@ -6979,6 +7040,7 @@ fn eval_reflection_method_metadata(
                 type_metadata: None,
                 return_type_metadata,
                 default_value: None,
+                default_value_trait_origin: None,
                 required_parameter_count,
                 parameters,
             });
@@ -7045,6 +7107,7 @@ fn eval_reflection_method_metadata(
                     type_metadata: None,
                     return_type_metadata,
                     default_value: None,
+                    default_value_trait_origin: None,
                     required_parameter_count,
                     parameters,
                 }
@@ -7112,6 +7175,7 @@ fn eval_reflection_method_metadata(
                     type_metadata: None,
                     return_type_metadata,
                     default_value: None,
+                    default_value_trait_origin: None,
                     required_parameter_count,
                     parameters,
                 }
@@ -7199,6 +7263,7 @@ fn eval_reflection_enum_synthetic_method_metadata(
         type_metadata: None,
         return_type_metadata,
         default_value: None,
+        default_value_trait_origin: None,
         required_parameter_count,
         parameters,
     })
@@ -7239,6 +7304,7 @@ fn eval_reflection_property_metadata(
                         .and_then(eval_reflection_parameter_type_metadata),
                     return_type_metadata: None,
                     default_value,
+                    default_value_trait_origin: property.trait_origin().map(str::to_string),
                     required_parameter_count: 0,
                     parameters: Vec::new(),
                 }
@@ -7275,6 +7341,7 @@ fn eval_reflection_property_metadata(
                     .and_then(eval_reflection_parameter_type_metadata),
                 return_type_metadata: None,
                 default_value: None,
+                default_value_trait_origin: None,
                 required_parameter_count: 0,
                 parameters: Vec::new(),
             });
@@ -7311,6 +7378,10 @@ fn eval_reflection_property_metadata(
                         .and_then(eval_reflection_parameter_type_metadata),
                     return_type_metadata: None,
                     default_value,
+                    default_value_trait_origin: property
+                        .trait_origin()
+                        .map(str::to_string)
+                        .or_else(|| Some(trait_decl.name().to_string())),
                     required_parameter_count: 0,
                     parameters: Vec::new(),
                 }
@@ -7438,7 +7509,7 @@ fn eval_reflection_static_property_value(
         return member
             .default_value
             .as_ref()
-            .map(|default| eval_method_parameter_default(default, context, values))
+            .map(|default| eval_reflection_member_default_value(&member, default, context, values))
             .transpose();
     }
     let declaring_class = member
@@ -7713,6 +7784,7 @@ fn eval_reflection_property_hook_method_metadata(
         type_metadata: None,
         return_type_metadata: eval_reflection_property_hook_return_type(property, hook),
         default_value: None,
+        default_value_trait_origin: None,
         required_parameter_count,
         parameters,
     }

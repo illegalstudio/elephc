@@ -193,6 +193,74 @@ return EvalMagicBox::aliasStat();"#,
     );
 }
 
+/// Verifies trait-imported constants and property defaults use PHP magic scopes.
+#[test]
+fn execute_program_resolves_eval_trait_member_default_magic_constants() {
+    let program = parse_fragment(
+        br#"namespace EvalMagicDefaultNs;
+trait EvalMagicDefaultInner {
+    public const C = __CLASS__;
+    public const T = __TRAIT__;
+    public string $p = __CLASS__;
+    public string $pt = __TRAIT__;
+    public static string $sp = __CLASS__;
+    public static string $st = __TRAIT__;
+}
+trait EvalMagicDefaultOuter {
+    use EvalMagicDefaultInner;
+}
+class EvalMagicDefaultBase {
+    use EvalMagicDefaultOuter;
+}
+class EvalMagicDefaultChild extends EvalMagicDefaultBase {}
+class EvalMagicDirect {
+    public const C = __CLASS__;
+    public const T = __TRAIT__;
+    public string $p = __CLASS__;
+    public string $pt = __TRAIT__;
+    public static string $sp = __CLASS__;
+    public static string $st = __TRAIT__;
+}
+$object = new EvalMagicDefaultChild();
+$traitProps = (new \ReflectionClass(EvalMagicDefaultInner::class))->getDefaultProperties();
+echo EvalMagicDefaultBase::C . "|" . EvalMagicDefaultBase::T . "|";
+echo EvalMagicDefaultChild::C . "|" . EvalMagicDefaultChild::T . "|";
+echo $object->p . "|" . $object->pt . "|";
+echo EvalMagicDefaultChild::$sp . "|" . EvalMagicDefaultChild::$st . "|";
+echo $traitProps["p"] . "|" . $traitProps["pt"] . ":";
+$direct = new EvalMagicDirect();
+return EvalMagicDirect::C . "|" . EvalMagicDirect::T . "|" . $direct->p . "|" . $direct->pt . "|" . EvalMagicDirect::$sp . "|" . EvalMagicDirect::$st;"#,
+    )
+    .expect("parse eval trait member magic fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    let expected_trait = concat!(
+        "EvalMagicDefaultNs\\EvalMagicDefaultBase|",
+        "EvalMagicDefaultNs\\EvalMagicDefaultInner|",
+        "EvalMagicDefaultNs\\EvalMagicDefaultBase|",
+        "EvalMagicDefaultNs\\EvalMagicDefaultInner|",
+        "EvalMagicDefaultNs\\EvalMagicDefaultBase|",
+        "EvalMagicDefaultNs\\EvalMagicDefaultInner|",
+        "EvalMagicDefaultNs\\EvalMagicDefaultBase|",
+        "EvalMagicDefaultNs\\EvalMagicDefaultInner|",
+        "EvalMagicDefaultNs\\EvalMagicDefaultInner|",
+        "EvalMagicDefaultNs\\EvalMagicDefaultInner:"
+    );
+    let expected_direct = concat!(
+        "EvalMagicDefaultNs\\EvalMagicDirect||",
+        "EvalMagicDefaultNs\\EvalMagicDirect||",
+        "EvalMagicDefaultNs\\EvalMagicDirect|"
+    );
+
+    assert_eq!(values.output, expected_trait);
+    assert_eq!(
+        values.get(result),
+        FakeValue::String(expected_direct.to_string())
+    );
+}
+
 /// Verifies trait-to-trait composition rejects missing inner traits.
 #[test]
 fn execute_program_rejects_missing_eval_trait_used_by_trait() {
