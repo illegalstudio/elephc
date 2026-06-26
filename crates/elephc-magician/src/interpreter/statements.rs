@@ -4082,6 +4082,22 @@ fn eval_throw_error(
     Err(EvalStatus::UncaughtThrowable)
 }
 
+/// Schedules the Throwable category required by one ReflectionClass instantiation error.
+fn eval_throw_reflection_instantiation_error(
+    error: EvalReflectionInstantiationError,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    match error {
+        EvalReflectionInstantiationError::ThrowableError(message) => {
+            eval_throw_error(&message, context, values)
+        }
+        EvalReflectionInstantiationError::ReflectionException(message) => {
+            eval_throw_reflection_exception(&message, context, values)
+        }
+    }
+}
+
 /// Resolves a static method using private-method scope rules.
 fn eval_dynamic_static_method_for_call(
     class_name: &str,
@@ -5007,8 +5023,9 @@ fn eval_reflection_class_new_instance_result(
     let class_name = context
         .resolve_class_name(&reflected_name)
         .unwrap_or(reflected_name);
-    if eval_reflection_aot_class_allows_public_instantiation(&class_name, values)? == Some(false) {
-        return Err(EvalStatus::RuntimeFatal);
+    if let Some(error) = eval_reflection_aot_class_public_instantiation_error(&class_name, values)?
+    {
+        return eval_throw_reflection_instantiation_error(error, context, values);
     }
     eval_reflection_public_constructor_scope(context, values, |context, values| {
         let instance = values.new_object(&class_name)?;
@@ -5082,10 +5099,10 @@ fn eval_reflection_class_new_instance_without_constructor_result(
     let class_name = context
         .resolve_class_name(&reflected_name)
         .unwrap_or(reflected_name);
-    if eval_reflection_aot_class_allows_without_constructor_allocation(&class_name, values)?
-        == Some(false)
+    if let Some(message) =
+        eval_reflection_aot_class_without_constructor_error(&class_name, values)?
     {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_error(&message, context, values);
     }
     values.new_object(&class_name).map(Some)
 }

@@ -62,6 +62,12 @@ const EVAL_REFLECTION_PARAMETER_FLAG_CALLABLE_TYPE: u64 = 512;
 const EVAL_REFLECTION_NAMED_TYPE_FLAG_ALLOWS_NULL: u64 = 1;
 const EVAL_REFLECTION_NAMED_TYPE_FLAG_BUILTIN: u64 = 2;
 
+/// Exception category and message for failed ReflectionClass instantiation.
+pub(in crate::interpreter) enum EvalReflectionInstantiationError {
+    ThrowableError(String),
+    ReflectionException(String),
+}
+
 /// Eval metadata needed to materialize one `ReflectionClass` owner object.
 struct EvalReflectionClassMetadata {
     resolved_name: String,
@@ -2917,32 +2923,57 @@ fn eval_reflection_aot_class_flags(
     Ok(Some((flags, modifiers)))
 }
 
-/// Returns whether a generated/AOT reflected class can be allocated without its constructor.
-pub(in crate::interpreter) fn eval_reflection_aot_class_allows_without_constructor_allocation(
+/// Returns the catchable error for generated/AOT allocation without constructor, if any.
+pub(in crate::interpreter) fn eval_reflection_aot_class_without_constructor_error(
     class_name: &str,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<bool>, EvalStatus> {
+) -> Result<Option<String>, EvalStatus> {
     let Some((flags, _)) = eval_reflection_aot_class_flags(class_name, values)? else {
         return Ok(None);
     };
-    let rejected_flags = EVAL_REFLECTION_CLASS_FLAG_ABSTRACT
-        | EVAL_REFLECTION_CLASS_FLAG_INTERFACE
-        | EVAL_REFLECTION_CLASS_FLAG_TRAIT
-        | EVAL_REFLECTION_CLASS_FLAG_ENUM;
-    Ok(Some(flags & rejected_flags == 0))
+    Ok(eval_reflection_non_instantiable_error_message(
+        class_name, flags,
+    ))
 }
 
-/// Returns whether a generated/AOT reflected class can be constructed through a public constructor.
-pub(in crate::interpreter) fn eval_reflection_aot_class_allows_public_instantiation(
+/// Returns the catchable error for generated/AOT public ReflectionClass construction, if any.
+pub(in crate::interpreter) fn eval_reflection_aot_class_public_instantiation_error(
     class_name: &str,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<bool>, EvalStatus> {
+) -> Result<Option<EvalReflectionInstantiationError>, EvalStatus> {
     let Some((flags, _)) = eval_reflection_aot_class_flags(class_name, values)? else {
         return Ok(None);
     };
-    Ok(Some(
-        flags & EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE == EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE,
-    ))
+    if let Some(message) = eval_reflection_non_instantiable_error_message(class_name, flags) {
+        return Ok(Some(EvalReflectionInstantiationError::ThrowableError(message)));
+    }
+    if flags & EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE == 0 {
+        return Ok(Some(
+            EvalReflectionInstantiationError::ReflectionException(format!(
+                "Access to non-public constructor of class {}",
+                class_name.trim_start_matches('\\')
+            )),
+        ));
+    }
+    Ok(None)
+}
+
+/// Builds PHP's non-instantiable class-like message from ReflectionClass flags.
+fn eval_reflection_non_instantiable_error_message(class_name: &str, flags: u64) -> Option<String> {
+    let class_name = class_name.trim_start_matches('\\');
+    if flags & EVAL_REFLECTION_CLASS_FLAG_ABSTRACT != 0 {
+        return Some(format!("Cannot instantiate abstract class {}", class_name));
+    }
+    if flags & EVAL_REFLECTION_CLASS_FLAG_INTERFACE != 0 {
+        return Some(format!("Cannot instantiate interface {}", class_name));
+    }
+    if flags & EVAL_REFLECTION_CLASS_FLAG_TRAIT != 0 {
+        return Some(format!("Cannot instantiate trait {}", class_name));
+    }
+    if flags & EVAL_REFLECTION_CLASS_FLAG_ENUM != 0 {
+        return Some(format!("Cannot instantiate enum {}", class_name));
+    }
+    None
 }
 
 /// Returns whether an absent or public AOT lifecycle method allows public reflection.
