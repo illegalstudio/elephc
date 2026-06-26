@@ -491,9 +491,11 @@ def _do_render(repo: Path, registry_path: Path, user_dir: Path, internals_dir: P
     raw = json.loads(registry_path.read_text(encoding="utf-8"))
     # Split the catalog: user-facing pages skip compiler-internal helpers.
     catalog_builtins = [b for b in raw if b["in_catalog"]]
+    internal_only = [b for b in raw if b["is_internal"] and not b["in_catalog"]]
     user_facing = [b for b in catalog_builtins if not b["is_internal"]]
     user_facing.sort(key=lambda b: (b["area"], b["name"]))
     catalog_builtins.sort(key=lambda b: (b["area"], b["name"]))
+    internal_only.sort(key=lambda b: b["name"])
 
     if force:
         _clean_output_tree(user_dir)
@@ -520,6 +522,20 @@ def _do_render(repo: Path, registry_path: Path, user_dir: Path, internals_dir: P
             skipped += 1
         else:
             internals_path.write_text(render_internals(b, idx, repo), encoding="utf-8")
+            written += 1
+
+    # Compiler-only builtin entries are tracked outside the PHP-visible catalog.
+    # Render them after the catalog so they cannot perturb existing sidebar order.
+    internal_start = len(catalog_builtins) + 1
+    for idx, b in enumerate(internal_only, start=internal_start):
+        i_dir = area_dir(internals_dir, b)
+        i_dir.mkdir(parents=True, exist_ok=True)
+        internals_path = i_dir / f"{slug(b['name'])}.md"
+        if internals_path.exists() and not force:
+            skipped += 1
+        else:
+            content = render_internals(b, idx, repo).rstrip() + "\n"
+            internals_path.write_text(content, encoding="utf-8")
             written += 1
 
     # User-facing pages are emitted only for non-internal builtins.

@@ -18206,18 +18206,21 @@
     "sub_area": "String"
   },
   {
-    "area": "Misc",
+    "area": "IO",
     "canonical_name": "__elephc_phar_list_entries",
-    "description": "",
+    "description": "Internal helper used by the built-in Phar / PharData support to enumerate archive entries.",
     "in_catalog": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": null,
-      "codegen_function": null,
-      "codegen_line": null,
-      "notes": [],
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
+      "codegen_function": "lower_elephc_phar_list_entries",
+      "codegen_line": 3634,
+      "notes": [
+        "Internal helper used by the built-in Phar / PharData support to enumerate archive entries.",
+        "Calls the native PHAR listing bridge and returns the entries as an array."
+      ],
       "runtime_helpers": [],
       "sig_arm": null,
       "sig_file": null,
@@ -18225,26 +18228,37 @@
     },
     "name": "__elephc_phar_list_entries",
     "sig": {
-      "params": [],
-      "return_type": "mixed",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "array",
       "variadic": null
     },
     "slug": "__elephc_phar_list_entries",
-    "sub_area": "Internal"
+    "sub_area": "IO"
   },
   {
-    "area": "Misc",
+    "area": "IO",
     "canonical_name": "__elephc_phar_set_compression",
-    "description": "",
+    "description": "Internal helper used by the built-in Phar / PharData support to change archive compression.",
     "in_catalog": false,
     "is_internal": true,
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": null,
-      "codegen_function": null,
-      "codegen_line": null,
-      "notes": [],
+      "codegen_file": "src/codegen_ir/lower_inst/builtins/io.rs",
+      "codegen_function": "lower_elephc_phar_set_compression",
+      "codegen_line": 3576,
+      "notes": [
+        "Internal helper used by the built-in Phar / PharData support to change archive compression.",
+        "Calls the native PHAR compression-control bridge and returns whether the update succeeded."
+      ],
       "runtime_helpers": [],
       "sig_arm": null,
       "sig_file": null,
@@ -18252,11 +18266,26 @@
     },
     "name": "__elephc_phar_set_compression",
     "sig": {
-      "params": [],
-      "return_type": "mixed",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "compression",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
       "variadic": null
     },
     "slug": "__elephc_phar_set_compression",
-    "sub_area": "Internal"
+    "sub_area": "IO"
   }
 ]

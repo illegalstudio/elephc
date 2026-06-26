@@ -1,8 +1,8 @@
 ---
 title: "__elephc_phar_set_compression() — internals"
-description: "Compiler internals for __elephc_phar_set_compression(): PHAR archive compression control for helper classes."
+description: "Compiler internals for __elephc_phar_set_compression(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 259
+  order: 415
 ---
 
 ## `__elephc_phar_set_compression()` — internals
@@ -10,32 +10,28 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Type checking**: [`src/types/checker/builtins/io/files.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/checker/builtins/io/files.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs) (`lower_elephc_phar_set_compression`)
-- **Bridge**: [`crates/elephc-phar/src/lib.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-phar/src/lib.rs) (`elephc_phar_set_compression`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3576](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3576) (`lower_elephc_phar_set_compression`)
+- **Function symbol**: `lower_elephc_phar_set_compression()`
+
 
 ### Lowering notes
 
-- Internal helper used by the built-in `Phar` / `PharData` support to change archive compression.
-- Requires the `elephc-phar` bridge and publishes the `elephc_phar_set_compression` function pointer before calling through the runtime slot.
-- Returns `true` on bridge success and `false` when the archive or compression mode cannot be handled.
+- Internal helper used by the built-in Phar / PharData support to change archive compression.
+- Calls the native PHAR compression-control bridge and returns whether the update succeeded.
 
 ## Runtime helpers
 
-The lowering publishes and calls:
-- `_elephc_phar_set_compression_fn`
-- `elephc_phar_set_compression`
+_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
 
 ## Signature summary
 
 ```php
-function __elephc_phar_set_compression(string $filename, int $compression): bool
+function __elephc_phar_set_compression(mixed $filename, mixed $compression): bool
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes exactly 2 arguments.
-- **Bridge dependency**: requires `elephc_phar`.
 
 ## Cross-references
 

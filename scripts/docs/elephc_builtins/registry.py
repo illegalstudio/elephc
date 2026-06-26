@@ -1186,7 +1186,7 @@ class Builtin:
     sub_area: str
     canonical_name: str  # always lowercase
     in_catalog: bool  # present in SUPPORTED_BUILTIN_FUNCTIONS
-    is_internal: bool  # present in INTERNAL_BUILTIN_FUNCTIONS (prefix __elephc_)
+    is_internal: bool  # compiler-only helper with no user-facing page
     sig: BuiltinSig = field(default_factory=BuiltinSig)
     lowering: LoweringInfo = field(default_factory=LoweringInfo)
     description: str = ""  # filled by hand, or left empty for the stub
@@ -1392,6 +1392,14 @@ INTERNAL_NOTES: Dict[str, List[str]] = {
     "__elephc_strtotime_raw": [
         "Internal helper used by the strtotime() builtin.",
         "Provides a raw timestamp parsing path for the runtime strtotime helper.",
+    ],
+    "__elephc_phar_list_entries": [
+        "Internal helper used by the built-in Phar / PharData support to enumerate archive entries.",
+        "Calls the native PHAR listing bridge and returns the entries as an array.",
+    ],
+    "__elephc_phar_set_compression": [
+        "Internal helper used by the built-in Phar / PharData support to change archive compression.",
+        "Calls the native PHAR compression-control bridge and returns whether the update succeeded.",
     ],
 }
 

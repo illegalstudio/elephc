@@ -701,6 +701,8 @@ def build_registry(repo: Path) -> list[Builtin]:
         sys.exit(f"builtins.rs not found: {dispatch}")
 
     supported, internal = parse_catalog(catalog)
+    internal_names = {name.lower() for name in internal}
+    catalog_names = list(dict.fromkeys([*supported, *internal]))
     call_sigs = parse_builtin_call_sigs(sigs)
     first_class_returns = parse_first_class_return_types(sigs)
     dispatch_map = parse_lowering_dispatch(dispatch)
@@ -726,12 +728,12 @@ def build_registry(repo: Path) -> list[Builtin]:
         for n, inferred_params in parse_check_builtin_param_types(cb_path).items():
             check_builtin_params.setdefault(n, []).extend(inferred_params)
 
-    for name in supported:
+    for name in catalog_names:
         canonical = name.lower()
-        in_catalog = True
+        in_catalog = canonical not in internal_names
         # Any function whose canonical name starts with __elephc_ is a compiler
         # internal helper; it gets an internals page but no user-facing page.
-        is_internal = canonical.startswith("__elephc_")
+        is_internal = canonical.startswith("__elephc_") or canonical in internal_names
 
         # Fallback: if signatures.rs didn't yield a result, use the call_sigs
         # entry directly (may be empty) so the builtin still renders.
@@ -972,19 +974,6 @@ def build_registry(repo: Path) -> list[Builtin]:
         )
         builtins.append(b)
 
-    # Internal ones (just for completeness in the registry — not rendered as user pages).
-    for name in internal:
-        canonical = name.lower()
-        b = Builtin(
-            name=name,
-            canonical_name=canonical,
-            in_catalog=False,
-            is_internal=True,
-            area="Misc",
-            sub_area="Internal",
-        )
-        builtins.append(b)
-
     return builtins
 
 
@@ -1050,6 +1039,5 @@ def _builtin_to_dict(b: Builtin) -> dict:
 
 if __name__ == "__main__":
     sys.exit(main())
-
 
 

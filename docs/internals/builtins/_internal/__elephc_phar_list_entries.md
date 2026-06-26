@@ -1,8 +1,8 @@
 ---
 title: "__elephc_phar_list_entries() — internals"
-description: "Compiler internals for __elephc_phar_list_entries(): PHAR archive entry enumeration for helper classes."
+description: "Compiler internals for __elephc_phar_list_entries(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 258
+  order: 414
 ---
 
 ## `__elephc_phar_list_entries()` — internals
@@ -10,32 +10,28 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Type checking**: [`src/types/checker/builtins/io/files.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/checker/builtins/io/files.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs) (`lower_elephc_phar_list_entries`)
-- **Bridge**: [`crates/elephc-phar/src/lib.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-phar/src/lib.rs) (`elephc_phar_list_entries`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/io.rs`:3634](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/io.rs#L3634) (`lower_elephc_phar_list_entries`)
+- **Function symbol**: `lower_elephc_phar_list_entries()`
+
 
 ### Lowering notes
 
-- Internal helper used by the built-in `Phar` / `PharData` support to enumerate archive entries.
-- Requires the `elephc-phar` bridge and publishes the `elephc_phar_list_entries` function pointer before calling through the runtime slot.
-- Returns an indexed array of entry-name strings.
+- Internal helper used by the built-in Phar / PharData support to enumerate archive entries.
+- Calls the native PHAR listing bridge and returns the entries as an array.
 
 ## Runtime helpers
 
-The lowering publishes and calls:
-- `_elephc_phar_list_entries_fn`
-- `elephc_phar_list_entries`
+_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
 
 ## Signature summary
 
 ```php
-function __elephc_phar_list_entries(string $filename): array
+function __elephc_phar_list_entries(mixed $filename): array
 ```
 
 ## What the type checker enforces
 
 - **Arity**: takes exactly 1 argument.
-- **Bridge dependency**: requires `elephc_phar`.
 
 ## Cross-references
 
