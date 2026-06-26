@@ -320,11 +320,12 @@ modifier bitmask for eval class-like metadata.
 and generated/AOT classes, plus parent interfaces for eval and generated/AOT
 interfaces. `ReflectionClass::getInterfaces()` materializes those names as a
 name-keyed array of `ReflectionClass` objects. `ReflectionClass::getTraitNames()`
-returns traits used directly by eval and generated/AOT classes and traits,
-`ReflectionClass::getTraits()` materializes those direct trait names as
-`ReflectionClass` objects, and
-`ReflectionClass::getTraitAliases()` exposes direct eval and generated/AOT trait
-`as` aliases as PHP's alias-name to `Trait::method` map.
+returns traits used directly by eval class-like symbols and generated/AOT
+classes, traits, and enums. `ReflectionClass::getTraits()` materializes those
+direct trait names as `ReflectionClass` objects, and
+`ReflectionClass::getTraitAliases()` exposes direct eval class-like and
+generated/AOT class/enum trait `as` aliases as PHP's alias-name to
+`Trait::method` map.
 `ReflectionClass::implementsInterface()` checks those eval relations
 case-insensitively, returns true when reflecting the requested interface itself,
 and checks generated/AOT class-interface relations through runtime metadata. It

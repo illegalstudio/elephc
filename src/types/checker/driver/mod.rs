@@ -244,6 +244,14 @@ pub(super) fn check_types_impl(
                 .get(name)
                 .map(|flattened| flattened.methods.as_slice())
                 .unwrap_or(methods.as_slice());
+            let enum_used_traits = flattened_enums
+                .get(name)
+                .map(|flattened| flattened.used_traits.as_slice())
+                .unwrap_or(&[]);
+            let enum_trait_aliases = flattened_enums
+                .get(name)
+                .map(|flattened| flattened.trait_aliases.as_slice())
+                .unwrap_or(&[]);
             if let Err(error) = build_enum_info(
                 name,
                 backing_type.as_ref(),
@@ -251,6 +259,8 @@ pub(super) fn check_types_impl(
                 implements,
                 enum_methods,
                 constants,
+                enum_used_traits,
+                enum_trait_aliases,
                 stmt.span,
                 &mut checker,
                 &mut next_class_id,

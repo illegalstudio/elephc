@@ -49,6 +49,8 @@ pub(crate) fn inject_builtin_enums(
         &[],
         &[],
         &[],
+        &[],
+        &[],
         checker,
         next_class_id,
     )?;
@@ -71,6 +73,8 @@ pub(crate) fn inject_builtin_enums(
                 attribute_args: Vec::new(),
             },
         ],
+        &[],
+        &[],
         &[],
         &[],
         &[],

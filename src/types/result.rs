@@ -123,4 +123,37 @@ mod tests {
             .expect("mac type check failed");
         assert_eq!(mac.required_libraries, vec!["elephc_crypto"]);
     }
+
+    /// Verifies enum class metadata preserves flattened trait relation data for runtime reflection.
+    #[test]
+    fn test_enum_class_info_preserves_trait_metadata() {
+        let program = parse_program(
+            r#"<?php
+trait EnumMetaTrait {
+    public function original() {}
+}
+enum EnumMetaTarget {
+    use EnumMetaTrait {
+        original as aliasOriginal;
+    }
+    case Ready;
+}
+"#,
+        );
+
+        let result = check(&program).expect("type check failed");
+        let enum_class = result
+            .classes
+            .get("EnumMetaTarget")
+            .expect("missing enum class metadata");
+
+        assert_eq!(enum_class.used_traits, vec!["EnumMetaTrait"]);
+        assert_eq!(
+            enum_class.trait_aliases,
+            vec![(
+                "aliasOriginal".to_string(),
+                "EnumMetaTrait::original".to_string()
+            )]
+        );
+    }
 }

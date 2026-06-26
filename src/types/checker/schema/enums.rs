@@ -102,6 +102,7 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
 /// - `backing_type`: optional `TypeExpr` for backed enums
 /// - `cases`: parsed enum case declarations
 /// - `span`: source location for error reporting
+/// - `used_traits` / `trait_aliases`: flattened direct enum trait-use metadata
 /// - `checker`: type checker state (classes, interfaces, enums, resolve_type_expr)
 /// - `next_class_id`: incrementing class ID counter
 ///
@@ -119,6 +120,8 @@ pub(crate) fn build_enum_info(
     implements: &[crate::names::Name],
     user_methods: &[crate::parser::ast::ClassMethod],
     user_constants: &[crate::parser::ast::ClassConst],
+    used_traits: &[String],
+    trait_aliases: &[(String, String)],
     span: crate::span::Span,
     checker: &mut Checker,
     next_class_id: &mut u64,
@@ -237,6 +240,8 @@ pub(crate) fn build_enum_info(
         implements,
         user_methods,
         user_constants,
+        used_traits,
+        trait_aliases,
         checker,
         next_class_id,
     )
@@ -246,8 +251,9 @@ pub(crate) fn build_enum_info(
 ///
 /// Used by parsed enum declarations and builtin enum injection after case/backing
 /// validation has already happened. Synthesizes the static enum methods exposed
-/// by PHP: all enums get `cases()`, while backed enums also get `from()` and
-/// `tryFrom()`.
+/// by PHP, and preserves flattened trait-use metadata for reflection/runtime
+/// class-like queries. All enums get `cases()`, while backed enums also get
+/// `from()` and `tryFrom()`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_enum_metadata(
     name: &str,
@@ -256,6 +262,8 @@ pub(crate) fn insert_enum_metadata(
     implements: &[crate::names::Name],
     user_methods: &[ClassMethod],
     user_constants: &[crate::parser::ast::ClassConst],
+    used_traits: &[String],
+    trait_aliases: &[(String, String)],
     checker: &mut Checker,
     next_class_id: &mut u64,
 ) -> Result<(), CompileError> {
@@ -443,8 +451,8 @@ pub(crate) fn insert_enum_metadata(
             property_attribute_args: HashMap::new(),
             constant_attribute_names,
             constant_attribute_args,
-            used_traits: Vec::new(),
-            trait_aliases: Vec::new(),
+            used_traits: used_traits.to_vec(),
+            trait_aliases: trait_aliases.to_vec(),
             properties,
             property_offsets,
             property_declaring_classes,
