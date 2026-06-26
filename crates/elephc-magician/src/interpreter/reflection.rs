@@ -2675,8 +2675,16 @@ fn eval_reflection_object_new(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("object")], evaluated_args)?;
-    if values.type_tag(args[0])? != EVAL_TAG_OBJECT {
-        return Err(EvalStatus::RuntimeFatal);
+    let tag = values.type_tag(args[0])?;
+    if tag != EVAL_TAG_OBJECT {
+        return eval_throw_type_error(
+            &format!(
+                "ReflectionObject::__construct(): Argument #1 ($object) must be of type object, {} given",
+                eval_reflection_type_error_type_name(tag)
+            ),
+            context,
+            values,
+        );
     }
     let reflected_name = eval_reflection_object_class_name(args[0], context, values)?;
     let Some(object) = eval_reflection_class_owner_object_result(
@@ -6720,6 +6728,35 @@ fn eval_throw_value_error(
     values.construct_object(exception, vec![message, code])?;
     context.set_pending_throw(exception);
     Err(EvalStatus::UncaughtThrowable)
+}
+
+/// Creates a catchable `TypeError` and propagates it through eval throw state.
+fn eval_throw_type_error(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let exception = values.new_object("TypeError")?;
+    let message = values.string(message)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
+}
+
+/// Returns PHP's type name spelling used in argument type error messages.
+fn eval_reflection_type_error_type_name(tag: u64) -> &'static str {
+    match tag {
+        EVAL_TAG_INT => "int",
+        EVAL_TAG_STRING => "string",
+        EVAL_TAG_FLOAT => "float",
+        EVAL_TAG_BOOL => "bool",
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array",
+        EVAL_TAG_NULL => "null",
+        EVAL_TAG_RESOURCE => "resource",
+        EVAL_TAG_OBJECT => "object",
+        _ => "unknown",
+    }
 }
 
 /// Returns method metadata for a method-like member on an eval class-like symbol.
