@@ -41,7 +41,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // first libc chmod arg = C path
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // second libc chmod arg = mode
     emitter.instruction("call chmod");                                          // libc chmod(path, mode)
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc chmod() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen to canonical integer result
     emitter.instruction("add rsp, 16");                                         // release stack
@@ -62,7 +62,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // second arg = uid
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // third arg = gid
     emitter.instruction("call chown");                                          // libc chown(path, uid, gid)
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc chown() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
     emitter.instruction("add rsp, 32");                                         // release stack
@@ -83,7 +83,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // second arg = uid
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // third arg = gid
     emitter.instruction("call lchown");                                         // libc lchown(path, uid, gid) without following symlinks
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc lchown() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
     emitter.instruction("add rsp, 32");                                         // release stack
@@ -112,7 +112,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov esi, DWORD PTR [rax + 16]");                       // second chown arg = passwd.pw_uid
     emitter.instruction("mov rdx, -1");                                         // gid = -1 (leave group unchanged)
     emitter.instruction("call chown");                                          // libc chown(path, uid, -1)
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc chown() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
     emitter.instruction("jmp __rt_chown_user_done_x86");                        // skip failure return
@@ -145,7 +145,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov esi, DWORD PTR [rax + 16]");                       // second lchown arg = passwd.pw_uid
     emitter.instruction("mov rdx, -1");                                         // gid = -1 (leave group unchanged)
     emitter.instruction("call lchown");                                         // libc lchown(path, uid, -1) without following symlinks
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc lchown() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
     emitter.instruction("jmp __rt_lchown_user_done_x86");                       // skip failure return
@@ -178,7 +178,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, -1");                                         // uid = -1 (leave owner unchanged)
     emitter.instruction("mov edx, DWORD PTR [rax + 16]");                       // third chown arg = group.gr_gid
     emitter.instruction("call chown");                                          // libc chown(path, -1, gid)
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc chown() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
     emitter.instruction("jmp __rt_chgrp_group_done_x86");                       // skip failure return
@@ -211,7 +211,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, -1");                                         // uid = -1 (leave owner unchanged)
     emitter.instruction("mov edx, DWORD PTR [rax + 16]");                       // third lchown arg = group.gr_gid
     emitter.instruction("call lchown");                                         // libc lchown(path, -1, gid) without following symlinks
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc lchown() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
     emitter.instruction("jmp __rt_lchgrp_group_done_x86");                      // skip failure return
@@ -241,7 +241,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish frame
     emitter.instruction("mov rdi, rax");                                        // fd → SysV first arg (size already in rsi from the caller)
     emitter.instruction("call ftruncate");                                      // libc ftruncate(fd, size)
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc ftruncate() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -256,7 +256,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish frame
     emitter.instruction("mov rdi, rax");                                        // fd
     emitter.instruction("call fsync");                                          // libc fsync(fd)
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc fsync() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -274,7 +274,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     } else {
         emitter.instruction("call fsync");                                      // Darwin fallback
     }
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc sync helper return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -307,8 +307,9 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rsi, 0x{:X}", open_flags));               // open flags
     emitter.instruction("mov rdx, 0x1B6");                                      // mode 0666 before umask
     emitter.instruction("call open");                                           // libc open()
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc open() return a negative C int?
     emitter.instruction("jl __rt_touch_set_times_x86");                         // skip close on failure
+    emitter.instruction("cdqe");                                                // normalize the successful C int fd before closing it
     emitter.instruction("mov rdi, rax");                                        // fd
     emitter.instruction("call close");                                          // libc close(fd)
 
@@ -343,7 +344,7 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdx, [rbp - 64]");                                 // pointer to timespec[0]
     emitter.instruction("mov rcx, 0");                                          // flags = 0
     emitter.instruction("call utimensat");                                      // libc utimensat()
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc utimensat() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
     emitter.instruction("add rsp, 80");                                         // release frame

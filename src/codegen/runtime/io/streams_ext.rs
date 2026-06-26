@@ -313,8 +313,9 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // first libc open arg
     emitter.instruction("xor esi, esi");                                        // O_RDONLY
     emitter.instruction("call open");                                           // libc open(path, O_RDONLY)
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc open() return a negative C int?
     emitter.instruction("jl __rt_readfile_fail_x86");                           // failure → PHP false sentinel
+    emitter.instruction("cdqe");                                                // normalize the successful C int fd into a 64-bit runtime descriptor
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save fd
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // total bytes copied = 0
 

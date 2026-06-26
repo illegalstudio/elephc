@@ -150,7 +150,7 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // pass the C path pointer as the first libc stat() argument
     emitter.instruction("lea rsi, [rsp]");                                      // pass the temporary stack stat buffer as the second libc stat() argument
     emitter.instruction("call stat");                                           // populate the temporary Linux stat buffer so the file size can be read safely
-    emitter.instruction("cmp rax, 0");                                          // test whether libc stat() succeeded before reading the file metadata
+    emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading the file metadata
     emitter.instruction("jne __rt_file_get_contents_fail");                     // return the empty string when the input path cannot be stated
 
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", size_off));   // load st_size from the temporary Linux stat buffer after libc stat() succeeds
@@ -159,9 +159,10 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", path_off));   // reload the C path pointer before opening the input file for reading
     emitter.instruction("xor esi, esi");                                        // pass O_RDONLY as the libc open() flags for the file_get_contents() read path
     emitter.instruction("call open");                                           // open the input file for reading through libc open()
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", fd_off));     // preserve the opened file descriptor across the later heap allocation and read() call
-    emitter.instruction("cmp rax, 0");                                          // test whether libc open() succeeded before attempting to allocate or read
+    emitter.instruction("cmp eax, 0");                                          // test whether libc open() returned a negative C int descriptor
     emitter.instruction("jl __rt_file_get_contents_fail");                      // return the empty string when the file could not be opened for reading
+    emitter.instruction("cdqe");                                                // normalize the successful C int fd into the runtime's 64-bit descriptor value
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", fd_off));     // preserve the opened file descriptor across the later heap allocation and read() call
 
     emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", size_slot_off)); // reload the requested file size before allocating the owned destination buffer
     emitter.instruction("call __rt_heap_alloc");                                // allocate owned heap storage for the file payload through the shared x86_64 heap wrapper

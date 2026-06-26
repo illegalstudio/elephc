@@ -1085,24 +1085,35 @@ echo ($f === false) ? "?" : "e:" . $f->format("Y-m-d H:i:s e");
 }
 
 /// Verifies `createFromFormat`'s optional third `DateTimeZone` argument interprets the parsed
-/// wall-clock in that zone (12:00 in New York is EDT/UTC-4 in June = 16:00 UTC) and sets it as the
-/// display zone, while `date_create_immutable_from_format` desugars to the immutable factory with
-/// the same zone handling. The zone is passed via a variable (the idiomatic form).
+/// wall-clock in that zone and sets it as the display zone when the zone is passed via a variable.
 #[test]
-fn test_create_from_format_timezone_arg() {
+fn test_create_from_format_timezone_arg_mutable() {
     let out = compile_and_run(
         r#"<?php
 date_default_timezone_set("UTC");
 $ny = new DateTimeZone("America/New_York");
 $d = DateTime::createFromFormat("Y-m-d H:i:s", "2024-06-15 12:00:00", $ny);
 echo $d->getTimestamp(), "|", gmdate("H:i", $d->getTimestamp()), "|", $d->format("H:i");
-$paris = new DateTimeZone("Europe/Paris");
-$i = date_create_immutable_from_format("Y-m-d H:i:s", "2024-06-15 12:00:00", $paris);
-echo "|", $i->getTimestamp();
 "#,
     );
-    // 16:00 UTC; display in NY = 12:00; Paris 12:00 CEST = 10:00 UTC = 1718445600.
-    assert_eq!(out, "1718467200|16:00|12:00|1718445600");
+    // 12:00 in New York is EDT/UTC-4 in June = 16:00 UTC; display in NY = 12:00.
+    assert_eq!(out, "1718467200|16:00|12:00");
+}
+
+/// Verifies `date_create_immutable_from_format` desugars to the immutable factory with the same
+/// optional timezone argument handling as `DateTimeImmutable::createFromFormat`.
+#[test]
+fn test_create_from_format_timezone_arg_immutable_function() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$paris = new DateTimeZone("Europe/Paris");
+$i = date_create_immutable_from_format("Y-m-d H:i:s", "2024-06-15 12:00:00", $paris);
+echo $i->getTimestamp();
+"#,
+    );
+    // Paris 12:00 CEST = 10:00 UTC = 1718445600.
+    assert_eq!(out, "1718445600");
 }
 
 /// Verifies that an inline `new DateTimeZone(...)` expression works as the third

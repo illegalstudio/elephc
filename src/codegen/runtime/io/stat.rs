@@ -264,7 +264,7 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: file_exists ---");
     emitter.label_global("__rt_file_exists");
     emit_linux_stat_call(emitter, frame_size);
-    emitter.instruction("cmp rax, 0");                                          // a successful newfstatat call returns zero when the path exists
+    emitter.instruction("cmp eax, 0");                                          // a successful libc stat() call returns zero as a C int
     emitter.instruction("sete al");                                             // convert the syscall success flag into a boolean byte
     emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the canonical integer result register
     emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the temporary stat buffer frame
@@ -275,7 +275,7 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: is_file ---");
     emitter.label_global("__rt_is_file");
     emit_linux_stat_call(emitter, frame_size);
-    emitter.instruction("cmp rax, 0");                                          // test whether newfstatat succeeded before reading the stat buffer
+    emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading the stat buffer
     emitter.instruction("jne __rt_is_file_no");                                 // a failing stat call means the path is not a regular file
     emitter.instruction(&format!("mov r9d, DWORD PTR [rsp + {}]", mode_off));   // load st_mode from the Linux stat buffer
     emitter.instruction("and r9d, 0xF000");                                     // keep only the file-type bits from st_mode
@@ -294,7 +294,7 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: is_dir ---");
     emitter.label_global("__rt_is_dir");
     emit_linux_stat_call(emitter, frame_size);
-    emitter.instruction("cmp rax, 0");                                          // test whether newfstatat succeeded before reading the stat buffer
+    emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading the stat buffer
     emitter.instruction("jne __rt_is_dir_no");                                  // a failing stat call means the path is not a directory
     emitter.instruction(&format!("mov r9d, DWORD PTR [rsp + {}]", mode_off));   // load st_mode from the Linux stat buffer
     emitter.instruction("and r9d, 0xF000");                                     // keep only the file-type bits from st_mode
@@ -323,7 +323,7 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: filesize ---");
     emitter.label_global("__rt_filesize");
     emit_linux_stat_call(emitter, frame_size);
-    emitter.instruction("cmp rax, 0");                                          // test whether newfstatat succeeded before reading st_size
+    emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading st_size
     emitter.instruction("jne __rt_filesize_fail");                              // return zero when the stat call fails
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", size_off));   // load st_size from the Linux stat buffer
     emitter.instruction("jmp __rt_filesize_ret");                               // skip the failure path after reading the file size
@@ -338,7 +338,7 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: filemtime ---");
     emitter.label_global("__rt_filemtime");
     emit_linux_stat_call(emitter, frame_size);
-    emitter.instruction("cmp rax, 0");                                          // test whether newfstatat succeeded before reading st_mtime
+    emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading st_mtime
     emitter.instruction("jne __rt_filemtime_fail");                             // return zero when the stat call fails
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", mtime_off));  // load st_mtime.tv_sec from the Linux stat buffer
     emitter.instruction("jmp __rt_filemtime_ret");                              // skip the failure path after reading the modification time
@@ -378,7 +378,7 @@ fn emit_linux_access_check(emitter: &mut Emitter, mode: u32) {
     emitter.instruction("mov rdi, rax");                                        // pass the C path pointer as the first syscall argument to access
     emitter.instruction(&format!("mov rsi, {}", mode));                         // pass the access-mode mask as the second libc access() argument
     emitter.instruction("call access");                                         // perform the access check through libc access()
-    emitter.instruction("cmp rax, 0");                                          // a successful access check returns zero on Linux
+    emitter.instruction("cmp eax, 0");                                          // a successful libc access() check returns zero as a C int
     emitter.instruction("sete al");                                             // convert the syscall success flag into a boolean byte
     emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the canonical integer result register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the access helper call sequence

@@ -248,7 +248,7 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the source C-string pointer as the first libc rename() argument
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the destination C-string pointer as the second libc rename() argument
     emitter.instruction("call rename");                                         // rename or move the file-system path through libc rename()
-    emitter.instruction("cmp rax, 0");                                          // a successful rename() call returns zero on Linux
+    emitter.instruction("cmp eax, 0");                                          // a successful libc rename() call returns zero as a C int
     emitter.instruction("sete al");                                             // convert the rename() success flag into a boolean byte
     emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the canonical integer result register
     emitter.instruction("add rsp, 32");                                         // release the aligned stack locals used by rename()
@@ -295,7 +295,7 @@ fn emit_single_path_libc_bool_helper(emitter: &mut Emitter, symbol: &str, extra_
         emitter.instruction(setup);                                             // populate any additional libc arguments required by this helper
     }
     emitter.instruction(&format!("call {}", symbol));                           // invoke the matching libc file-system helper on Linux x86_64
-    emitter.instruction("cmp rax, 0");                                          // libc path helpers return zero when the operation succeeds
+    emitter.instruction("cmp eax, 0");                                          // libc path helpers return zero as a C int on success
     emitter.instruction("sete al");                                             // convert the success code into a boolean byte
     emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the canonical integer result register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the libc helper returns
