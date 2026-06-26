@@ -4054,6 +4054,55 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
     }
 }
 
+/// Returns whether a static property is PHP-`isset()` without throwing for missing properties.
+pub(in crate::interpreter) fn eval_static_property_isset_result(
+    class_name: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let class_name = resolve_eval_static_member_class_name(class_name, context)?;
+    if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
+        if !property.is_static() {
+            return Ok(false);
+        }
+        if validate_eval_member_access(&declaring_class, property.visibility(), context).is_err() {
+            return Ok(false);
+        }
+        let Some(value) = context.static_property(&declaring_class, property.name()) else {
+            return Ok(false);
+        };
+        return Ok(!values.is_null(value)?);
+    }
+    if eval_static_member_context_owns_class(&class_name, context) {
+        return Ok(false);
+    }
+    if let Some((declaring_class, visibility, _, is_static)) =
+        eval_reflection_aot_static_property_access_metadata(
+            &class_name,
+            property_name,
+            context,
+            values,
+        )?
+    {
+        if !is_static {
+            return Ok(false);
+        }
+        if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+            return Ok(false);
+        }
+        if !values.static_property_is_initialized(&declaring_class, property_name)? {
+            return Ok(false);
+        }
+    } else if !eval_runtime_class_like_exists(&class_name, context, values)? {
+        return eval_throw_class_not_found_error(&class_name, context, values);
+    }
+    if let Some(value) = values.static_property_get(&class_name, property_name)? {
+        return Ok(!values.is_null(value)?);
+    }
+    Ok(false)
+}
+
 /// Reads one eval-declared class constant after resolving the class-like receiver.
 pub(in crate::interpreter) fn eval_class_constant_fetch_result(
     class_name: &str,

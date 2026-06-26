@@ -9328,6 +9328,49 @@ echo $aotClass::$count;');
     assert_eq!(out.stdout, "set:tail|5|AB|15");
 }
 
+/// Verifies eval `isset()` and `empty()` probe static properties without normal read fatals.
+#[test]
+fn test_eval_static_property_isset_empty_probes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotStaticProbe {
+    public static $nullish = null;
+    public static $empty = "";
+    public static $value = "x";
+}
+eval('class EvalDynamicStaticProbe {
+    public static $nullish = null;
+    public static $empty = "";
+    public static $value = "x";
+}
+$evalClass = "EvalDynamicStaticProbe";
+echo isset(EvalDynamicStaticProbe::$value) ? "nominal" : "bad"; echo "|";
+echo isset($evalClass::$value) ? "eval-set" : "bad"; echo "|";
+echo isset($evalClass::$nullish) ? "bad" : "eval-null"; echo "|";
+echo empty($evalClass::$empty) ? "eval-empty" : "bad"; echo "|";
+echo empty($evalClass::$value) ? "bad" : "eval-value"; echo "|";
+echo isset($evalClass::$missing) ? "bad" : "eval-missing"; echo "|";
+echo empty($evalClass::$missing) ? "eval-missing-empty" : "bad"; echo "|";
+$aotClass = "EvalAotStaticProbe";
+echo isset($aotClass::$value) ? "aot-set" : "bad"; echo "|";
+echo isset($aotClass::$nullish) ? "bad" : "aot-null"; echo "|";
+echo empty($aotClass::$empty) ? "aot-empty" : "bad"; echo "|";
+echo empty($aotClass::$value) ? "bad" : "aot-value"; echo "|";
+echo isset($aotClass::$missing) ? "bad" : "aot-missing"; echo "|";
+echo empty($aotClass::$missing) ? "aot-missing-empty" : "bad";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "nominal|eval-set|eval-null|eval-empty|eval-value|eval-missing|eval-missing-empty|aot-set|aot-null|aot-empty|aot-value|aot-missing|aot-missing-empty"
+    );
+}
+
 /// Verifies eval invokable objects dispatch through variable and callback call paths.
 #[test]
 fn test_eval_declared_invokable_object_dynamic_callables() {
