@@ -13917,7 +13917,7 @@ try {
 /// Verifies eval ReflectionClass::newInstance rejects non-public AOT constructors like PHP.
 #[test]
 fn test_eval_reflection_class_new_instance_rejects_protected_aot_constructor_from_child_scope() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class EvalReflectNewProtectedAotCtorBase {
     protected function __construct() {}
@@ -13925,17 +13925,22 @@ class EvalReflectNewProtectedAotCtorBase {
 
 class EvalReflectNewProtectedAotCtorChild extends EvalReflectNewProtectedAotCtorBase {
     public static function run(): void {
-        eval('$ref = new ReflectionClass("EvalReflectNewProtectedAotCtorBase");
-            $ref->newInstance();');
+        eval('try {
+            $ref = new ReflectionClass("EvalReflectNewProtectedAotCtorBase");
+            $ref->newInstance();
+            echo "bad";
+        } catch (ReflectionException $e) {
+            echo get_class($e) . ":" . $e->getMessage();
+        }');
     }
 }
 
 EvalReflectNewProtectedAotCtorChild::run();
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "unexpected stderr: {err}"
+    assert_eq!(
+        out,
+        "ReflectionException:Access to non-public constructor of class EvalReflectNewProtectedAotCtorBase"
     );
 }
 
@@ -13969,27 +13974,39 @@ fn test_eval_reflection_class_new_instance_rejects_aot_non_instantiable_class_li
         (
             "abstract class EvalReflectNewAotAbstract {}",
             "EvalReflectNewAotAbstract",
+            "Error:Cannot instantiate abstract class EvalReflectNewAotAbstract",
         ),
-        ("interface EvalReflectNewAotIface {}", "EvalReflectNewAotIface"),
-        ("trait EvalReflectNewAotTrait {}", "EvalReflectNewAotTrait"),
+        (
+            "interface EvalReflectNewAotIface {}",
+            "EvalReflectNewAotIface",
+            "Error:Cannot instantiate interface EvalReflectNewAotIface",
+        ),
+        (
+            "trait EvalReflectNewAotTrait {}",
+            "EvalReflectNewAotTrait",
+            "Error:Cannot instantiate trait EvalReflectNewAotTrait",
+        ),
         (
             "enum EvalReflectNewAotEnum { case Ready; }",
             "EvalReflectNewAotEnum",
+            "Error:Cannot instantiate enum EvalReflectNewAotEnum",
         ),
     ];
-    for (declaration, class_name) in cases {
+    for (declaration, class_name, expected) in cases {
         let source = format!(
             r#"<?php
 {declaration}
-eval('$ref = new ReflectionClass("{class_name}");
-$ref->newInstance();');
+eval('try {{
+    $ref = new ReflectionClass("{class_name}");
+    $ref->newInstance();
+    echo "bad";
+}} catch (Error $e) {{
+    echo get_class($e) . ":" . $e->getMessage();
+}}');
 "#
         );
-        let err = compile_and_run_expect_failure(&source);
-        assert!(
-            err.contains("Fatal error: eval() runtime failed"),
-            "unexpected stderr for {class_name}: {err}"
-        );
+        let out = compile_and_run(&source);
+        assert_eq!(out, expected, "unexpected stdout for {class_name}");
     }
 }
 
@@ -14185,27 +14202,39 @@ fn test_eval_reflection_class_new_instance_without_constructor_rejects_aot_non_c
         (
             "abstract class EvalReflectNoCtorAotAbstract {}",
             "EvalReflectNoCtorAotAbstract",
+            "Error:Cannot instantiate abstract class EvalReflectNoCtorAotAbstract",
         ),
-        ("interface EvalReflectNoCtorAotIface {}", "EvalReflectNoCtorAotIface"),
-        ("trait EvalReflectNoCtorAotTrait {}", "EvalReflectNoCtorAotTrait"),
+        (
+            "interface EvalReflectNoCtorAotIface {}",
+            "EvalReflectNoCtorAotIface",
+            "Error:Cannot instantiate interface EvalReflectNoCtorAotIface",
+        ),
+        (
+            "trait EvalReflectNoCtorAotTrait {}",
+            "EvalReflectNoCtorAotTrait",
+            "Error:Cannot instantiate trait EvalReflectNoCtorAotTrait",
+        ),
         (
             "enum EvalReflectNoCtorAotEnum { case Ready; }",
             "EvalReflectNoCtorAotEnum",
+            "Error:Cannot instantiate enum EvalReflectNoCtorAotEnum",
         ),
     ];
-    for (declaration, class_name) in cases {
+    for (declaration, class_name, expected) in cases {
         let source = format!(
             r#"<?php
 {declaration}
-eval('$ref = new ReflectionClass("{class_name}");
-$ref->newInstanceWithoutConstructor();');
+eval('try {{
+    $ref = new ReflectionClass("{class_name}");
+    $ref->newInstanceWithoutConstructor();
+    echo "bad";
+}} catch (Error $e) {{
+    echo get_class($e) . ":" . $e->getMessage();
+}}');
 "#
         );
-        let err = compile_and_run_expect_failure(&source);
-        assert!(
-            err.contains("Fatal error: eval() runtime failed"),
-            "unexpected stderr for {class_name}: {err}"
-        );
+        let out = compile_and_run(&source);
+        assert_eq!(out, expected, "unexpected stdout for {class_name}");
     }
 }
 
