@@ -1009,24 +1009,33 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies private `__clone()` is not callable through a global clone expression.
+/// Verifies private `__clone()` throws Error through a global clone expression.
 #[test]
-fn execute_program_rejects_private_clone_hook_outside_declaring_class() {
+fn execute_program_private_clone_hook_outside_declaring_class_throws_error() {
     let program = parse_fragment(
         br#"class EvalCloneRuntimePrivateFail {
     private function __clone() {}
 }
 $box = new EvalCloneRuntimePrivateFail();
-clone $box;"#,
+try {
+    clone $box;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+return true;"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("private clone hook should be inaccessible outside the class");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(
+        values.output,
+        "Error:Call to private EvalCloneRuntimePrivateFail::__clone() from global scope"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies a get-only property hook computes a virtual eval property.

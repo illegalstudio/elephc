@@ -3850,6 +3850,25 @@ fn eval_throw_method_access_error<T>(
     )
 }
 
+/// Throws PHP's inaccessible clone-expression error for `__clone()` hooks.
+fn eval_throw_clone_access_error<T>(
+    declaring_class: &str,
+    visibility: EvalVisibility,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Call to {} {}::__clone() from {}",
+            eval_visibility_label(visibility),
+            declaring_class.trim_start_matches('\\'),
+            eval_native_constructor_scope_label(context)
+        ),
+        context,
+        values,
+    )
+}
+
 /// Throws PHP's error for calling an instance method through static syntax.
 fn eval_throw_non_static_method_call_error<T>(
     declaring_class: &str,
@@ -4778,7 +4797,14 @@ pub(in crate::interpreter) fn eval_object_clone_result(
         .as_deref()
         .and_then(|class_name| context.class_method(class_name, "__clone"));
     if let Some((declaring_class, method)) = &clone_method {
-        validate_eval_member_access(declaring_class, method.visibility(), context)?;
+        if validate_eval_member_access(declaring_class, method.visibility(), context).is_err() {
+            return eval_throw_clone_access_error(
+                declaring_class,
+                method.visibility(),
+                context,
+                values,
+            );
+        }
     }
     let should_call_aot_clone_hook = if dynamic_class_name.is_none() {
         eval_aot_clone_hook_is_callable(object, context, values)?
@@ -4813,7 +4839,7 @@ pub(in crate::interpreter) fn eval_object_clone_result(
 /// Returns whether an accessible instance AOT `__clone()` hook should run.
 fn eval_aot_clone_hook_is_callable(
     object: RuntimeCellHandle,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let class_name = eval_runtime_object_class_name(object, values)?;
@@ -4825,7 +4851,9 @@ fn eval_aot_clone_hook_is_callable(
     if is_static || is_abstract {
         return Err(EvalStatus::RuntimeFatal);
     }
-    validate_eval_member_access(&declaring_class, visibility, context)?;
+    if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+        return eval_throw_clone_access_error(&declaring_class, visibility, context, values);
+    }
     Ok(true)
 }
 
@@ -5318,7 +5346,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
                 if is_static || is_abstract {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                validate_eval_member_access(&declaring_class, visibility, context)?;
+                if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+                    return eval_throw_method_access_error(
+                        &declaring_class,
+                        method_name,
+                        visibility,
+                        context,
+                        values,
+                    );
+                }
             }
         }
         return eval_native_method_with_evaluated_args(
