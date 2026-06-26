@@ -1283,6 +1283,19 @@ impl FakeOps {
         }
         Ok(array)
     }
+    /// Reports fake generated/AOT ReflectionClass trait names for metadata unit tests.
+    pub(super) fn runtime_reflection_class_trait_names(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let mut array = self.runtime_string_array_new(1)?;
+        if class_name.eq_ignore_ascii_case("KnownClass") {
+            array = self.runtime_string_array_push(array, "KnownTrait")?;
+        } else if class_name.eq_ignore_ascii_case("KnownTrait") {
+            array = self.runtime_string_array_push(array, "KnownInnerTrait")?;
+        }
+        Ok(array)
+    }
     /// Reports one fake AOT interface for eval `interface_exists` unit tests.
     pub(super) fn runtime_interface_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
         Ok([
@@ -1306,7 +1319,9 @@ impl FakeOps {
     }
     /// Reports one fake AOT trait for eval `trait_exists` unit tests.
     pub(super) fn runtime_trait_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
-        Ok(name.eq_ignore_ascii_case("KnownTrait"))
+        Ok(["KnownTrait", "KnownInnerTrait"]
+            .iter()
+            .any(|known| name.eq_ignore_ascii_case(known)))
     }
     /// Reports one fake AOT enum for eval `enum_exists` unit tests.
     pub(super) fn runtime_enum_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {

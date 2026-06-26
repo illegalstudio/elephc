@@ -298,6 +298,13 @@ impl RuntimeValueOps for FakeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_reflection_class_interface_names(class_name)
     }
+    /// Reports fake generated/AOT ReflectionClass trait names for metadata bridge tests.
+    fn reflection_class_trait_names(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_reflection_class_trait_names(class_name)
+    }
     /// Creates one fake object for eval `new` unit tests.
     fn new_object(&mut self, _class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_new_object(_class_name)

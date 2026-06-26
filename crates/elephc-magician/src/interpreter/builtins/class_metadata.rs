@@ -104,7 +104,7 @@ pub(in crate::interpreter) fn eval_class_relation_target_result(
                 values,
             )
         }
-        "class_uses" => values.assoc_new(0),
+        "class_uses" => eval_runtime_class_trait_names_result(&target, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -115,6 +115,17 @@ fn eval_runtime_class_interface_names_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let names_array = values.reflection_class_interface_names(class_name)?;
+    let names = eval_class_relation_runtime_string_array_to_vec(names_array, values)?;
+    values.release(names_array)?;
+    eval_class_relation_names_result(names, values)
+}
+
+/// Builds `class_uses()` data for generated/AOT direct trait-use metadata.
+fn eval_runtime_class_trait_names_result(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let names_array = values.reflection_class_trait_names(class_name)?;
     let names = eval_class_relation_runtime_string_array_to_vec(names_array, values)?;
     values.release(names_array)?;
     eval_class_relation_names_result(names, values)

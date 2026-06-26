@@ -50,6 +50,7 @@ pub(crate) fn emit_runtime_data_user(
     interfaces: &HashMap<String, InterfaceInfo>,
     interface_names: &[String],
     trait_names: &[String],
+    declared_trait_uses: &HashMap<String, Vec<String>>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
     allowed_class_names: Option<&HashSet<String>>,
@@ -482,6 +483,12 @@ pub(crate) fn emit_runtime_data_user(
     emit_eval_reflection_class_lookup_data(&mut out, &sorted_classes);
     out.push_str(".p2align 3\n");
     emit_eval_reflection_class_interface_lookup_data(&mut out, &sorted_classes, interfaces);
+    out.push_str(".p2align 3\n");
+    emit_eval_reflection_class_trait_lookup_data(
+        &mut out,
+        &sorted_classes,
+        declared_trait_uses,
+    );
 
     // -- class-level PHP 8 attribute metadata table --
     // Per-class layout: count followed by (name_ptr, name_len) pairs.
@@ -1387,6 +1394,78 @@ fn push_eval_reflection_class_interface_row(
     *index += 1;
 }
 
+/// Emits class-like/trait-name rows consumed by eval `class_uses()` metadata probes.
+fn emit_eval_reflection_class_trait_lookup_data(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+    declared_trait_uses: &HashMap<String, Vec<String>>,
+) {
+    let mut entries = Vec::new();
+    let mut index = 0usize;
+    for (class_name, class_info) in sorted_classes {
+        for trait_name in &class_info.used_traits {
+            push_eval_reflection_class_trait_row(
+                out,
+                &mut entries,
+                &mut index,
+                class_name,
+                trait_name,
+            );
+        }
+    }
+
+    let mut sorted_traits: Vec<&String> = declared_trait_uses.keys().collect();
+    sorted_traits.sort();
+    for trait_name in sorted_traits {
+        if let Some(used_traits) = declared_trait_uses.get(trait_name) {
+            for used_trait in used_traits {
+                push_eval_reflection_class_trait_row(
+                    out,
+                    &mut entries,
+                    &mut index,
+                    trait_name,
+                    used_trait,
+                );
+            }
+        }
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _eval_reflection_class_trait_count\n_eval_reflection_class_trait_count:\n");
+    out.push_str(&format!("    .quad {}\n", entries.len()));
+    out.push_str(".globl _eval_reflection_class_traits\n_eval_reflection_class_traits:\n");
+    for (class_label, class_len, trait_label, trait_len) in entries {
+        out.push_str(&format!("    .quad {}\n", class_label));
+        out.push_str(&format!("    .quad {}\n", class_len));
+        out.push_str(&format!("    .quad {}\n", trait_label));
+        out.push_str(&format!("    .quad {}\n", trait_len));
+    }
+}
+
+/// Adds one class-like/trait-name row and its backing string labels.
+fn push_eval_reflection_class_trait_row(
+    out: &mut String,
+    entries: &mut Vec<(String, usize, String, usize)>,
+    index: &mut usize,
+    class_name: &str,
+    trait_name: &str,
+) {
+    let class_label = format!("_eval_reflection_class_trait_class_{}", *index);
+    let trait_label = format!("_eval_reflection_class_trait_name_{}", *index);
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        class_label,
+        escaped_ascii(class_name)
+    ));
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        trait_label,
+        escaped_ascii(trait_name)
+    ));
+    entries.push((class_label, class_name.len(), trait_label, trait_name.len()));
+    *index += 1;
+}
+
 /// Returns direct and inherited parent interface names for one generated interface.
 fn eval_reflection_interface_parent_names(
     interface_name: &str,
@@ -2041,6 +2120,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &[],
+            &HashMap::new(),
             &classes,
             &HashMap::new(),
             Some(&allowed_class_names),
@@ -2068,6 +2148,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &[],
+            &HashMap::new(),
             &classes,
             &HashMap::new(),
             None,

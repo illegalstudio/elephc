@@ -611,9 +611,9 @@ Eval object relation probes through `instanceof`, `is_a()`, and `is_subclass_of(
 generated AOT class/interface metadata and eval-created object metadata.
 `interface_exists()`, `trait_exists()`, and `enum_exists()` can probe generated
 AOT metadata. `class_implements()` and `class_parents()` materialize
-generated/AOT interface and parent metadata when the bridge exposes it, while
-`class_uses()` reports direct trait uses for eval-declared classes and traits.
-`class_alias()` can
+generated/AOT interface and parent metadata when the bridge exposes it.
+`class_uses()` reports direct trait uses for eval-declared and generated/AOT
+classes and traits. `class_alias()` can
 alias eval-declared and generated/AOT
 classes, interfaces, traits, and enums, preserving the target class-like kind
 for the corresponding metadata probes. Top-level compiled `class_alias()`

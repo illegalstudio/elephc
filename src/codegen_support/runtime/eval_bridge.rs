@@ -183,6 +183,7 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emit_aarch64_eval_reflection_method_names(emitter);
     emit_aarch64_eval_reflection_property_names(emitter);
     emit_aarch64_eval_reflection_class_interface_names(emitter);
+    emit_aarch64_eval_reflection_class_trait_names(emitter);
     emit_aarch64_eval_reflection_class_flags(emitter);
     emit_aarch64_eval_reflection_method_flags(emitter);
     emit_aarch64_eval_reflection_method_declaring_class(emitter);
@@ -1643,6 +1644,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emit_x86_64_eval_reflection_method_names(emitter);
     emit_x86_64_eval_reflection_property_names(emitter);
     emit_x86_64_eval_reflection_class_interface_names(emitter);
+    emit_x86_64_eval_reflection_class_trait_names(emitter);
     emit_x86_64_eval_reflection_class_flags(emitter);
     emit_x86_64_eval_reflection_method_flags(emitter);
     emit_x86_64_eval_reflection_method_declaring_class(emitter);
@@ -3141,6 +3143,19 @@ fn emit_aarch64_eval_reflection_class_interface_names(emitter: &mut Emitter) {
     );
 }
 
+/// Emits the ARM64 eval hook that returns AOT `class_uses()` trait names.
+fn emit_aarch64_eval_reflection_class_trait_names(emitter: &mut Emitter) {
+    emit_aarch64_eval_reflection_member_names(
+        emitter,
+        "__elephc_eval_reflection_class_trait_names",
+        "_eval_reflection_class_trait_count",
+        "_eval_reflection_class_traits",
+        "__elephc_eval_reflection_class_trait_names",
+        "class trait",
+        32,
+    );
+}
+
 /// Emits an ARM64 class-filtered AOT reflection member-name scanner.
 fn emit_aarch64_eval_reflection_member_names(
     emitter: &mut Emitter,
@@ -3527,6 +3542,19 @@ fn emit_x86_64_eval_reflection_class_interface_names(emitter: &mut Emitter) {
         "_eval_reflection_class_interfaces",
         "__elephc_eval_reflection_class_interface_names_x86",
         "class interface",
+        32,
+    );
+}
+
+/// Emits the x86_64 eval hook that returns AOT `class_uses()` trait names.
+fn emit_x86_64_eval_reflection_class_trait_names(emitter: &mut Emitter) {
+    emit_x86_64_eval_reflection_member_names(
+        emitter,
+        "__elephc_eval_reflection_class_trait_names",
+        "_eval_reflection_class_trait_count",
+        "_eval_reflection_class_traits",
+        "__elephc_eval_reflection_class_trait_names_x86",
+        "class trait",
         32,
     );
 }
