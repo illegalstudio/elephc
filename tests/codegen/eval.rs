@@ -15098,7 +15098,7 @@ EvalDynamicNewPrivateCtor::run();
 /// Verifies eval object construction rejects private AOT constructors outside the declaring scope.
 #[test]
 fn test_eval_dynamic_new_rejects_private_constructor_from_child_scope() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class EvalDynamicNewPrivateCtorBase {
     private function __construct(int $x) {}
@@ -15106,16 +15106,21 @@ class EvalDynamicNewPrivateCtorBase {
 
 class EvalDynamicNewPrivateCtorChild extends EvalDynamicNewPrivateCtorBase {
     public static function run(): void {
-        eval('return new EvalDynamicNewPrivateCtorBase(3);');
+        eval('try {
+            new EvalDynamicNewPrivateCtorBase(3);
+            echo "bad";
+        } catch (Error $e) {
+            echo get_class($e) . ":" . $e->getMessage();
+        }');
     }
 }
 
 EvalDynamicNewPrivateCtorChild::run();
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "unexpected stderr: {err}"
+    assert_eq!(
+        out,
+        "Error:Call to private EvalDynamicNewPrivateCtorBase::__construct() from scope EvalDynamicNewPrivateCtorChild"
     );
 }
 
@@ -15145,7 +15150,7 @@ EvalDynamicNewProtectedCtorChild::run();
 /// Verifies eval object construction rejects protected AOT constructors between sibling scopes.
 #[test]
 fn test_eval_dynamic_new_rejects_protected_constructor_from_sibling_scope() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class EvalDynamicNewProtectedCtorSiblingBase {}
 
@@ -15155,16 +15160,21 @@ class EvalDynamicNewProtectedCtorLeft extends EvalDynamicNewProtectedCtorSibling
 
 class EvalDynamicNewProtectedCtorRight extends EvalDynamicNewProtectedCtorSiblingBase {
     public static function run(): void {
-        eval('return new EvalDynamicNewProtectedCtorLeft(3);');
+        eval('try {
+            new EvalDynamicNewProtectedCtorLeft(3);
+            echo "bad";
+        } catch (Error $e) {
+            echo get_class($e) . ":" . $e->getMessage();
+        }');
     }
 }
 
 EvalDynamicNewProtectedCtorRight::run();
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "unexpected stderr: {err}"
+    assert_eq!(
+        out,
+        "Error:Call to protected EvalDynamicNewProtectedCtorLeft::__construct() from scope EvalDynamicNewProtectedCtorRight"
     );
 }
 

@@ -2989,6 +2989,28 @@ fn eval_reflection_aot_lifecycle_method_allows_public_reflection(
         && flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT == 0)
 }
 
+/// Returns AOT constructor access metadata when the constructor is not public.
+pub(in crate::interpreter) fn eval_reflection_aot_non_public_constructor(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, EvalVisibility)>, EvalStatus> {
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let Some(flags) = values.reflection_method_flags(runtime_class_name, "__construct")? else {
+        return Ok(None);
+    };
+    let visibility = if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
+        EvalVisibility::Private
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED != 0 {
+        EvalVisibility::Protected
+    } else {
+        return Ok(None);
+    };
+    let declaring_class = values
+        .reflection_method_declaring_class(runtime_class_name, "__construct")?
+        .unwrap_or_else(|| runtime_class_name.to_string());
+    Ok(Some((declaring_class, visibility)))
+}
+
 /// Builds an eval-backed `ReflectionFunction` object for eval or registered native functions.
 fn eval_reflection_function_new(
     evaluated_args: Vec<EvaluatedCallArg>,
