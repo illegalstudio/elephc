@@ -699,27 +699,18 @@ impl Parser {
         }
 
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "var")) {
-            if visibility.is_some()
-                || is_static
-                || is_abstract
-                || is_final
-                || is_readonly
-                || set_visibility.is_some()
-            {
-                return Err(EvalParseError::UnsupportedConstruct);
-            }
-            self.advance();
-            let (property, mut hook_methods) = self.parse_class_property_decl(
-                EvalVisibility::Public,
-                None,
-                false,
-                false,
-                false,
+            self.parse_legacy_var_property_member(
+                attributes,
+                visibility.is_some()
+                    || is_static
+                    || is_abstract
+                    || is_final
+                    || is_readonly
+                    || set_visibility.is_some(),
                 is_readonly_class,
-                false,
+                properties,
+                methods,
             )?;
-            properties.push(property.with_attributes(attributes));
-            methods.append(&mut hook_methods);
             return Ok(());
         }
 
@@ -761,6 +752,33 @@ impl Parser {
             is_readonly,
             is_readonly_class,
             is_abstract,
+        )?;
+        properties.push(property.with_attributes(attributes));
+        methods.append(&mut hook_methods);
+        Ok(())
+    }
+
+    /// Parses PHP's legacy `var` public-property marker after the keyword is recognized.
+    fn parse_legacy_var_property_member(
+        &mut self,
+        attributes: Vec<EvalAttribute>,
+        has_other_modifiers: bool,
+        is_readonly_class: bool,
+        properties: &mut Vec<EvalClassProperty>,
+        methods: &mut Vec<EvalClassMethod>,
+    ) -> Result<(), EvalParseError> {
+        if has_other_modifiers {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        self.advance();
+        let (property, mut hook_methods) = self.parse_class_property_decl(
+            EvalVisibility::Public,
+            None,
+            false,
+            false,
+            false,
+            is_readonly_class,
+            false,
         )?;
         properties.push(property.with_attributes(attributes));
         methods.append(&mut hook_methods);
@@ -1426,6 +1444,21 @@ impl Parser {
             )?;
             properties.extend(promoted_properties);
             methods.push(method.with_attributes(attributes));
+            return Ok(());
+        }
+        if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "var")) {
+            self.parse_legacy_var_property_member(
+                attributes,
+                visibility.is_some()
+                    || is_static
+                    || is_abstract
+                    || is_final
+                    || is_readonly
+                    || set_visibility.is_some(),
+                false,
+                properties,
+                methods,
+            )?;
             return Ok(());
         }
         let visibility = visibility.unwrap_or(EvalVisibility::Public);

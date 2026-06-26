@@ -49,7 +49,7 @@ such a local alias removes the alias without unsetting the global value.
 | Control flow | Braced and single-statement `if`/`elseif`/`else`, `else if`, `while`, `do/while`, `for`, `foreach`, `switch`, `break`, and `continue` are supported. |
 | Exceptions | `throw`, `try`, `catch`, union catches, class-specific catches, optional catch variables, and `finally` are supported. `finally` runs before a fragment returns or propagates a `Throwable`; a control action from `finally` replaces the pending action from the protected body or catch. |
 | Functions | Eval fragments can declare functions. Static locals inside eval-declared functions are initialized once per eval context and persist across later calls through that context. Top-level `static` declarations in separate eval fragments are initialized for each eval execution. |
-| Classes | Eval fragments can declare classes with properties including PHP's legacy `var` public-property marker, asymmetric property write visibility (`private(set)` / `protected(set)`), constructor property promotion including by-reference promotion for variable, array-element, object-property, static-property, property-array-element, static-property-array-element, and default-value targets, concrete property get/set hooks including by-reference get-hook syntax, methods, `__construct()`, inheritance, visibility, readonly properties/classes, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations and PHP-compatible property/constant conflict checks, interface implementations, static members, class/interface/trait constants including `final` constants, and class-level attributes. Duplicate eval class-like names are rejected. |
+| Classes | Eval fragments can declare classes and traits with properties including PHP's legacy `var` public-property marker, asymmetric property write visibility (`private(set)` / `protected(set)`), constructor property promotion including by-reference promotion for variable, array-element, object-property, static-property, property-array-element, static-property-array-element, and default-value targets, concrete property get/set hooks including by-reference get-hook syntax, methods, `__construct()`, inheritance, visibility, readonly properties/classes, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations and PHP-compatible property/constant conflict checks, interface implementations, static members, class/interface/trait constants including `final` constants, and class-level attributes. Duplicate eval class-like names are rejected. |
 | Enums | Eval fragments can declare pure and `int` / `string` backed enums with cases, constants including `final` constants, methods, interface implementations, `::cases()`, `::from()`, `::tryFrom()`, `->name`, and backed `->value`. |
 | Includes | `include`, `include_once`, `require`, and `require_once` execute local filesystem paths from inside fragments. |
 | Namespaces | Both `namespace Name;` and `namespace Name { ... }` forms are supported, including simple and grouped `use`, `use function`, and `use const` declarations. |
@@ -149,8 +149,8 @@ containers to eval-declared functions.
 ## Classes and objects
 
 Eval-declared classes support inheritance, public/protected/private properties,
-PHP's legacy `var` marker for public properties,
-and methods, asymmetric property write visibility (`private(set)` /
+PHP's legacy `var` marker for public properties, and methods, asymmetric
+property write visibility (`private(set)` /
 `protected(set)`), constructor property promotion including by-reference promotion
 for variable, array-element, object-property, static-property,
 property-array-element, static-property-array-element, and default-value targets,
@@ -164,6 +164,7 @@ properties, static methods, static interface method contracts, class, interface,
 trait, and enum constants including `final` constants, class-level attributes,
 `ClassName::class` literals, magic method fallback through `__call()` and
 `__callStatic()`, and magic property fallback through `__get()` and `__set()`.
+Eval traits also accept the legacy `var` marker for public properties.
 PHP's global `#[Override]` marker is validated on eval-declared methods against
 non-private parent methods and eval interface method contracts.
 Eval validates method override and interface method parameter and return types
