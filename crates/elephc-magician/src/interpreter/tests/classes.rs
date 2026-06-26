@@ -339,6 +339,60 @@ return $box->id();"#,
     assert_eq!(values.get(result), FakeValue::Int(7));
 }
 
+/// Verifies direct reads of uninitialized typed eval properties throw catchable PHP errors.
+#[test]
+fn execute_program_rejects_uninitialized_typed_property_reads() {
+    let program = parse_fragment(
+        br#"class EvalTypedReadBox {
+    public int $typed;
+    public ?int $nullable;
+    public ?int $defaultNull = null;
+    public $plain;
+}
+$box = new EvalTypedReadBox();
+try {
+    echo $box->typed;
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    echo $box->nullable;
+} catch (Error $e) {
+    echo $e->getMessage();
+}
+echo "|";
+echo is_null($box->defaultNull) ? "default-null" : "bad";
+echo "|";
+echo is_null($box->plain) ? "plain-null" : "bad";
+echo "|";
+$box->typed = 0;
+echo $box->typed;
+echo "|";
+unset($box->typed);
+try {
+    echo $box->typed;
+} catch (Error $e) {
+    echo $e->getMessage();
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Error:Typed property EvalTypedReadBox::$typed must not be accessed before initialization|\
+Typed property EvalTypedReadBox::$nullable must not be accessed before initialization|\
+default-null|plain-null|0|\
+Typed property EvalTypedReadBox::$typed must not be accessed before initialization"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies readonly eval properties throw Error on writes outside the declaring constructor.
 #[test]
 fn execute_program_readonly_property_write_after_constructor_throws_error() {

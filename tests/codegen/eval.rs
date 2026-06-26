@@ -8584,6 +8584,59 @@ echo implode(",", array_keys($vars));');
     assert_eq!(out.stdout, "PA:b:a,b:b");
 }
 
+/// Verifies direct reads of uninitialized eval-declared typed properties throw PHP errors.
+#[test]
+fn test_eval_uninitialized_typed_instance_property_reads_throw_error() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalUninitializedTypedRead {
+    public int $typed;
+    public ?int $nullable;
+    public ?int $defaultNull = null;
+    public $plain;
+}
+$object = new EvalUninitializedTypedRead();
+try {
+    echo $object->typed;
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    echo $object->nullable;
+} catch (Error $e) {
+    echo $e->getMessage();
+}
+echo "|";
+echo is_null($object->defaultNull) ? "default-null" : "bad";
+echo "|";
+echo is_null($object->plain) ? "plain-null" : "bad";
+echo "|";
+$object->typed = 0;
+echo $object->typed;
+echo "|";
+unset($object->typed);
+try {
+    echo $object->typed;
+} catch (Error $e) {
+    echo $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Error:Typed property EvalUninitializedTypedRead::$typed must not be accessed before initialization|\
+Typed property EvalUninitializedTypedRead::$nullable must not be accessed before initialization|\
+default-null|plain-null|0|\
+Typed property EvalUninitializedTypedRead::$typed must not be accessed before initialization"
+    );
+}
+
 /// Verifies eval `get_object_vars()` exposes initialized generated/AOT properties by scope.
 #[test]
 fn test_eval_get_object_vars_exposes_initialized_aot_properties_by_scope() {

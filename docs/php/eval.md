@@ -176,6 +176,10 @@ Eval validates inherited property redeclarations with PHP-style invariant
 property types, matching static storage, compatible read/write visibility, and
 readonly compatibility: child redeclarations may add `readonly`, but may not
 remove inherited `readonly`.
+Typed eval-declared instance and static properties track PHP initialization
+state: reads before initialization or after `unset()` throw the same catchable
+`Error`, while untyped properties and explicit `= null` defaults are initialized
+to `null`.
 Eval validates inherited class/interface constant redeclarations with PHP-style
 visibility compatibility, and rejects non-public interface constants.
 Eval-declared method calls also enforce declared return values at runtime, with
