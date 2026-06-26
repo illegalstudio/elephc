@@ -7716,6 +7716,36 @@ echo count($implements) . ":" . $implements["EvalDynIface"];');
     );
 }
 
+/// Verifies eval static method calls preserve PHP forwarding and late-static binding.
+#[test]
+fn test_eval_declared_static_method_calls_preserve_forwarding() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalStaticForwardA {
+    public static function who() { return static::tag(); }
+    public static function relayNamed() { return EvalStaticForwardA::who(); }
+    public static function relaySelf() { return self::who(); }
+    public static function tag() { return "A"; }
+}
+class EvalStaticForwardB extends EvalStaticForwardA {
+    public static function relayParent() { return parent::who(); }
+    public static function relayStatic() { return static::who(); }
+    public static function tag() { return "B"; }
+}
+echo EvalStaticForwardB::relayNamed(); echo ":";
+echo EvalStaticForwardB::relaySelf(); echo ":";
+echo EvalStaticForwardB::relayParent(); echo ":";
+echo EvalStaticForwardB::relayStatic();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "A:B:B:B");
+}
+
 /// Verifies eval-declared interfaces are usable by eval-declared classes.
 #[test]
 fn test_eval_declared_interface_metadata_and_implementation() {
