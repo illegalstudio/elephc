@@ -1756,6 +1756,65 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod construction throws catchable PHP reflection errors.
+#[test]
+fn execute_program_reflection_method_constructor_throws_reflection_exceptions() {
+    let program = parse_fragment(
+        br#"class EvalReflectMissingMethodTarget {}
+try {
+    new ReflectionMethod("EvalReflectMissingMethodTarget", "missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionMethod("EvalReflectMissingMethodTarget::missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    ReflectionMethod::createFromMethodName("EvalReflectMissingMethodTarget::missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionMethod("EvalReflectMissingClass", "run");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    ReflectionMethod::createFromMethodName("not-a-method");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values);
+    assert!(
+        result.is_ok(),
+        "execute eval ir failed after output {:?}",
+        values.output
+    );
+
+    assert_eq!(
+        values.output,
+        "ReflectionException:Method EvalReflectMissingMethodTarget::missing() does not exist|Method EvalReflectMissingMethodTarget::missing() does not exist|Method EvalReflectMissingMethodTarget::missing() does not exist|Class \"EvalReflectMissingClass\" does not exist|ReflectionMethod::createFromMethodName(): Argument #1 ($method) must be a valid method name"
+    );
+    assert_eq!(values.get(result.expect("execute eval ir")), FakeValue::Bool(true));
+}
+
 /// Verifies eval member and enum-case reflectors expose their declaring class.
 #[test]
 fn execute_program_reflects_eval_declaring_class_metadata() {

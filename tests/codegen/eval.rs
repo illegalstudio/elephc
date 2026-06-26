@@ -11536,6 +11536,61 @@ echo $ref->invoke(new EvalReflectCtorMethodTarget());');
     );
 }
 
+/// Verifies eval ReflectionMethod construction errors are catchable ReflectionException objects.
+#[test]
+fn test_eval_reflection_method_constructor_throws_reflection_exceptions() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectMissingMethodTarget {}
+eval('
+try {
+    ReflectionMethod::createFromMethodName("EvalAotReflectMissingMethodTarget::missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+class EvalDynReflectMissingMethodTarget {}
+try {
+    new ReflectionMethod("EvalDynReflectMissingMethodTarget", "missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionMethod("EvalDynReflectMissingMethodTarget::missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionMethod("EvalDynReflectMissingClass", "run");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    ReflectionMethod::createFromMethodName("not-a-method");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "ReflectionException:Method EvalAotReflectMissingMethodTarget::missing() does not exist|Method EvalDynReflectMissingMethodTarget::missing() does not exist|Method EvalDynReflectMissingMethodTarget::missing() does not exist|Class \"EvalDynReflectMissingClass\" does not exist|ReflectionMethod::createFromMethodName(): Argument #1 ($method) must be a valid method name"
+    );
+}
+
 /// Verifies eval-declared final properties cannot be redeclared by subclasses.
 #[test]
 fn test_eval_declared_final_property_override_fails() {
