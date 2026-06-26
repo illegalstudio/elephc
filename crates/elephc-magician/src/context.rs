@@ -422,6 +422,7 @@ pub struct ElephcEvalContext {
     native_property_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
     static_locals: HashMap<(String, String), RuntimeCellHandle>,
     static_properties: HashMap<(String, String), RuntimeCellHandle>,
+    static_property_aliases: HashMap<(String, String), EvalReferenceTarget>,
     class_constants: HashMap<(String, String), RuntimeCellHandle>,
     included_files: HashSet<String>,
     dynamic_objects: HashMap<u64, String>,
@@ -482,6 +483,7 @@ impl ElephcEvalContext {
             native_property_attributes: HashMap::new(),
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
+            static_property_aliases: HashMap::new(),
             class_constants: HashMap::new(),
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
@@ -543,6 +545,7 @@ impl ElephcEvalContext {
             native_property_attributes: HashMap::new(),
             static_locals: HashMap::new(),
             static_properties: HashMap::new(),
+            static_property_aliases: HashMap::new(),
             class_constants: HashMap::new(),
             included_files: HashSet::new(),
             dynamic_objects: HashMap::new(),
@@ -2537,6 +2540,27 @@ impl ElephcEvalContext {
             .static_properties
             .insert((normalize_class_name(class_name), name.into()), cell);
         previous.filter(|previous| *previous != cell)
+    }
+
+    /// Binds one eval static property slot to a persistent PHP reference target.
+    pub fn bind_static_property_alias(
+        &mut self,
+        class_name: &str,
+        name: &str,
+        target: EvalReferenceTarget,
+    ) -> Option<EvalReferenceTarget> {
+        self.static_property_aliases
+            .insert((normalize_class_name(class_name), name.to_string()), target)
+    }
+
+    /// Returns the persistent reference target bound to one eval static property slot.
+    pub fn static_property_alias(
+        &self,
+        class_name: &str,
+        name: &str,
+    ) -> Option<&EvalReferenceTarget> {
+        self.static_property_aliases
+            .get(&(normalize_class_name(class_name), name.to_string()))
     }
 
     /// Returns a materialized eval class constant cell.

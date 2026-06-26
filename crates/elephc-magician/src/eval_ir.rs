@@ -207,6 +207,11 @@ pub enum EvalStmt {
         property: String,
         value: EvalExpr,
     },
+    StaticPropertyReferenceBind {
+        class_name: String,
+        property: String,
+        source: String,
+    },
     StaticPropertyArrayAppend {
         class_name: String,
         property: String,
@@ -229,6 +234,11 @@ pub enum EvalStmt {
         property: String,
         value: EvalExpr,
     },
+    DynamicStaticPropertyReferenceBind {
+        class_name: EvalExpr,
+        property: String,
+        source: String,
+    },
     DynamicStaticPropertyArrayAppend {
         class_name: EvalExpr,
         property: String,
@@ -250,6 +260,11 @@ pub enum EvalStmt {
         class_name: EvalExpr,
         property: EvalExpr,
         value: EvalExpr,
+    },
+    DynamicStaticPropertyNameReferenceBind {
+        class_name: EvalExpr,
+        property: EvalExpr,
+        source: String,
     },
     DynamicStaticPropertyNameArrayAppend {
         class_name: EvalExpr,

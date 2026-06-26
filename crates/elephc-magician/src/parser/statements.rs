@@ -2669,6 +2669,21 @@ impl Parser {
             return Err(EvalParseError::UnexpectedToken);
         };
         self.advance();
+        if op.is_none() && self.consume(TokenKind::Ampersand) {
+            let TokenKind::DollarIdent(source) = self.current() else {
+                return Err(EvalParseError::ExpectedVariable);
+            };
+            let source = source.clone();
+            self.advance();
+            if require_semicolon {
+                self.expect_semicolon()?;
+            }
+            return Ok(vec![EvalStmt::StaticPropertyReferenceBind {
+                class_name,
+                property,
+                source,
+            }]);
+        }
         let value = self.parse_expr()?;
         if require_semicolon {
             self.expect_semicolon()?;
@@ -2742,6 +2757,21 @@ impl Parser {
             return Err(EvalParseError::UnexpectedToken);
         };
         self.advance();
+        if op.is_none() && self.consume(TokenKind::Ampersand) {
+            let TokenKind::DollarIdent(source) = self.current() else {
+                return Err(EvalParseError::ExpectedVariable);
+            };
+            let source = source.clone();
+            self.advance();
+            if require_semicolon {
+                self.expect_semicolon()?;
+            }
+            return Ok(vec![EvalStmt::DynamicStaticPropertyReferenceBind {
+                class_name,
+                property,
+                source,
+            }]);
+        }
         let value = self.parse_expr()?;
         if require_semicolon {
             self.expect_semicolon()?;
@@ -3394,6 +3424,22 @@ fn property_reference_bind_stmt(
                 source,
             })
         }
+        EvalExpr::DynamicStaticPropertyGet {
+            class_name,
+            property,
+        } => Ok(EvalStmt::DynamicStaticPropertyReferenceBind {
+            class_name: *class_name,
+            property,
+            source,
+        }),
+        EvalExpr::DynamicStaticPropertyNameGet {
+            class_name,
+            property,
+        } => Ok(EvalStmt::DynamicStaticPropertyNameReferenceBind {
+            class_name: *class_name,
+            property: *property,
+            source,
+        }),
         _ => Err(EvalParseError::UnexpectedToken),
     }
 }
@@ -3662,7 +3708,9 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
         EvalStmt::UnsetDynamicStaticProperty { class_name, .. } => {
             eval_expr_uses_this_property(class_name, property_name)
         }
-        EvalStmt::StaticPropertyIncDec { .. } | EvalStmt::UnsetStaticProperty { .. } => false,
+        EvalStmt::StaticPropertyIncDec { .. }
+        | EvalStmt::StaticPropertyReferenceBind { .. }
+        | EvalStmt::UnsetStaticProperty { .. } => false,
         EvalStmt::DynamicPropertySet {
             object,
             property,
@@ -3764,6 +3812,9 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
         EvalStmt::DynamicStaticPropertyIncDec { class_name, .. } => {
             eval_expr_uses_this_property(class_name, property_name)
         }
+        EvalStmt::DynamicStaticPropertyReferenceBind { class_name, .. } => {
+            eval_expr_uses_this_property(class_name, property_name)
+        }
         EvalStmt::DynamicStaticPropertyNameSet {
             class_name,
             property,
@@ -3791,6 +3842,14 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
                 || eval_expr_uses_this_property(value, property_name)
         }
         EvalStmt::DynamicStaticPropertyNameIncDec {
+            class_name,
+            property,
+            ..
+        } => {
+            eval_expr_uses_this_property(class_name, property_name)
+                || eval_expr_uses_this_property(property, property_name)
+        }
+        EvalStmt::DynamicStaticPropertyNameReferenceBind {
             class_name,
             property,
             ..

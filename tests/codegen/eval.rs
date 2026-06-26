@@ -10293,6 +10293,44 @@ echo $class::${eval_dynamic_static_property_items_expression()}[1];');
     assert_eq!(out.stdout, "1|6|5:4");
 }
 
+/// Verifies eval-declared static properties can bind to local variables by reference.
+#[test]
+fn test_eval_declared_static_property_reference_binding() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalStaticPropertyReferenceBindBox {
+    public static $value = "old";
+    public static $other = "old";
+    public static $third = "old";
+}
+
+$source = "A";
+EvalStaticPropertyReferenceBindBox::$value =& $source;
+$source = "B";
+echo EvalStaticPropertyReferenceBindBox::$value . "|";
+EvalStaticPropertyReferenceBindBox::$value = "C";
+echo $source . "|";
+
+$class = "EvalStaticPropertyReferenceBindBox";
+$dynamic = "D";
+$class::$other =& $dynamic;
+$dynamic = "E";
+echo EvalStaticPropertyReferenceBindBox::$other . "|";
+$class::$other = "F";
+echo $dynamic . "|";
+
+$name = "third";
+$third = "G";
+EvalStaticPropertyReferenceBindBox::${$name} =& $third;
+$third = "H";
+echo EvalStaticPropertyReferenceBindBox::$third . "|";
+$class::${$name} = "I";
+echo $third;');
+"#,
+    );
+    assert_eq!(out, "B|C|E|F|H|I");
+}
+
 /// Verifies eval AOT method fallback dispatches missing and inaccessible methods through `__call`.
 #[test]
 fn test_eval_aot_magic_call_method_fallback() {
