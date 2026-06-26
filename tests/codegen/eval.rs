@@ -10077,6 +10077,34 @@ echo EvalNamedReceiverDynamicStaticMethod::$missing("B");');
     assert_eq!(out.stdout, "read:A|later:B");
 }
 
+/// Verifies eval supports braced dynamic static method names.
+#[test]
+fn test_eval_braced_dynamic_static_method_name() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalBracedDynamicStaticMethod {
+    public static function read($value) {
+        return "read:" . $value;
+    }
+
+    public static function __callStatic($method, $args) {
+        return $method . ":" . $args[0];
+    }
+}
+$method = "read";
+$class = "EvalBracedDynamicStaticMethod";
+echo EvalBracedDynamicStaticMethod::{$method}("A") . "|";
+echo $class::{"missing"}("B");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "read:A|missing:B");
+}
+
 /// Verifies eval AOT method fallback dispatches missing and inaccessible methods through `__call`.
 #[test]
 fn test_eval_aot_magic_call_method_fallback() {

@@ -844,6 +844,20 @@ impl Parser {
                     args,
                 })
             }
+            TokenKind::LBrace => {
+                self.advance();
+                let method = self.parse_expr()?;
+                self.expect(TokenKind::RBrace)?;
+                if !matches!(self.current(), TokenKind::LParen) {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                let args = self.parse_call_args()?;
+                Ok(EvalExpr::DynamicStaticMethodCall {
+                    class_name: Box::new(EvalExpr::ClassNameFetch { class_name }),
+                    method: Box::new(method),
+                    args,
+                })
+            }
             TokenKind::Ident(constant) => {
                 let constant = constant.clone();
                 self.advance();
@@ -893,6 +907,20 @@ impl Parser {
                 Ok(EvalExpr::DynamicStaticMethodCall {
                     class_name: Box::new(class_name),
                     method: Box::new(EvalExpr::Const(EvalConst::String(method))),
+                    args,
+                })
+            }
+            TokenKind::LBrace => {
+                self.advance();
+                let method = self.parse_expr()?;
+                self.expect(TokenKind::RBrace)?;
+                if !matches!(self.current(), TokenKind::LParen) {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                let args = self.parse_call_args()?;
+                Ok(EvalExpr::DynamicStaticMethodCall {
+                    class_name: Box::new(class_name),
+                    method: Box::new(method),
                     args,
                 })
             }
