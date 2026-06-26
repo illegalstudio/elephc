@@ -1287,6 +1287,7 @@ impl FakeOps {
             "Countable",
             "Iterator",
             "IteratorAggregate",
+            "Throwable",
             "Traversable",
         ]
         .iter()

@@ -415,6 +415,13 @@ enum EvalInvalidPureBackedMarker implements EvalBackedMarker {
 class EvalInvalidUnitEnumClass implements EvalUnitMarker {}"#,
         "non-enum class cannot implement UnitEnum through a marker",
     );
+
+    assert_invalid_enum_fragment(
+        br#"enum EvalInvalidThrowableEnum implements Throwable {
+    case Ready;
+}"#,
+        "enum cannot implement Throwable",
+    );
 }
 
 /// Verifies eval allows the enum magic methods PHP permits.

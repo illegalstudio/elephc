@@ -1321,6 +1321,12 @@ fn eval_builtin_backed_enum_interface_name(name: &str) -> bool {
         .eq_ignore_ascii_case("BackedEnum")
 }
 
+/// Returns whether one name is PHP's native Throwable interface.
+fn eval_builtin_throwable_interface_name(name: &str) -> bool {
+    name.trim_start_matches('\\')
+        .eq_ignore_ascii_case("Throwable")
+}
+
 /// Returns whether one name is visible as a native/runtime interface to eval.
 pub(in crate::interpreter) fn eval_runtime_interface_exists(
     name: &str,
@@ -1367,6 +1373,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
             return Err(EvalStatus::RuntimeFatal);
         }
     }
+    validate_eval_class_does_not_implement_throwable_interfaces(class, context)?;
     validate_eval_class_does_not_implement_enum_interfaces(class, context)?;
     validate_declared_class_interface_members(class, context)?;
     if !class.is_abstract() {
@@ -1549,6 +1556,7 @@ fn validate_eval_enum_interfaces(
             return Err(EvalStatus::RuntimeFatal);
         }
     }
+    validate_eval_class_does_not_implement_throwable_interfaces(enum_class, context)?;
     if enum_decl.backing_type().is_none()
         && pending_class_interface_names(enum_class, context)
             .iter()
@@ -2442,6 +2450,21 @@ fn validate_eval_class_does_not_implement_enum_interfaces(
     if pending_class_interface_names(class, context)
         .iter()
         .any(|interface| eval_builtin_enum_interface_name(interface))
+    {
+        Err(EvalStatus::RuntimeFatal)
+    } else {
+        Ok(())
+    }
+}
+
+/// Rejects eval classes and enums that directly implement PHP's Throwable contract.
+fn validate_eval_class_does_not_implement_throwable_interfaces(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    if pending_class_interface_names(class, context)
+        .iter()
+        .any(|interface| eval_builtin_throwable_interface_name(interface))
     {
         Err(EvalStatus::RuntimeFatal)
     } else {

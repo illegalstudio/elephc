@@ -7485,6 +7485,31 @@ enum EvalDynPureBackedMarker implements EvalDynBackedMarkerBad {
     );
 }
 
+/// Verifies eval-declared classes cannot implement PHP's special Throwable contract.
+#[test]
+fn test_eval_declared_class_rejects_throwable_interfaces() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalDynInvalidThrowable implements Throwable {}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalDynThrowableMarker extends Throwable {}
+class EvalDynInvalidThrowableMarker implements EvalDynThrowableMarker {}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval enum `from()` misses throw catchable `ValueError` objects.
 #[test]
 fn test_eval_fragment_enum_from_miss_throws_value_error() {
