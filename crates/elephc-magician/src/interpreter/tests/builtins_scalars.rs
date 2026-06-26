@@ -237,6 +237,48 @@ return call_user_func_array("get_class", ["object" => $object]);"#,
         FakeValue::String("stdClass".to_string())
     );
 }
+
+/// Verifies eval no-arg `get_class()` and `get_parent_class()` read method class scope.
+#[test]
+fn execute_program_dispatches_no_arg_class_name_builtins() {
+    let program = parse_fragment(
+        br#"class EvalNoArgClassParent {}
+class EvalNoArgClassBase extends EvalNoArgClassParent {
+    public function inherited() {
+        return get_class() . ":" . get_parent_class();
+    }
+    public function inheritedCallable() {
+        return call_user_func("get_class") . ":" . call_user_func_array("get_parent_class", []);
+    }
+}
+class EvalNoArgClassChild extends EvalNoArgClassBase {
+    public function own() {
+        return get_class() . ":" . get_parent_class();
+    }
+}
+$child = new EvalNoArgClassChild();
+echo $child->inherited(); echo ":";
+echo $child->inheritedCallable(); echo ":";
+echo $child->own(); echo ":";
+try {
+    get_class();
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage(); echo ":";
+}
+return get_parent_class();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "EvalNoArgClassBase:EvalNoArgClassParent:EvalNoArgClassBase:EvalNoArgClassParent:EvalNoArgClassChild:EvalNoArgClassBase:Error:get_class() without arguments must be called from within a class:"
+    );
+    assert_eq!(values.get(result), FakeValue::String(String::new()));
+}
 /// Verifies eval `get_parent_class()` reads object and class-string parents by callable.
 #[test]
 fn execute_program_dispatches_get_parent_class_builtin() {

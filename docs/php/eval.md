@@ -700,6 +700,12 @@ including dynamic property names, and static properties including dynamic
 receivers or dynamic property names. Callable dispatch of `settype()` remains
 by-value and emits PHP's by-reference warning.
 
+Eval supports the deprecated no-argument `get_class()` and `get_parent_class()`
+forms inside class methods. They read the declaring method's class scope rather
+than the late-static called class. Outside a class scope, no-argument
+`get_class()` throws `Error`; no-argument `get_parent_class()` returns an empty
+string, matching elephc's AOT lowering for parentless or scope-less lookups.
+
 Eval `array_map()` supports one or more source arrays with supported callable
 values or a `null` callback. `array_filter()`, `array_reduce()`,
 `array_walk()`, `usort()`, `uasort()`, and `uksort()` share the same callback

@@ -104,11 +104,29 @@ pub(in crate::interpreter) fn eval_builtin_get_class(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [object] = args else {
-        return Err(EvalStatus::RuntimeFatal);
+    match args {
+        [] => eval_get_class_no_arg_result(context, values),
+        [object] => {
+            let object = eval_expr(object, context, scope, values)?;
+            eval_get_class_result(object, context, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Resolves PHP's deprecated no-arg `get_class()` form from the current class scope.
+pub(in crate::interpreter) fn eval_get_class_no_arg_result(
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(class_name) = context.current_class_scope() else {
+        return eval_throw_error(
+            "get_class() without arguments must be called from within a class",
+            context,
+            values,
+        );
     };
-    let object = eval_expr(object, context, scope, values)?;
-    eval_get_class_result(object, context, values)
+    values.string(class_name.trim_start_matches('\\'))
 }
 
 /// Resolves the PHP-visible class name for one already materialized object cell.
@@ -164,11 +182,26 @@ pub(in crate::interpreter) fn eval_builtin_get_parent_class(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [object_or_class] = args else {
-        return Err(EvalStatus::RuntimeFatal);
+    match args {
+        [] => eval_get_parent_class_no_arg_result(context, values),
+        [object_or_class] => {
+            let object_or_class = eval_expr(object_or_class, context, scope, values)?;
+            eval_get_parent_class_result(object_or_class, context, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Resolves PHP's deprecated no-arg `get_parent_class()` form from the current class scope.
+pub(in crate::interpreter) fn eval_get_parent_class_no_arg_result(
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(class_name) = context.current_class_scope() else {
+        return values.string("");
     };
-    let object_or_class = eval_expr(object_or_class, context, scope, values)?;
-    eval_get_parent_class_result(object_or_class, context, values)
+    let class_name = values.string(class_name.trim_start_matches('\\'))?;
+    eval_get_parent_class_result(class_name, context, values)
 }
 
 /// Resolves the PHP-visible parent class name for one object or class-name cell.

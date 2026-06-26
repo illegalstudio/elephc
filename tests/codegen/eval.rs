@@ -3993,6 +3993,48 @@ echo function_exists("get_class");');
     );
 }
 
+/// Verifies eval no-arg `get_class()` and `get_parent_class()` use method class scope.
+#[test]
+fn test_eval_dispatches_no_arg_class_name_builtins() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalNoArgRuntimeParent {}
+class EvalNoArgRuntimeBase extends EvalNoArgRuntimeParent {
+    public function inherited() {
+        return get_class() . ":" . get_parent_class();
+    }
+    public function inheritedCallable() {
+        return call_user_func("get_class") . ":" . call_user_func_array("get_parent_class", []);
+    }
+}
+class EvalNoArgRuntimeChild extends EvalNoArgRuntimeBase {
+    public function own() {
+        return get_class() . ":" . get_parent_class();
+    }
+}
+$child = new EvalNoArgRuntimeChild();
+echo $child->inherited() . ":";
+echo $child->inheritedCallable() . ":";
+echo $child->own() . ":";
+try {
+    get_class();
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage() . ":";
+}
+echo get_parent_class();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalNoArgRuntimeBase:EvalNoArgRuntimeParent:EvalNoArgRuntimeBase:EvalNoArgRuntimeParent:EvalNoArgRuntimeChild:EvalNoArgRuntimeBase:Error:get_class() without arguments must be called from within a class:"
+    );
+}
+
 /// Verifies eval `get_parent_class()` resolves AOT object and class-string parents.
 #[test]
 fn test_eval_dispatches_get_parent_class_builtin_call() {

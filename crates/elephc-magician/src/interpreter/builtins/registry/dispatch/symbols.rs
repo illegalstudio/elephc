@@ -77,10 +77,11 @@ pub(in crate::interpreter) fn eval_symbols_builtin_with_values(
             eval_get_called_class_result(context, values)?
         }
         "get_class" => {
-            let [object] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_get_class_result(*object, context, values)?
+            match evaluated_args {
+                [] => eval_get_class_no_arg_result(context, values)?,
+                [object] => eval_get_class_result(*object, context, values)?,
+                _ => return Err(EvalStatus::RuntimeFatal),
+            }
         }
         "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
             if !evaluated_args.is_empty() {
@@ -89,10 +90,13 @@ pub(in crate::interpreter) fn eval_symbols_builtin_with_values(
             eval_get_declared_symbols_result(name, context, values)?
         }
         "get_parent_class" => {
-            let [object_or_class] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_get_parent_class_result(*object_or_class, context, values)?
+            match evaluated_args {
+                [] => eval_get_parent_class_no_arg_result(context, values)?,
+                [object_or_class] => {
+                    eval_get_parent_class_result(*object_or_class, context, values)?
+                }
+                _ => return Err(EvalStatus::RuntimeFatal),
+            }
         }
         "get_resource_id" | "get_resource_type" => {
             let [resource] = evaluated_args else {
