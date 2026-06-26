@@ -3324,6 +3324,46 @@ echo $box->accepts($box);');
     );
 }
 
+/// Verifies eval-declared objects without `__toString()` throw catchable PHP errors in string contexts.
+#[test]
+fn test_eval_declared_object_string_context_without_tostring_throws_error() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalPlainStringContext {}
+$box = new EvalPlainStringContext();
+try {
+    echo $box;
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error:Object of class EvalPlainStringContext could not be converted to string"
+    );
+}
+
+/// Verifies AOT objects stringified from eval throw PHP's catchable conversion error.
+#[test]
+fn test_eval_aot_object_string_context_without_tostring_throws_error() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotPlainStringContext {}
+eval('$box = new EvalAotPlainStringContext();
+try {
+    echo $box;
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error:Object of class EvalAotPlainStringContext could not be converted to string"
+    );
+}
+
 /// Verifies eval `settype()` mutates direct variables and supports named arguments.
 #[test]
 fn test_eval_dispatches_settype_builtin_call() {

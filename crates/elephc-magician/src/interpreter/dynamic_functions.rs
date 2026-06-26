@@ -679,7 +679,7 @@ pub(in crate::interpreter) fn eval_string_context_value(
     eval_dynamic_object_string_context_value(value, context, values)
 }
 
-/// Invokes `__toString()` for eval-declared objects and rejects missing invalid hooks.
+/// Invokes `__toString()` for eval-declared objects or throws PHP's missing-hook error.
 fn eval_dynamic_object_string_context_value(
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
@@ -692,7 +692,7 @@ fn eval_dynamic_object_string_context_value(
     let called_class_name = class.name().to_string();
     let Some((declaring_class, method)) = context.class_method(&called_class_name, "__toString")
     else {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_object_to_string_error(&called_class_name, context, values);
     };
     if method.visibility() != EvalVisibility::Public
         || method.is_static()
@@ -719,6 +719,19 @@ fn eval_runtime_object_string_context_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let identity = values.object_identity(value)?;
+    let class_name = runtime_object_class_name(value, values)?;
+    if !eval_runtime_object_has_interpreter_tostring(identity, &class_name, context)
+        && eval_aot_method_dispatch_metadata_in_hierarchy(
+            &class_name,
+            "__toString",
+            context,
+            values,
+        )?
+        .is_none()
+    {
+        return eval_throw_object_to_string_error(&class_name, context, values);
+    }
     let result = eval_method_call_result_with_evaluated_args(
         value,
         "__toString",
@@ -727,6 +740,49 @@ fn eval_runtime_object_string_context_value(
         values,
     )?;
     eval_tostring_result_to_string(result, values)
+}
+
+/// Returns whether eval owns a synthetic `__toString()` implementation for the runtime object.
+fn eval_runtime_object_has_interpreter_tostring(
+    identity: u64,
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    context.eval_reflection_class_name(identity).is_some()
+        || context.eval_reflection_function_name(identity).is_some()
+        || context.eval_reflection_method(identity).is_some()
+        || context.eval_reflection_property(identity).is_some()
+        || context.eval_reflection_class_constant(identity).is_some()
+        || eval_runtime_class_name_has_reflection_tostring(class_name)
+}
+
+/// Returns whether a synthetic reflection class has `__toString()` handled by eval dispatch.
+fn eval_runtime_class_name_has_reflection_tostring(class_name: &str) -> bool {
+    let class_name = class_name.trim_start_matches('\\');
+    [
+        "ReflectionParameter",
+        "ReflectionNamedType",
+        "ReflectionUnionType",
+        "ReflectionIntersectionType",
+    ]
+    .iter()
+    .any(|reflection_class| class_name.eq_ignore_ascii_case(reflection_class))
+}
+
+/// Throws PHP's catchable object-to-string conversion error.
+fn eval_throw_object_to_string_error<T>(
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Object of class {} could not be converted to string",
+            class_name.trim_start_matches('\\')
+        ),
+        context,
+        values,
+    )
 }
 
 /// Normalizes one `__toString()` result to a boxed string cell.

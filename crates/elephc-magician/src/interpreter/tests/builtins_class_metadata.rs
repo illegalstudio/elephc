@@ -2036,7 +2036,8 @@ fn execute_program_reflection_class_to_string() {
     public int $id = 7;
     public function read(string $name = "Ada"): ?string { return $name; }
 }
-echo (new ReflectionClass("EvalReflectClassStringTarget"))->__toString();
+$ref = new ReflectionClass("EvalReflectClassStringTarget");
+echo $ref;
 return true;"#,
     )
     .expect("parse eval fragment");

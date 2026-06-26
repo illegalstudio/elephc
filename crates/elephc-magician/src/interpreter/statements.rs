@@ -4606,20 +4606,6 @@ fn eval_throw_reflection_exception(
     Err(EvalStatus::UncaughtThrowable)
 }
 
-/// Creates and schedules an `Error` through eval's normal Throwable channel.
-fn eval_throw_error<T>(
-    message: &str,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<T, EvalStatus> {
-    let exception = values.new_object("Error")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
-}
-
 /// Schedules the Throwable category required by one ReflectionClass instantiation error.
 fn eval_throw_reflection_instantiation_error(
     error: EvalReflectionInstantiationError,
@@ -5555,7 +5541,7 @@ fn eval_magic_call_arg_array(
 }
 
 /// Returns the runtime-visible class name for a non-eval object receiver.
-fn runtime_object_class_name(
+pub(in crate::interpreter) fn runtime_object_class_name(
     object: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
@@ -6689,7 +6675,7 @@ fn eval_native_method_access_error(
 }
 
 /// Finds generated/AOT method metadata on a class or its native parent chain.
-fn eval_aot_method_dispatch_metadata_in_hierarchy(
+pub(in crate::interpreter) fn eval_aot_method_dispatch_metadata_in_hierarchy(
     class_name: &str,
     method_name: &str,
     context: &ElephcEvalContext,

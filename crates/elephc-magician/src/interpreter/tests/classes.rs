@@ -1338,13 +1338,22 @@ fn execute_program_rejects_eval_object_string_context_without_tostring() {
     let program = parse_fragment(
         br#"class EvalPlainStringContext {}
 $box = new EvalPlainStringContext();
-echo $box;"#,
+try {
+    echo $box;
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    execute_program(&program, &mut scope, &mut values).expect_err("missing __toString should fail");
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Error:Object of class EvalPlainStringContext could not be converted to string"
+    );
 }
 
 /// Verifies eval rejects magic methods whose staticness, arity, or fatal contracts are invalid.

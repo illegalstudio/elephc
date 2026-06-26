@@ -29,6 +29,7 @@ mod return_values;
 mod runtime_ops;
 mod scope_cells;
 mod statements;
+mod throwables;
 
 use crate::context::{
     ElephcEvalContext, ElephcEvalExecutionScope, EvalReferenceTarget, NativeCallableDefault,
@@ -71,6 +72,7 @@ pub use runtime_ops::RuntimeValueOps;
 use runtime_ops::*;
 use scope_cells::*;
 use statements::*;
+use throwables::*;
 use std::ffi::{CStr, CString};
 use std::mem::MaybeUninit;
 use std::net::ToSocketAddrs;
