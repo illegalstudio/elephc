@@ -831,25 +831,34 @@ echo $box->value;"#,
     assert_eq!(values.output, "1:3:3");
 }
 
-/// Verifies eval rejects private member access from global scope.
+/// Verifies eval throws Error for private property access from global scope.
 #[test]
-fn execute_program_rejects_private_eval_member_access_from_global_scope() {
+fn execute_program_private_eval_member_access_from_global_scope_throws_error() {
     let program = parse_fragment(
         br#"class EvalPrivateGlobalBox {
     private int $secret = 4;
     private function read() { return $this->secret; }
 }
 $box = new EvalPrivateGlobalBox();
-echo $box->secret;"#,
+try {
+    echo $box->secret;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+return true;"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("global private property access should fail");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(
+        values.output,
+        "Error:Cannot access private property EvalPrivateGlobalBox::$secret"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval rejects calls to private methods from global scope.
 #[test]

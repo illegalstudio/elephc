@@ -66,21 +66,32 @@ return EvalStaticBase::baseRead();"#,
     assert_eq!(values.get(result), FakeValue::Int(5));
 }
 
-/// Verifies private static properties are not readable from global eval scope.
+/// Verifies private static property access from global eval scope throws Error.
 #[test]
-fn execute_program_rejects_private_eval_static_property_from_global_scope() {
+fn execute_program_private_eval_static_property_from_global_scope_throws_error() {
     let program = parse_fragment(
         br#"class EvalStaticPrivate {
     private static int $secret = 4;
 }
-return EvalStaticPrivate::$secret;"#,
+try {
+    echo EvalStaticPrivate::$secret;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+return true;"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    execute_program(&program, &mut scope, &mut values)
-        .expect_err("global private static property access should fail");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Error:Cannot access private property EvalStaticPrivate::$secret"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies eval rejects static-style calls to non-static methods.
