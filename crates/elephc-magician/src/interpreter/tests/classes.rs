@@ -204,6 +204,45 @@ return $box->value;"#,
     assert_eq!(values.get(result), FakeValue::Int(7));
 }
 
+/// Verifies by-reference promoted properties can alias static and nested property targets.
+#[test]
+fn execute_program_aliases_by_reference_promoted_static_and_nested_properties() {
+    let program = parse_fragment(
+        br#"class EvalPromotedStaticRefHolder {
+    public static $value = 1;
+    public $items = [1];
+    public static $staticItems = [1];
+}
+class EvalPromotedStaticRefBox {
+    public function __construct(public &$value) {}
+}
+$box = new EvalPromotedStaticRefBox(EvalPromotedStaticRefHolder::$value);
+$box->value = 5;
+echo EvalPromotedStaticRefHolder::$value; echo ":";
+EvalPromotedStaticRefHolder::$value = 7;
+echo $box->value; echo ":";
+$holder = new EvalPromotedStaticRefHolder();
+$itemBox = new EvalPromotedStaticRefBox($holder->items[0]);
+$itemBox->value = 11;
+echo $holder->items[0]; echo ":";
+$holder->items[0] = 13;
+echo $itemBox->value; echo ":";
+$staticItemBox = new EvalPromotedStaticRefBox(EvalPromotedStaticRefHolder::$staticItems[0]);
+$staticItemBox->value = 17;
+echo EvalPromotedStaticRefHolder::$staticItems[0]; echo ":";
+EvalPromotedStaticRefHolder::$staticItems[0] = 19;
+return $staticItemBox->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "5:7:11:13:17:");
+    assert_eq!(values.get(result), FakeValue::Int(19));
+}
+
 /// Verifies by-reference promoted defaults use internal property alias storage.
 #[test]
 fn execute_program_aliases_by_reference_promoted_default_properties() {

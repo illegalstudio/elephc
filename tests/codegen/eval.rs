@@ -17056,6 +17056,40 @@ return $box->value;');
     assert_eq!(out, "5:7");
 }
 
+/// Verifies eval promoted by-reference properties alias static and nested property targets.
+#[test]
+fn test_eval_declared_class_aliases_by_reference_promoted_static_and_nested_properties() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class DynEvalPromotedStaticRefHolder {
+    public static $value = 1;
+    public $items = [1];
+    public static $staticItems = [1];
+}
+class DynEvalPromotedStaticRefSupported {
+    public function __construct(public &$value) {}
+}');
+echo eval('$box = new DynEvalPromotedStaticRefSupported(DynEvalPromotedStaticRefHolder::$value);
+$box->value = 5;
+echo DynEvalPromotedStaticRefHolder::$value . ":";
+DynEvalPromotedStaticRefHolder::$value = 7;
+echo $box->value . ":";
+$holder = new DynEvalPromotedStaticRefHolder();
+$itemBox = new DynEvalPromotedStaticRefSupported($holder->items[0]);
+$itemBox->value = 11;
+echo $holder->items[0] . ":";
+$holder->items[0] = 13;
+echo $itemBox->value . ":";
+$staticItemBox = new DynEvalPromotedStaticRefSupported(DynEvalPromotedStaticRefHolder::$staticItems[0]);
+$staticItemBox->value = 17;
+echo DynEvalPromotedStaticRefHolder::$staticItems[0] . ":";
+DynEvalPromotedStaticRefHolder::$staticItems[0] = 19;
+return $staticItemBox->value;');
+"#,
+    );
+    assert_eq!(out, "5:7:11:13:17:19");
+}
+
 /// Verifies eval `class_alias()` supports class-like interface, trait, enum, and class targets.
 #[test]
 fn test_eval_class_alias_supports_class_like_targets() {
