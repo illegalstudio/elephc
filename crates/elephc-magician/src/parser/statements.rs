@@ -2953,6 +2953,17 @@ impl Parser {
             return Ok(vec![EvalStmt::Expr(target)]);
         };
         self.advance();
+        if op.is_none() && self.consume(TokenKind::Ampersand) {
+            let TokenKind::DollarIdent(source) = self.current() else {
+                return Err(EvalParseError::ExpectedVariable);
+            };
+            let source = source.clone();
+            self.advance();
+            if require_semicolon {
+                self.expect_semicolon()?;
+            }
+            return property_reference_bind_stmt(target, source).map(|stmt| vec![stmt]);
+        }
         let value = self.parse_expr()?;
         if require_semicolon {
             self.expect_semicolon()?;
@@ -3365,6 +3376,28 @@ fn eval_default_class_receiver_is_supported(class_name: &str) -> bool {
         .eq_ignore_ascii_case("static")
 }
 
+/// Builds a property by-reference binding statement from a parsed property target.
+fn property_reference_bind_stmt(
+    target: EvalExpr,
+    source: String,
+) -> Result<EvalStmt, EvalParseError> {
+    match target {
+        EvalExpr::PropertyGet { object, property } => Ok(EvalStmt::PropertyReferenceBind {
+            object: *object,
+            property,
+            source,
+        }),
+        EvalExpr::DynamicPropertyGet { object, property } => {
+            Ok(EvalStmt::DynamicPropertyReferenceBind {
+                object: *object,
+                property: *property,
+                source,
+            })
+        }
+        _ => Err(EvalParseError::UnexpectedToken),
+    }
+}
+
 /// Builds an object-property increment/decrement statement from a parsed property target.
 fn property_inc_dec_stmt(target: EvalExpr, increment: bool) -> Result<EvalStmt, EvalParseError> {
     match target {
@@ -3613,6 +3646,13 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
         | EvalStmt::UnsetProperty { object, property } => {
             eval_is_this_property(object, property, property_name)
                 || eval_expr_uses_this_property(object, property_name)
+        }
+        EvalStmt::DynamicPropertyReferenceBind {
+            object, property, ..
+        } => {
+            eval_is_this_dynamic_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(property, property_name)
         }
         EvalStmt::UnsetDynamicProperty { object, property } => {
             eval_is_this_dynamic_property(object, property, property_name)

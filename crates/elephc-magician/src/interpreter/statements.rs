@@ -166,6 +166,23 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_property_reference_bind_result(object, property, source, context, scope, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::DynamicPropertyReferenceBind {
+            object,
+            property,
+            source,
+        } => {
+            let object = eval_expr(object, context, scope, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_property_reference_bind_result(
+                object,
+                &property,
+                source,
+                context,
+                scope,
+                values,
+            )?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::DynamicPropertySet {
             object,
             property,
@@ -3796,7 +3813,14 @@ fn eval_property_reference_bind_result(
         return Err(EvalStatus::RuntimeFatal);
     }
     let storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
-    let target = eval_property_reference_target(source_name, context, scope, values)?;
+    let target = eval_property_reference_target(
+        identity,
+        &storage_property_name,
+        source_name,
+        context,
+        scope,
+        values,
+    )?;
     let value = eval_reference_target_value(&target, context, values)?;
     context.bind_dynamic_property_alias(identity, &storage_property_name, target);
     values.property_set(object, &storage_property_name, value)?;
@@ -3806,6 +3830,8 @@ fn eval_property_reference_bind_result(
 
 /// Resolves a local by-reference source into a persistent property alias target.
 fn eval_property_reference_target(
+    object_identity: u64,
+    storage_property_name: &str,
     source_name: &str,
     context: &ElephcEvalContext,
     scope: &mut ElephcEvalScope,
@@ -3814,8 +3840,24 @@ fn eval_property_reference_target(
     if let Some(target) = scope.reference_target(source_name).cloned() {
         return Ok(target);
     }
-    let cell = visible_scope_cell(context, scope, source_name).map_or_else(|| values.null(), Ok)?;
-    Ok(EvalReferenceTarget::Cell { cell })
+    if context.current_function().is_some() {
+        let cell =
+            visible_scope_cell(context, scope, source_name).map_or_else(|| values.null(), Ok)?;
+        return Ok(EvalReferenceTarget::Cell { cell });
+    }
+    let alias_name = eval_property_reference_alias_name(object_identity, storage_property_name);
+    for replaced in set_reference_alias(context, scope, &alias_name, source_name, values)? {
+        values.release(replaced)?;
+    }
+    Ok(EvalReferenceTarget::Variable {
+        scope: scope as *mut ElephcEvalScope,
+        name: alias_name,
+    })
+}
+
+/// Builds the hidden scope variable name that backs one property reference alias.
+fn eval_property_reference_alias_name(object_identity: u64, storage_property_name: &str) -> String {
+    format!("\0elephc_property_ref:{object_identity}:{storage_property_name}")
 }
 
 /// Reads the current value from a persistent reference target.

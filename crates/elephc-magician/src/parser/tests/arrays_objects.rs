@@ -409,6 +409,29 @@ fn parse_fragment_accepts_property_write_source() {
     );
 }
 
+/// Verifies object property reference bindings parse as dedicated EvalIR statements.
+#[test]
+fn parse_fragment_accepts_property_reference_bind_source() {
+    let program =
+        parse_fragment(br#"$this->x =& $source; $this->{$name} =& $other;"#)
+            .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::PropertyReferenceBind {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: "x".to_string(),
+                source: "source".to_string(),
+            },
+            EvalStmt::DynamicPropertyReferenceBind {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: EvalExpr::LoadVar("name".to_string()),
+                source: "other".to_string(),
+            },
+        ]
+    );
+}
+
 /// Verifies object property array writes and appends parse as dedicated EvalIR statements.
 #[test]
 fn parse_fragment_accepts_property_array_write_source() {

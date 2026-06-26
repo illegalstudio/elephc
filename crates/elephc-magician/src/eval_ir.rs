@@ -141,6 +141,11 @@ pub enum EvalStmt {
         property: String,
         source: String,
     },
+    DynamicPropertyReferenceBind {
+        object: EvalExpr,
+        property: EvalExpr,
+        source: String,
+    },
     DynamicPropertySet {
         object: EvalExpr,
         property: EvalExpr,

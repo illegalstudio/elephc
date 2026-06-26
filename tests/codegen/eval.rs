@@ -3458,6 +3458,36 @@ echo empty($missing?->{eval_dynamic_write_bad()}) ? "nullempty" : "bad";');
     );
 }
 
+/// Verifies eval-declared object properties can bind to local variables by reference.
+#[test]
+fn test_eval_declared_property_reference_binding() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalPropertyReferenceBindBox {
+    public $value = "old";
+    public $other = "old";
+}
+
+$box = new EvalPropertyReferenceBindBox();
+$source = "A";
+$box->value =& $source;
+$source = "B";
+echo $box->value . "|";
+$box->value = "C";
+echo $source . "|";
+
+$name = "other";
+$dynamic = "D";
+$box->{$name} =& $dynamic;
+$dynamic = "E";
+echo $box->other . "|";
+$box->{$name} = "F";
+echo $dynamic;');
+"#,
+    );
+    assert_eq!(out, "B|C|E|F");
+}
+
 /// Verifies eval object property increment/decrement works with named and dynamic properties.
 #[test]
 fn test_eval_object_property_inc_dec_statements() {
