@@ -899,9 +899,11 @@ fn unbox_by_ref_capture_wat(slot_off: usize) -> Result<String> {
 /// Returns the raw WAT sequence that unboxes one capture from a raw descriptor slot at
 /// `[desc + slot_off]` (NOT a Mixed cell) to the body capture parameter's `IrType` /
 /// `PhpType`, pushing exactly the param's `WasmRepr::val_types` for the body call.
-/// Refcounted captures (containers, callables, strings) are `incref`'d so the body's
-/// Owned parameter owns a fresh ref; the descriptor retains its own ref (released by the
-/// tag-walk at descriptor free). Scalars (int/bool/float) are pushed with no refcount.
+/// Refcounted captures (containers, callables, strings) are pushed as BORROWS (no incref),
+/// matching native's Model A: the descriptor retains its single ref (released by the
+/// tag-walk at descriptor free), and a captured value returned by the body is promoted to
+/// an owned ref at the EIR return boundary (`acquire_borrowed_return_value`) instead of by
+/// the wrapper. Scalars (int/bool/float) are pushed with no refcount.
 fn unbox_capture_wat(slot_off: usize, ir: &IrType, php: &PhpType) -> Result<String> {
     let off = slot_off as i32;
     let mut s = String::new();
@@ -912,11 +914,7 @@ fn unbox_capture_wat(slot_off: usize, ir: &IrType, php: &PhpType) -> Result<Stri
                     &format!("(local.set $ub_lo (i64.load offset={} (local.get $desc)))", off),
                     "load the captured callable descriptor (i64 lo)",
                 ));
-                s.push_str(&wat_ins(
-                    "(call $__rt_incref (i32.wrap_i64 (local.get $ub_lo)))",
-                    "own a ref for the body's capture parameter",
-                ));
-                s.push_str(&wat_ins("local.get $ub_lo", "push the descriptor i64 for the body"));
+                s.push_str(&wat_ins("local.get $ub_lo", "push the descriptor i64 for the body (borrow)"));
             } else {
                 s.push_str(&wat_ins(
                     &format!("(i64.load offset={} (local.get $desc))", off),
@@ -942,11 +940,7 @@ fn unbox_capture_wat(slot_off: usize, ir: &IrType, php: &PhpType) -> Result<Stri
                 ),
                 "load the captured string length (i32 -> i64 for the Str repr)",
             ));
-            s.push_str(&wat_ins(
-                "(call $__rt_incref (local.get $rb_ptr))",
-                "own a ref to the captured string for the body",
-            ));
-            s.push_str(&wat_ins("local.get $rb_ptr", "push the string pointer for the body"));
+            s.push_str(&wat_ins("local.get $rb_ptr", "push the string pointer for the body (borrow)"));
             s.push_str(&wat_ins("local.get $rb_len", "push the string length for the body"));
         }
         IrType::Heap(kind) => match kind {
@@ -955,11 +949,7 @@ fn unbox_capture_wat(slot_off: usize, ir: &IrType, php: &PhpType) -> Result<Stri
                     &format!("(local.set $rb_ptr (i32.load offset={} (local.get $desc)))", off),
                     "load the captured container/cell pointer",
                 ));
-                s.push_str(&wat_ins(
-                    "(call $__rt_incref (local.get $rb_ptr))",
-                    "own a ref to the captured container/cell for the body",
-                ));
-                s.push_str(&wat_ins("local.get $rb_ptr", "push the container/cell pointer for the body"));
+                s.push_str(&wat_ins("local.get $rb_ptr", "push the container/cell pointer for the body (borrow)"));
             }
             IrHeapKind::Iterable | IrHeapKind::Buffer => {
                 return Err(WasmError::Unsupported(format!(
@@ -1459,12 +1449,15 @@ mod tests {
     // -------------------------------------------------------------------------
 
     /// Builds a one-Str-capture closure body `__eir_closure_cap_gc_0` for the P7b
-    /// balance driver: it returns the captured string unchanged (the wrapper incref'd
-    /// it for this body param; `box_result_wat` persists a copy and releases the body's
-    /// source ref). Body params are `(ptr i32, len i64)` — the wrapper's
-    /// `unbox_capture_wat` Str arm pushes them in that order.
+    /// balance driver: it acquires the captured string (modeling EIR Edit 1's
+    /// return-boundary `Op::Acquire`) and returns it unchanged. The wrapper now passes the
+    /// capture as a borrow (no unbox incref), so the body's own incref is the owned ref
+    /// `box_result_wat` releases after persisting a copy for the result cell. Body params
+    /// are `(ptr i32, len i64)` — the wrapper's `unbox_capture_wat` Str arm pushes them in
+    /// that order.
     fn str_capture_body_wat() -> &'static str {
         r#"(func $fn___eir_closure_cap_gc_0 (param $cp i32) (param $cl i64) (result i32) (result i64)
+  (call $__rt_incref (local.get $cp))                                   ;; EDIT 1: acquire the capture for the return value
   (local.get $cp)                                                       ;; return the captured string pointer
   (local.get $cl))                                                      ;; return the captured string length
 "#
@@ -1613,13 +1606,15 @@ mod tests {
     // -------------------------------------------------------------------------
 
     /// Builds the one-Callable-capture closure body `__eir_closure_cap_call_gc_0` for the
-    /// callable balance driver: it returns the captured descriptor unchanged (an I64).
-    /// The wrapper increfs the capture for this body param; `box_result_wat`'s Callable
-    /// arm increfs it again for the result cell and releases the body's source ref. Body
-    /// param is `(param $cap i64)` — the wrapper's `unbox_capture_wat` Callable arm pushes
-    /// the descriptor i64.
+    /// callable balance driver: it acquires the captured descriptor (modeling EIR Edit 1's
+    /// return-boundary `Op::Acquire`) and returns it unchanged (an I64). The wrapper now
+    /// passes the capture as a borrow (no unbox incref), so the body's own incref is the
+    /// owned ref `box_result_wat`'s Callable arm releases after increfing again for the
+    /// result cell. Body param is `(param $cap i64)` — the wrapper's `unbox_capture_wat`
+    /// Callable arm pushes the descriptor i64.
     fn callable_capture_body_wat() -> &'static str {
         r#"(func $fn___eir_closure_cap_call_gc_0 (param $cap i64) (result i64)
+  (call $__rt_incref (i32.wrap_i64 (local.get $cap)))                   ;; EDIT 1: acquire the capture for the return value
   (local.get $cap))                                                     ;; return the captured callable descriptor (i64)
 "#
     }
@@ -1687,6 +1682,100 @@ mod tests {
         if let Some(o) = run_p7b_capture_driver(
             callable_capture_fn(),
             callable_capture_body_wat(),
+            driver,
+            "t",
+            10,
+            None,
+        ) {
+            assert_eq!(o, "0");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // P7d0: by-value callable capture non-return path — refcount leak guard.
+    // Proves Edit 2 (unbox incref removal) for the case where the capture is NOT
+    // returned: any spurious wrapper incref permanently elevates the captured
+    // descriptor's refcount and leaves it un-freed after all explicit releases.
+    // -------------------------------------------------------------------------
+
+    /// Builds the closure body `__eir_closure_cap_nr_0` for the non-return
+    /// callable capture driver: ignores the captured callable descriptor and
+    /// returns a constant int 42. No incref here — Edit 1 only acquires a capture
+    /// that IS returned by the body; since the capture is discarded, a spurious
+    /// wrapper unbox incref (pre-Edit-2) would be uncompensated, leaking the
+    /// captured descriptor's refcount permanently.
+    fn nr_capture_body_wat() -> &'static str {
+        r#"(func $fn___eir_closure_cap_nr_0 (param $cap i64) (result i64)
+  (i64.const 42))                                                       ;; ignore the capture; return an int (non-return path)
+"#
+    }
+
+    /// Builds the closure `Function` (name, one Callable capture param, Int return)
+    /// that `emit_closure_dispatch` reads to generate the capture-aware wrapper +
+    /// ladder arm. The return type is `IrType::I64` / `PhpType::Int` — the body
+    /// returns a plain int rather than the captured callable, so `box_result_wat`
+    /// emits a kind-5 int cell that carries no reference to the inner descriptor.
+    fn nr_capture_fn() -> Function {
+        let mut f = Function::new(
+            "__eir_closure_cap_nr_0".to_string(),
+            IrType::I64,
+            PhpType::Int,
+        );
+        f.flags.is_closure = true;
+        f.flags.closure_capture_count = 1;
+        f.params.push(FunctionParam {
+            name: "c".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Callable,
+            by_ref: false,
+            variadic: false,
+        });
+        f
+    }
+
+    /// A one-Callable-capture closure that does NOT return the capture, called
+    /// through the full P7d0 path, leaves `_gc_live` at "0". The driver stamps an
+    /// inner callable descriptor (no captures, alloc rc = 1) and an outer descriptor
+    /// that captures it (tag 10), increfing `inner` before storing it in the slot
+    /// so the outer owns one ref and the driver retains its own alloc ref (inner
+    /// rc = 2 after setup). The call dispatches through the generated wrapper; the
+    /// wrapper unboxes the capture as a borrow (Edit 2: no unbox incref), the body
+    /// ignores it and returns the int 42, and the wrapper boxes it into a kind-5 int
+    /// result cell. The driver then releases: the int result cell (inner untouched),
+    /// the arg buffer, the outer descriptor (tag-10 walk releases the captured inner
+    /// ref, rc 2→1), and the driver's own inner ref (rc 1→0, freed). Pre-Edit-2 the
+    /// wrapper would incref inner during unbox (rc 2→3), the non-return body would
+    /// not compensate, the tag-10 walk brings rc 3→2, and the driver decref brings
+    /// rc 2→1 — inner is never freed, `_gc_live != 0`.
+    #[test]
+    fn closure_capture_callable_nonreturn_gc() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $inner i32) (local $desc i32) (local $args i32) (local $rcell i32)
+  (local.set $inner (call $__rt_heap_alloc (i32.const 32)))           ;; inner callable descriptor (no captures)
+  (i64.store (i32.sub (local.get $inner) (i32.const 8)) (i64.const 6)) ;; stamp inner heap-header kind = 6 (callable)
+  (i64.store (local.get $inner) (i64.const 1))                         ;; inner descriptor kind = 1 (Closure)
+  (i32.store offset=8 (local.get $inner) (i32.const 0))               ;; inner entry_index = 0 (unused here)
+  (i32.store offset=12 (local.get $inner) (i32.const 0))              ;; inner capture_count = 0
+  (i32.store offset=16 (local.get $inner) (i32.const 0))              ;; inner capture_tags_ptr = 0 (no tags)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 48)))            ;; outer descriptor (32 + 1 capture slot)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp outer heap-header kind = 6 (callable)
+  (i64.store (local.get $desc) (i64.const 1))                         ;; outer descriptor kind = 1 (Closure)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; outer entry_index = 0 (only closure)
+  (i32.store offset=12 (local.get $desc) (i32.const 1))              ;; outer capture_count = 1
+  (i32.store offset=16 (local.get $desc) (i32.const 512))            ;; outer capture_tags_ptr = static tag array [10]
+  (call $__rt_incref (local.get $inner))                              ;; retain a ref for the descriptor (MaybeOwned stamp arm)
+  (i64.store offset=32 (local.get $desc) (i64.extend_i32_u (local.get $inner))) ;; store captured callable ptr in slot 0
+  (local.set $args (call $__rt_array_new (i64.const 0) (i64.const 16))) ;; empty arg buffer (no visible args)
+  (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args))) ;; dispatch -> int result cell (kind 5)
+  (call $__rt_decref_any (local.get $rcell))                         ;; release the int result cell (does NOT touch inner)
+  (call $__rt_decref_any (local.get $args))                          ;; release the empty arg buffer
+  (call $__rt_decref_any (local.get $desc))                          ;; release the outer descriptor (tag-10 walk releases inner ref)
+  (call $__rt_decref_any (local.get $inner))                         ;; release the driver's own inner allocation ref
+  (global.get $_gc_live))                                            ;; expect 0 (inner rc reaches 0 and is freed)
+"#;
+        if let Some(o) = run_p7b_capture_driver(
+            nr_capture_fn(),
+            nr_capture_body_wat(),
             driver,
             "t",
             10,
