@@ -94,6 +94,92 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies invalid eval-declared static property access throws PHP-compatible Error values.
+#[test]
+fn execute_program_invalid_eval_static_property_access_throws_error() {
+    let program = parse_fragment(
+        br#"class EvalStaticPropertyErrors {
+    public int $instance = 1;
+    public static int $typed;
+}
+try {
+    echo EvalStaticPropertyErrors::$missing;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo "|";
+try {
+    echo EvalStaticPropertyErrors::$instance;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo "|";
+try {
+    echo EvalStaticPropertyErrors::$typed;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo "|";
+try {
+    EvalStaticPropertyErrors::$missing = 9;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Error:Access to undeclared static property EvalStaticPropertyErrors::$missing|\
+Error:Access to undeclared static property EvalStaticPropertyErrors::$instance|\
+Error:Typed static property EvalStaticPropertyErrors::$typed must not be accessed before initialization|\
+Error:Access to undeclared static property EvalStaticPropertyErrors::$missing"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies generated/AOT static property misses distinguish missing classes from missing properties.
+#[test]
+fn execute_program_invalid_runtime_static_property_access_throws_error() {
+    let program = parse_fragment(
+        br#"try {
+    echo KnownClass::$missing;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo "|";
+try {
+    echo MissingRuntimeStaticClass::$missing;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Error:Access to undeclared static property KnownClass::$missing|\
+Error:Class \"MissingRuntimeStaticClass\" not found"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval rejects static-style calls to non-static methods.
 #[test]
 fn execute_program_rejects_static_call_to_eval_instance_method() {
