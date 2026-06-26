@@ -5661,7 +5661,9 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let class_name = resolve_eval_static_member_class_name(class_name, context)?;
+    let receiver = resolve_eval_static_method_receiver(class_name, context)?;
+    let class_name = receiver.dispatch_class;
+    let called_class_name = receiver.called_class;
     if let Some(result) = eval_builtin_property_hook_type_static_method_result(
         &class_name,
         method_name,
@@ -5711,6 +5713,7 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
         if validate_eval_member_access(&declaring_class, method.visibility(), context).is_err() {
             if let Some(result) = eval_magic_static_method_call(
                 &class_name,
+                &called_class_name,
                 method_name,
                 evaluated_args,
                 context,
@@ -5728,7 +5731,7 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
         }
         return eval_dynamic_static_method_with_values(
             &declaring_class,
-            &class_name,
+            &called_class_name,
             &method,
             evaluated_args,
             context,
@@ -5757,6 +5760,7 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
     {
         if let Some(result) = eval_magic_static_method_call(
             &class_name,
+            &called_class_name,
             method_name,
             evaluated_args,
             context,
@@ -6106,6 +6110,33 @@ pub(in crate::interpreter) fn resolve_eval_static_class_name(
             })
             .ok_or(EvalStatus::RuntimeFatal),
     }
+}
+
+/// Resolved static method dispatch metadata preserving PHP late-static forwarding.
+struct EvalStaticMethodReceiver {
+    dispatch_class: String,
+    called_class: String,
+}
+
+/// Resolves static method receivers into lookup and late-static called-class names.
+fn resolve_eval_static_method_receiver(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> Result<EvalStaticMethodReceiver, EvalStatus> {
+    let dispatch_class = resolve_eval_static_member_class_name(class_name, context)?;
+    let called_class = match class_name.to_ascii_lowercase().as_str() {
+        "self" | "parent" => context
+            .current_called_class_scope()
+            .or_else(|| context.current_class_scope())
+            .map(str::to_string)
+            .ok_or(EvalStatus::RuntimeFatal)?,
+        "static" => dispatch_class.clone(),
+        _ => dispatch_class.clone(),
+    };
+    Ok(EvalStaticMethodReceiver {
+        dispatch_class,
+        called_class,
+    })
 }
 
 /// Resolves static member receivers while allowing non-eval class names to reach AOT lookup.
@@ -6983,6 +7014,7 @@ fn eval_magic_instance_method_call(
 /// Dispatches a missing or inaccessible eval static method through `__callStatic()`.
 fn eval_magic_static_method_call(
     class_name: &str,
+    called_class_name: &str,
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
@@ -6997,7 +7029,7 @@ fn eval_magic_static_method_call(
     let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
     eval_dynamic_static_method_with_values(
         &declaring_class,
-        class_name,
+        called_class_name,
         &method,
         magic_args,
         context,

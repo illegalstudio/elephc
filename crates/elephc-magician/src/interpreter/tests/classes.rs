@@ -73,6 +73,36 @@ return $self instanceof EvalRelativeFactoryBase
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval static method calls preserve PHP late-static forwarding rules.
+#[test]
+fn execute_program_forwards_eval_static_method_called_class() {
+    let program = parse_fragment(
+        br#"class EvalForwardA {
+    public static function who() { return static::tag(); }
+    public static function relayNamed() { return EvalForwardA::who(); }
+    public static function relaySelf() { return self::who(); }
+    public static function tag() { return "A"; }
+}
+class EvalForwardB extends EvalForwardA {
+    public static function relayParent() { return parent::who(); }
+    public static function relayStatic() { return static::who(); }
+    public static function tag() { return "B"; }
+}
+echo EvalForwardB::relayNamed(); echo ":";
+echo EvalForwardB::relaySelf(); echo ":";
+echo EvalForwardB::relayParent(); echo ":";
+return EvalForwardB::relayStatic();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "A:B:B:");
+    assert_eq!(values.get(result), FakeValue::String("B".to_string()));
+}
+
 /// Verifies eval classes can extend runtime/AOT classes through the dynamic backing object.
 #[test]
 fn execute_program_extends_runtime_class_from_eval_declaration() {
