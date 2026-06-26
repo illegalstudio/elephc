@@ -3792,6 +3792,16 @@ pub(in crate::interpreter) fn eval_property_get_result(
                 values,
             );
         }
+        if property.property_type().is_some()
+            && !context.dynamic_property_is_initialized(identity, &storage_property_name)
+        {
+            return eval_throw_uninitialized_property_error(
+                &declaring_class,
+                property.name(),
+                context,
+                values,
+            );
+        }
     }
     if !declared_property_found
         && eval_object_public_property_exists(object, property_name, values)?
@@ -4644,6 +4654,24 @@ fn eval_throw_undeclared_static_property_error<T>(
         &format!(
             "Access to undeclared static property {}::${}",
             class_name.trim_start_matches('\\'),
+            property_name
+        ),
+        context,
+        values,
+    )
+}
+
+/// Throws PHP's uninitialized typed instance property error.
+fn eval_throw_uninitialized_property_error<T>(
+    declaring_class: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Typed property {}::${} must not be accessed before initialization",
+            declaring_class.trim_start_matches('\\'),
             property_name
         ),
         context,
