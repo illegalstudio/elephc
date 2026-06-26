@@ -29,12 +29,13 @@
 //!   signature/environment/invocation symbol records.
 //! - `__rt_callable_descriptor_release` mirrors `__rt_decref_object`: null / below-payload
 //!   / at-cursor guards, a refcount==0 re-entrancy guard, mark-zero, then a capture walk
-//!   that releases each refcounted slot (tag in {1,4,5,6,7,10} = str/array/assoc/object/
-//!   mixed/callable) via the kind-dispatched `__rt_decref_any` (so a callable capture
-//!   recurses through kind-6), and finally `__rt_heap_free` (unsafe; refcount already 0).
-//!   By-ref captures use tag sentinel 0xFF and are skipped (the promoted cell outlives
-//!   the closure). P7a0 descriptors have capture_count 0, so the walk is a no-op today;
-//!   the full walk is emitted now so P7b only needs `ClosureNew` to populate slots.
+//!   that releases each refcounted slot (tag in {1,4,5,6,7,10,12} = str/array/assoc/
+//!   object/mixed/callable/iterable) via the kind-dispatched `__rt_decref_any` (so a
+//!   callable capture recurses through kind-6), and finally `__rt_heap_free` (unsafe;
+//!   refcount already 0). By-ref captures use tag sentinel 0xFF and are skipped (the
+//!   promoted cell outlives the closure). P7a0 descriptors have capture_count 0, so the
+//!   walk is a no-op today; the full walk is emitted now so P7b only needs `ClosureNew`
+//!   to populate slots.
 //! - P7a1 closure call uses a uniform Mixed-cell arg buffer. `ClosureCall` boxes each
 //!   argument into a kind-5 cell (via `objects::emit_box_value_into_mixed`), pushes the
 //!   cell pointer into a `value_type`-7 array (`__rt_array_push_mixed`), and calls
@@ -99,9 +100,9 @@ const RT_CALLABLE_DESCRIPTOR_RELEASE: &str = r#"(func $__rt_callable_descriptor_
     (loop $walk
       (br_if $walk_end (i32.ge_u (local.get $i) (local.get $n)))   ;; i >= n -> end walk
       (local.set $tag (i32.load8_u (i32.add (local.get $tags) (local.get $i))))  ;; tag = tags[i]
-      ;; refcounted tags: 1 (str), 4 (array), 5 (assoc), 6 (object), 7 (mixed), 10 (callable).
-      ;; Scalars (0/2/3), null (8), and the by-ref sentinel (0xFF) own no heap storage.
-      (if (i32.or (i32.or (i32.eq (local.get $tag) (i32.const 1)) (i32.and (i32.ge_u (local.get $tag) (i32.const 4)) (i32.le_u (local.get $tag) (i32.const 7)))) (i32.eq (local.get $tag) (i32.const 10))) (then  ;; tag in {1,4,5,6,7,10} -> release the slot
+      ;; refcounted tags: 1 (str), 4 (array), 5 (assoc), 6 (object), 7 (mixed), 10 (callable), 12 (iterable).
+      ;; Scalars (0/2/3), null (8), and the by-ref sentinel (0xFF) own no heap storage; 13 (buffer) is non-refcounted.
+      (if (i32.or (i32.or (i32.or (i32.eq (local.get $tag) (i32.const 1)) (i32.and (i32.ge_u (local.get $tag) (i32.const 4)) (i32.le_u (local.get $tag) (i32.const 7)))) (i32.eq (local.get $tag) (i32.const 10))) (i32.eq (local.get $tag) (i32.const 12))) (then  ;; tag in {1,4,5,6,7,10,12} -> release the slot
         (local.set $slot (i32.wrap_i64 (i64.load offset=32 (i32.add (local.get $ptr) (i32.mul (local.get $i) (i32.const 16))))))  ;; slot ptr = low 8 bytes of [ptr+32+i*16]
         (call $__rt_decref_any (local.get $slot))                  ;; release the child (kind-dispatched; callable recurses via kind 6)
       )                                                            ;; close then (tag check)
@@ -137,11 +138,12 @@ const CAPTURE_SLOT_BYTES: i32 = 16;
 /// The runtime release-tag byte for a capture of `php` type, mirroring the native
 /// `type_tag` table (`src/codegen/callable_descriptor.rs:584`) with the by-ref
 /// override. The release runtime (`__rt_callable_descriptor_release`) releases a
-/// slot iff its tag is in `{1,4,5,6,7,10}` (str/array/assoc/object/mixed/callable);
-/// scalars (`0/2/3`), null (`8`), and the by-ref sentinel (`0xFF`) own no heap
-/// storage and are skipped. Only the wrapper-supported set is reachable for P7b
-/// (see `lower_closure_new`), but the full table is emitted for forward-compat
-/// with P7c (by-ref) and P7d (Mixed/Union) captures.
+/// slot iff its tag is in `{1,4,5,6,7,10,12}` (str/array/assoc/object/mixed/callable/
+/// iterable); scalars (`0/2/3`), null (`8`), the by-ref sentinel (`0xFF`), and
+/// `13` (buffer, non-refcounted) own no heap storage and are skipped. Only the
+/// wrapper-supported set is reachable for P7b (see `lower_closure_new`), but the
+/// full table is emitted for forward-compat with P7c (by-ref), P7d1 (Mixed/Union),
+/// and P7d1b (Iterable) captures.
 fn capture_tag_for_php_type(php: &PhpType, by_ref: bool) -> u8 {
     if by_ref {
         return 0xFF;
@@ -229,19 +231,20 @@ pub(super) fn emit_closure_capture_tag_tables(
 /// indexes `ctx.closure_tag_ptrs`.
 ///
 /// P7b supports by-value captures of `Int`/`Bool`/`Float`/`Str`/`Array`/`AssocArray`/
-/// `Object`/`Callable`; P7d1 extends that to `Mixed`/`Union` (both a kind-5 Mixed
-/// cell, capture tag 7). The capture list is recovered as the trailing
-/// `closure_capture_count` params of the closure body (parity with native
+/// `Object`/`Callable`; P7d1 extends that to `Mixed`/`Union` (both a kind-5 Mixed cell,
+/// capture tag 7); P7d1b extends that to `Iterable` (single-i32 Ptr, capture tag 12,
+/// now in the release set `{1,4,5,6,7,10,12}`). The capture list is recovered as the
+/// trailing `closure_capture_count` params of the closure body (parity with native
 /// `closure_capture_params_from_eir`); the operand count is cross-checked against it.
 /// The slot layout (tag + store shape) is derived from the **capture param** type
 /// (not the operand type), with an explicit operand/param type-drift cross-check so a
 /// future lowering divergence is a compile error, not a silent miscompile. By-ref
 /// captures (P7c/P7c0), by-ref/variadic visible params (m10), and
-/// `Iterable`/`Buffer`/`TaggedScalar`/`Pointer`/`Resource`/`Packed`/`Never` captures
-/// are rejected (Iterable/Buffer/TaggedScalar land in P7d1b). Ownership: a non-`Owned`
-/// refcounted capture is `incref`'d (or `__rt_str_persist`'d for strings) so the
-/// descriptor owns a ref; an `Owned` operand's ref transfers directly (no incref),
-/// mirroring native `emit_runtime_closure_descriptor_with_captures`.
+/// `Buffer`/`TaggedScalar`/`Pointer`/`Resource`/`Packed`/`Never` captures are rejected.
+/// Ownership: a non-`Owned` refcounted capture is `incref`'d (or `__rt_str_persist`'d
+/// for strings) so the descriptor owns a ref; an `Owned` operand's ref transfers
+/// directly (no incref), mirroring native
+/// `emit_runtime_closure_descriptor_with_captures`.
 pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let data_id = data_immediate(inst)?;
     let name = ctx
@@ -333,17 +336,16 @@ pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
 /// local is promoted into a persistent ref-cell and the cell pointer is stamped into
 /// the descriptor. P7d1 extends the by-value set to `Mixed`/`Union` (both
 /// `WasmRepr::Ptr`, boxed as a kind-5 Mixed cell, capture tag 7 already in the
-/// release set `{1,4,5,6,7,10}`); the by-ref path reuses the same Ptr-repr promote
+/// release set `{1,4,5,6,7,10,12}`); the by-ref path reuses the same Ptr-repr promote
 /// + cell-ptr stamp, so by-ref `Mixed`/`Union` only needs this reject lift.
-/// `Iterable`/`Buffer`/`TaggedScalar` captures still need dedicated work (P7d1b):
-/// `Iterable` carries capture tag 12 (outside the release condition today) and its
-/// cell kind must be confirmed in `__rt_decref_any`'s dispatched set; `Buffer` is
-/// non-refcounted; `TaggedScalar` is a 2-word `WasmRepr::Tagged` cell that diverges
-/// from the release walk's single-i32-ptr read. `Pointer`/`Resource`/`Packed`/
-/// `Never` captures would stamp a slot whose tag is not in the release set
-/// `{1,4,5,6,7,10}` (an unleakable ptr) — and a by-ref capture of them has no sound
-/// promote either. `Void` captures carry no value. Each is rejected with a phase tag
-/// so the caller knows where it lands later.
+/// P7d1b accepts `IrHeapKind::Iterable` by-value and by-ref (single-i32 Ptr, tag 12,
+/// now in the release set). `Buffer` stays REJECTED — `BufferNew` is not lowered in
+/// WASM; a Buffer capture path would be dead-code scaffolding until that lands.
+/// `TaggedScalar` (P7d1c) is a 2-word `WasmRepr::Tagged` cell that diverges from the
+/// release walk's single-i32-ptr read. `Pointer`/`Resource`/`Packed`/`Never` would
+/// stamp a slot whose tag is not in the release set `{1,4,5,6,7,10,12}` (an unleakable
+/// ptr) — and a by-ref capture of them has no sound promote either. `Void` carries no
+/// value. Each rejected kind carries a phase tag so the caller knows where it lands.
 fn reject_unsupported_capture(name: &str, p: &crate::ir::FunctionParam) -> Result<()> {
     // Reject by php_type first: Pointer/Resource lower to a raw I64 and Packed to
     // Heap(Object), so the ir_type match below would otherwise accept them even
@@ -365,11 +367,13 @@ fn reject_unsupported_capture(name: &str, p: &crate::ir::FunctionParam) -> Resul
     match p.ir_type {
         IrType::I64 | IrType::F64 | IrType::Str => Ok(()),
         IrType::Heap(
-            IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object | IrHeapKind::Mixed | IrHeapKind::Union,
+            IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object
+            | IrHeapKind::Mixed | IrHeapKind::Union
+            | IrHeapKind::Iterable,
         ) => Ok(()),
-        IrType::Heap(IrHeapKind::Iterable | IrHeapKind::Buffer) => Err(WasmError::Unsupported(
-            format!("ClosureNew {} capture on wasm32-wasi (P7d1b)", name),
-        )),
+        IrType::Heap(IrHeapKind::Buffer) => Err(WasmError::Unsupported(format!(
+            "ClosureNew {} Buffer capture on wasm32-wasi (BufferNew not yet lowered)", name,
+        ))),
         IrType::TaggedScalar | IrType::Void => Err(WasmError::Unsupported(format!(
             "ClosureNew {:?} capture {} on wasm32-wasi",
             p.ir_type, p.name
@@ -467,11 +471,13 @@ fn stamp_capture_slot(
             );
         }
         IrType::Heap(
-            IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object | IrHeapKind::Mixed | IrHeapKind::Union,
+            IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object | IrHeapKind::Mixed | IrHeapKind::Union
+            | IrHeapKind::Iterable,
         ) => {
-            // Container/Mixed-cell ptr on the stack as a single i32. Mixed and Union
-            // are both `WasmRepr::Ptr` (a kind-5 Mixed cell), so they stamp exactly like
-            // an array/hash/object slot: one i32 ptr the release walk reads back.
+            // Container/Mixed-cell/Iterable ptr on the stack as a single i32. Mixed and Union
+            // are both `WasmRepr::Ptr` (a kind-5 Mixed cell); Iterable is a type-erased
+            // array/hash/object ptr (kind 2/3/4) freed via `__rt_decref_any`. All stamp
+            // as one i32 ptr that the release walk reads back.
             let ptr = ctx.fresh_temp(ValType::I32);
             ctx.fb.ins(&format!("local.set {}", ptr), "capture container/cell pointer");
             if not_owned {
@@ -944,16 +950,17 @@ fn unbox_capture_wat(slot_off: usize, ir: &IrType, php: &PhpType) -> Result<Stri
             s.push_str(&wat_ins("local.get $rb_len", "push the string length for the body"));
         }
         IrType::Heap(kind) => match kind {
-            IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object | IrHeapKind::Mixed | IrHeapKind::Union => {
+            IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Object | IrHeapKind::Mixed | IrHeapKind::Union
+            | IrHeapKind::Iterable => {
                 s.push_str(&wat_ins(
                     &format!("(local.set $rb_ptr (i32.load offset={} (local.get $desc)))", off),
-                    "load the captured container/cell pointer",
+                    "load the captured container/cell/Iterable pointer (single-i32 borrow)",
                 ));
-                s.push_str(&wat_ins("local.get $rb_ptr", "push the container/cell pointer for the body (borrow)"));
+                s.push_str(&wat_ins("local.get $rb_ptr", "push the container/cell/Iterable pointer for the body (borrow)"));
             }
-            IrHeapKind::Iterable | IrHeapKind::Buffer => {
+            IrHeapKind::Buffer => {
                 return Err(WasmError::Unsupported(format!(
-                    "closure heap capture kind {:?} on wasm32-wasi (P7d1b)",
+                    "closure heap capture kind {:?} on wasm32-wasi (BufferNew not yet lowered)",
                     kind
                 )));
             }
@@ -1158,7 +1165,7 @@ mod tests {
     use super::super::refcount::emit_refcount_runtime;
     use super::super::wat::WatModule;
     use crate::codegen::platform::Target;
-    use crate::ir::{Function, FunctionParam, IrType, Module};
+    use crate::ir::{Function, FunctionParam, IrHeapKind, IrType, Module};
     use crate::types::PhpType;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -1779,6 +1786,95 @@ mod tests {
             driver,
             "t",
             10,
+            None,
+        ) {
+            assert_eq!(o, "0");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // P7d1b: Iterable by-value capture refcount balance — Edit 4 load-bearing
+    // guard. Proves that tag 12 in the release condition is necessary: without
+    // it the captured array is never released and `_gc_live` is non-zero.
+    // -------------------------------------------------------------------------
+
+    /// Builds the one-Iterable-capture closure body `__eir_closure_cap_iter_gc_0`:
+    /// receives the captured array pointer as a borrow (single i32, `WasmRepr::Ptr`
+    /// for `IrType::Heap(IrHeapKind::Iterable)`) and returns a constant int 42,
+    /// ignoring the capture. The non-return path is the sensitive one: the wrapper
+    /// passes the Iterable as a borrow (no incref), the body does not touch it, and
+    /// the only release is via the descriptor's tag-12 release walk (Edit 4).
+    fn iterable_gc_body_wat() -> &'static str {
+        r#"(func $fn___eir_closure_cap_iter_gc_0 (param $arr i32) (result i64)
+  (i64.const 42))                                                     ;; ignore the capture; return a constant int
+"#
+    }
+
+    /// Builds the closure `Function` (name, one Iterable capture param, Int return)
+    /// that `emit_closure_dispatch` reads to generate the capture-aware wrapper +
+    /// ladder arm. Iterable carries as `IrType::Heap(IrHeapKind::Iterable)` with
+    /// `PhpType::Iterable`; the wrapper's `unbox_capture_wat` Heap arm (Edit 3)
+    /// pushes the raw i32 ptr as a borrow for the body.
+    fn iterable_gc_fn() -> Function {
+        let mut f = Function::new(
+            "__eir_closure_cap_iter_gc_0".to_string(),
+            IrType::I64,
+            PhpType::Int,
+        );
+        f.flags.is_closure = true;
+        f.flags.closure_capture_count = 1;
+        f.params.push(FunctionParam {
+            name: "arr".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Iterable),
+            php_type: PhpType::Iterable,
+            by_ref: false,
+            variadic: false,
+        });
+        f
+    }
+
+    /// A one-Iterable-capture closure, created and called through the full P7d1b
+    /// path with explicit release of the result cell, the arg buffer, the
+    /// descriptor, and the driver's own array ref, leaves `_gc_live` at "0". The
+    /// driver allocates a real `__rt_array_new` pointer (kind 2, rc = 1), increfs
+    /// it before storing into the descriptor slot so the descriptor owns one ref
+    /// (rc = 2), calls the closure (wrapper borrows the array, body ignores it,
+    /// no incref), then releases: int result cell, empty arg buffer, the descriptor
+    /// (tag-12 walk calls `__rt_decref_any(arr)` → rc 2→1), and finally the
+    /// driver's own array ref (rc 1→0, freed). Proves Edit 4 (tag 12 in the release
+    /// set) actually frees the captured array.
+    ///
+    /// NEGATIVE CONTROL: temporarily reverting Edit 4 (removing tag 12 from the
+    /// condition) causes the descriptor release walk to skip the Iterable slot →
+    /// array rc stays at 1 after the driver decref → array not freed → `_gc_live`
+    /// returns a non-zero value. Report: pass=0, Edit-4-reverted=1.
+    #[test]
+    fn closure_capture_iterable_balanced_gc() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $arr i32) (local $desc i32) (local $args i32) (local $rcell i32)
+  (local.set $arr (call $__rt_array_new (i64.const 0) (i64.const 16)))  ;; real array (kind 2), rc = 1 from alloc
+  (local.set $desc (call $__rt_heap_alloc (i32.const 48)))              ;; descriptor (32 + 1 capture slot), rc = 1
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6))  ;; stamp heap-header kind = 6 (callable)
+  (i64.store (local.get $desc) (i64.const 1))                          ;; descriptor kind = 1 (Closure)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))                 ;; entry_index = 0 (only closure)
+  (i32.store offset=12 (local.get $desc) (i32.const 1))                ;; capture_count = 1
+  (i32.store offset=16 (local.get $desc) (i32.const 512))              ;; capture_tags_ptr = static tag array [12]
+  (call $__rt_incref (local.get $arr))                                  ;; retain a ref for the descriptor (MaybeOwned stamp arm), array rc = 2
+  (i64.store offset=32 (local.get $desc) (i64.extend_i32_u (local.get $arr))) ;; store captured Iterable ptr in slot 0
+  (local.set $args (call $__rt_array_new (i64.const 0) (i64.const 16))) ;; empty arg buffer (no visible args)
+  (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args))) ;; dispatch -> int result cell (kind 5)
+  (call $__rt_decref_any (local.get $rcell))                           ;; release the int result cell (does NOT touch arr)
+  (call $__rt_decref_any (local.get $args))                            ;; release the empty arg buffer
+  (call $__rt_decref_any (local.get $desc))                            ;; release the descriptor (tag-12 walk releases arr ref: rc 2->1)
+  (call $__rt_decref_any (local.get $arr))                             ;; release the driver's own array ref (rc 1->0, freed)
+  (global.get $_gc_live))                                              ;; expect 0 (array freed, no leak)
+"#;
+        if let Some(o) = run_p7b_capture_driver(
+            iterable_gc_fn(),
+            iterable_gc_body_wat(),
+            driver,
+            "t",
+            12,
             None,
         ) {
             assert_eq!(o, "0");

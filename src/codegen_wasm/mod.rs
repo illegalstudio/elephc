@@ -4113,6 +4113,131 @@ mod tests {
         }
     }
 
+    // ----- P7d1b: Iterable closure captures (by-value) -----
+
+    /// P7d1b Iterable by-value capture (tag 12): main creates an `Op::ArrayNew`
+    /// result typed as `IrType::Heap(IrHeapKind::Iterable)` / `PhpType::Iterable`
+    /// (the underlying runtime object is a real kind-2 array), pushes two int
+    /// elements, captures it by value (`ClosureNew` stamps one i32 ptr + incref for
+    /// the borrowed operand, tag 12), the body loads the capture and returns its
+    /// element count via `Op::ArrayLen`, and the caller `EchoValue`s the int result
+    /// -> "2". Exercises the Iterable accept in `reject_unsupported_capture` (Edit 1),
+    /// the `Heap|Iterable` arm in `stamp_capture_slot` (Edit 2), the `Heap|Iterable`
+    /// borrow arm in `unbox_capture_wat` (Edit 3), and the tag-12 descriptor release
+    /// walk at main exit (Edit 4). The array ptr is a real kind-2 block so
+    /// `__rt_decref_any` dispatches correctly through kind 2 → `__rt_decref_array`.
+    #[test]
+    fn closure_capture_iterable_by_value_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = module.data.intern_string("__eir_closure_cap_iter_bv");
+
+        let mut body = Function::new(
+            "__eir_closure_cap_iter_bv".to_string(),
+            IrType::I64,
+            PhpType::Int,
+        );
+        body.flags.is_closure = true;
+        body.flags.closure_capture_count = 1;
+        body.params.push(FunctionParam {
+            name: "arr".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Iterable),
+            php_type: PhpType::Iterable,
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_arr = body.add_local(
+            Some("arr".to_string()),
+            IrType::Heap(IrHeapKind::Iterable),
+            PhpType::Iterable,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arr = b.emit_load_local(slot_arr, IrType::Heap(IrHeapKind::Iterable), PhpType::Iterable);
+            let len = b
+                .emit(Op::ArrayLen, vec![arr], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(len) });
+        }
+        module.add_closure(body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        let slot_main_arr = main.add_local(
+            Some("arr".to_string()),
+            IrType::Heap(IrHeapKind::Iterable),
+            PhpType::Iterable,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Iterable),
+                    PhpType::Iterable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot_main_arr, arr);
+            for v in [10_i64, 20] {
+                let h = b.emit_load_local(slot_main_arr, IrType::Heap(IrHeapKind::Iterable), PhpType::Iterable);
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![h, c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let cap_arr = b.emit_load_local(slot_main_arr, IrType::Heap(IrHeapKind::Iterable), PhpType::Iterable);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    vec![cap_arr],
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let result = b
+                .emit(
+                    Op::ClosureCall,
+                    vec![callable],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "2");
+        }
+    }
+
     // ----- P2: scalar instruction lowering, observed via wasmer --invoke -----
 
     /// Returns whether the `wasmer` CLI is available.
