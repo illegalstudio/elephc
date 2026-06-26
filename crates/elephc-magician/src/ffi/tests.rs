@@ -11,6 +11,7 @@
 //! - Fake runtime-cell pointers are never dereferenced by these tests.
 
 use super::context::*;
+use super::declared_symbols::*;
 use super::execute::*;
 use super::native_functions::*;
 use super::native_methods::*;
@@ -315,6 +316,65 @@ fn context_push_class_scope_records_self_and_called_class() {
     assert_eq!(pop_status, EvalStatus::Ok.code());
     assert_eq!(ctx.current_class_scope(), None);
     assert_eq!(ctx.current_called_class_scope(), None);
+}
+
+/// Verifies generated declaration-name metadata is exposed through eval lists.
+#[test]
+fn register_declared_symbol_names_records_visible_metadata() {
+    let mut ctx = ElephcEvalContext::new();
+    let class_name = b"\\AotDeclaredClass";
+    let class_duplicate = b"aotdeclaredclass";
+    let interface_name = b"AotDeclaredInterface";
+    let trait_name = b"AotDeclaredTrait";
+    let empty_name = b"";
+
+    let class_registered = unsafe {
+        __elephc_eval_register_declared_class_name(
+            &mut ctx,
+            class_name.as_ptr(),
+            class_name.len() as u64,
+        )
+    };
+    let duplicate_registered = unsafe {
+        __elephc_eval_register_declared_class_name(
+            &mut ctx,
+            class_duplicate.as_ptr(),
+            class_duplicate.len() as u64,
+        )
+    };
+    let interface_registered = unsafe {
+        __elephc_eval_register_declared_interface_name(
+            &mut ctx,
+            interface_name.as_ptr(),
+            interface_name.len() as u64,
+        )
+    };
+    let trait_registered = unsafe {
+        __elephc_eval_register_declared_trait_name(
+            &mut ctx,
+            trait_name.as_ptr(),
+            trait_name.len() as u64,
+        )
+    };
+    let empty_rejected = unsafe {
+        __elephc_eval_register_declared_trait_name(
+            &mut ctx,
+            empty_name.as_ptr(),
+            empty_name.len() as u64,
+        )
+    };
+
+    assert_eq!(class_registered, 1);
+    assert_eq!(duplicate_registered, 1);
+    assert_eq!(interface_registered, 1);
+    assert_eq!(trait_registered, 1);
+    assert_eq!(empty_rejected, 0);
+    assert_eq!(ctx.declared_class_names(), &["AotDeclaredClass".to_string()]);
+    assert_eq!(
+        ctx.declared_interface_names(),
+        &["AotDeclaredInterface".to_string()]
+    );
+    assert_eq!(ctx.declared_trait_names(), &["AotDeclaredTrait".to_string()]);
 }
 
 /// Verifies the function-exists ABI probes eval-declared functions by folded name.

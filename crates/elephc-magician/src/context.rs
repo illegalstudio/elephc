@@ -916,9 +916,14 @@ impl ElephcEvalContext {
         true
     }
 
-    /// Returns class names declared or aliased through eval in PHP-visible order.
+    /// Returns class names declared through eval or registered from generated metadata.
     pub fn declared_class_names(&self) -> &[String] {
         &self.declared_class_names
+    }
+
+    /// Registers a runtime-visible class or enum declaration name for `get_declared_classes()`.
+    pub fn define_external_declared_class_name(&mut self, name: &str) -> bool {
+        push_external_declared_name(&mut self.declared_class_names, name)
     }
 
     /// Defines an eval-declared interface, failing if this context already has the name.
@@ -960,9 +965,14 @@ impl ElephcEvalContext {
             .flatten()
     }
 
-    /// Returns interface names declared through eval in PHP-visible order.
+    /// Returns interface names declared through eval or registered from generated metadata.
     pub fn declared_interface_names(&self) -> &[String] {
         &self.declared_interface_names
+    }
+
+    /// Registers a runtime-visible interface declaration name for `get_declared_interfaces()`.
+    pub fn define_external_declared_interface_name(&mut self, name: &str) -> bool {
+        push_external_declared_name(&mut self.declared_interface_names, name)
     }
 
     /// Defines an eval-declared trait, failing if this context already has the name.
@@ -1004,9 +1014,14 @@ impl ElephcEvalContext {
             .flatten()
     }
 
-    /// Returns trait names declared through eval in PHP-visible order.
+    /// Returns trait names declared through eval or registered from generated metadata.
     pub fn declared_trait_names(&self) -> &[String] {
         &self.declared_trait_names
+    }
+
+    /// Registers a runtime-visible trait declaration name for `get_declared_traits()`.
+    pub fn define_external_declared_trait_name(&mut self, name: &str) -> bool {
+        push_external_declared_name(&mut self.declared_trait_names, name)
     }
 
     /// Defines an eval-declared enum plus class-shaped metadata for dispatch.
@@ -3176,6 +3191,22 @@ impl Default for ElephcEvalContext {
 /// Normalizes PHP class names for the eval dynamic class registry.
 fn normalize_class_name(name: &str) -> String {
     name.trim_start_matches('\\').to_ascii_lowercase()
+}
+
+/// Adds an external declaration name once while preserving PHP-visible spelling.
+fn push_external_declared_name(names: &mut Vec<String>, name: &str) -> bool {
+    let visible_name = name.trim_start_matches('\\');
+    let key = normalize_class_name(visible_name);
+    if key.is_empty() {
+        return false;
+    }
+    if !names
+        .iter()
+        .any(|existing| normalize_class_name(existing) == key)
+    {
+        names.push(visible_name.to_string());
+    }
+    true
 }
 
 /// Normalizes PHP enum case names for case-sensitive eval enum lookup.

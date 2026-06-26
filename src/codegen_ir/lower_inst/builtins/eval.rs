@@ -502,6 +502,7 @@ fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
         .extern_symbol("__elephc_eval_context_new");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::store_at_offset(ctx.emitter, result_reg, offset);
+    register_eval_declared_symbols(ctx, offset);
     register_eval_native_functions(ctx, offset)?;
     register_eval_native_method_signatures(ctx, offset);
     ctx.emitter.label(&ready);
@@ -550,6 +551,60 @@ fn register_eval_native_method_signatures(ctx: &mut FunctionContext<'_>, context
         register_eval_native_member_attribute(ctx, context_offset, &registration);
     }
     register_eval_native_class_parents(ctx, context_offset);
+}
+
+/// Registers generated declared-name metadata with a newly allocated eval context.
+fn register_eval_declared_symbols(ctx: &mut FunctionContext<'_>, context_offset: usize) {
+    let class_names = ctx.module.declared_class_names.clone();
+    let interface_names = ctx.module.declared_interface_names.clone();
+    let trait_names = ctx.module.declared_trait_names.clone();
+    for name in class_names {
+        register_eval_declared_symbol_name(
+            ctx,
+            context_offset,
+            "__elephc_eval_register_declared_class_name",
+            &name,
+        );
+    }
+    for name in interface_names {
+        register_eval_declared_symbol_name(
+            ctx,
+            context_offset,
+            "__elephc_eval_register_declared_interface_name",
+            &name,
+        );
+    }
+    for name in trait_names {
+        register_eval_declared_symbol_name(
+            ctx,
+            context_offset,
+            "__elephc_eval_register_declared_trait_name",
+            &name,
+        );
+    }
+}
+
+/// Emits one declared-name metadata registration call into the eval context.
+fn register_eval_declared_symbol_name(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    symbol_name: &str,
+    name: &str,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+    let symbol = ctx.emitter.target.extern_symbol(symbol_name);
+    abi::emit_call_label(ctx.emitter, &symbol);
 }
 
 /// Collects global PHP functions that can use the descriptor-invoker bridge.

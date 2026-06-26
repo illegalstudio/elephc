@@ -7384,6 +7384,41 @@ echo class_exists(class: "MissingEvalClassExistsProbe", autoload: false) ? "Y" :
     assert_eq!(out, "YYYYYN");
 }
 
+/// Verifies eval `get_declared_*()` exposes generated AOT class-like names.
+#[test]
+fn test_eval_get_declared_symbols_exposes_aot_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalDeclaredAotIface {}
+trait EvalDeclaredAotTrait {}
+enum EvalDeclaredAotEnum { case Ready; }
+class EvalDeclaredAotClass implements EvalDeclaredAotIface { use EvalDeclaredAotTrait; }
+
+eval('$classHit = false;
+$enumHit = false;
+foreach (get_declared_classes() as $name) {
+    if ($name === "EvalDeclaredAotClass") { $classHit = true; }
+    if ($name === "EvalDeclaredAotEnum") { $enumHit = true; }
+}
+$interfaceHit = false;
+foreach (get_declared_interfaces() as $name) {
+    if ($name === "EvalDeclaredAotIface") { $interfaceHit = true; }
+}
+$traitHit = false;
+foreach (get_declared_traits() as $name) {
+    if ($name === "EvalDeclaredAotTrait") { $traitHit = true; }
+}
+echo $classHit ? "C" : "c";
+echo $enumHit ? "E" : "e";
+echo ":";
+echo $interfaceHit ? "I" : "i";
+echo ":";
+echo $traitHit ? "T" : "t";');
+"#,
+    );
+    assert_eq!(out, "CE:I:T");
+}
+
 /// Verifies eval `interface_exists()` probes generated AOT interface metadata.
 #[test]
 fn test_eval_fragment_interface_exists_probes_aot_interfaces() {
@@ -8022,7 +8057,14 @@ class EvalDynReaderBox implements EvalDynNamedReader {
 $box = new EvalDynReaderBox();
 echo interface_exists("EvalDynReader") ? "iface" : "bad"; echo ":";
 echo class_exists("EvalDynReader") ? "bad" : "notclass"; echo ":";
-echo count(get_declared_interfaces()) . ":";
+$declaredInterfaces = get_declared_interfaces();
+$readerDeclared = false;
+$namedDeclared = false;
+foreach ($declaredInterfaces as $name) {
+    if ($name === "EvalDynReader") { $readerDeclared = true; }
+    if ($name === "EvalDynNamedReader") { $namedDeclared = true; }
+}
+echo ($readerDeclared && $namedDeclared) ? "declared" : "missing"; echo ":";
 echo $box->read(4) . ":";
 echo $box->label() . ":";
 echo is_a($box, "EvalDynNamedReader") ? "isa" : "bad"; echo ":";
@@ -8038,7 +8080,7 @@ echo count($implements) . ":" . $implements["EvalDynNamedReader"] . ":" . $imple
     );
     assert_eq!(
         out.stdout,
-        "iface:notclass:2:5:box:isa:str:2:EvalDynNamedReader:EvalDynReader"
+        "iface:notclass:declared:5:box:isa:str:2:EvalDynNamedReader:EvalDynReader"
     );
 }
 
@@ -18670,14 +18712,39 @@ echo (new ReflectionClass("EvalAliasEnumCopy"))->getName(); echo ":";
 echo EvalAliasEnumCopy::Ready->value; echo ":";
 echo class_alias("EvalAliasClass", "EvalAliasClassCopy") ? "C" : "c"; echo ":";
 echo class_exists("EvalAliasClassCopy") ? "CE" : "ce"; echo ":";
-echo count(get_declared_classes()); echo ":";
-echo count(get_declared_interfaces()); echo ":";
-return count(get_declared_traits());');
+$declaredClasses = get_declared_classes();
+$classDeclared = false;
+$enumDeclared = false;
+$classAliasDeclared = false;
+$enumAliasDeclared = false;
+foreach ($declaredClasses as $name) {
+    if ($name === "EvalAliasClass") { $classDeclared = true; }
+    if ($name === "EvalAliasEnum") { $enumDeclared = true; }
+    if ($name === "EvalAliasClassCopy") { $classAliasDeclared = true; }
+    if ($name === "EvalAliasEnumCopy") { $enumAliasDeclared = true; }
+}
+echo ($classDeclared && $enumDeclared && !$classAliasDeclared && !$enumAliasDeclared) ? "DC" : "dc"; echo ":";
+$declaredInterfaces = get_declared_interfaces();
+$ifaceDeclared = false;
+$ifaceAliasDeclared = false;
+foreach ($declaredInterfaces as $name) {
+    if ($name === "EvalAliasIface") { $ifaceDeclared = true; }
+    if ($name === "EvalAliasIfaceCopy") { $ifaceAliasDeclared = true; }
+}
+echo ($ifaceDeclared && !$ifaceAliasDeclared) ? "DI" : "di"; echo ":";
+$declaredTraits = get_declared_traits();
+$traitDeclared = false;
+$traitAliasDeclared = false;
+foreach ($declaredTraits as $name) {
+    if ($name === "EvalAliasTrait") { $traitDeclared = true; }
+    if ($name === "EvalAliasTraitCopy") { $traitAliasDeclared = true; }
+}
+return ($traitDeclared && !$traitAliasDeclared) ? "DT" : "dt";');
 "#,
     );
     assert_eq!(
         out,
-        "I:IE:IC:II:IR:U:UE:UC:T:TE:TC:TI:E:EE:EC:EvalAliasEnum:ready:C:CE:2:1:1"
+        "I:IE:IC:II:IR:U:UE:UC:T:TE:TC:TI:E:EE:EC:EvalAliasEnum:ready:C:CE:DC:DI:DT"
     );
 }
 

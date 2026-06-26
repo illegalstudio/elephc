@@ -630,11 +630,12 @@ alias eval-declared and generated/AOT
 classes, interfaces, traits, and enums, preserving the target class-like kind
 for the corresponding metadata probes. Top-level compiled `class_alias()`
 calls still use elephc's generated subclass model, so eval sees the same AOT
-parent metadata as the compiled program. Aliases are usable for class-like
-lookups but are not added to `get_declared_classes()`,
-`get_declared_interfaces()`, or `get_declared_traits()`. Eval-declared enums are
-visible inside eval through `enum_exists()` and through class-like probes such
-as `class_exists()`.
+parent metadata as the compiled program. `get_declared_classes()`,
+`get_declared_interfaces()`, and `get_declared_traits()` expose eval-declared
+names plus generated/AOT declaration names; enum names are included in the class
+list like PHP. Aliases are usable for class-like lookups but are not added to
+the declared-name lists. Eval-declared enums are visible inside eval through
+`enum_exists()` and through class-like probes such as `class_exists()`.
 `method_exists()` and `property_exists()` inspect eval-declared class/interface/
 trait/enum metadata and generated runtime metadata. Object targets also see
 dynamic public properties, and `property_exists()` follows PHP's current-scope

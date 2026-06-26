@@ -10,6 +10,7 @@
 //! - Helper routines stay private to the FFI layer unless shared across families.
 
 pub mod context;
+pub mod declared_symbols;
 pub(crate) mod dynamic_destructors;
 pub mod execute;
 #[cfg(not(test))]
@@ -21,6 +22,7 @@ pub mod symbols;
 pub(crate) mod util;
 
 pub use context::*;
+pub use declared_symbols::*;
 pub use execute::*;
 #[cfg(not(test))]
 pub use function_calls::*;
