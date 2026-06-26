@@ -84,7 +84,7 @@ pub(in crate::interpreter) fn eval_call_arg_values(
 }
 
 /// Evaluates one call arg and captures caller-side storage for by-reference parameters.
-fn eval_call_arg_value(
+pub(in crate::interpreter) fn eval_call_arg_value(
     expr: &EvalExpr,
     context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,

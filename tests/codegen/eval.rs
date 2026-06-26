@@ -3694,16 +3694,38 @@ try {
 fn test_eval_dispatches_settype_builtin_call() {
     let out = compile_and_run(
         r#"<?php
+class EvalAotSettypeBox {
+    public mixed $value = 8;
+    public static mixed $staticValue = 9;
+}
 eval('$x = 42;
 echo settype($x, "string") ? gettype($x) . ":" . $x : "bad";
 echo ":";
 $y = "0";
 echo settype(type: "bool", var: $y) ? gettype($y) . ":" . ($y ? "true" : "false") : "bad";
 echo ":";
+$items = ["k" => "6"];
+echo settype($items["k"], "integer") ? gettype($items["k"]) . ":" . $items["k"] : "bad";
+echo ":";
+$box = new EvalAotSettypeBox();
+echo settype($box->value, "string") ? gettype($box->value) . ":" . $box->value : "bad";
+echo ":";
+$name = "value";
+echo settype($box->{$name}, "integer") ? gettype($box->value) . ":" . $box->value : "bad";
+echo ":";
+echo settype(EvalAotSettypeBox::$staticValue, "string") ? gettype(EvalAotSettypeBox::$staticValue) . ":" . EvalAotSettypeBox::$staticValue : "bad";
+echo ":";
+$class = "EvalAotSettypeBox";
+$staticName = "staticValue";
+echo settype($class::${$staticName}, "bool") ? gettype(EvalAotSettypeBox::$staticValue) . ":" . (EvalAotSettypeBox::$staticValue ? "true" : "false") : "bad";
+echo ":";
 echo function_exists("settype");');
 "#,
     );
-    assert_eq!(out, "string:42:boolean:false:1");
+    assert_eq!(
+        out,
+        "string:42:boolean:false:integer:6:string:8:integer:8:string:9:boolean:true:1"
+    );
 }
 
 /// Verifies eval SPL object identity builtins inspect AOT object cells.

@@ -673,6 +673,11 @@ where listed below unless a note says otherwise.
 
 ## Builtin notes
 
+Eval `settype()` mutates direct variables, array elements, object properties
+including dynamic property names, and static properties including dynamic
+receivers or dynamic property names. Callable dispatch of `settype()` remains
+by-value and emits PHP's by-reference warning.
+
 Eval `array_map()` supports one or more source arrays with a string callback or
 `null` callback. One-array results preserve source keys, multi-array results
 are reindexed, missing source values are padded with `null`, and

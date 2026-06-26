@@ -7099,8 +7099,8 @@ fn write_back_method_variadic_ref_args(
     Ok(())
 }
 
-/// Stores one by-reference method result in the original caller-side variable.
-fn write_back_method_ref_target(
+/// Stores one by-reference result in the original caller-side target.
+pub(in crate::interpreter) fn write_back_method_ref_target(
     target: &EvalReferenceTarget,
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
