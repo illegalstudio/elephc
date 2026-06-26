@@ -4817,6 +4817,41 @@ $box->run();
     assert_eq!(out, "5");
 }
 
+/// Verifies eval fragments use AOT private parent static slots when child classes shadow them.
+#[test]
+fn test_eval_fragment_uses_aot_private_parent_static_property_shadowing_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalPrivateStaticShadowParent {
+    private static $value = "p";
+    public static function parentView() {
+        return eval('return self::$value;');
+    }
+    public static function parentWrite() {
+        return eval('self::$value = "P"; return self::$value;');
+    }
+}
+class EvalPrivateStaticShadowChild extends EvalPrivateStaticShadowParent {
+    public static $value = "c";
+    public static function childView() {
+        return eval('return self::$value;');
+    }
+}
+eval('echo EvalPrivateStaticShadowChild::$value; echo "|";
+echo EvalPrivateStaticShadowChild::childView(); echo "|";
+echo EvalPrivateStaticShadowChild::parentView(); echo "|";
+echo EvalPrivateStaticShadowChild::parentWrite(); echo "|";
+echo EvalPrivateStaticShadowChild::$value;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "c|c|p|P|c");
+}
+
 /// Verifies eval fragments allow parent scopes to access child-declared protected AOT static properties.
 #[test]
 fn test_eval_fragment_can_mutate_child_protected_aot_static_property_from_parent_method() {
@@ -5078,6 +5113,80 @@ class EvalPrivateAotMethodChild extends EvalPrivateAotMethodBase {
         out,
         "Error:Call to private method EvalPrivateAotMethodBase::secret() from scope EvalPrivateAotMethodChild"
     );
+}
+
+/// Verifies eval fragments dispatch private AOT parent methods on child receivers.
+#[test]
+fn test_eval_fragment_dispatches_aot_private_parent_method_on_child_receiver() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalPrivateAotParentReceiverBase {
+    private function secret() { return "p"; }
+    public function parentView() {
+        return eval('return $this->secret();');
+    }
+}
+class EvalPrivateAotParentReceiverChild extends EvalPrivateAotParentReceiverBase {}
+$object = new EvalPrivateAotParentReceiverChild();
+eval('echo $object->parentView();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "p");
+}
+
+/// Verifies eval fragments dispatch AOT private parent methods shadowed by child methods.
+#[test]
+fn test_eval_fragment_dispatches_aot_private_parent_method_shadowing_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalPrivateAotMethodShadowParent {
+    private function secret() { return "p"; }
+    private static function staticSecret() { return "ps"; }
+    public function parentView() {
+        return eval('return $this->secret();');
+    }
+    public function parentCallback() {
+        return eval('$cb = [$this, "secret"]; return call_user_func($cb);');
+    }
+    public static function parentStaticView() {
+        return eval('return self::staticSecret();');
+    }
+}
+class EvalPrivateAotMethodShadowChild extends EvalPrivateAotMethodShadowParent {
+    public function secret() { return "c"; }
+    public static function staticSecret() { return "cs"; }
+    public function childView() {
+        return eval('return $this->secret();');
+    }
+    public function childCallback() {
+        return eval('$cb = [$this, "secret"]; return call_user_func($cb);');
+    }
+    public static function childStaticView() {
+        return eval('return self::staticSecret();');
+    }
+}
+$object = new EvalPrivateAotMethodShadowChild();
+eval('echo $object->secret(); echo "|";
+echo $object->childView(); echo "|";
+echo $object->parentView(); echo "|";
+echo $object->childCallback(); echo "|";
+echo $object->parentCallback(); echo "|";
+echo EvalPrivateAotMethodShadowChild::staticSecret(); echo "|";
+echo EvalPrivateAotMethodShadowChild::childStaticView(); echo "|";
+echo EvalPrivateAotMethodShadowChild::parentStaticView();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "c|c|p|c|p|cs|cs|ps");
 }
 
 /// Verifies eval fragments can call inherited protected AOT methods from child scopes.
