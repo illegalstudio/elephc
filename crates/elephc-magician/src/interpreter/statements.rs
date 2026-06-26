@@ -3044,10 +3044,9 @@ pub(in crate::interpreter) fn eval_property_set_result(
             );
         }
         if validate_eval_property_write_access(&declaring_class, &property, context).is_err() {
-            return eval_throw_property_access_error(
+            return eval_throw_property_write_access_error(
                 &declaring_class,
-                property.name(),
-                property.write_visibility(),
+                &property,
                 context,
                 values,
             );
@@ -3091,7 +3090,12 @@ pub(in crate::interpreter) fn eval_property_set_result(
                 return Ok(());
             }
         } else if property.has_get_hook() {
-            return Err(EvalStatus::RuntimeFatal);
+            return eval_throw_property_hook_readonly_error(
+                &declaring_class,
+                property.name(),
+                context,
+                values,
+            );
         }
     }
     if !declared_property_found
@@ -3301,7 +3305,14 @@ pub(in crate::interpreter) fn eval_property_unset_result(
         eval_dynamic_property_for_access(&object_class_name, property_name, context)
     {
         if validate_eval_member_access(&declaring_class, property.visibility(), context).is_ok() {
-            validate_eval_property_write_access(&declaring_class, &property, context)?;
+            if validate_eval_property_write_access(&declaring_class, &property, context).is_err() {
+                return eval_throw_property_unset_access_error(
+                    &declaring_class,
+                    &property,
+                    context,
+                    values,
+                );
+            }
             if validate_eval_readonly_property_write(&declaring_class, &property, context).is_err() {
                 return eval_throw_readonly_property_unset_error(
                     &declaring_class,
@@ -3611,6 +3622,82 @@ fn eval_throw_property_access_error<T>(
         &format!(
             "Cannot access {} property {}::${}",
             eval_visibility_label(visibility),
+            declaring_class.trim_start_matches('\\'),
+            property_name
+        ),
+        context,
+        values,
+    )
+}
+
+/// Throws PHP's write access error for eval-declared properties.
+fn eval_throw_property_write_access_error<T>(
+    declaring_class: &str,
+    property: &EvalClassProperty,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    if let Some(set_visibility) = property.set_visibility() {
+        return eval_throw_error(
+            &format!(
+                "Cannot modify {}(set) property {}::${} from {}",
+                eval_visibility_label(set_visibility),
+                declaring_class.trim_start_matches('\\'),
+                property.name(),
+                eval_native_constructor_scope_label(context)
+            ),
+            context,
+            values,
+        );
+    }
+    eval_throw_property_access_error(
+        declaring_class,
+        property.name(),
+        property.write_visibility(),
+        context,
+        values,
+    )
+}
+
+/// Throws PHP's unset access error for asymmetric eval-declared properties.
+fn eval_throw_property_unset_access_error<T>(
+    declaring_class: &str,
+    property: &EvalClassProperty,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    if let Some(set_visibility) = property.set_visibility() {
+        return eval_throw_error(
+            &format!(
+                "Cannot unset {}(set) property {}::${} from {}",
+                eval_visibility_label(set_visibility),
+                declaring_class.trim_start_matches('\\'),
+                property.name(),
+                eval_native_constructor_scope_label(context)
+            ),
+            context,
+            values,
+        );
+    }
+    eval_throw_property_access_error(
+        declaring_class,
+        property.name(),
+        property.write_visibility(),
+        context,
+        values,
+    )
+}
+
+/// Throws PHP's read-only property-hook write error.
+fn eval_throw_property_hook_readonly_error<T>(
+    declaring_class: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Property {}::${} is read-only",
             declaring_class.trim_start_matches('\\'),
             property_name
         ),
@@ -4079,10 +4166,9 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
             );
         }
         if validate_eval_property_write_access(&declaring_class, &property, context).is_err() {
-            return eval_throw_property_access_error(
+            return eval_throw_property_write_access_error(
                 &declaring_class,
-                property.name(),
-                property.write_visibility(),
+                &property,
                 context,
                 values,
             );

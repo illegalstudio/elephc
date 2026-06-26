@@ -8024,7 +8024,7 @@ echo $box->value . ":" . $box->shout();');
     );
     assert_eq!(out.stdout, "Ada!:Ada!?");
 
-    let err = compile_and_run_expect_failure(
+    let err = compile_and_run_capture(
         r#"<?php
 eval('class EvalHookReadOnly {
     public int $answer {
@@ -8032,13 +8032,20 @@ eval('class EvalHookReadOnly {
     }
 }
 $box = new EvalHookReadOnly();
-$box->answer = 7;');
+try {
+    $box->answer = 7;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
 "#,
     );
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        err.success,
+        "program failed: stdout={:?} stderr={}",
+        err.stdout, err.stderr
     );
+    assert_eq!(err.stdout, "Error:Property EvalHookReadOnly::$answer is read-only");
 }
 
 /// Verifies eval-declared magic property methods handle missing and inaccessible properties.
@@ -10350,6 +10357,39 @@ echo $protected->getModifiers();');
 "#,
     );
     assert_eq!(out, "1:base:7:owner:child:Pt4129:pT2049");
+
+    let errors = compile_and_run_capture(
+        r#"<?php
+eval('class EvalDeclaredAsymErrorBox {
+    public private(set) int $privateValue = 1;
+    public protected(set) int $protectedValue = 2;
+}
+$box = new EvalDeclaredAsymErrorBox();
+try {
+    $box->privateValue = 7;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    unset($box->protectedValue);
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        errors.success,
+        "program failed: stdout={:?} stderr={}",
+        errors.stdout, errors.stderr
+    );
+    assert_eq!(
+        errors.stdout,
+        "Error:Cannot modify private(set) property EvalDeclaredAsymErrorBox::$privateValue from global scope|\
+Error:Cannot unset protected(set) property EvalDeclaredAsymErrorBox::$protectedValue from global scope"
+    );
 }
 
 /// Verifies eval-declared inherited properties preserve PHP redeclaration invariants.

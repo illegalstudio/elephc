@@ -581,9 +581,9 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies eval-declared `private(set)` rejects global writes without dispatching `__set`.
+/// Verifies eval-declared `private(set)` throws Error without dispatching `__set`.
 #[test]
-fn execute_program_rejects_private_set_property_write_outside_declaring_class() {
+fn execute_program_private_set_property_write_outside_declaring_class_throws_error() {
     let program = parse_fragment(
         br#"class EvalAsymPrivateSetBox {
     public private(set) int $value = 1;
@@ -592,37 +592,54 @@ fn execute_program_rejects_private_set_property_write_outside_declaring_class() 
     }
 }
 $box = new EvalAsymPrivateSetBox();
-$box->value = 2;"#,
+try {
+    $box->value = 2;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+return true;"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("global private(set) property write should fail");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "");
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(
+        values.output,
+        "Error:Cannot modify private(set) property EvalAsymPrivateSetBox::$value from global scope"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies eval-declared `protected(set)` rejects global writes.
+/// Verifies eval-declared `protected(set)` throws Error for global writes.
 #[test]
-fn execute_program_rejects_protected_set_property_write_outside_hierarchy() {
+fn execute_program_protected_set_property_write_outside_hierarchy_throws_error() {
     let program = parse_fragment(
         br#"class EvalAsymProtectedSetBox {
     public protected(set) int $value = 1;
 }
 $box = new EvalAsymProtectedSetBox();
-$box->value = 2;"#,
+try {
+    $box->value = 2;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+return true;"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("global protected(set) property write should fail");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(
+        values.output,
+        "Error:Cannot modify protected(set) property EvalAsymProtectedSetBox::$value from global scope"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies asymmetric write restrictions cannot satisfy a public interface set contract.
@@ -1477,9 +1494,9 @@ return class_exists("EvalGoodDebugInfoMagic") && class_exists("EvalGoodSetStateM
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies get-only property hooks reject writes outside a set accessor.
+/// Verifies get-only property hooks throw Error on writes outside a set accessor.
 #[test]
-fn execute_program_rejects_write_to_get_only_eval_property_hook() {
+fn execute_program_write_to_get_only_eval_property_hook_throws_error() {
     let program = parse_fragment(
         br#"class EvalHookReadOnly {
     public int $answer {
@@ -1487,16 +1504,25 @@ fn execute_program_rejects_write_to_get_only_eval_property_hook() {
     }
 }
 $box = new EvalHookReadOnly();
-$box->answer = 7;"#,
+try {
+    $box->answer = 7;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+return true;"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("get-only property hook write should fail");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(
+        values.output,
+        "Error:Property EvalHookReadOnly::$answer is read-only"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies eval subclasses inherit parent property hooks.
