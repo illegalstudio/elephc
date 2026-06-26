@@ -87,7 +87,62 @@ pub(in crate::interpreter) fn eval_class_relation_target_result(
             _ => Err(EvalStatus::RuntimeFatal),
         };
     }
-    values.assoc_new(0)
+    match name {
+        "class_implements" => eval_runtime_class_interface_names_result(&target, values),
+        "class_parents" => {
+            eval_class_relation_names_result(
+                eval_runtime_class_parent_names(&target, context),
+                values,
+            )
+        }
+        "class_uses" => values.assoc_new(0),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Builds `class_implements()` data for generated/AOT class metadata.
+fn eval_runtime_class_interface_names_result(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let names_array = values.reflection_class_interface_names(class_name)?;
+    let names = eval_class_relation_runtime_string_array_to_vec(names_array, values)?;
+    values.release(names_array)?;
+    eval_class_relation_names_result(names, values)
+}
+
+/// Returns generated/AOT parent names in PHP's nearest-parent-first order.
+fn eval_runtime_class_parent_names(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut current = context.native_class_parent(class_name).map(str::to_string);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(parent) = current {
+        let parent = parent.trim_start_matches('\\').to_string();
+        if !seen.insert(parent.to_ascii_lowercase()) {
+            break;
+        }
+        current = context.native_class_parent(&parent).map(str::to_string);
+        names.push(parent);
+    }
+    names
+}
+
+/// Copies a runtime string array into Rust-owned class/interface names.
+fn eval_class_relation_runtime_string_array_to_vec(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut result = Vec::with_capacity(len);
+    for position in 0..len {
+        let key = values.int(position as i64)?;
+        let value = values.array_get(array, key)?;
+        result.push(eval_class_metadata_name(value, values)?);
+    }
+    Ok(result)
 }
 
 /// Evaluates class attribute metadata helpers.
@@ -295,6 +350,7 @@ fn eval_class_relation_target_name(
         return Ok(eval_class_relation_name_exists(&name, context, values)?.then_some(name));
     }
     let name = eval_class_metadata_name(target, values)?;
+    let name = context.resolve_class_like_name(&name).unwrap_or(name);
     Ok(eval_class_relation_name_exists(&name, context, values)?.then_some(name))
 }
 

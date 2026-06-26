@@ -74,6 +74,46 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies generated/AOT parent and interface metadata is exposed to relation builtins.
+#[test]
+fn execute_program_reports_aot_class_relation_metadata() {
+    let program = parse_fragment(
+        br#"$implements = class_implements("KnownClass");
+echo count($implements); echo ":";
+echo $implements["KnownInterface"]; echo ":";
+$parents = class_parents("KnownClass");
+echo count($parents); echo ":";
+echo $parents["ParentClass"]; echo ":";
+$call = call_user_func("class_implements", "KnownClass");
+echo $call["KnownInterface"]; echo ":";
+$interfaceParents = class_implements("KnownInterface");
+echo $interfaceParents["Traversable"]; echo ":";
+$named = call_user_func_array("class_parents", ["object_or_class" => "KnownClass"]);
+echo $named["ParentClass"]; echo ":";
+class_alias("KnownClass", "KnownAlias");
+$aliasImplements = class_implements("KnownAlias");
+echo $aliasImplements["KnownInterface"]; echo ":";
+$aliasParents = class_parents("KnownAlias");
+echo $aliasParents["ParentClass"];
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    assert!(context.define_native_class_parent("KnownClass", "ParentClass"));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result =
+        execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+            .expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "1:KnownInterface:1:ParentClass:KnownInterface:Traversable:ParentClass:KnownInterface:ParentClass"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies PHP OOP introspection builtins follow eval visibility and scope rules.
 #[test]
 fn execute_program_dispatches_oop_introspection_builtins() {

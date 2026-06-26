@@ -7770,6 +7770,57 @@ echo function_exists("is_a"); echo function_exists("is_subclass_of");');
     assert_eq!(out, "YYYNYYYYN11");
 }
 
+/// Verifies eval class-relation builtins materialize generated/AOT metadata.
+#[test]
+fn test_eval_class_relation_builtins_expose_aot_metadata() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface EvalAotRelationBaseIface {}
+interface EvalAotRelationChildIface extends EvalAotRelationBaseIface {}
+class EvalAotRelationBase {}
+class EvalAotRelationMid extends EvalAotRelationBase {}
+class EvalAotRelationChild extends EvalAotRelationMid implements EvalAotRelationChildIface {}
+
+eval('$object = new EvalAotRelationChild();
+$implements = class_implements($object);
+ksort($implements);
+foreach ($implements as $name) { echo $name . ","; }
+echo ":";
+$stringImplements = call_user_func("class_implements", "EvalAotRelationChild");
+ksort($stringImplements);
+foreach ($stringImplements as $name) { echo $name . ","; }
+echo ":";
+$interfaceParents = class_implements("EvalAotRelationChildIface");
+foreach ($interfaceParents as $name) { echo $name . ","; }
+echo ":";
+$parents = class_parents($object);
+foreach ($parents as $name) { echo $name . ","; }
+echo ":";
+$stringParents = call_user_func_array("class_parents", ["object_or_class" => "EvalAotRelationChild"]);
+foreach ($stringParents as $name) { echo $name . ","; }
+echo ":";
+echo function_exists("class_implements"); echo function_exists("class_parents");');
+class_alias("EvalAotRelationChild", "EvalAotRelationAlias");
+eval('echo ":";
+$aliasImplements = class_implements("EvalAotRelationAlias");
+ksort($aliasImplements);
+foreach ($aliasImplements as $name) { echo $name . ","; }
+echo ":";
+$aliasParents = class_parents("EvalAotRelationAlias");
+foreach ($aliasParents as $name) { echo $name . ","; }');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalAotRelationBaseIface,EvalAotRelationChildIface,:EvalAotRelationBaseIface,EvalAotRelationChildIface,:EvalAotRelationBaseIface,:EvalAotRelationMid,EvalAotRelationBase,:EvalAotRelationMid,EvalAotRelationBase,:11:EvalAotRelationBaseIface,EvalAotRelationChildIface,:EvalAotRelationChild,EvalAotRelationMid,EvalAotRelationBase,"
+    );
+}
+
 /// Verifies eval `instanceof` probes AOT and eval-declared class metadata.
 #[test]
 fn test_eval_fragment_instanceof_probes_class_metadata() {

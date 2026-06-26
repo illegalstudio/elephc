@@ -610,9 +610,14 @@ AOT and eval-declared class-name probes are visible through `class_exists()`.
 Eval object relation probes through `instanceof`, `is_a()`, and `is_subclass_of()` use
 generated AOT class/interface metadata and eval-created object metadata.
 `interface_exists()`, `trait_exists()`, and `enum_exists()` can probe generated
-AOT metadata. `class_alias()` can alias eval-declared and generated/AOT
+AOT metadata. `class_implements()` and `class_parents()` materialize
+generated/AOT interface and parent metadata when the bridge exposes it, while
+`class_uses()` reports eval-declared direct trait uses. `class_alias()` can
+alias eval-declared and generated/AOT
 classes, interfaces, traits, and enums, preserving the target class-like kind
-for the corresponding metadata probes. Aliases are usable for class-like
+for the corresponding metadata probes. Top-level compiled `class_alias()`
+calls still use elephc's generated subclass model, so eval sees the same AOT
+parent metadata as the compiled program. Aliases are usable for class-like
 lookups but are not added to `get_declared_classes()`,
 `get_declared_interfaces()`, or `get_declared_traits()`. Eval-declared enums are
 visible inside eval through `enum_exists()` and through class-like probes such
