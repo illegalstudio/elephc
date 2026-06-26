@@ -378,6 +378,57 @@ return EvalByRefStaticPropertyBox::updatePrivate($changer);"#,
     assert_eq!(values.get(result), FakeValue::String("secret".to_string()));
 }
 
+/// Verifies by-reference method params write back array elements stored in properties.
+#[test]
+fn execute_program_writes_back_eval_method_by_ref_property_array_elements() {
+    let program = parse_fragment(
+        br#"class EvalByRefPropertyArrayElementChanger {
+    public function set(&$value, $next) {
+        $value = $next;
+    }
+    public function pair(&$left, &$right) {
+        $left = "left";
+        $right = "right";
+        return $left;
+    }
+}
+class EvalByRefPropertyArrayElementBox {
+    public $items = ["first" => "old", "same" => "same"];
+    public $other = null;
+    public static $staticItems = ["first" => "static-old", "same" => "static-same"];
+}
+$changer = new EvalByRefPropertyArrayElementChanger();
+$box = new EvalByRefPropertyArrayElementBox();
+$changer->set($box->items["first"], "changed");
+$name = "items";
+$changer->set($box->{$name}["dynamic"], "dynamic");
+$changer->set($box->other["created"], "created");
+echo $box->items["first"]; echo ":";
+echo $box->items["dynamic"]; echo ":";
+echo $box->other["created"]; echo ":";
+echo $changer->pair($box->items["same"], $box->items["same"]); echo ":";
+echo $box->items["same"]; echo ":";
+$changer->set(EvalByRefPropertyArrayElementBox::$staticItems["first"], "static");
+$class = "EvalByRefPropertyArrayElementBox";
+$staticName = "staticItems";
+$changer->set($class::${$staticName}["dynamic"], "static-dynamic");
+echo EvalByRefPropertyArrayElementBox::$staticItems["first"]; echo ":";
+echo EvalByRefPropertyArrayElementBox::$staticItems["dynamic"]; echo ":";
+return $changer->pair(
+    EvalByRefPropertyArrayElementBox::$staticItems["same"],
+    EvalByRefPropertyArrayElementBox::$staticItems["same"]
+) . ":" . EvalByRefPropertyArrayElementBox::$staticItems["same"];"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "changed:dynamic:created:right:right:static:static-dynamic:");
+    assert_eq!(values.get(result), FakeValue::String("right:right".to_string()));
+}
+
 /// Verifies eval-declared by-reference method params keep property access restrictions.
 #[test]
 fn execute_program_rejects_invalid_eval_method_by_ref_object_property_targets() {

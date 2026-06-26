@@ -9628,6 +9628,62 @@ echo EvalAotByRefStaticPropertyBox::$value;');
     assert_eq!(out.stdout, "right:right:dynamic:name:secret:aot-changed");
 }
 
+/// Verifies eval methods mutate property array elements passed by reference.
+#[test]
+fn test_eval_declared_method_by_ref_property_array_element_arguments() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotByRefPropertyArrayElementBox {
+    public static $items = ["aot" => "old"];
+}
+eval('class EvalByRefPropertyArrayElementChanger {
+    public function set(&$value, $next) {
+        $value = $next;
+    }
+    public function pair(&$left, &$right) {
+        $left = "left";
+        $right = "right";
+        return $left;
+    }
+}
+class EvalByRefPropertyArrayElementBox {
+    public $items = ["first" => "old", "same" => "same"];
+    public $other = null;
+    public static $staticItems = ["first" => "static-old", "same" => "static-same"];
+}
+$changer = new EvalByRefPropertyArrayElementChanger();
+$box = new EvalByRefPropertyArrayElementBox();
+$changer->set($box->items["first"], "changed");
+$name = "items";
+$changer->set($box->{$name}["dynamic"], "dynamic");
+$changer->set($box->other["created"], "created");
+echo $box->items["first"] . ":" . $box->items["dynamic"] . ":" . $box->other["created"] . ":";
+echo $changer->pair($box->items["same"], $box->items["same"]) . ":" . $box->items["same"] . ":";
+$changer->set(EvalByRefPropertyArrayElementBox::$staticItems["first"], "static");
+$class = "EvalByRefPropertyArrayElementBox";
+$staticName = "staticItems";
+$changer->set($class::${$staticName}["dynamic"], "static-dynamic");
+echo EvalByRefPropertyArrayElementBox::$staticItems["first"] . ":";
+echo EvalByRefPropertyArrayElementBox::$staticItems["dynamic"] . ":";
+echo $changer->pair(
+    EvalByRefPropertyArrayElementBox::$staticItems["same"],
+    EvalByRefPropertyArrayElementBox::$staticItems["same"]
+) . ":" . EvalByRefPropertyArrayElementBox::$staticItems["same"] . ":";
+$changer->set(EvalAotByRefPropertyArrayElementBox::$items["aot"], "aot-changed");
+echo EvalAotByRefPropertyArrayElementBox::$items["aot"];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "changed:dynamic:created:right:right:static:static-dynamic:right:right:aot-changed"
+    );
+}
+
 /// Verifies eval dynamic static callables dispatch eval-declared static methods.
 #[test]
 fn test_eval_declared_static_method_dynamic_callables() {

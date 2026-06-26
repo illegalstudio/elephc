@@ -104,7 +104,13 @@ pub(in crate::interpreter) fn eval_call_arg_value(
         }
         EvalExpr::ArrayGet { array, index } => {
             let EvalExpr::LoadVar(array_name) = array.as_ref() else {
-                return eval_expr(expr, context, caller_scope, values).map(|value| (value, None));
+                return eval_nested_array_element_call_arg_value(
+                    array,
+                    index,
+                    context,
+                    caller_scope,
+                    values,
+                );
             };
             let array = visible_scope_cell(context, caller_scope, array_name)
                 .map_or_else(|| values.null(), Ok)?;
@@ -198,6 +204,32 @@ pub(in crate::interpreter) fn eval_call_arg_value(
         }
         _ => eval_expr(expr, context, caller_scope, values).map(|value| (value, None)),
     }
+}
+
+/// Evaluates an array element whose array expression is itself a writable caller target.
+fn eval_nested_array_element_call_arg_value(
+    array: &EvalExpr,
+    index: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    let (array, array_target) = eval_call_arg_value(array, context, caller_scope, values)?;
+    let index = eval_expr(index, context, caller_scope, values)?;
+    let value = eval_array_get_result(array, index, context, values)?;
+    if values.type_tag(array)? == EVAL_TAG_OBJECT {
+        return Ok((value, None));
+    }
+    let Some(array_target) = array_target else {
+        return Ok((value, None));
+    };
+    Ok((
+        value,
+        Some(EvalReferenceTarget::NestedArrayElement {
+            array_target: Box::new(array_target),
+            index,
+        }),
+    ))
 }
 
 /// Evaluates one static-property lvalue and records it as a by-reference call target.
