@@ -1129,6 +1129,7 @@ fn visit_static_var_declarations(
             | EvalStmt::Expr(_)
             | EvalStmt::Global { .. }
             | EvalStmt::InterfaceDecl(_)
+            | EvalStmt::DynamicPropertySet { .. }
             | EvalStmt::PropertyReferenceBind { .. }
             | EvalStmt::PropertySet { .. }
             | EvalStmt::ReferenceAssign { .. }
@@ -1138,6 +1139,7 @@ fn visit_static_var_declarations(
             | EvalStmt::Throw(_)
             | EvalStmt::TraitDecl(_)
             | EvalStmt::UnsetArrayElement { .. }
+            | EvalStmt::UnsetDynamicProperty { .. }
             | EvalStmt::UnsetProperty { .. }
             | EvalStmt::UnsetVar { .. } => {}
         }

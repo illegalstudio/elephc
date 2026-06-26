@@ -3413,6 +3413,51 @@ echo $missing?->{eval_dynamic_member_bad()}(eval_dynamic_member_bad()) ?? "none"
     );
 }
 
+/// Verifies eval-declared objects support runtime-name property writes and probes.
+#[test]
+fn test_eval_declared_dynamic_property_write_unset_isset_empty() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalDynamicWriteBox {
+    public $name = "old";
+    public $blank = "";
+}
+
+function eval_dynamic_write_name() {
+    echo "name:";
+    return "name";
+}
+
+function eval_dynamic_write_value() {
+    echo "value:";
+    return "Ada";
+}
+
+function eval_dynamic_write_bad() {
+    echo "bad";
+    return "name";
+}
+
+$box = new EvalDynamicWriteBox();
+$name = "name";
+$blank = "blank";
+$box->{eval_dynamic_write_name()} = eval_dynamic_write_value();
+echo $box->name; echo "|";
+echo isset($box->{$name}) ? "set" : "bad"; echo "|";
+echo empty($box->{$blank}) ? "empty" : "bad"; echo "|";
+unset($box->{$name});
+echo isset($box->{$name}) ? "bad" : "unset"; echo "|";
+$missing = null;
+echo isset($missing?->{eval_dynamic_write_bad()}) ? "bad" : "nullset"; echo "|";
+echo empty($missing?->{eval_dynamic_write_bad()}) ? "nullempty" : "bad";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "name:value:Ada|set|empty|unset|nullset|nullempty"
+    );
+}
+
 /// Verifies eval string contexts dispatch AOT `__toString()` through the runtime method bridge.
 #[test]
 fn test_eval_aot_tostring_string_contexts() {

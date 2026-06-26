@@ -325,7 +325,7 @@ pub(in crate::interpreter) fn eval_expr(
 }
 
 /// Evaluates a runtime property or method name expression and returns its PHP string bytes as UTF-8.
-fn eval_dynamic_member_name(
+pub(in crate::interpreter) fn eval_dynamic_member_name(
     expr: &EvalExpr,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,

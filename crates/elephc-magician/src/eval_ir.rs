@@ -141,6 +141,11 @@ pub enum EvalStmt {
         property: String,
         source: String,
     },
+    DynamicPropertySet {
+        object: EvalExpr,
+        property: EvalExpr,
+        value: EvalExpr,
+    },
     PropertySet {
         object: EvalExpr,
         property: String,
@@ -176,6 +181,10 @@ pub enum EvalStmt {
     UnsetProperty {
         object: EvalExpr,
         property: String,
+    },
+    UnsetDynamicProperty {
+        object: EvalExpr,
+        property: EvalExpr,
     },
     UnsetVar {
         name: String,

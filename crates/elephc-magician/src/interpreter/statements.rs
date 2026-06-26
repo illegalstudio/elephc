@@ -166,6 +166,17 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_property_reference_bind_result(object, property, source, context, scope, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::DynamicPropertySet {
+            object,
+            property,
+            value,
+        } => {
+            let object = eval_expr(object, context, scope, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            let value = eval_expr(value, context, scope, values)?;
+            eval_property_set_result(object, &property, value, context, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::StaticVar { name, init } => {
             execute_static_var_stmt(name, init, context, scope, values)?;
             Ok(EvalControl::None)
@@ -224,6 +235,12 @@ pub(in crate::interpreter) fn execute_stmt(
         EvalStmt::UnsetProperty { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
             eval_property_unset_result(object, property, context, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::UnsetDynamicProperty { object, property } => {
+            let object = eval_expr(object, context, scope, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_property_unset_result(object, &property, context, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::UnsetVar { name } => {

@@ -582,6 +582,11 @@ pub(in crate::interpreter) fn eval_builtin_unset(
                 let object = eval_expr(object, context, scope, values)?;
                 eval_property_unset_result(object, property, context, values)?;
             }
+            EvalExpr::DynamicPropertyGet { object, property } => {
+                let object = eval_expr(object, context, scope, values)?;
+                let property = eval_dynamic_member_name(property, context, scope, values)?;
+                eval_property_unset_result(object, &property, context, values)?;
+            }
             _ => return Err(EvalStatus::RuntimeFatal),
         }
     }
@@ -648,6 +653,38 @@ pub(in crate::interpreter) fn eval_empty_arg(
         let value = eval_property_get_result(object, property, context, values)?;
         return Ok(!values.truthy(value)?);
     }
+    if let EvalExpr::DynamicPropertyGet { object, property } = arg {
+        let object = eval_expr(object, context, scope, values)?;
+        let property = eval_dynamic_member_name(property, context, scope, values)?;
+        if !eval_property_isset_result(object, &property, context, values)? {
+            return Ok(true);
+        }
+        let value = eval_property_get_result(object, &property, context, values)?;
+        return Ok(!values.truthy(value)?);
+    }
+    if let EvalExpr::NullsafePropertyGet { object, property } = arg {
+        let object = eval_expr(object, context, scope, values)?;
+        if values.is_null(object)? {
+            return Ok(true);
+        }
+        if !eval_property_isset_result(object, property, context, values)? {
+            return Ok(true);
+        }
+        let value = eval_property_get_result(object, property, context, values)?;
+        return Ok(!values.truthy(value)?);
+    }
+    if let EvalExpr::NullsafeDynamicPropertyGet { object, property } = arg {
+        let object = eval_expr(object, context, scope, values)?;
+        if values.is_null(object)? {
+            return Ok(true);
+        }
+        let property = eval_dynamic_member_name(property, context, scope, values)?;
+        if !eval_property_isset_result(object, &property, context, values)? {
+            return Ok(true);
+        }
+        let value = eval_property_get_result(object, &property, context, values)?;
+        return Ok(!values.truthy(value)?);
+    }
     if let EvalExpr::ArrayGet { array, index } = arg {
         let array = eval_expr(array, context, scope, values)?;
         let index = eval_expr(index, context, scope, values)?;
@@ -677,6 +714,26 @@ pub(in crate::interpreter) fn eval_isset_arg(
     if let EvalExpr::PropertyGet { object, property } = arg {
         let object = eval_expr(object, context, scope, values)?;
         return eval_property_isset_result(object, property, context, values);
+    }
+    if let EvalExpr::DynamicPropertyGet { object, property } = arg {
+        let object = eval_expr(object, context, scope, values)?;
+        let property = eval_dynamic_member_name(property, context, scope, values)?;
+        return eval_property_isset_result(object, &property, context, values);
+    }
+    if let EvalExpr::NullsafePropertyGet { object, property } = arg {
+        let object = eval_expr(object, context, scope, values)?;
+        if values.is_null(object)? {
+            return Ok(false);
+        }
+        return eval_property_isset_result(object, property, context, values);
+    }
+    if let EvalExpr::NullsafeDynamicPropertyGet { object, property } = arg {
+        let object = eval_expr(object, context, scope, values)?;
+        if values.is_null(object)? {
+            return Ok(false);
+        }
+        let property = eval_dynamic_member_name(property, context, scope, values)?;
+        return eval_property_isset_result(object, &property, context, values);
     }
     if let EvalExpr::ArrayGet { array, index } = arg {
         let array = eval_expr(array, context, scope, values)?;

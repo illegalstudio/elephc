@@ -2563,18 +2563,25 @@ impl Parser {
             }
             return Ok(vec![EvalStmt::Expr(target)]);
         }
-        let EvalExpr::PropertyGet { object, property } = target else {
-            return Err(EvalParseError::UnexpectedToken);
-        };
         let value = self.parse_expr()?;
         if require_semicolon {
             self.expect_semicolon()?;
         }
-        Ok(vec![EvalStmt::PropertySet {
-            object: *object,
-            property,
-            value,
-        }])
+        match target {
+            EvalExpr::PropertyGet { object, property } => Ok(vec![EvalStmt::PropertySet {
+                object: *object,
+                property,
+                value,
+            }]),
+            EvalExpr::DynamicPropertyGet { object, property } => {
+                Ok(vec![EvalStmt::DynamicPropertySet {
+                    object: *object,
+                    property: *property,
+                    value,
+                }])
+            }
+            _ => Err(EvalParseError::UnexpectedToken),
+        }
     }
 
     /// Parses a complete `if` statement after consuming the `if` keyword.
@@ -2680,6 +2687,12 @@ impl Parser {
                     object: *object,
                     property,
                 },
+                EvalExpr::DynamicPropertyGet { object, property } => {
+                    EvalStmt::UnsetDynamicProperty {
+                        object: *object,
+                        property: *property,
+                    }
+                }
                 _ => return Err(EvalParseError::ExpectedVariable),
             };
             statements.push(stmt);
@@ -3012,6 +3025,21 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
         | EvalStmt::UnsetProperty { object, property } => {
             eval_is_this_property(object, property, property_name)
                 || eval_expr_uses_this_property(object, property_name)
+        }
+        EvalStmt::UnsetDynamicProperty { object, property } => {
+            eval_is_this_dynamic_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(property, property_name)
+        }
+        EvalStmt::DynamicPropertySet {
+            object,
+            property,
+            value,
+        } => {
+            eval_is_this_dynamic_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(property, property_name)
+                || eval_expr_uses_this_property(value, property_name)
         }
         EvalStmt::PropertySet {
             object,

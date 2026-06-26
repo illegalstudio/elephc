@@ -354,3 +354,30 @@ fn parse_fragment_accepts_property_write_source() {
         }]
     );
 }
+
+/// Verifies dynamic object property writes parse as runtime-name EvalIR statements.
+#[test]
+fn parse_fragment_accepts_dynamic_property_write_source() {
+    let program = parse_fragment(br#"$this->{$name} = 7;"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::DynamicPropertySet {
+            object: EvalExpr::LoadVar("this".to_string()),
+            property: EvalExpr::LoadVar("name".to_string()),
+            value: EvalExpr::Const(EvalConst::Int(7)),
+        }]
+    );
+}
+
+/// Verifies dynamic object property unsets parse as runtime-name EvalIR statements.
+#[test]
+fn parse_fragment_accepts_dynamic_property_unset_source() {
+    let program = parse_fragment(br#"unset($this->{$name});"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::UnsetDynamicProperty {
+            object: EvalExpr::LoadVar("this".to_string()),
+            property: EvalExpr::LoadVar("name".to_string()),
+        }]
+    );
+}
