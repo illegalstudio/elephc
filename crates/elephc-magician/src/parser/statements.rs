@@ -3109,6 +3109,12 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
                     .iter()
                     .any(|arg| eval_expr_uses_this_property(arg.value(), property_name))
         }
+        EvalExpr::DynamicNewObject { class_name, args } => {
+            eval_expr_uses_this_property(class_name, property_name)
+                || args
+                    .iter()
+                    .any(|arg| eval_expr_uses_this_property(arg.value(), property_name))
+        }
         EvalExpr::DynamicMethodCall {
             object,
             method,

@@ -57,6 +57,12 @@ pub(in crate::interpreter) fn eval_expr(
                 values,
             )
         }
+        EvalExpr::DynamicNewObject { class_name, args } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_new_object_class_name(class_name, context, values)?;
+            let args = eval_method_call_arg_values(args, context, scope, values)?;
+            eval_new_object_result(&class_name, args, context, scope, values)
+        }
         EvalExpr::DynamicPropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
             let property = eval_dynamic_member_name(property, context, scope, values)?;
@@ -95,27 +101,7 @@ pub(in crate::interpreter) fn eval_expr(
         EvalExpr::NewObject { class_name, args } => {
             let args = eval_method_call_arg_values(args, context, scope, values)?;
             let class_name = eval_new_object_class_name(class_name, context)?;
-            if let Some(object) =
-                eval_reflection_owner_new_object(&class_name, args.clone(), context, values)?
-            {
-                return Ok(object);
-            }
-            if let Some(class) = context.class(&class_name).cloned() {
-                eval_dynamic_class_new_object(&class, args, context, scope, values)
-            } else {
-                let object = values.new_object(&class_name)?;
-                if let Err(err) = eval_native_constructor_with_evaluated_args(
-                    &class_name,
-                    object,
-                    args,
-                    context,
-                    values,
-                ) {
-                    let _ = values.release(object);
-                    return Err(err);
-                }
-                Ok(object)
-            }
+            eval_new_object_result(&class_name, args, context, scope, values)
         }
         EvalExpr::NewAnonymousClass { class, args } => {
             ensure_eval_anonymous_class_decl(class, context, scope, values)?;
@@ -383,6 +369,32 @@ fn eval_cast_expr(
     }
 }
 
+/// Constructs an object after the target class name and constructor arguments have been evaluated.
+fn eval_new_object_result(
+    class_name: &str,
+    args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(object) =
+        eval_reflection_owner_new_object(class_name, args.clone(), context, values)?
+    {
+        return Ok(object);
+    }
+    if let Some(class) = context.class(class_name).cloned() {
+        return eval_dynamic_class_new_object(&class, args, context, scope, values);
+    }
+    let object = values.new_object(class_name)?;
+    if let Err(err) =
+        eval_native_constructor_with_evaluated_args(class_name, object, args, context, values)
+    {
+        let _ = values.release(object);
+        return Err(err);
+    }
+    Ok(object)
+}
+
 /// Resolves special class names used by `new` while preserving AOT fallback names.
 fn eval_new_object_class_name(
     class_name: &str,
@@ -393,6 +405,23 @@ fn eval_new_object_class_name(
         _ => Ok(context
             .resolve_class_name(class_name)
             .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string())),
+    }
+}
+
+/// Resolves a runtime class-name value used by `new $class(...)`.
+fn eval_dynamic_new_object_class_name(
+    class_name: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    match values.type_tag(class_name)? {
+        EVAL_TAG_STRING => {
+            let bytes = values.string_bytes(class_name)?;
+            let class_name = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+            eval_new_object_class_name(&class_name, context)
+        }
+        EVAL_TAG_OBJECT => eval_instanceof_object_target_name(class_name, context, values),
+        _ => Err(EvalStatus::RuntimeFatal),
     }
 }
 

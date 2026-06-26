@@ -6652,6 +6652,41 @@ echo eval('$box = new EvalDynamicNewNamedCtor(right: "F", left: "E"); return $bo
     assert_eq!(out, "EF");
 }
 
+/// Verifies eval object construction accepts runtime class-name variables.
+#[test]
+fn test_eval_dynamic_new_accepts_runtime_class_name() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotRuntimeNewTarget {
+    public string $label;
+    public function __construct(string $label) {
+        $this->label = "aot:" . $label;
+    }
+}
+
+eval('class EvalRuntimeNewTarget {
+    public string $label;
+    public function __construct(string $label) {
+        $this->label = "eval:" . $label;
+    }
+}
+
+$evalClass = "EvalRuntimeNewTarget";
+$evalBox = new $evalClass("Ada");
+echo $evalBox->label; echo "|";
+
+$aotClass = "EvalAotRuntimeNewTarget";
+$aotBox = new $aotClass("Turing");
+echo $aotBox->label; echo "|";
+
+$prototype = new EvalRuntimeNewTarget("proto");
+$copy = new $prototype("Grace");
+echo $copy->label;');
+"#,
+    );
+    assert_eq!(out, "eval:Ada|aot:Turing|eval:Grace");
+}
+
 /// Verifies eval object construction passes object-typed arguments to AOT constructors.
 #[test]
 fn test_eval_dynamic_new_passes_object_arg_to_constructor() {
