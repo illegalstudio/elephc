@@ -1743,7 +1743,7 @@ fn validate_eval_magic_methods(methods: &[EvalClassMethod]) -> Result<(), EvalSt
 /// Validates staticness, visibility, arity, and declared return type for one eval magic method.
 fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus> {
     let name = method.name().to_ascii_lowercase();
-    if is_validated_eval_magic_method(&name) {
+    if validated_eval_magic_method_rejects_by_ref_params(&name) {
         validate_magic_no_by_ref_params(method)?;
     }
     match name.as_str() {
@@ -1826,6 +1826,11 @@ fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(), EvalStatus
         _ => {}
     }
     Ok(())
+}
+
+/// Returns whether PHP rejects by-reference parameters for this magic method.
+fn validated_eval_magic_method_rejects_by_ref_params(name: &str) -> bool {
+    is_validated_eval_magic_method(name) && !matches!(name, "__construct" | "__invoke")
 }
 
 /// Returns whether eval knows PHP declaration-time rules for this magic method.
@@ -6379,7 +6384,7 @@ pub(in crate::interpreter) fn bind_native_callable_bound_args(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     let Some(signature) = signature else {
-        return positional_evaluated_bound_args(None, args);
+        return positional_evaluated_bound_args(None, args, context, values);
     };
     if !signature.bridge_supported() {
         return Err(EvalStatus::RuntimeFatal);
@@ -6387,7 +6392,7 @@ pub(in crate::interpreter) fn bind_native_callable_bound_args(
     if signature.param_names().len() == signature.param_count() {
         bind_native_signature_args(&signature, args, context, values)
     } else {
-        positional_evaluated_bound_args(Some(&signature), args)
+        positional_evaluated_bound_args(Some(&signature), args, context, values)
     }
 }
 
@@ -6395,11 +6400,14 @@ pub(in crate::interpreter) fn bind_native_callable_bound_args(
 fn positional_evaluated_bound_args(
     signature: Option<&NativeCallableSignature>,
     args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
     if args.iter().any(|arg| arg.name.is_some()) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    args.into_iter()
+    let mut bound_args = args
+        .into_iter()
         .enumerate()
         .map(|(index, arg)| {
             let ref_target = if signature.is_some_and(|signature| signature.param_by_ref(index)) {
@@ -6413,7 +6421,11 @@ fn positional_evaluated_bound_args(
                 variadic_ref_targets: Vec::new(),
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Some(signature) = signature {
+        apply_native_callable_bound_arg_types(signature, &mut bound_args, context, values)?;
+    }
+    Ok(bound_args)
 }
 
 /// Returns only runtime cell values from bound native AOT call arguments.
@@ -6506,10 +6518,50 @@ fn bind_native_signature_args(
         });
     }
 
-    bound_args
+    let mut bound_args = bound_args
         .into_iter()
         .collect::<Option<Vec<_>>>()
-        .ok_or(EvalStatus::RuntimeFatal)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    apply_native_callable_bound_arg_types(signature, &mut bound_args, context, values)?;
+    Ok(bound_args)
+}
+
+/// Applies registered native AOT parameter types after argument binding and default filling.
+fn apply_native_callable_bound_arg_types(
+    signature: &NativeCallableSignature,
+    bound_args: &mut [BoundMethodArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for (position, bound_arg) in bound_args.iter_mut().enumerate() {
+        let Some(param_type) = signature.param_type(position) else {
+            continue;
+        };
+        if signature.param_variadic(position) {
+            apply_native_callable_variadic_arg_type(param_type, bound_arg, context, values)?;
+        } else {
+            bound_arg.value =
+                eval_method_parameter_value(param_type, bound_arg.value, context, values)?;
+        }
+    }
+    Ok(())
+}
+
+/// Applies one registered native variadic parameter type to each collected argument.
+fn apply_native_callable_variadic_arg_type(
+    param_type: &EvalParameterType,
+    bound_arg: &mut BoundMethodArg,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let len = values.array_len(bound_arg.value)?;
+    for position in 0..len {
+        let key = values.array_iter_key(bound_arg.value, position)?;
+        let value = values.array_get(bound_arg.value, key)?;
+        let value = eval_method_parameter_value(param_type, value, context, values)?;
+        bound_arg.value = values.array_set(bound_arg.value, key, value)?;
+    }
+    Ok(())
 }
 
 /// Returns the native callable variadic slot, if metadata registered one.

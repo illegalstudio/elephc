@@ -3324,6 +3324,37 @@ echo $box->accepts($box);');
     );
 }
 
+/// Verifies eval string contexts dispatch AOT `__toString()` through the runtime method bridge.
+#[test]
+fn test_eval_aot_tostring_string_contexts() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotStringableBox {
+    public string $name = "Ada";
+    public function __toString() {
+        return "box:" . $this->name;
+    }
+    public function accepts(string $value) {
+        return "typed:" . $value;
+    }
+}
+$box = new EvalAotStringableBox();
+eval('echo $box; echo ":";
+print $box; echo ":";
+echo "pre" . $box; echo ":";
+echo strval($box); echo ":";
+echo call_user_func("strval", $box); echo ":";
+echo call_user_func_array("strval", [$box]); echo ":";
+echo $box instanceof Stringable ? "S" : "s"; echo ":";
+echo $box->accepts($box);');
+"#,
+    );
+    assert_eq!(
+        out,
+        "box:Ada:box:Ada:prebox:Ada:box:Ada:box:Ada:box:Ada:S:typed:box:Ada"
+    );
+}
+
 /// Verifies eval-declared objects without `__toString()` throw catchable PHP errors in string contexts.
 #[test]
 fn test_eval_declared_object_string_context_without_tostring_throws_error() {
@@ -8980,6 +9011,9 @@ fn test_eval_declared_method_by_ref_arguments() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalByRefMethodBox {
+    public function __construct(&$value) {
+        $value = $value . "-ctor";
+    }
     public function change(&$value) {
         $value = $value . "-method";
     }
@@ -8994,7 +9028,8 @@ eval('class EvalByRefMethodBox {
 class EvalByRefPropertyBox {
     public string $value = "D";
 }
-$box = new EvalByRefMethodBox();
+$ctor = "Z";
+$box = new EvalByRefMethodBox($ctor);
 $value = "A";
 $box->change($value);
 EvalByRefMethodBox::changeStatic($value);
@@ -9004,7 +9039,7 @@ $items = ["k" => "C"];
 $box->change($items["k"]);
 $prop = new EvalByRefPropertyBox();
 $box->change($prop->value);
-echo $value . ":" . $named . ":" . $items["k"] . ":" . $prop->value;');
+echo $ctor . ":" . $value . ":" . $named . ":" . $items["k"] . ":" . $prop->value;');
 "#,
     );
     assert!(
@@ -9014,7 +9049,7 @@ echo $value . ":" . $named . ":" . $items["k"] . ":" . $prop->value;');
     );
     assert_eq!(
         out.stdout,
-        "A-method-static-variadic:B-named:C-method:D-method"
+        "Z-ctor:A-method-static-variadic:B-named:C-method:D-method"
     );
 }
 

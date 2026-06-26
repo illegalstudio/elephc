@@ -411,10 +411,28 @@ echo $named("E", "F"); echo ":";
 return call_user_func_array(["KnownClass", "sum"], [2, 5]);"#,
     )
     .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut join_signature = NativeCallableSignature::new(2);
+    assert!(join_signature.set_param_name(0, "left"));
+    assert!(join_signature.set_param_name(1, "right"));
+    assert!(context.define_native_static_method_signature(
+        "KnownClass",
+        "join",
+        join_signature
+    ));
+    let mut sum_signature = NativeCallableSignature::new(2);
+    assert!(sum_signature.set_param_name(0, "left"));
+    assert!(sum_signature.set_param_name(1, "right"));
+    assert!(context.define_native_static_method_signature(
+        "KnownClass",
+        "sum",
+        sum_signature
+    ));
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("execute eval ir");
 
     assert_eq!(values.output, "AB:CD:EF:");
     assert_eq!(values.get(result), FakeValue::Int(7));
@@ -498,7 +516,7 @@ fn execute_program_static_runtime_method_hook_rejects_unregistered_named_args() 
     let error =
         execute_program(&program, &mut scope, &mut values).expect_err("named AOT call should fail");
 
-    assert_eq!(error, EvalStatus::RuntimeFatal);
+    assert_eq!(error, EvalStatus::UncaughtThrowable);
 }
 
 /// Verifies `call_user_func_array` inside eval can dispatch an eval-declared function.

@@ -349,7 +349,7 @@ $changer->set($box->value);"#,
     let mut values = FakeOps::default();
     let err = execute_program(&private_program, &mut scope, &mut values)
         .expect_err("private property by-ref target should fail from global scope");
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(err, EvalStatus::UncaughtThrowable);
 
     let readonly_program = parse_fragment(
         br#"class EvalByRefReadonlyPropertyFailChanger {

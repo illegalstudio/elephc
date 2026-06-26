@@ -500,7 +500,7 @@ fn bind_dynamic_variadic_arg(
 }
 
 /// Applies one eval method parameter type to a bound runtime value.
-fn eval_method_parameter_value(
+pub(in crate::interpreter) fn eval_method_parameter_value(
     param_type: &EvalParameterType,
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,

@@ -107,6 +107,9 @@ fn eval_validate_call_user_func_native_object_method(
         eval_aot_method_dispatch_metadata_in_hierarchy(&class_name, method_name, context, values)?
     else {
         if eval_call_user_func_native_instance_magic_callable(&class_name, context, values)?
+            || context
+                .native_method_signature(&class_name, method_name)
+                .is_some()
             || !values.class_exists(&class_name)?
         {
             return Ok(());
@@ -213,6 +216,9 @@ fn eval_validate_call_user_func_native_static_method(
         eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?
     else {
         if eval_call_user_func_native_static_magic_callable(class_name, context, values)?
+            || context
+                .native_static_method_signature(class_name, method_name)
+                .is_some()
             || !values.class_exists(class_name)?
         {
             return Ok(());
