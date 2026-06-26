@@ -4054,6 +4054,20 @@ fn eval_throw_value_error(
     Err(EvalStatus::UncaughtThrowable)
 }
 
+/// Creates and schedules a `ReflectionException` through eval's normal Throwable channel.
+fn eval_throw_reflection_exception(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let exception = values.new_object("ReflectionException")?;
+    let message = values.string(message)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
+}
+
 /// Resolves a static method using private-method scope rules.
 fn eval_dynamic_static_method_for_call(
     class_name: &str,
@@ -4953,6 +4967,18 @@ fn eval_reflection_class_new_instance_result(
         return Ok(None);
     };
     if let Some(class) = context.class(&reflected_name).cloned() {
+        if let Some((_, constructor)) = context.class_method(class.name(), "__construct") {
+            if constructor.visibility() != EvalVisibility::Public {
+                return eval_throw_reflection_exception(
+                    &format!(
+                        "Access to non-public constructor of class {}",
+                        class.name()
+                    ),
+                    context,
+                    values,
+                );
+            }
+        }
         return eval_reflection_public_constructor_scope(context, values, |context, values| {
             let mut scope = ElephcEvalScope::new();
             eval_dynamic_class_new_object(&class, constructor_args, context, &mut scope, values)

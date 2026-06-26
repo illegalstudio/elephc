@@ -13884,19 +13884,33 @@ echo $fourth->label();');
 
 /// Verifies eval ReflectionClass::newInstance rejects non-public eval constructors like PHP.
 #[test]
-fn test_eval_reflection_class_new_instance_rejects_private_eval_constructor() {
-    let err = compile_and_run_expect_failure(
+fn test_eval_reflection_class_new_instance_rejects_non_public_eval_constructors() {
+    let out = compile_and_run(
         r#"<?php
 eval('class EvalReflectNewPrivateCtor {
     private function __construct() {}
 }
-$ref = new ReflectionClass("EvalReflectNewPrivateCtor");
-$ref->newInstance();');
+class EvalReflectNewProtectedCtor {
+    protected function __construct() {}
+}
+try {
+    (new ReflectionClass("EvalReflectNewPrivateCtor"))->newInstance();
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    (new ReflectionClass("EvalReflectNewProtectedCtor"))->newInstance();
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "unexpected stderr: {err}"
+    assert_eq!(
+        out,
+        "ReflectionException:Access to non-public constructor of class EvalReflectNewPrivateCtor|ReflectionException:Access to non-public constructor of class EvalReflectNewProtectedCtor"
     );
 }
 

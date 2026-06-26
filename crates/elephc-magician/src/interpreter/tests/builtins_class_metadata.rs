@@ -3151,6 +3151,44 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass::newInstance throws for non-public eval constructors.
+#[test]
+fn execute_program_reflection_class_new_instance_rejects_non_public_eval_constructors() {
+    let program = parse_fragment(
+        br#"class EvalReflectNewPrivateCtor {
+    private function __construct() {}
+}
+class EvalReflectNewProtectedCtor {
+    protected function __construct() {}
+}
+try {
+    (new ReflectionClass("EvalReflectNewPrivateCtor"))->newInstance();
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    (new ReflectionClass("EvalReflectNewProtectedCtor"))->newInstance();
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "ReflectionException:Access to non-public constructor of class EvalReflectNewPrivateCtor|ReflectionException:Access to non-public constructor of class EvalReflectNewProtectedCtor"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionMethod::invoke dispatches eval-declared methods.
 #[test]
 fn execute_program_reflection_method_invoke_calls_eval_method() {
