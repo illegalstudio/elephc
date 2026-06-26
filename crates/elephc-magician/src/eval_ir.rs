@@ -2291,6 +2291,10 @@ pub enum EvalExpr {
         method: Box<EvalExpr>,
         args: Vec<EvalCallArg>,
     },
+    DynamicNewObject {
+        class_name: Box<EvalExpr>,
+        args: Vec<EvalCallArg>,
+    },
     DynamicPropertyGet {
         object: Box<EvalExpr>,
         property: Box<EvalExpr>,

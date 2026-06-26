@@ -844,6 +844,15 @@ impl Parser {
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "class")) {
             return self.parse_anonymous_class_expr(is_readonly_anonymous);
         }
+        if let TokenKind::DollarIdent(name) = self.current() {
+            let class_name = EvalExpr::LoadVar(name.clone());
+            self.advance();
+            let args = self.parse_call_args()?;
+            return Ok(EvalExpr::DynamicNewObject {
+                class_name: Box::new(class_name),
+                args,
+            });
+        }
         let class_name = self.parse_qualified_name()?;
         let class_name = self.resolve_class_name(class_name);
         let args = self.parse_call_args()?;
