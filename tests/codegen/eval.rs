@@ -10132,6 +10132,29 @@ echo $class::{"missing"}("B");');
     assert_eq!(out.stdout, "read:A|missing:B");
 }
 
+/// Verifies eval supports braced dynamic class constant names.
+#[test]
+fn test_eval_braced_dynamic_class_constant_name() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalBracedDynamicClassConstant {
+    public const READ = "read";
+    public const FALLBACK = "fallback";
+}
+$constant = "READ";
+$class = "EvalBracedDynamicClassConstant";
+echo EvalBracedDynamicClassConstant::{$constant} . "|";
+echo $class::{"FALLBACK"};');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "read|fallback");
+}
+
 /// Verifies eval AOT method fallback dispatches missing and inaccessible methods through `__call`.
 #[test]
 fn test_eval_aot_magic_call_method_fallback() {

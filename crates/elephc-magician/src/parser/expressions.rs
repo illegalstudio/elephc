@@ -846,16 +846,19 @@ impl Parser {
             }
             TokenKind::LBrace => {
                 self.advance();
-                let method = self.parse_expr()?;
+                let member = self.parse_expr()?;
                 self.expect(TokenKind::RBrace)?;
-                if !matches!(self.current(), TokenKind::LParen) {
-                    return Err(EvalParseError::UnsupportedConstruct);
+                if matches!(self.current(), TokenKind::LParen) {
+                    let args = self.parse_call_args()?;
+                    return Ok(EvalExpr::DynamicStaticMethodCall {
+                        class_name: Box::new(EvalExpr::ClassNameFetch { class_name }),
+                        method: Box::new(member),
+                        args,
+                    });
                 }
-                let args = self.parse_call_args()?;
-                Ok(EvalExpr::DynamicStaticMethodCall {
+                Ok(EvalExpr::DynamicClassConstantNameFetch {
                     class_name: Box::new(EvalExpr::ClassNameFetch { class_name }),
-                    method: Box::new(method),
-                    args,
+                    constant: Box::new(member),
                 })
             }
             TokenKind::Ident(constant) => {
@@ -912,16 +915,19 @@ impl Parser {
             }
             TokenKind::LBrace => {
                 self.advance();
-                let method = self.parse_expr()?;
+                let member = self.parse_expr()?;
                 self.expect(TokenKind::RBrace)?;
-                if !matches!(self.current(), TokenKind::LParen) {
-                    return Err(EvalParseError::UnsupportedConstruct);
+                if matches!(self.current(), TokenKind::LParen) {
+                    let args = self.parse_call_args()?;
+                    return Ok(EvalExpr::DynamicStaticMethodCall {
+                        class_name: Box::new(class_name),
+                        method: Box::new(member),
+                        args,
+                    });
                 }
-                let args = self.parse_call_args()?;
-                Ok(EvalExpr::DynamicStaticMethodCall {
+                Ok(EvalExpr::DynamicClassConstantNameFetch {
                     class_name: Box::new(class_name),
-                    method: Box::new(method),
-                    args,
+                    constant: Box::new(member),
                 })
             }
             TokenKind::Ident(constant) => {

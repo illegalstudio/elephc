@@ -95,6 +95,15 @@ pub(in crate::interpreter) fn eval_expr(
             let class_name = eval_dynamic_class_name(class_name, context, values)?;
             eval_class_constant_fetch_result(&class_name, constant, context, values)
         }
+        EvalExpr::DynamicClassConstantNameFetch {
+            class_name,
+            constant,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let constant = eval_dynamic_member_name(constant, context, scope, values)?;
+            eval_class_constant_fetch_result(&class_name, &constant, context, values)
+        }
         EvalExpr::DynamicClassNameFetch { class_name } => {
             let class_name = eval_expr(class_name, context, scope, values)?;
             eval_dynamic_class_name_fetch_result(class_name, context, values)
