@@ -506,6 +506,7 @@ fn runtime_referenced_enum_singleton_names(module: &Module) -> HashSet<String> {
             collect_reflection_enum_singleton_name(module, function, inst, &mut names);
         }
     }
+    seed_eval_visible_enum_singleton_names(module, &mut names);
     names
 }
 
@@ -520,6 +521,28 @@ fn all_runtime_scanned_functions(module: &Module) -> impl Iterator<Item = &Funct
         .chain(module.callback_wrappers.iter())
         .chain(module.extern_callback_trampolines.iter())
         .chain(module.runtime_callable_invokers.iter())
+}
+
+/// Adds every enum when `eval` can dynamically fetch AOT enum cases by name.
+fn seed_eval_visible_enum_singleton_names(module: &Module, names: &mut HashSet<String>) {
+    if !module_contains_eval_state(module) {
+        return;
+    }
+    names.extend(module.enum_infos.keys().cloned());
+}
+
+/// Returns true when any scanned function owns persistent eval runtime state.
+fn module_contains_eval_state(module: &Module) -> bool {
+    all_runtime_scanned_functions(module).any(|function| {
+        function.locals.iter().any(|local| {
+            matches!(
+                local.kind,
+                crate::ir::LocalKind::EvalContext
+                    | crate::ir::LocalKind::EvalScope
+                    | crate::ir::LocalKind::EvalGlobalScope
+            )
+        })
+    })
 }
 
 /// Adds enum names referenced by `Enum::Case` scoped constant reads.

@@ -12493,6 +12493,36 @@ echo count($aliases) . ":" . $aliases["aliasOriginal"];');
     );
 }
 
+/// Verifies eval can fetch a generated/AOT enum case only referenced inside eval source.
+#[test]
+fn test_eval_fetches_aot_enum_case_object_from_eval_only_reference() {
+    if !codegen_fixture_uses_ir_backend() {
+        return;
+    }
+    let out = compile_and_run_capture(
+        r#"<?php
+trait EvalAotCaseTrait {
+    public function marker() {}
+}
+enum EvalAotCaseEnum {
+    use EvalAotCaseTrait;
+    case Ready;
+}
+eval('$case = EvalAotCaseEnum::Ready;
+echo get_class($case) . ":";
+$uses = class_uses($case);
+ksort($uses);
+echo count($uses) . ":" . $uses["EvalAotCaseTrait"];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "EvalAotCaseEnum:1:EvalAotCaseTrait");
+}
+
 /// Verifies generated enum trait metadata emits one runtime reflection row per direct trait.
 #[test]
 fn test_eval_reflection_class_trait_metadata_for_aot_enum_is_not_duplicated() {
