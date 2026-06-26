@@ -4453,19 +4453,23 @@ $box->run();
 /// Verifies eval fragments outside the declaring scope cannot read private AOT properties.
 #[test]
 fn test_eval_fragment_rejects_private_property_outside_declaring_scope() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class EvalPrivatePropOutsideBox {
     private int $x = 1;
 }
 
 $box = new EvalPrivatePropOutsideBox();
-eval('return $box->x;');
+echo eval('try {
+    return $box->x;
+} catch (Error $e) {
+    return get_class($e) . ":" . $e->getMessage();
+}');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "unexpected stderr: {err}"
+    assert_eq!(
+        out,
+        "Error:Cannot access private property EvalPrivatePropOutsideBox::$x"
     );
 }
 
@@ -4516,7 +4520,7 @@ $box->run();
 /// Verifies eval fragments reject protected AOT properties between sibling class scopes.
 #[test]
 fn test_eval_fragment_rejects_protected_aot_property_from_sibling_scope() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class EvalProtectedPropSiblingBase {}
 
@@ -4526,7 +4530,11 @@ class EvalProtectedPropLeft extends EvalProtectedPropSiblingBase {
 
 class EvalProtectedPropRight extends EvalProtectedPropSiblingBase {
     public function run(): void {
-        echo eval('return (new EvalProtectedPropLeft())->x;');
+        echo eval('try {
+            return (new EvalProtectedPropLeft())->x;
+        } catch (Error $e) {
+            return get_class($e) . ":" . $e->getMessage();
+        }');
     }
 }
 
@@ -4534,9 +4542,9 @@ $right = new EvalProtectedPropRight();
 $right->run();
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "unexpected stderr: {err}"
+    assert_eq!(
+        out,
+        "Error:Cannot access protected property EvalProtectedPropLeft::$x"
     );
 }
 
@@ -4720,7 +4728,7 @@ $box->run();
 /// Verifies eval fragments reject private AOT static properties outside the declaring scope.
 #[test]
 fn test_eval_fragment_rejects_private_aot_static_property_outside_declaring_scope() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class EvalPrivateStaticPropBase {
     private static int $x = 1;
@@ -4728,7 +4736,11 @@ class EvalPrivateStaticPropBase {
 
 class EvalPrivateStaticPropChild extends EvalPrivateStaticPropBase {
     public function run(): void {
-        echo eval('return EvalPrivateStaticPropBase::$x;');
+        echo eval('try {
+            return EvalPrivateStaticPropBase::$x;
+        } catch (Error $e) {
+            return get_class($e) . ":" . $e->getMessage();
+        }');
     }
 }
 
@@ -4736,9 +4748,9 @@ $box = new EvalPrivateStaticPropChild();
 $box->run();
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "unexpected stderr: {err}"
+    assert_eq!(
+        out,
+        "Error:Cannot access private property EvalPrivateStaticPropBase::$x"
     );
 }
 
@@ -4792,7 +4804,7 @@ $box->run();
 /// Verifies eval fragments reject protected AOT static properties between sibling class scopes.
 #[test]
 fn test_eval_fragment_rejects_protected_aot_static_property_from_sibling_scope() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class EvalProtectedStaticPropSiblingBase {}
 
@@ -4802,7 +4814,11 @@ class EvalProtectedStaticPropLeft extends EvalProtectedStaticPropSiblingBase {
 
 class EvalProtectedStaticPropRight extends EvalProtectedStaticPropSiblingBase {
     public function run(): void {
-        echo eval('return EvalProtectedStaticPropLeft::$x;');
+        echo eval('try {
+            return EvalProtectedStaticPropLeft::$x;
+        } catch (Error $e) {
+            return get_class($e) . ":" . $e->getMessage();
+        }');
     }
 }
 
@@ -4810,9 +4826,9 @@ $right = new EvalProtectedStaticPropRight();
 $right->run();
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "unexpected stderr: {err}"
+    assert_eq!(
+        out,
+        "Error:Cannot access protected property EvalProtectedStaticPropLeft::$x"
     );
 }
 

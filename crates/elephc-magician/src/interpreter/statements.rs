@@ -2899,6 +2899,20 @@ pub(in crate::interpreter) fn eval_property_get_result(
         return values.property_get(object, property_name);
     };
     let Some(class) = context.dynamic_object_class(identity) else {
+        let class_name = eval_runtime_object_class_name(object, values)?;
+        if let Some((declaring_class, visibility, _, is_static)) =
+            eval_reflection_aot_property_access_metadata(&class_name, property_name, values)?
+        {
+            if !is_static && validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+                return eval_throw_property_access_error(
+                    &declaring_class,
+                    property_name,
+                    visibility,
+                    context,
+                    values,
+                );
+            }
+        }
         return values.property_get(object, property_name);
     };
     let object_class_name = class.name().to_string();
@@ -2981,6 +2995,22 @@ pub(in crate::interpreter) fn eval_property_set_result(
         return values.property_set(object, property_name, value);
     };
     let Some(class) = context.dynamic_object_class(identity) else {
+        let class_name = eval_runtime_object_class_name(object, values)?;
+        if let Some((declaring_class, _, write_visibility, is_static)) =
+            eval_reflection_aot_property_access_metadata(&class_name, property_name, values)?
+        {
+            if !is_static
+                && validate_eval_member_access(&declaring_class, write_visibility, context).is_err()
+            {
+                return eval_throw_property_access_error(
+                    &declaring_class,
+                    property_name,
+                    write_visibility,
+                    context,
+                    values,
+                );
+            }
+        }
         return values.property_set(object, property_name, value);
     };
     let object_class_name = class.name().to_string();
@@ -3639,6 +3669,24 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
     if eval_static_member_context_owns_class(&class_name, context) {
         return Err(EvalStatus::RuntimeFatal);
     }
+    if let Some((declaring_class, visibility, _, is_static)) =
+        eval_reflection_aot_static_property_access_metadata(
+            &class_name,
+            property_name,
+            context,
+            values,
+        )?
+    {
+        if is_static && validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+            return eval_throw_property_access_error(
+                &declaring_class,
+                property_name,
+                visibility,
+                context,
+                values,
+            );
+        }
+    }
     values
         .static_property_get(&class_name, property_name)?
         .ok_or(EvalStatus::RuntimeFatal)
@@ -3826,6 +3874,26 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
     }
     if eval_static_member_context_owns_class(&class_name, context) {
         return Err(EvalStatus::RuntimeFatal);
+    }
+    if let Some((declaring_class, _, write_visibility, is_static)) =
+        eval_reflection_aot_static_property_access_metadata(
+            &class_name,
+            property_name,
+            context,
+            values,
+        )?
+    {
+        if is_static
+            && validate_eval_member_access(&declaring_class, write_visibility, context).is_err()
+        {
+            return eval_throw_property_access_error(
+                &declaring_class,
+                property_name,
+                write_visibility,
+                context,
+                values,
+            );
+        }
     }
     if values.static_property_set(&class_name, property_name, value)? {
         Ok(())
