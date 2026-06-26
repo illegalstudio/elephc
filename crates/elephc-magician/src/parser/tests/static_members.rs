@@ -132,6 +132,32 @@ fn parse_fragment_accepts_named_receiver_dynamic_static_method_name() {
     );
 }
 
+/// Verifies braced dynamic static method names preserve their method expression.
+#[test]
+fn parse_fragment_accepts_braced_dynamic_static_method_name() {
+    let program =
+        parse_fragment(br#"return EvalStaticBox::{$method}(2) . $class::{"Read"}(3);"#)
+            .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Binary {
+            op: EvalBinOp::Concat,
+            left: Box::new(EvalExpr::DynamicStaticMethodCall {
+                class_name: Box::new(EvalExpr::ClassNameFetch {
+                    class_name: "EvalStaticBox".to_string(),
+                }),
+                method: Box::new(EvalExpr::LoadVar("method".to_string())),
+                args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::Int(2)))],
+            }),
+            right: Box::new(EvalExpr::DynamicStaticMethodCall {
+                class_name: Box::new(EvalExpr::LoadVar("class".to_string())),
+                method: Box::new(EvalExpr::Const(EvalConst::String("Read".to_string()))),
+                args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::Int(3)))],
+            }),
+        }))]
+    );
+}
+
 /// Verifies runtime-valued static receivers support properties, constants, and `::class`.
 #[test]
 fn parse_fragment_accepts_dynamic_static_metadata_receiver() {
