@@ -191,7 +191,7 @@ elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 elephc --target linux-aarch64 hello.php
 elephc --target linux-x86_64 hello.php
 
-# Compile a standalone prefork HTTP server binary (Phase 1: echo → body, fresh per-request state)
+# Compile a standalone prefork HTTP server binary
 elephc --web app.php
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4
@@ -587,7 +587,7 @@ The **[docs/](docs/)** directory is a complete wiki covering every aspect of the
 
 If you're new to compilers or assembly, start from the top and work your way down. No prior low-level knowledge required.
 
-For runna ble language samples, see `examples/`. For the benchmark harness and CI trend artifacts that compare elephc against PHP and equivalent C fixtures, see `benchmarks/README.md`. For a focused perf comparison, see `benchmarks/hot-path-buffer-vs-arrays`.
+For runnable language samples, see `examples/`. For the benchmark harness and CI trend artifacts that compare elephc against PHP and equivalent C fixtures, see `benchmarks/README.md`. For a focused perf comparison, see `benchmarks/hot-path-buffer-vs-arrays`.
 
 ## License
 

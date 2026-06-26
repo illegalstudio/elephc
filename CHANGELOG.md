@@ -3,8 +3,8 @@
 All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
-## [Unreleased]
-- `--web` stability hardening: fixed remaining per-request ownership leaks around Mixed foreach/array/hash values, made static-runtime user/group lookups independent from host NSS modules, and expanded the full sharded CI gate across macOS ARM64, Linux x86_64, and Linux ARM64.
+## [0.25.2] - 2026-06-26
+- `--web`: compile a PHP program into a standalone prefork HTTP server binary with per-request top-level execution, `echo`/`print` response bodies, `$_SERVER`/`$_GET`/`$_POST` and `php://input` request input, PHP-compatible `http_response_code()`/`header()` handling, configurable listen address/workers/body limit, clean signal shutdown, worker respawn, bounded keep-alive handling, fixed-heap request cleanup, and full sharded CI coverage across macOS ARM64, Linux x86_64, and Linux ARM64.
 - Fixed a heap leak when releasing string-keyed associative arrays (issue #408): promoting an indexed array to hash storage (`array_to_hash`) built the result hash from a copy of the source array but never freed that source array, leaking one allocation per conversion. Reassigning an assoc array in a loop — or, under `--web`, rebuilding the request superglobals each request — slowly exhausted the heap. The conversion now releases the temporary source array, so the heap stays flat.
 - EIR small-function inliner: splices small (≤24-instruction), non-recursive user functions into their callers — covering scalar, string, and array/value helpers — with copy-on-write and reference-counting semantics preserved, gated by `--ir-opt`. Recursive (direct or mutual), generator/fiber, exception-handling, object/closure/resource/by-reference, and argument-coercing call sites are left as ordinary calls.
 - EIR optimization pipeline now runs to a module-level fixed point: the small-function inliner and the per-function passes are interleaved and repeated until neither changes anything, so optimization and inlining feed each other (e.g. a function inlined once its callees fold below the size threshold). Behavior is unchanged with `--ir-opt` on vs off; only the generated code gets tighter.
@@ -402,7 +402,7 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.25.1...HEAD
+[0.25.2]: https://github.com/illegalstudio/elephc/compare/v0.25.1...v0.25.2
 [0.25.1]: https://github.com/illegalstudio/elephc/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/illegalstudio/elephc/compare/v0.24.3...v0.25.0
 [0.24.3]: https://github.com/illegalstudio/elephc/compare/v0.24.2...v0.24.3
