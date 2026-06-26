@@ -177,6 +177,33 @@ fn parse_fragment_accepts_dynamic_static_property_compound_assignment() {
     );
 }
 
+/// Verifies static property unsets parse as explicit static-unset statements.
+#[test]
+fn parse_fragment_accepts_static_property_unset() {
+    let program =
+        parse_fragment(br#"unset(EvalStaticBox::$count);"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::UnsetStaticProperty {
+            class_name: "EvalStaticBox".to_string(),
+            property: "count".to_string(),
+        }]
+    );
+}
+
+/// Verifies runtime-valued static property unsets preserve the class receiver expression.
+#[test]
+fn parse_fragment_accepts_dynamic_static_property_unset() {
+    let program = parse_fragment(br#"unset($class::$count);"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::UnsetDynamicStaticProperty {
+            class_name: EvalExpr::LoadVar("class".to_string()),
+            property: "count".to_string(),
+        }]
+    );
+}
+
 /// Verifies static property compound assignments lower to one read-modify-write statement.
 #[test]
 fn parse_fragment_accepts_static_property_compound_assignment() {

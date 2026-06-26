@@ -254,6 +254,22 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_property_unset_result(object, &property, context, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::UnsetStaticProperty {
+            class_name,
+            property,
+        } => {
+            eval_static_property_unset_result(class_name, property, context, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::UnsetDynamicStaticProperty {
+            class_name,
+            property,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            eval_static_property_unset_result(&class_name, property, context, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::UnsetVar { name } => {
             if let Some(replaced) = unset_scope_cell(scope, name.clone()) {
                 eval_release_value(context, values, replaced)?;
@@ -4101,6 +4117,28 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
         return Ok(!values.is_null(value)?);
     }
     Ok(false)
+}
+
+/// Throws PHP's catchable error for attempts to unset an existing static property target.
+pub(in crate::interpreter) fn eval_static_property_unset_result(
+    class_name: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let class_name = resolve_eval_static_member_class_name(class_name, context)?;
+    if !eval_runtime_class_like_exists(&class_name, context, values)? {
+        return eval_throw_class_not_found_error(&class_name, context, values);
+    }
+    eval_throw_error(
+        &format!(
+            "Attempt to unset static property {}::${}",
+            class_name.trim_start_matches('\\'),
+            property_name
+        ),
+        context,
+        values,
+    )
 }
 
 /// Reads one eval-declared class constant after resolving the class-like receiver.

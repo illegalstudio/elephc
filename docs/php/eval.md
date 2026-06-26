@@ -562,6 +562,8 @@ PHP's global `#[AllowDynamicProperties]` marker is rejected on eval-declared
 readonly classes.
 `self::`, `parent::`, and late-bound `static::` work for supported static
 members, class constants, and class-name literals.
+Attempts to `unset()` static properties parse normally and throw PHP's
+catchable `Error`, including runtime-valued static receivers.
 
 Eval object construction can allocate eval-declared classes, `stdClass`, and
 emitted AOT classes visible through runtime class metadata. Missing class names

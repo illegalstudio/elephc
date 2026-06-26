@@ -1141,7 +1141,9 @@ fn visit_static_var_declarations(
             | EvalStmt::TraitDecl(_)
             | EvalStmt::UnsetArrayElement { .. }
             | EvalStmt::UnsetDynamicProperty { .. }
+            | EvalStmt::UnsetDynamicStaticProperty { .. }
             | EvalStmt::UnsetProperty { .. }
+            | EvalStmt::UnsetStaticProperty { .. }
             | EvalStmt::UnsetVar { .. } => {}
         }
     }
