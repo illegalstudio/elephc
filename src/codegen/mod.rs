@@ -496,15 +496,12 @@ fn collect_declared_trait_names(program: &Program) -> Vec<String> {
     names
 }
 
-/// Collects declared trait uses for the surrounding analysis or metadata result.
+/// Collects trait-to-trait uses for the surrounding analysis or metadata result.
 fn collect_declared_trait_uses(program: &Program) -> HashMap<String, Vec<String>> {
     let mut uses = HashMap::new();
     for stmt in program {
         match &stmt.kind {
             StmtKind::TraitDecl {
-                name, trait_uses, ..
-            }
-            | StmtKind::EnumDecl {
                 name, trait_uses, ..
             } => {
                 uses.insert(

@@ -12458,6 +12458,97 @@ echo count($aliases) . ":" . $aliases["aliasOriginal"];');
     );
 }
 
+/// Verifies eval ReflectionClass exposes generated/AOT enum trait metadata.
+#[test]
+fn test_eval_reflection_class_get_trait_metadata_for_aot_enum() {
+    if !codegen_fixture_uses_ir_backend() {
+        return;
+    }
+    let out = compile_and_run_capture(
+        r#"<?php
+trait EvalAotReflectEnumTrait {
+    public function original() {}
+}
+enum EvalAotReflectTraitEnum {
+    use EvalAotReflectEnumTrait {
+        original as aliasOriginal;
+    }
+    case Ready;
+}
+eval('$ref = new ReflectionClass("EvalAotReflectTraitEnum");
+$traits = $ref->getTraitNames();
+$aliases = $ref->getTraitAliases();
+echo count($traits) . ":" . implode(",", $traits) . ":";
+echo count($aliases) . ":" . $aliases["aliasOriginal"];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "1:EvalAotReflectEnumTrait:1:EvalAotReflectEnumTrait::original"
+    );
+}
+
+/// Verifies generated enum trait metadata emits one runtime reflection row per direct trait.
+#[test]
+fn test_eval_reflection_class_trait_metadata_for_aot_enum_is_not_duplicated() {
+    if !codegen_fixture_uses_ir_backend() {
+        return;
+    }
+    let dir = make_cli_test_dir("elephc_eval_aot_enum_trait_metadata");
+    let (user_asm, _runtime_asm, _required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+trait EvalAotReflectEnumTrait {
+    public function original() {}
+}
+enum EvalAotReflectTraitEnum {
+    use EvalAotReflectEnumTrait {
+        original as aliasOriginal;
+    }
+    case Ready;
+}
+eval('$ref = new ReflectionClass("EvalAotReflectTraitEnum");
+$traits = $ref->getTraitNames();
+$aliases = $ref->getTraitAliases();
+echo count($traits) . ":" . implode(",", $traits) . ":";
+echo count($aliases) . ":" . $aliases["aliasOriginal"];');
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    let start = user_asm
+        .find("_eval_reflection_class_traits:\n")
+        .expect("missing trait metadata table");
+    let count_start = user_asm
+        .find("_eval_reflection_class_trait_count:\n")
+        .expect("missing trait metadata count");
+    let count_tail = &user_asm[count_start..start];
+    let tail = &user_asm[start..];
+    let end = tail
+        .find(".globl _eval_reflection_class_trait_alias_count")
+        .expect("missing trait alias metadata table");
+    let trait_table = &tail[..end];
+
+    assert!(
+        count_tail.contains("    .quad 1\n"),
+        "unexpected trait table count:\n{count_tail}\n{trait_table}"
+    );
+
+    assert_eq!(
+        trait_table
+            .matches(".ascii \"EvalAotReflectTraitEnum\"")
+            .count(),
+        1,
+        "{trait_table}"
+    );
+}
+
 /// Verifies eval ReflectionClass::implementsInterface reports class, enum, and
 /// interface metadata through the bridge.
 #[test]
