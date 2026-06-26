@@ -211,9 +211,10 @@ attributes, are visible through `class_attribute_names()`,
 `class_attribute_args()`, and `class_get_attributes()` when their arguments fit
 the supported literal positional/named subset (`string`, `int`, `float`, `bool`,
 `null`, negated numeric literals, `ClassName::class` strings, or positional
-array literals containing the same supported values). Positional arguments keep integer keys in
-`class_attribute_args()` / `ReflectionAttribute::getArguments()`, and named
-arguments keep their PHP names as string keys.
+or string-keyed array literals containing the same supported values). Positional
+arguments keep integer keys in `class_attribute_args()` /
+`ReflectionAttribute::getArguments()`, and named arguments keep their PHP names
+as string keys.
 `ReflectionAttribute::newInstance()` instantiates eval-declared or
 bridge-supported generated/AOT attribute classes from those materialized
 attributes, and `ReflectionAttribute::getTarget()` /
@@ -231,7 +232,8 @@ child methods and public access see the child property.
 property, class-constant, and method-parameter attributes for eval-declared
 class-like symbols and bridge-registered generated/AOT class-level, method,
 property, and class-constant attributes when their arguments fit the same
-literal positional/named subset. Associative or dynamic attribute arrays are
+literal positional/named subset. String-keyed attribute array literals keep
+their PHP string keys; dynamic or otherwise unsupported attribute array keys are
 still unsupported metadata. `getName()` returns the reflected class, member, or
 parameter name
 for those owners. `ReflectionClass`, `ReflectionObject`, `ReflectionFunction`, `ReflectionMethod`,

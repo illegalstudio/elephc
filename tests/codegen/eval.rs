@@ -12166,6 +12166,37 @@ echo is_null($attrs[0]->newInstance()) ? "N" : "bad";');
     );
 }
 
+/// Verifies eval attribute array arguments preserve string keys.
+#[test]
+fn test_eval_declared_class_attribute_string_keyed_array_args() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalArrayAttribute {
+    public $items;
+    public function __construct($items) {
+        $this->items = $items;
+    }
+}
+#[EvalArrayAttribute(["plain", "name" => "Ada", "nested" => ["inner" => "value"]])]
+class EvalArrayAttributeTarget {}
+$args = class_attribute_args("EvalArrayAttributeTarget", "EvalArrayAttribute");
+$items = $args[0];
+echo count($items) . ":" . $items[0] . ":" . $items["name"] . ":" . $items["nested"]["inner"] . ":";
+$attr = class_get_attributes("EvalArrayAttributeTarget")[0];
+$attrItems = $attr->getArguments()[0];
+echo count($attrItems) . ":" . $attrItems[0] . ":" . $attrItems["name"] . ":" . $attrItems["nested"]["inner"] . ":";
+$instanceItems = $attr->newInstance()->items;
+echo count($instanceItems) . ":" . $instanceItems[0] . ":" . $instanceItems["name"] . ":" . $instanceItems["nested"]["inner"];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "3:plain:Ada:value:3:plain:Ada:value:3:plain:Ada:value");
+}
+
 /// Verifies eval can read generated/AOT float attribute arguments.
 #[test]
 fn test_eval_reflection_class_exposes_aot_float_attribute_args() {
