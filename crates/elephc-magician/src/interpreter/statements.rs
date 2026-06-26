@@ -7404,14 +7404,21 @@ fn eval_reflection_attribute_arg_value(
     }
 }
 
-/// Materializes one retained positional attribute array literal for constructor calls.
+/// Materializes one retained attribute array literal for constructor calls.
 fn eval_reflection_attribute_array_arg_value(
     elements: &[EvalAttributeArg],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(elements.len())?;
+    let mut result = if elements.iter().any(|element| element.name().is_some()) {
+        values.assoc_new(elements.len())?
+    } else {
+        values.array_new(elements.len())?
+    };
     for (index, element) in elements.iter().enumerate() {
-        let key = values.int(index as i64)?;
+        let key = match element.name() {
+            Some(name) => values.string(name)?,
+            None => values.int(index as i64)?,
+        };
         let value = eval_reflection_attribute_arg_value(element.value(), values)?;
         result = values.array_set(result, key, value)?;
     }

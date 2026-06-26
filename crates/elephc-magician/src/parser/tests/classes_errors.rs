@@ -148,7 +148,7 @@ fn parse_fragment_rejects_reserved_class_constant_name() {
 #[test]
 fn parse_fragment_accepts_class_attribute_metadata() {
     let program = parse_fragment(
-        br#"#[Route("/home", -1, 1.5, -2.5, true, null, EvalAttrDep::class, ["nested", 2])]
+        br#"#[Route("/home", -1, 1.5, -2.5, true, null, EvalAttrDep::class, ["nested", "key" => 2])]
 #[Tag(name: "named")]
 class DynEvalAttributed {}"#,
     )
@@ -169,7 +169,10 @@ class DynEvalAttributed {}"#,
                         EvalAttributeArg::String("EvalAttrDep".to_string()),
                         EvalAttributeArg::Array(vec![
                             EvalAttributeArg::String("nested".to_string()),
-                            EvalAttributeArg::Int(2),
+                            EvalAttributeArg::Named {
+                                name: "key".to_string(),
+                                value: Box::new(EvalAttributeArg::Int(2)),
+                            },
                         ]),
                     ]),
                 ),

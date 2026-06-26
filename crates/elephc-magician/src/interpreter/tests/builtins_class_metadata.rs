@@ -3999,20 +3999,26 @@ return true;"#,
 /// Verifies unsupported attribute argument metadata remains name-visible but not materializable.
 #[test]
 fn execute_program_rejects_unsupported_class_attribute_args_metadata() {
-    let program = parse_fragment(
+    for source in [
         br#"#[Tag($dynamic)]
 class EvalUnsupportedAttr {}
 $names = class_attribute_names("EvalUnsupportedAttr");
 echo count($names); echo ":"; echo $names[0]; echo ":";
+class_attribute_args("EvalUnsupportedAttr", "Tag");"# as &[u8],
+        br#"#[Tag(["fixed" => "ok", $dynamic => "bad"])]
+class EvalUnsupportedAttr {}
+$names = class_attribute_names("EvalUnsupportedAttr");
+echo count($names); echo ":"; echo $names[0]; echo ":";
 class_attribute_args("EvalUnsupportedAttr", "Tag");"#,
-    )
-    .expect("parse eval fragment");
-    let mut scope = ElephcEvalScope::new();
-    let mut values = FakeOps::default();
+    ] {
+        let program = parse_fragment(source).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("unsupported attribute metadata should fail");
+        let err = execute_program(&program, &mut scope, &mut values)
+            .expect_err("unsupported attribute metadata should fail");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
-    assert_eq!(values.output, "1:Tag:");
+        assert_eq!(err, EvalStatus::RuntimeFatal);
+        assert_eq!(values.output, "1:Tag:");
+    }
 }

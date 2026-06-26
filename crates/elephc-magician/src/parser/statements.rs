@@ -3664,7 +3664,7 @@ fn eval_attribute_arg_from_expr(expr: &EvalExpr) -> Option<EvalAttributeArg> {
     }
 }
 
-/// Converts a positional eval array literal into retained attribute metadata.
+/// Converts an eval array literal into retained attribute metadata.
 fn eval_attribute_array_arg_from_elements(
     elements: &[EvalArrayElement],
 ) -> Option<EvalAttributeArg> {
@@ -3672,7 +3672,16 @@ fn eval_attribute_array_arg_from_elements(
         .iter()
         .map(|element| match element {
             EvalArrayElement::Value(value) => eval_attribute_arg_from_expr(value),
-            EvalArrayElement::KeyValue { .. } => None,
+            EvalArrayElement::KeyValue { key, value } => {
+                let value = eval_attribute_arg_from_expr(value)?;
+                match key {
+                    EvalExpr::Const(EvalConst::String(name)) => Some(EvalAttributeArg::Named {
+                        name: name.clone(),
+                        value: Box::new(value),
+                    }),
+                    _ => None,
+                }
+            }
         })
         .collect::<Option<Vec<_>>>()
         .map(EvalAttributeArg::Array)
