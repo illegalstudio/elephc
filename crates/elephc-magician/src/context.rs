@@ -2791,6 +2791,22 @@ impl ElephcEvalContext {
         });
     }
 
+    /// Pushes PHP-visible class-like member magic constants for default expressions.
+    pub fn push_class_like_member_magic_scope(
+        &mut self,
+        class_name: &str,
+        trait_name: Option<&str>,
+    ) {
+        self.magic_stack.push(EvalMagicScope {
+            function_name: String::new(),
+            method_name: String::new(),
+            class_name: class_name.trim_start_matches('\\').to_string(),
+            trait_name: trait_name
+                .map(|trait_name| trait_name.trim_start_matches('\\').to_string())
+                .unwrap_or_default(),
+        });
+    }
+
     /// Pops the current PHP-visible eval magic-constant scope.
     pub fn pop_magic_scope(&mut self) {
         self.magic_stack.pop();

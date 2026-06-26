@@ -1705,6 +1705,7 @@ pub enum EvalTraitAdaptation {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalClassConstant {
     name: String,
+    trait_origin: Option<String>,
     attributes: Vec<EvalAttribute>,
     visibility: EvalVisibility,
     is_final: bool,
@@ -1735,6 +1736,7 @@ impl EvalClassConstant {
     ) -> Self {
         Self {
             name: name.into(),
+            trait_origin: None,
             attributes: Vec::new(),
             visibility,
             is_final,
@@ -1748,9 +1750,22 @@ impl EvalClassConstant {
         self
     }
 
+    /// Returns a copy of this constant with its declaring trait retained for magic constants.
+    pub fn with_trait_origin(mut self, trait_name: impl Into<String>) -> Self {
+        if self.trait_origin.is_none() {
+            self.trait_origin = Some(trait_name.into());
+        }
+        self
+    }
+
     /// Returns the PHP-visible class constant name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns the trait that originally declared this imported constant, if any.
+    pub fn trait_origin(&self) -> Option<&str> {
+        self.trait_origin.as_deref()
     }
 
     /// Returns attributes declared directly on this class constant.
@@ -1912,6 +1927,7 @@ impl EvalTrait {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalClassProperty {
     name: String,
+    trait_origin: Option<String>,
     attributes: Vec<EvalAttribute>,
     property_type: Option<EvalParameterType>,
     visibility: EvalVisibility,
@@ -1983,6 +1999,7 @@ impl EvalClassProperty {
     ) -> Self {
         Self {
             name: name.into(),
+            trait_origin: None,
             attributes: Vec::new(),
             property_type: None,
             visibility,
@@ -2034,6 +2051,14 @@ impl EvalClassProperty {
         self
     }
 
+    /// Returns a copy of this property with its declaring trait retained for magic constants.
+    pub fn with_trait_origin(mut self, trait_name: impl Into<String>) -> Self {
+        if self.trait_origin.is_none() {
+            self.trait_origin = Some(trait_name.into());
+        }
+        self
+    }
+
     /// Returns a copy of this property with retained type metadata.
     pub fn with_type(mut self, property_type: Option<EvalParameterType>) -> Self {
         self.property_type = property_type;
@@ -2055,6 +2080,11 @@ impl EvalClassProperty {
     /// Returns the PHP-visible property name without `$`.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns the trait that originally declared this imported property, if any.
+    pub fn trait_origin(&self) -> Option<&str> {
+        self.trait_origin.as_deref()
     }
 
     /// Returns attributes declared directly on this class property.
