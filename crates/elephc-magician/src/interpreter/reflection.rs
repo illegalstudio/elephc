@@ -4224,6 +4224,77 @@ fn eval_reflection_aot_property_metadata_if_exists(
     )))
 }
 
+/// Returns generated/AOT property access metadata for an exact class/property pair.
+pub(in crate::interpreter) fn eval_reflection_aot_property_access_metadata(
+    class_name: &str,
+    property_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, EvalVisibility, EvalVisibility, bool)>, EvalStatus> {
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let Some(flags) = values.reflection_property_flags(runtime_class_name, property_name)? else {
+        return Ok(None);
+    };
+    let declaring_class = values
+        .reflection_property_declaring_class(runtime_class_name, property_name)?
+        .unwrap_or_else(|| runtime_class_name.to_string());
+    Ok(Some(eval_reflection_aot_property_access_metadata_from_flags(
+        declaring_class,
+        flags,
+    )))
+}
+
+/// Returns generated/AOT static property metadata from a class or native parent chain.
+pub(in crate::interpreter) fn eval_reflection_aot_static_property_access_metadata(
+    class_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, EvalVisibility, EvalVisibility, bool)>, EvalStatus> {
+    let mut current = class_name.trim_start_matches('\\').to_string();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if !seen.insert(current.to_ascii_lowercase()) {
+            return Ok(None);
+        }
+        if let Some(metadata) =
+            eval_reflection_aot_property_access_metadata(&current, property_name, values)?
+        {
+            return Ok(Some(metadata));
+        }
+        let Some(parent) = context.native_class_parent(&current) else {
+            return Ok(None);
+        };
+        current = parent.to_string();
+    }
+}
+
+/// Converts AOT ReflectionProperty flags into access-check metadata.
+fn eval_reflection_aot_property_access_metadata_from_flags(
+    declaring_class: String,
+    flags: u64,
+) -> (String, EvalVisibility, EvalVisibility, bool) {
+    let visibility = if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
+        EvalVisibility::Private
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED != 0 {
+        EvalVisibility::Protected
+    } else {
+        EvalVisibility::Public
+    };
+    let write_visibility = if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET != 0 {
+        EvalVisibility::Private
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET != 0 {
+        EvalVisibility::Protected
+    } else {
+        visibility
+    };
+    (
+        declaring_class,
+        visibility,
+        write_visibility,
+        flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0,
+    )
+}
+
 /// Returns registered generated/AOT property type metadata for one reflected property.
 fn eval_reflection_aot_property_type_metadata(
     runtime_class_name: &str,
