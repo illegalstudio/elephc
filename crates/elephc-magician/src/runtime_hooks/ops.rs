@@ -589,6 +589,32 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         })
     }
 
+    /// Returns generated AOT trait alias names visible for one reflected class-like symbol.
+    fn reflection_class_trait_alias_names(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_reflection_class_trait_alias_names(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+            )
+        })
+    }
+
+    /// Returns generated AOT trait alias sources visible for one reflected class-like symbol.
+    fn reflection_class_trait_alias_sources(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_reflection_class_trait_alias_sources(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+            )
+        })
+    }
+
     /// Creates a boxed Mixed object through the generated dynamic class-name wrapper.
     fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {
         let object = Self::handle(unsafe {

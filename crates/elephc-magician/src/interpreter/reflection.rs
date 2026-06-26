@@ -878,8 +878,10 @@ pub(in crate::interpreter) fn eval_reflection_class_get_trait_aliases_result(
     };
     let aliases = if context.trait_decl(&reflected_name).is_some() {
         context.trait_trait_aliases(&reflected_name)
-    } else {
+    } else if eval_reflection_class_like_exists(&reflected_name, context) {
         context.class_trait_aliases(&reflected_name)
+    } else {
+        eval_reflection_aot_class_trait_aliases(&reflected_name, values)?
     };
     eval_reflection_string_assoc_result(aliases, values).map(Some)
 }
@@ -5877,6 +5879,24 @@ fn eval_reflection_aot_class_trait_names(
     let names = eval_reflection_string_array_to_vec(names_array, values)?;
     values.release(names_array)?;
     Ok(names)
+}
+
+/// Returns generated AOT trait aliases for one reflected class-like symbol.
+fn eval_reflection_aot_class_trait_aliases(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<(String, String)>, EvalStatus> {
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let alias_names_array = values.reflection_class_trait_alias_names(runtime_class_name)?;
+    let alias_names = eval_reflection_string_array_to_vec(alias_names_array, values)?;
+    values.release(alias_names_array)?;
+    let alias_sources_array = values.reflection_class_trait_alias_sources(runtime_class_name)?;
+    let alias_sources = eval_reflection_string_array_to_vec(alias_sources_array, values)?;
+    values.release(alias_sources_array)?;
+    if alias_names.len() != alias_sources.len() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(alias_names.into_iter().zip(alias_sources).collect())
 }
 
 /// Copies a runtime string array into Rust-owned strings for reflection metadata assembly.

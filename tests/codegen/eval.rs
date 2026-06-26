@@ -12430,6 +12430,34 @@ echo count($nestedTraits) . ":" . $nestedTraits[0];');
     );
 }
 
+/// Verifies eval ReflectionClass exposes generated/AOT direct trait aliases.
+#[test]
+fn test_eval_reflection_class_get_trait_aliases_for_aot_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+trait EvalAotReflectAliasTrait {
+    public function original() {}
+}
+class EvalAotReflectAliasTarget {
+    use EvalAotReflectAliasTrait {
+        original as aliasOriginal;
+    }
+}
+eval('$aliases = (new ReflectionClass("EvalAotReflectAliasTarget"))->getTraitAliases();
+echo count($aliases) . ":" . $aliases["aliasOriginal"];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "1:EvalAotReflectAliasTrait::original"
+    );
+}
+
 /// Verifies eval ReflectionClass::implementsInterface reports class, enum, and
 /// interface metadata through the bridge.
 #[test]

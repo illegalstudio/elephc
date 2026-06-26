@@ -489,6 +489,8 @@ pub(crate) fn emit_runtime_data_user(
         &sorted_classes,
         declared_trait_uses,
     );
+    out.push_str(".p2align 3\n");
+    emit_eval_reflection_class_trait_alias_lookup_data(&mut out, &sorted_classes);
 
     // -- class-level PHP 8 attribute metadata table --
     // Per-class layout: count followed by (name_ptr, name_len) pairs.
@@ -1463,6 +1465,84 @@ fn push_eval_reflection_class_trait_row(
         escaped_ascii(trait_name)
     ));
     entries.push((class_label, class_name.len(), trait_label, trait_name.len()));
+    *index += 1;
+}
+
+/// Emits class/alias and class/source rows consumed by eval `getTraitAliases()`.
+fn emit_eval_reflection_class_trait_alias_lookup_data(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+) {
+    let mut alias_entries = Vec::new();
+    let mut source_entries = Vec::new();
+    let mut index = 0usize;
+    for (class_name, class_info) in sorted_classes {
+        for (alias, source) in &class_info.trait_aliases {
+            push_eval_reflection_class_trait_alias_row(
+                out,
+                &mut alias_entries,
+                &mut source_entries,
+                &mut index,
+                class_name,
+                alias,
+                source,
+            );
+        }
+    }
+
+    out.push_str(".p2align 3\n");
+    out.push_str(
+        ".globl _eval_reflection_class_trait_alias_count\n_eval_reflection_class_trait_alias_count:\n",
+    );
+    out.push_str(&format!("    .quad {}\n", alias_entries.len()));
+    out.push_str(".globl _eval_reflection_class_trait_aliases\n_eval_reflection_class_trait_aliases:\n");
+    for (class_label, class_len, alias_label, alias_len) in alias_entries {
+        out.push_str(&format!("    .quad {}\n", class_label));
+        out.push_str(&format!("    .quad {}\n", class_len));
+        out.push_str(&format!("    .quad {}\n", alias_label));
+        out.push_str(&format!("    .quad {}\n", alias_len));
+    }
+    out.push_str(
+        ".globl _eval_reflection_class_trait_alias_sources\n_eval_reflection_class_trait_alias_sources:\n",
+    );
+    for (class_label, class_len, source_label, source_len) in source_entries {
+        out.push_str(&format!("    .quad {}\n", class_label));
+        out.push_str(&format!("    .quad {}\n", class_len));
+        out.push_str(&format!("    .quad {}\n", source_label));
+        out.push_str(&format!("    .quad {}\n", source_len));
+    }
+}
+
+/// Adds one class/trait-alias row and its backing string labels.
+fn push_eval_reflection_class_trait_alias_row(
+    out: &mut String,
+    alias_entries: &mut Vec<(String, usize, String, usize)>,
+    source_entries: &mut Vec<(String, usize, String, usize)>,
+    index: &mut usize,
+    class_name: &str,
+    alias: &str,
+    source: &str,
+) {
+    let class_label = format!("_eval_reflection_class_trait_alias_class_{}", *index);
+    let alias_label = format!("_eval_reflection_class_trait_alias_name_{}", *index);
+    let source_label = format!("_eval_reflection_class_trait_alias_source_{}", *index);
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        class_label,
+        escaped_ascii(class_name)
+    ));
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        alias_label,
+        escaped_ascii(alias)
+    ));
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        source_label,
+        escaped_ascii(source)
+    ));
+    alias_entries.push((class_label.clone(), class_name.len(), alias_label, alias.len()));
+    source_entries.push((class_label, class_name.len(), source_label, source.len()));
     *index += 1;
 }
 
