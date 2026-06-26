@@ -142,6 +142,41 @@ fn parse_fragment_accepts_dynamic_static_metadata_receiver() {
     );
 }
 
+/// Verifies runtime-valued static receivers support property writes.
+#[test]
+fn parse_fragment_accepts_dynamic_static_property_assignment() {
+    let program = parse_fragment(br#"$class::$count = 2;"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::DynamicStaticPropertySet {
+            class_name: EvalExpr::LoadVar("class".to_string()),
+            property: "count".to_string(),
+            value: EvalExpr::Const(EvalConst::Int(2)),
+        }]
+    );
+}
+
+/// Verifies dynamic static property compound assignments lower to read-modify-write EvalIR.
+#[test]
+fn parse_fragment_accepts_dynamic_static_property_compound_assignment() {
+    let program = parse_fragment(br#"$class::$count += 2;"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::DynamicStaticPropertySet {
+            class_name: EvalExpr::LoadVar("class".to_string()),
+            property: "count".to_string(),
+            value: EvalExpr::Binary {
+                op: EvalBinOp::Add,
+                left: Box::new(EvalExpr::DynamicStaticPropertyGet {
+                    class_name: Box::new(EvalExpr::LoadVar("class".to_string())),
+                    property: "count".to_string(),
+                }),
+                right: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+            },
+        }]
+    );
+}
+
 /// Verifies static property compound assignments lower to one read-modify-write statement.
 #[test]
 fn parse_fragment_accepts_static_property_compound_assignment() {

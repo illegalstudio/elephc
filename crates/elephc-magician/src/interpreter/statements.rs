@@ -200,6 +200,17 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_static_property_set_result(class_name, property, value, context, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::DynamicStaticPropertySet {
+            class_name,
+            property,
+            value,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let value = eval_expr(value, context, scope, values)?;
+            eval_static_property_set_result(&class_name, property, value, context, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::StoreVar { name, value } => {
             let value = eval_expr(value, context, scope, values)?;
             for replaced in set_scope_cell(

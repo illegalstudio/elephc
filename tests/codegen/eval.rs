@@ -9293,6 +9293,41 @@ echo $aotClass::KIND;');
     );
 }
 
+/// Verifies eval dynamic static receivers write eval-declared and AOT static properties.
+#[test]
+fn test_eval_dynamic_static_receiver_property_writes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotDynamicStaticWrite {
+    public static $value = "aot";
+    public static $count = 10;
+}
+eval('class EvalDynamicStaticWrite {
+    public static $value = "start";
+    public static $count = 1;
+}
+$evalClass = "EvalDynamicStaticWrite";
+$evalClass::$value = "set";
+$evalClass::$value .= ":tail";
+$evalClass::$count += 4;
+echo EvalDynamicStaticWrite::$value; echo "|";
+echo $evalClass::$count; echo "|";
+$aotClass = "EvalAotDynamicStaticWrite";
+$aotClass::$value = "A";
+$aotClass::$value .= "B";
+$aotClass::$count += 5;
+echo EvalAotDynamicStaticWrite::$value; echo "|";
+echo $aotClass::$count;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "set:tail|5|AB|15");
+}
+
 /// Verifies eval invokable objects dispatch through variable and callback call paths.
 #[test]
 fn test_eval_declared_invokable_object_dynamic_callables() {

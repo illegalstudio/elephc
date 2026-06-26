@@ -137,6 +137,9 @@ impl Parser {
             {
                 self.parse_static_property_set_stmt(true)
             }
+            TokenKind::DollarIdent(_) if self.current_starts_dynamic_static_property_assignment() => {
+                self.parse_dynamic_static_property_set_stmt(true)
+            }
             TokenKind::PlusPlus | TokenKind::MinusMinus => self.parse_prefix_inc_dec_stmt(true),
             TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
                 self.parse_property_stmt(true)
@@ -271,6 +274,17 @@ impl Parser {
         self.tokens
             .get(pos)
             .is_some_and(|token| assignment_op(token).is_some())
+    }
+
+    /// Returns true when the current tokens form `$class::$property <assign-op>`.
+    pub(super) fn current_starts_dynamic_static_property_assignment(&self) -> bool {
+        matches!(self.current(), TokenKind::DollarIdent(_))
+            && matches!(self.peek(), TokenKind::DoubleColon)
+            && matches!(self.tokens.get(self.pos + 2), Some(TokenKind::DollarIdent(_)))
+            && self
+                .tokens
+                .get(self.pos + 3)
+                .is_some_and(|token| assignment_op(token).is_some())
     }
 
     /// Parses `do { ... } while (expr);`.
@@ -2518,6 +2532,48 @@ impl Parser {
         }])
     }
 
+    /// Parses `$class::$property = expr` and compound assignments with a dynamic receiver.
+    pub(super) fn parse_dynamic_static_property_set_stmt(
+        &mut self,
+        require_semicolon: bool,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let TokenKind::DollarIdent(class_name) = self.current() else {
+            return Err(EvalParseError::ExpectedVariable);
+        };
+        let class_name = EvalExpr::LoadVar(class_name.clone());
+        self.advance();
+        self.expect(TokenKind::DoubleColon)?;
+        let TokenKind::DollarIdent(property) = self.current() else {
+            return Err(EvalParseError::ExpectedVariable);
+        };
+        let property = property.clone();
+        self.advance();
+        let Some(op) = assignment_op(self.current()) else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        self.advance();
+        let value = self.parse_expr()?;
+        if require_semicolon {
+            self.expect_semicolon()?;
+        }
+        let value = match op {
+            Some(op) => EvalExpr::Binary {
+                op,
+                left: Box::new(EvalExpr::DynamicStaticPropertyGet {
+                    class_name: Box::new(class_name.clone()),
+                    property: property.clone(),
+                }),
+                right: Box::new(value),
+            },
+            None => value,
+        };
+        Ok(vec![EvalStmt::DynamicStaticPropertySet {
+            class_name,
+            property,
+            value,
+        }])
+    }
+
     /// Parses prefix `++$name` and `--$name` as simple statement effects.
     pub(super) fn parse_prefix_inc_dec_stmt(
         &mut self,
@@ -3048,6 +3104,12 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
         } => {
             eval_is_this_property(object, property, property_name)
                 || eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::DynamicStaticPropertySet {
+            class_name, value, ..
+        } => {
+            eval_expr_uses_this_property(class_name, property_name)
                 || eval_expr_uses_this_property(value, property_name)
         }
         EvalStmt::StaticPropertySet { value, .. } | EvalStmt::StoreVar { value, .. } => {

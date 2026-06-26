@@ -440,7 +440,7 @@ fn eval_new_object_class_name(
 }
 
 /// Resolves a runtime class-name value used by dynamic class operations.
-fn eval_dynamic_class_name(
+pub(in crate::interpreter) fn eval_dynamic_class_name(
     class_name: RuntimeCellHandle,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
