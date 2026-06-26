@@ -14663,55 +14663,70 @@ class EvalTraitConstBadBox {
     );
 }
 
-/// Verifies eval rejects private member access from outside the declaring class.
+/// Verifies eval throws Error for private member access from outside the declaring class.
 #[test]
-fn test_eval_declared_private_member_access_fails() {
-    let err = compile_and_run_expect_failure(
+fn test_eval_declared_private_member_access_throws_error() {
+    let out = compile_and_run(
         r#"<?php
 eval('class EvalPrivateAccessBox {
     private int $secret = 4;
 }
 $box = new EvalPrivateAccessBox();
-echo $box->secret;');
+try {
+    echo $box->secret;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    assert_eq!(
+        out,
+        "Error:Cannot access private property EvalPrivateAccessBox::$secret"
     );
 }
 
-/// Verifies eval rejects protected class constant access from outside the declaring class.
+/// Verifies eval throws Error for protected class constant access from outside the declaring class.
 #[test]
-fn test_eval_declared_protected_class_constant_access_fails() {
-    let err = compile_and_run_expect_failure(
+fn test_eval_declared_protected_class_constant_access_throws_error() {
+    let out = compile_and_run(
         r#"<?php
 eval('class EvalProtectedConstAccessBox {
     protected const SECRET = 4;
 }
-echo EvalProtectedConstAccessBox::SECRET;');
+try {
+    echo EvalProtectedConstAccessBox::SECRET;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    assert_eq!(
+        out,
+        "Error:Cannot access protected constant EvalProtectedConstAccessBox::SECRET"
     );
 }
 
-/// Verifies eval rejects private static member access from outside the declaring class.
+/// Verifies eval throws Error for private static member access from outside the declaring class.
 #[test]
-fn test_eval_declared_private_static_member_access_fails() {
-    let err = compile_and_run_expect_failure(
+fn test_eval_declared_private_static_member_access_throws_error() {
+    let out = compile_and_run(
         r#"<?php
 eval('class EvalPrivateStaticAccessBox {
     private static int $secret = 4;
 }
-echo EvalPrivateStaticAccessBox::$secret;');
+try {
+    echo EvalPrivateStaticAccessBox::$secret;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    assert_eq!(
+        out,
+        "Error:Cannot access private property EvalPrivateStaticAccessBox::$secret"
     );
 }
 

@@ -2914,7 +2914,13 @@ pub(in crate::interpreter) fn eval_property_get_result(
             {
                 return Ok(result);
             }
-            return Err(EvalStatus::RuntimeFatal);
+            return eval_throw_property_access_error(
+                &declaring_class,
+                property.name(),
+                property.visibility(),
+                context,
+                values,
+            );
         }
         storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
         if property.has_get_hook()
@@ -2999,9 +3005,23 @@ pub(in crate::interpreter) fn eval_property_set_result(
             )? {
                 return Ok(());
             }
-            return Err(EvalStatus::RuntimeFatal);
+            return eval_throw_property_access_error(
+                &declaring_class,
+                property.name(),
+                property.visibility(),
+                context,
+                values,
+            );
         }
-        validate_eval_property_write_access(&declaring_class, &property, context)?;
+        if validate_eval_property_write_access(&declaring_class, &property, context).is_err() {
+            return eval_throw_property_access_error(
+                &declaring_class,
+                property.name(),
+                property.write_visibility(),
+                context,
+                values,
+            );
+        }
         validate_eval_readonly_property_write(&declaring_class, &property, context)?;
         storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
         if property.has_set_hook() {
@@ -3530,6 +3550,46 @@ fn validate_eval_property_write_access(
     validate_eval_member_access(declaring_class, property.write_visibility(), context)
 }
 
+/// Throws PHP's inaccessible property error for eval-declared properties.
+fn eval_throw_property_access_error<T>(
+    declaring_class: &str,
+    property_name: &str,
+    visibility: EvalVisibility,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Cannot access {} property {}::${}",
+            eval_visibility_label(visibility),
+            declaring_class.trim_start_matches('\\'),
+            property_name
+        ),
+        context,
+        values,
+    )
+}
+
+/// Throws PHP's inaccessible constant error for eval-declared class constants.
+fn eval_throw_constant_access_error<T>(
+    declaring_class: &str,
+    constant_name: &str,
+    visibility: EvalVisibility,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Cannot access {} constant {}::{}",
+            eval_visibility_label(visibility),
+            declaring_class.trim_start_matches('\\'),
+            constant_name
+        ),
+        context,
+        values,
+    )
+}
+
 /// Reads one eval-declared static property after resolving the class-like receiver.
 pub(in crate::interpreter) fn eval_static_property_get_result(
     class_name: &str,
@@ -3542,7 +3602,15 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
         if !property.is_static() {
             return Err(EvalStatus::RuntimeFatal);
         }
-        validate_eval_member_access(&declaring_class, property.visibility(), context)?;
+        if validate_eval_member_access(&declaring_class, property.visibility(), context).is_err() {
+            return eval_throw_property_access_error(
+                &declaring_class,
+                property.name(),
+                property.visibility(),
+                context,
+                values,
+            );
+        }
         return context
             .static_property(&declaring_class, property.name())
             .ok_or(EvalStatus::RuntimeFatal);
@@ -3576,7 +3644,15 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
         return Ok(case);
     }
     if let Some((declaring_class, constant)) = context.class_constant(&class_name, constant_name) {
-        validate_eval_member_access(&declaring_class, constant.visibility(), context)?;
+        if validate_eval_member_access(&declaring_class, constant.visibility(), context).is_err() {
+            return eval_throw_constant_access_error(
+                &declaring_class,
+                constant.name(),
+                constant.visibility(),
+                context,
+                values,
+            );
+        }
         return context
             .class_constant_cell(&declaring_class, constant.name())
             .ok_or(EvalStatus::RuntimeFatal);
@@ -3712,7 +3788,15 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
         if !property.is_static() {
             return Err(EvalStatus::RuntimeFatal);
         }
-        validate_eval_property_write_access(&declaring_class, &property, context)?;
+        if validate_eval_property_write_access(&declaring_class, &property, context).is_err() {
+            return eval_throw_property_access_error(
+                &declaring_class,
+                property.name(),
+                property.write_visibility(),
+                context,
+                values,
+            );
+        }
         validate_eval_readonly_property_write(&declaring_class, &property, context)?;
         if let Some(replaced) = context.set_static_property(&declaring_class, property.name(), value) {
             values.release(replaced)?;
@@ -4069,11 +4153,11 @@ fn eval_throw_reflection_exception(
 }
 
 /// Creates and schedules an `Error` through eval's normal Throwable channel.
-fn eval_throw_error(
+fn eval_throw_error<T>(
     message: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+) -> Result<T, EvalStatus> {
     let exception = values.new_object("Error")?;
     let message = values.string(message)?;
     let code = values.int(0)?;
@@ -6064,7 +6148,7 @@ pub(in crate::interpreter) fn eval_native_constructor_with_evaluated_args(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if let Some(message) = eval_native_constructor_access_error(class_name, context, values)? {
-        return eval_throw_error(&message, context, values).map(|_| ());
+        return eval_throw_error(&message, context, values);
     }
     let signature = context.native_constructor_signature(class_name);
     let bound_args = bind_native_callable_bound_args(

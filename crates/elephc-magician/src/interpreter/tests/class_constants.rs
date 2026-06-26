@@ -46,21 +46,32 @@ return EvalConstChild::hidden();"#,
     assert_eq!(values.get(result), FakeValue::Int(5));
 }
 
-/// Verifies protected class constants are not readable from global eval scope.
+/// Verifies protected class constant access from global eval scope throws Error.
 #[test]
-fn execute_program_rejects_protected_eval_class_constant_from_global_scope() {
+fn execute_program_protected_eval_class_constant_from_global_scope_throws_error() {
     let program = parse_fragment(
         br#"class EvalConstProtected {
     protected const SECRET = 4;
 }
-return EvalConstProtected::SECRET;"#,
+try {
+    echo EvalConstProtected::SECRET;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+return true;"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    execute_program(&program, &mut scope, &mut values)
-        .expect_err("global protected class constant access should fail");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Error:Cannot access protected constant EvalConstProtected::SECRET"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies duplicate class constants in one eval class are rejected.
