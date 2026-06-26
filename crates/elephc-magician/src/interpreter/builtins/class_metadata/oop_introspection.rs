@@ -18,7 +18,6 @@ use super::{eval_class_metadata_name, eval_class_relation_name_exists};
 use std::collections::HashSet;
 
 const EVAL_CLASS_METADATA_FLAG_STATIC: u64 = 1;
-const EVAL_CLASS_METADATA_FLAG_PUBLIC: u64 = 2;
 const EVAL_CLASS_METADATA_FLAG_PROTECTED: u64 = 4;
 const EVAL_CLASS_METADATA_FLAG_PRIVATE: u64 = 8;
 
@@ -360,15 +359,19 @@ fn eval_class_method_names_for_scope(
 ) -> Result<Vec<String>, EvalStatus> {
     if context.has_class(class_name) || context.has_enum(class_name) {
         let mut names = Vec::new();
+        let mut seen = HashSet::new();
         for name in context.class_method_names(class_name) {
             let Some((declaring_class, method)) = context.class_method(class_name, &name) else {
-                names.push(name);
+                eval_push_unique_method_name(&mut names, &mut seen, name);
                 continue;
             };
             if validate_eval_member_access(&declaring_class, method.visibility(), context).is_ok() {
-                names.push(name);
+                eval_push_unique_method_name(&mut names, &mut seen, name);
             }
         }
+        eval_add_current_scope_private_method_names(
+            &mut names, &mut seen, class_name, context, values,
+        )?;
         return Ok(names);
     }
     if context.has_interface(class_name) {
@@ -385,25 +388,149 @@ fn eval_class_method_names_for_scope(
     let method_names = values.reflection_method_names(class_name)?;
     let names = eval_runtime_string_array_to_vec(method_names, values)?;
     values.release(method_names)?;
-    eval_public_runtime_method_names(class_name, names, values)
+    let mut names = eval_visible_runtime_method_names(class_name, names, context, values)?;
+    let mut seen = names
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    eval_add_current_scope_private_method_names(&mut names, &mut seen, class_name, context, values)?;
+    Ok(names)
 }
 
-/// Filters generated runtime methods to the public surface visible to eval.
-fn eval_public_runtime_method_names(
+/// Filters generated runtime methods to the surface visible from the current eval scope.
+fn eval_visible_runtime_method_names(
     class_name: &str,
     names: Vec<String>,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<String>, EvalStatus> {
     let mut result = Vec::new();
     for name in names {
-        if values
-            .reflection_method_flags(class_name, &name)?
-            .is_some_and(|flags| flags & EVAL_CLASS_METADATA_FLAG_PUBLIC != 0)
-        {
+        let Some((declaring_class, visibility)) =
+            eval_runtime_method_access_metadata(class_name, &name, values)?
+        else {
+            continue;
+        };
+        if validate_eval_member_access(&declaring_class, visibility, context).is_ok() {
             result.push(name);
         }
     }
     Ok(result)
+}
+
+/// Adds private methods declared by the current eval scope when PHP would expose them.
+fn eval_add_current_scope_private_method_names(
+    names: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(current_class) = context.current_class_scope() else {
+        return Ok(());
+    };
+    if !eval_class_metadata_is_a(class_name, current_class, context) {
+        return Ok(());
+    }
+    if let Some(class) = context.class(current_class) {
+        for method in class.methods() {
+            if method.visibility() == EvalVisibility::Private {
+                eval_push_unique_method_name(names, seen, method.name().to_string());
+            }
+        }
+        return Ok(());
+    }
+    if context.has_interface(current_class) || context.has_trait(current_class) {
+        return Ok(());
+    }
+    if !eval_class_relation_name_exists(current_class, context, values)? {
+        return Ok(());
+    }
+    let method_names = values.reflection_method_names(current_class)?;
+    let current_names = eval_runtime_string_array_to_vec(method_names, values)?;
+    values.release(method_names)?;
+    for name in current_names {
+        let Some((declaring_class, visibility)) =
+            eval_runtime_method_access_metadata(current_class, &name, values)?
+        else {
+            continue;
+        };
+        if visibility == EvalVisibility::Private
+            && eval_same_class_metadata_name(&declaring_class, current_class)
+        {
+            eval_push_unique_method_name(names, seen, name);
+        }
+    }
+    Ok(())
+}
+
+/// Returns whether one eval or generated/AOT class name is the same as or extends another.
+fn eval_class_metadata_is_a(
+    class_name: &str,
+    target: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    eval_same_class_metadata_name(class_name, target)
+        || context.class_is_a(class_name, target, false)
+        || eval_native_class_metadata_is_a(class_name, target, context)
+}
+
+/// Returns whether generated/AOT parent metadata proves one class extends another.
+fn eval_native_class_metadata_is_a(
+    class_name: &str,
+    target: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    let target = target.trim_start_matches('\\');
+    let mut current = class_name.trim_start_matches('\\').to_string();
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(current.to_ascii_lowercase()) {
+            return false;
+        }
+        if eval_same_class_metadata_name(&current, target) {
+            return true;
+        }
+        let Some(parent) = context.native_class_parent(&current) else {
+            return false;
+        };
+        current = parent.to_string();
+    }
+}
+
+/// Returns whether two PHP class names refer to the same normalized metadata name.
+fn eval_same_class_metadata_name(left: &str, right: &str) -> bool {
+    left.trim_start_matches('\\')
+        .eq_ignore_ascii_case(right.trim_start_matches('\\'))
+}
+
+/// Appends one method name while preserving PHP's case-insensitive uniqueness rule.
+fn eval_push_unique_method_name(
+    names: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    name: String,
+) {
+    if seen.insert(name.to_ascii_lowercase()) {
+        names.push(name);
+    }
+}
+
+/// Returns access metadata for one generated/AOT method name, if reflection exposes it.
+fn eval_runtime_method_access_metadata(
+    class_name: &str,
+    method_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, EvalVisibility)>, EvalStatus> {
+    let Some(flags) = values.reflection_method_flags(class_name, method_name)? else {
+        return Ok(None);
+    };
+    let declaring_class = values
+        .reflection_method_declaring_class(class_name, method_name)?
+        .unwrap_or_else(|| class_name.to_string());
+    Ok(Some((
+        declaring_class,
+        eval_runtime_member_visibility(flags),
+    )))
 }
 
 /// Builds `get_class_vars()` for an eval-declared class or enum.
@@ -697,13 +824,13 @@ fn eval_runtime_property_access_metadata(
         .unwrap_or_else(|| class_name.to_string());
     Ok(Some((
         declaring_class,
-        eval_runtime_property_visibility(flags),
+        eval_runtime_member_visibility(flags),
         flags & EVAL_CLASS_METADATA_FLAG_STATIC != 0,
     )))
 }
 
-/// Converts generated/AOT reflection property flags into eval visibility metadata.
-fn eval_runtime_property_visibility(flags: u64) -> EvalVisibility {
+/// Converts generated/AOT reflection member flags into eval visibility metadata.
+fn eval_runtime_member_visibility(flags: u64) -> EvalVisibility {
     if flags & EVAL_CLASS_METADATA_FLAG_PRIVATE != 0 {
         EvalVisibility::Private
     } else if flags & EVAL_CLASS_METADATA_FLAG_PROTECTED != 0 {

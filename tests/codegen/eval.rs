@@ -8966,6 +8966,97 @@ echo property_exists($object, "childSecret") ? "objectChildPrivateProperty" : "b
     );
 }
 
+/// Verifies eval `get_class_methods()` follows PHP scope visibility for eval-declared metadata.
+#[test]
+fn test_eval_get_class_methods_exposes_declared_methods_by_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalClassMethodsBase {
+    private function basePrivate() {}
+    protected function baseProtected() {}
+    public function basePublic() {}
+    public function parentView() {
+        $methods = get_class_methods(EvalClassMethodsChild::class);
+        sort($methods);
+        echo implode(",", $methods);
+    }
+}
+class EvalClassMethodsChild extends EvalClassMethodsBase {
+    private function childPrivate() {}
+    protected static function childProtectedStatic() {}
+    public function childPublic() {}
+    public function childView() {
+        $methods = get_class_methods($this);
+        sort($methods);
+        echo implode(",", $methods);
+    }
+}
+$outside = get_class_methods("EvalClassMethodsChild");
+sort($outside);
+echo implode(",", $outside);
+echo ":";
+(new EvalClassMethodsChild())->childView();
+echo ":";
+(new EvalClassMethodsChild())->parentView();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "basePublic,childPublic,childView,parentView:baseProtected,basePublic,childPrivate,childProtectedStatic,childPublic,childView,parentView:basePrivate,baseProtected,basePublic,childProtectedStatic,childPublic,childView,parentView"
+    );
+}
+
+/// Verifies eval `get_class_methods()` follows PHP scope visibility for generated/AOT metadata.
+#[test]
+fn test_eval_get_class_methods_exposes_aot_methods_by_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotClassMethodsBase {
+    private function basePrivate() {}
+    protected function baseProtected() {}
+    public function basePublic() {}
+    public static function baseStaticPublic() {}
+    public function parentView() {
+        return eval('$methods = get_class_methods(EvalAotClassMethodsChild::class);
+sort($methods);
+echo implode(",", $methods);');
+    }
+}
+class EvalAotClassMethodsChild extends EvalAotClassMethodsBase {
+    private function childPrivate() {}
+    protected static function childProtectedStatic() {}
+    public function childPublic() {}
+    public function childView() {
+        return eval('$methods = get_class_methods($this);
+sort($methods);
+echo implode(",", $methods);');
+    }
+}
+eval('$outside = get_class_methods("EvalAotClassMethodsChild");
+sort($outside);
+echo implode(",", $outside);
+echo ":";');
+(new EvalAotClassMethodsChild())->childView();
+echo ":";
+(new EvalAotClassMethodsChild())->parentView();
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "basepublic,basestaticpublic,childpublic,childview,parentview:baseprotected,basepublic,basestaticpublic,childprivate,childprotectedstatic,childpublic,childview,parentview:baseprivate,baseprotected,basepublic,basestaticpublic,childprotectedstatic,childpublic,childview,parentview"
+    );
+}
+
 /// Verifies eval `get_object_vars()` skips uninitialized typed properties like PHP.
 #[test]
 fn test_eval_get_object_vars_skips_uninitialized_declared_properties() {
