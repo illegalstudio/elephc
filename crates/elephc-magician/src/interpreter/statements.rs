@@ -677,17 +677,27 @@ fn eval_dynamic_destructor_for_release(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    eval_dynamic_destructor_for_object_cell(identity, object, context, values).map(|_| ())
+}
+
+/// Calls a dynamic eval `__destruct()` hook for an already-boxed object cell.
+pub(crate) fn eval_dynamic_destructor_for_object_cell(
+    identity: u64,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
     let Some(class_name) = context
         .dynamic_object_class(identity)
         .map(|class| class.name().to_string())
     else {
-        return Ok(());
+        return Ok(false);
     };
     let Some((declaring_class, method)) = context.class_method(&class_name, "__destruct") else {
-        return Ok(());
+        return Ok(true);
     };
     if !context.begin_dynamic_object_destructor(identity) {
-        return Ok(());
+        return Ok(true);
     }
     let result = eval_dynamic_method_with_values(
         &declaring_class,
@@ -703,7 +713,7 @@ fn eval_dynamic_destructor_for_release(
         Err(status) => Err(status),
     };
     context.finish_dynamic_object_destructor(identity);
-    release_result
+    release_result.map(|_| true)
 }
 
 /// Executes `unset($object[$key])` through `ArrayAccess::offsetUnset()`.

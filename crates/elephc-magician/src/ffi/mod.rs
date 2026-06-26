@@ -10,6 +10,7 @@
 //! - Helper routines stay private to the FFI layer unless shared across families.
 
 pub mod context;
+pub(crate) mod dynamic_destructors;
 pub mod execute;
 #[cfg(not(test))]
 pub mod function_calls;

@@ -13,6 +13,8 @@
 use super::util::abi_name_to_string;
 use crate::abi::{ElephcEvalContext, ElephcEvalScope, ABI_VERSION};
 use crate::errors::EvalStatus;
+#[cfg(not(test))]
+use crate::ffi::dynamic_destructors::install_dynamic_object_destructor_hook;
 
 /// Returns the ABI version expected by generated elephc eval call sites.
 #[no_mangle]
@@ -23,6 +25,8 @@ pub extern "C" fn __elephc_eval_abi_version() -> u32 {
 /// Allocates a process-level eval context handle for generated code.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
+    #[cfg(not(test))]
+    install_dynamic_object_destructor_hook();
     Box::into_raw(Box::new(ElephcEvalContext::new()))
 }
 
@@ -34,6 +38,9 @@ pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext) {
     if !ctx.is_null() {
+        if let Some(context) = unsafe { ctx.as_ref() } {
+            context.unregister_dynamic_object_context();
+        }
         drop(Box::from_raw(ctx));
     }
 }

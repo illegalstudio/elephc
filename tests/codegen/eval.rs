@@ -15976,6 +15976,25 @@ echo "after";');
     assert_eq!(out, "drop:A:drop:B:after");
 }
 
+/// Verifies eval-declared object destructors run when objects escape eval and native code releases them.
+#[test]
+fn test_eval_dynamic_object_runs_destructor_after_native_release() {
+    let out = compile_and_run(
+        r#"<?php
+$box = eval('class EvalDestructEscapedBox {
+    public string $name;
+    public function __construct($name) { $this->name = $name; }
+    public function __destruct() { echo "drop:" . $this->name . ":"; }
+}
+return new EvalDestructEscapedBox("A");');
+echo "before:";
+unset($box);
+echo "after";
+"#,
+    );
+    assert_eq!(out, "before:drop:A:after");
+}
+
 /// Verifies eval `clone` shallow-copies ordinary emitted AOT objects.
 #[test]
 fn test_eval_clone_aot_object_expression() {

@@ -71,6 +71,8 @@ use return_values::*;
 pub use runtime_ops::RuntimeValueOps;
 use runtime_ops::*;
 use scope_cells::*;
+#[cfg(not(test))]
+pub(crate) use statements::eval_dynamic_destructor_for_object_cell;
 use statements::*;
 use throwables::*;
 use std::ffi::{CStr, CString};

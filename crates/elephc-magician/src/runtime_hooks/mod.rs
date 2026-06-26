@@ -26,7 +26,8 @@ use crate::abi::ElephcEvalContext;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 #[cfg(not(test))]
 use externs::{
-    __elephc_eval_value_array_new, __elephc_eval_value_array_set, __elephc_eval_value_int,
+    __elephc_eval_install_dynamic_object_destructor_hook, __elephc_eval_value_array_new,
+    __elephc_eval_value_array_set, __elephc_eval_value_int, __elephc_eval_value_object_from_raw,
 };
 
 /// Runtime hook adapter that produces and consumes boxed elephc Mixed cells.
@@ -50,12 +51,19 @@ impl ElephcRuntimeOps {
     }
 
     /// Converts a runtime wrapper result into an interpreter handle.
-    fn handle(ptr: *mut RuntimeCell) -> Result<RuntimeCellHandle, EvalStatus> {
+    pub(crate) fn handle(ptr: *mut RuntimeCell) -> Result<RuntimeCellHandle, EvalStatus> {
         if ptr.is_null() {
             Err(EvalStatus::RuntimeFatal)
         } else {
             Ok(RuntimeCellHandle::from_raw(ptr))
         }
+    }
+
+    /// Boxes one borrowed raw object payload for eval `$this` dispatch.
+    pub(crate) fn object_from_raw(
+        object: *mut RuntimeCell,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_object_from_raw(object) })
     }
 
     /// Packs source-order argument cells into the boxed eval array ABI.
@@ -80,5 +88,13 @@ impl ElephcRuntimeOps {
             return (std::ptr::null(), 0);
         };
         (class_scope.as_ptr(), class_scope.len() as u64)
+    }
+}
+
+/// Installs the eval dynamic object destructor callback into runtime data.
+#[cfg(not(test))]
+pub(crate) unsafe fn install_dynamic_object_destructor_hook(callback: usize) {
+    unsafe {
+        __elephc_eval_install_dynamic_object_destructor_hook(callback);
     }
 }

@@ -99,6 +99,10 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_object_clone_shallow(
         object: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    /// Returns a boxed Mixed object cell for a borrowed raw object payload.
+    pub(super) fn __elephc_eval_value_object_from_raw(
+        object: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_object_property_len(object: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_object_property_iter_key(
         object: *mut RuntimeCell,
@@ -325,4 +329,6 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_final_object_identity(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_release(value: *mut RuntimeCell);
     pub(super) fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Installs the optional eval dynamic object destructor callback.
+    pub(super) fn __elephc_eval_install_dynamic_object_destructor_hook(callback: usize);
 }

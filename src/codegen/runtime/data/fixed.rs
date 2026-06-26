@@ -38,6 +38,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".comm _fiber_main_saved_sp, 8, 3\n");
     out.push_str(".comm _fiber_main_saved_exc, 8, 3\n");
     out.push_str(".comm _fiber_main_saved_call_frame, 8, 3\n");
+    out.push_str(".comm _elephc_eval_dynamic_object_destruct_fn, 8, 3\n");
     out.push_str(".comm _rt_diag_suppression, 8, 3\n");
     out.push_str(&format!(".comm _heap_buf, {}, 3\n", heap_size));
     out.push_str(".comm _heap_off, 8, 3\n");

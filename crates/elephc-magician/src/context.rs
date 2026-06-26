@@ -966,10 +966,30 @@ impl ElephcEvalContext {
             .unwrap_or_else(|| class_name.to_string());
         self.dynamic_objects
             .insert(identity, normalize_class_name(&class_name));
+        crate::ffi::dynamic_destructors::register_dynamic_object_context(identity, self as *mut Self);
         self.dynamic_destructing_objects.remove(&identity);
         self.dynamic_destructed_objects.remove(&identity);
         self.dynamic_initialized_properties
             .retain(|(object, _)| *object != identity);
+    }
+
+    /// Removes one dynamic object identity and all per-object eval metadata.
+    pub fn forget_dynamic_object(&mut self, identity: u64) {
+        self.dynamic_objects.remove(&identity);
+        self.dynamic_destructing_objects.remove(&identity);
+        self.dynamic_destructed_objects.remove(&identity);
+        self.dynamic_property_aliases
+            .retain(|(object, _), _| *object != identity);
+        self.dynamic_initialized_properties
+            .retain(|(object, _)| *object != identity);
+        crate::ffi::dynamic_destructors::unregister_dynamic_object(identity);
+    }
+
+    /// Removes this context from the process-local dynamic object destructor registry.
+    pub fn unregister_dynamic_object_context(&self) {
+        crate::ffi::dynamic_destructors::unregister_dynamic_objects_for_context(
+            self as *const Self as *mut Self,
+        );
     }
 
     /// Returns the dynamic eval class metadata associated with one object identity.

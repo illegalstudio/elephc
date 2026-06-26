@@ -1260,6 +1260,7 @@ fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
     matches!(
         php_symbol_key(name.trim_start_matches('\\')).as_str(),
         "array_column"
+            | "eval"
             | "array_fill"
             | "array_fill_keys"
             | "explode"
