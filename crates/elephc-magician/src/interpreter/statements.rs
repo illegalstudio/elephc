@@ -6630,17 +6630,59 @@ pub(in crate::interpreter) fn eval_native_method_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if let Some((declaring_class, visibility)) =
-        eval_native_method_access_error(class_name, method_name, context, values)?
-    {
-        return eval_throw_method_access_error(
-            &declaring_class,
+    let metadata =
+        eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?;
+    if let Some((declaring_class, visibility, _, is_abstract)) = metadata {
+        if !is_abstract
+            && validate_eval_member_access(&declaring_class, visibility, context).is_err()
+        {
+            if eval_native_instance_magic_method_available(class_name, context, values)? {
+                return eval_native_magic_instance_method_call(
+                    object,
+                    class_name,
+                    method_name,
+                    evaluated_args,
+                    context,
+                    values,
+                );
+            }
+            return eval_throw_method_access_error(
+                &declaring_class,
+                method_name,
+                visibility,
+                context,
+                values,
+            );
+        }
+    } else if eval_native_instance_magic_method_available(class_name, context, values)? {
+        return eval_native_magic_instance_method_call(
+            object,
+            class_name,
             method_name,
-            visibility,
+            evaluated_args,
             context,
             values,
         );
     }
+    eval_native_method_with_evaluated_args_unchecked(
+        object,
+        class_name,
+        method_name,
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Calls one generated/AOT instance method without enforcing member visibility.
+fn eval_native_method_with_evaluated_args_unchecked(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let signature = context.native_method_signature(class_name, method_name);
     let bound_args = bind_native_callable_bound_args(
         signature,
@@ -6664,17 +6706,56 @@ pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if let Some((declaring_class, visibility)) =
-        eval_native_method_access_error(class_name, method_name, context, values)?
-    {
-        return eval_throw_method_access_error(
-            &declaring_class,
+    let metadata =
+        eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?;
+    if let Some((declaring_class, visibility, is_static, is_abstract)) = metadata {
+        if is_static
+            && !is_abstract
+            && validate_eval_member_access(&declaring_class, visibility, context).is_err()
+        {
+            if eval_native_static_magic_method_available(class_name, context, values)? {
+                return eval_native_magic_static_method_call(
+                    class_name,
+                    method_name,
+                    evaluated_args,
+                    context,
+                    values,
+                );
+            }
+            return eval_throw_method_access_error(
+                &declaring_class,
+                method_name,
+                visibility,
+                context,
+                values,
+            );
+        }
+    } else if eval_native_static_magic_method_available(class_name, context, values)? {
+        return eval_native_magic_static_method_call(
+            class_name,
             method_name,
-            visibility,
+            evaluated_args,
             context,
             values,
         );
     }
+    eval_native_static_method_with_evaluated_args_unchecked(
+        class_name,
+        method_name,
+        evaluated_args,
+        context,
+        values,
+    )
+}
+
+/// Calls one generated/AOT static method without enforcing member visibility.
+fn eval_native_static_method_with_evaluated_args_unchecked(
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let signature = context.native_static_method_signature(class_name, method_name);
     let bound_args = bind_native_callable_bound_args(
         signature,
@@ -6691,25 +6772,69 @@ pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args(
     }
 }
 
-/// Returns generated/AOT method access metadata when current eval scope cannot call it.
-fn eval_native_method_access_error(
+/// Returns whether a generated/AOT class has an instance `__call()` fallback.
+fn eval_native_instance_magic_method_available(
     class_name: &str,
-    method_name: &str,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<(String, EvalVisibility)>, EvalStatus> {
-    let Some((declaring_class, visibility, _, is_abstract)) =
-        eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?
-    else {
-        return Ok(None);
-    };
-    if is_abstract {
-        return Ok(None);
-    }
-    if validate_eval_member_access(&declaring_class, visibility, context).is_ok() {
-        return Ok(None);
-    }
-    Ok(Some((declaring_class, visibility)))
+) -> Result<bool, EvalStatus> {
+    Ok(eval_aot_method_dispatch_metadata_in_hierarchy(class_name, "__call", context, values)?
+        .is_some_and(|(_, _, is_static, is_abstract)| !is_static && !is_abstract))
+}
+
+/// Returns whether a generated/AOT class has a static `__callStatic()` fallback.
+fn eval_native_static_magic_method_available(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(
+        eval_aot_method_dispatch_metadata_in_hierarchy(
+            class_name,
+            "__callStatic",
+            context,
+            values,
+        )?
+        .is_some_and(|(_, _, is_static, is_abstract)| is_static && !is_abstract),
+    )
+}
+
+/// Dispatches a missing or inaccessible generated/AOT instance method through `__call()`.
+fn eval_native_magic_instance_method_call(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
+    eval_native_method_with_evaluated_args_unchecked(
+        object,
+        class_name,
+        "__call",
+        magic_args,
+        context,
+        values,
+    )
+}
+
+/// Dispatches a missing or inaccessible generated/AOT static method through `__callStatic()`.
+fn eval_native_magic_static_method_call(
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
+    eval_native_static_method_with_evaluated_args_unchecked(
+        class_name,
+        "__callStatic",
+        magic_args,
+        context,
+        values,
+    )
 }
 
 /// Finds generated/AOT method metadata on a class or its native parent chain.
