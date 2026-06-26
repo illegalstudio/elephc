@@ -2153,6 +2153,8 @@ pub enum EvalVisibility {
 #[derive(Debug, Clone)]
 pub struct EvalClassMethod {
     name: String,
+    trait_origin: Option<String>,
+    trait_origin_method: Option<String>,
     source_location: Option<EvalSourceLocation>,
     attributes: Vec<EvalAttribute>,
     visibility: EvalVisibility,
@@ -2174,6 +2176,8 @@ impl PartialEq for EvalClassMethod {
     /// Compares class method metadata while ignoring retained source-location decoration.
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
+            && self.trait_origin == other.trait_origin
+            && self.trait_origin_method == other.trait_origin_method
             && self.attributes == other.attributes
             && self.visibility == other.visibility
             && self.is_static == other.is_static
@@ -2234,6 +2238,8 @@ impl EvalClassMethod {
         let parameter_is_variadic = vec![false; params.len()];
         Self {
             name: name.into(),
+            trait_origin: None,
+            trait_origin_method: None,
             source_location: None,
             attributes: Vec::new(),
             visibility,
@@ -2261,6 +2267,35 @@ impl EvalClassMethod {
     /// Returns the PHP-visible method name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns a copy of this method with its declaring trait retained for magic constants.
+    pub fn with_trait_origin(mut self, trait_name: impl Into<String>) -> Self {
+        if self.trait_origin.is_none() {
+            self.trait_origin = Some(trait_name.into());
+            self.trait_origin_method = Some(self.name.clone());
+        }
+        self
+    }
+
+    /// Returns the trait that originally declared this imported method, if any.
+    pub fn trait_origin(&self) -> Option<&str> {
+        self.trait_origin.as_deref()
+    }
+
+    /// Returns the PHP `__FUNCTION__` value for this method body.
+    pub fn magic_function_name(&self) -> &str {
+        self.trait_origin_method.as_deref().unwrap_or(&self.name)
+    }
+
+    /// Returns the PHP `__METHOD__` value for this method body.
+    pub fn magic_method_name(&self, class_name: &str) -> String {
+        let owner = self.trait_origin().unwrap_or(class_name);
+        format!(
+            "{}::{}",
+            owner.trim_start_matches('\\'),
+            self.magic_function_name()
+        )
     }
 
     /// Returns eval-fragment source-location metadata, when retained.

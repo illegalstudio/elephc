@@ -145,6 +145,54 @@ return $box->word();"#,
     assert_eq!(values.get(result), FakeValue::String("in".to_string()));
 }
 
+/// Verifies nested trait aliases preserve PHP magic constants from the declaring trait.
+#[test]
+fn execute_program_resolves_eval_trait_method_magic_constants() {
+    let program = parse_fragment(
+        br#"namespace EvalMagicTraitNs;
+trait EvalMagicInner {
+    public function report() {
+        return __NAMESPACE__ . "|" . __CLASS__ . "|" . __TRAIT__ . "|" . __METHOD__ . "|" . __FUNCTION__;
+    }
+    public static function stat() {
+        return __NAMESPACE__ . "|" . __CLASS__ . "|" . __TRAIT__ . "|" . __METHOD__ . "|" . __FUNCTION__;
+    }
+}
+trait EvalMagicOuter {
+    use EvalMagicInner {
+        report as aliasReport;
+        stat as aliasStat;
+    }
+}
+class EvalMagicBox {
+    use EvalMagicOuter;
+}
+echo (new EvalMagicBox())->aliasReport(); echo ":";
+return EvalMagicBox::aliasStat();"#,
+    )
+    .expect("parse eval trait magic fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    let expected_instance = concat!(
+        "EvalMagicTraitNs|EvalMagicTraitNs\\EvalMagicBox|",
+        "EvalMagicTraitNs\\EvalMagicInner|",
+        "EvalMagicTraitNs\\EvalMagicInner::report|report:"
+    );
+    let expected_static = concat!(
+        "EvalMagicTraitNs|EvalMagicTraitNs\\EvalMagicBox|",
+        "EvalMagicTraitNs\\EvalMagicInner|",
+        "EvalMagicTraitNs\\EvalMagicInner::stat|stat"
+    );
+
+    assert_eq!(values.output, expected_instance);
+    assert_eq!(
+        values.get(result),
+        FakeValue::String(expected_static.to_string())
+    );
+}
+
 /// Verifies trait-to-trait composition rejects missing inner traits.
 #[test]
 fn execute_program_rejects_missing_eval_trait_used_by_trait() {

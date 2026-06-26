@@ -173,10 +173,20 @@ pub(super) fn eval_magic_const(
         EvalMagicConst::File => values.string(&context.eval_file_magic()),
         EvalMagicConst::Dir => values.string(context.call_dir()),
         EvalMagicConst::Line(line) => values.int(*line),
-        EvalMagicConst::Function => values.string(context.current_function().unwrap_or("")),
-        EvalMagicConst::Method => values.string(context.current_function().unwrap_or("")),
-        EvalMagicConst::Class | EvalMagicConst::Namespace | EvalMagicConst::Trait => {
-            values.string("")
-        }
+        EvalMagicConst::Function => values.string(
+            context
+                .current_magic_function()
+                .or_else(|| context.current_function())
+                .unwrap_or(""),
+        ),
+        EvalMagicConst::Method => values.string(
+            context
+                .current_magic_method()
+                .or_else(|| context.current_function())
+                .unwrap_or(""),
+        ),
+        EvalMagicConst::Class => values.string(context.current_magic_class().unwrap_or("")),
+        EvalMagicConst::Namespace => values.string(""),
+        EvalMagicConst::Trait => values.string(context.current_magic_trait().unwrap_or("")),
     }
 }

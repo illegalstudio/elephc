@@ -36,6 +36,15 @@ pub struct ElephcEvalExecutionScope {
     called_class_stack: Vec<String>,
 }
 
+/// PHP-visible magic-constant names for the current eval execution frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EvalMagicScope {
+    function_name: String,
+    method_name: String,
+    class_name: String,
+    trait_name: String,
+}
+
 /// Caller-side storage target that can remain linked to an eval object property.
 #[derive(Clone)]
 pub enum EvalReferenceTarget {
@@ -459,6 +468,7 @@ pub struct ElephcEvalContext {
     function_stack: Vec<String>,
     class_stack: Vec<String>,
     called_class_stack: Vec<String>,
+    magic_stack: Vec<EvalMagicScope>,
     pending_throw: Option<RuntimeCellHandle>,
     spl_autoload_extensions: String,
     streams: EvalStreamResources,
@@ -521,6 +531,7 @@ impl ElephcEvalContext {
             function_stack: Vec::new(),
             class_stack: Vec::new(),
             called_class_stack: Vec::new(),
+            magic_stack: Vec::new(),
             pending_throw: None,
             spl_autoload_extensions: String::from(".inc,.php"),
             streams: EvalStreamResources::default(),
@@ -584,6 +595,7 @@ impl ElephcEvalContext {
             function_stack: Vec::new(),
             class_stack: Vec::new(),
             called_class_stack: Vec::new(),
+            magic_stack: Vec::new(),
             pending_throw: None,
             spl_autoload_extensions: String::from(".inc,.php"),
             streams: EvalStreamResources::default(),
@@ -2764,6 +2776,52 @@ impl ElephcEvalContext {
     /// Returns the current late-static-bound eval class scope, if execution is inside a method.
     pub fn current_called_class_scope(&self) -> Option<&str> {
         self.called_class_stack.last().map(String::as_str)
+    }
+
+    /// Pushes PHP-visible method magic constants for the current eval method frame.
+    pub fn push_method_magic_scope(&mut self, class_name: &str, method: &EvalClassMethod) {
+        self.magic_stack.push(EvalMagicScope {
+            function_name: method.magic_function_name().to_string(),
+            method_name: method.magic_method_name(class_name),
+            class_name: class_name.trim_start_matches('\\').to_string(),
+            trait_name: method
+                .trait_origin()
+                .map(|trait_name| trait_name.trim_start_matches('\\').to_string())
+                .unwrap_or_default(),
+        });
+    }
+
+    /// Pops the current PHP-visible eval magic-constant scope.
+    pub fn pop_magic_scope(&mut self) {
+        self.magic_stack.pop();
+    }
+
+    /// Returns the PHP `__FUNCTION__` value for the current eval frame.
+    pub fn current_magic_function(&self) -> Option<&str> {
+        self.magic_stack
+            .last()
+            .map(|scope| scope.function_name.as_str())
+    }
+
+    /// Returns the PHP `__METHOD__` value for the current eval method frame.
+    pub fn current_magic_method(&self) -> Option<&str> {
+        self.magic_stack
+            .last()
+            .map(|scope| scope.method_name.as_str())
+    }
+
+    /// Returns the PHP `__CLASS__` value for the current eval method frame.
+    pub fn current_magic_class(&self) -> Option<&str> {
+        self.magic_stack
+            .last()
+            .map(|scope| scope.class_name.as_str())
+    }
+
+    /// Returns the PHP `__TRAIT__` value for the current eval method frame.
+    pub fn current_magic_trait(&self) -> Option<&str> {
+        self.magic_stack
+            .last()
+            .map(|scope| scope.trait_name.as_str())
     }
 
     /// Captures the current eval execution stacks for later caller-context-sensitive work.

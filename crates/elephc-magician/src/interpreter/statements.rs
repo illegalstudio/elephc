@@ -2335,8 +2335,14 @@ fn append_eval_trait_methods(
         if class_method_names.contains(&key) {
             continue;
         }
-        let method =
-            apply_trait_visibility_adaptations(trait_decl.name(), method, trait_adaptations);
+        let method = method
+            .clone()
+            .with_trait_origin(trait_decl.name().to_string());
+        let method = apply_trait_visibility_adaptations(
+            trait_decl.name(),
+            &method,
+            trait_adaptations,
+        );
         if !trait_method_names.insert(key) {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -2387,7 +2393,10 @@ fn append_eval_trait_method_aliases(
             }
             continue;
         };
-        let mut alias_method = source_method.renamed(alias.clone());
+        let mut alias_method = source_method
+            .clone()
+            .with_trait_origin(trait_decl.name().to_string())
+            .renamed(alias.clone());
         if let Some(visibility) = visibility {
             alias_method = alias_method.with_visibility_override(*visibility);
         }
@@ -7832,6 +7841,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_flags(
     context.push_function(qualified_method_name.clone());
     context.push_class_scope(class_name.to_string());
     context.push_called_class_scope(called_class_name.to_string());
+    context.push_method_magic_scope(class_name, method);
     let evaluated_args = match bind_evaluated_method_args(
         method.params(),
         method.parameter_types(),
@@ -7844,6 +7854,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_flags(
     ) {
         Ok(args) => args,
         Err(status) => {
+            context.pop_magic_scope();
             context.pop_called_class_scope();
             context.pop_class_scope();
             context.pop_function();
@@ -7884,6 +7895,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_flags(
             values,
         ),
     };
+    context.pop_magic_scope();
     context.pop_called_class_scope();
     context.pop_class_scope();
     context.pop_function();
@@ -7926,6 +7938,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_fla
     context.push_function(qualified_method_name.clone());
     context.push_class_scope(class_name.to_string());
     context.push_called_class_scope(called_class_name.to_string());
+    context.push_method_magic_scope(class_name, method);
     let evaluated_args = match bind_evaluated_method_args(
         method.params(),
         method.parameter_types(),
@@ -7938,6 +7951,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_fla
     ) {
         Ok(args) => args,
         Err(status) => {
+            context.pop_magic_scope();
             context.pop_called_class_scope();
             context.pop_class_scope();
             context.pop_function();
@@ -7977,6 +7991,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_fla
             values,
         ),
     };
+    context.pop_magic_scope();
     context.pop_called_class_scope();
     context.pop_class_scope();
     context.pop_function();

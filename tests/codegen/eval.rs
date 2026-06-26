@@ -4593,6 +4593,48 @@ class Box {
     assert_eq!(out, "[||]");
 }
 
+/// Verifies eval trait methods expose PHP magic constants from the declaring trait.
+#[test]
+fn test_eval_trait_method_magic_constants_execute_through_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+eval('namespace EvalBridgeTraitMagic;
+trait Inner {
+    public function report() {
+        return __NAMESPACE__ . "|" . __CLASS__ . "|" . __TRAIT__ . "|" . __METHOD__ . "|" . __FUNCTION__;
+    }
+    public static function stat() {
+        return __NAMESPACE__ . "|" . __CLASS__ . "|" . __TRAIT__ . "|" . __METHOD__ . "|" . __FUNCTION__;
+    }
+}
+trait Outer {
+    use Inner {
+        report as aliasReport;
+        stat as aliasStat;
+    }
+}
+class Box {
+    use Outer;
+}
+echo (new Box())->aliasReport(); echo ":";
+echo Box::aliasStat();');
+"#,
+    );
+    let expected = concat!(
+        "EvalBridgeTraitMagic|EvalBridgeTraitMagic\\Box|",
+        "EvalBridgeTraitMagic\\Inner|",
+        "EvalBridgeTraitMagic\\Inner::report|report:",
+        "EvalBridgeTraitMagic|EvalBridgeTraitMagic\\Box|",
+        "EvalBridgeTraitMagic\\Inner|",
+        "EvalBridgeTraitMagic\\Inner::stat|stat"
+    );
+
+    assert_eq!(
+        out,
+        expected
+    );
+}
+
 /// Verifies eval-declared functions persist across eval calls in the same generated context.
 #[test]
 fn test_eval_declared_function_persists_across_eval_calls() {
