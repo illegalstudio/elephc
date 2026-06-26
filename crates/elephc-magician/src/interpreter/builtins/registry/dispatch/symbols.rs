@@ -70,6 +70,12 @@ pub(in crate::interpreter) fn eval_symbols_builtin_with_values(
         "is_a" | "is_subclass_of" => {
             eval_is_a_relation_result(name, evaluated_args, context, values)?
         }
+        "get_called_class" => {
+            if !evaluated_args.is_empty() {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_get_called_class_result(context, values)?
+        }
         "get_class" => {
             let [object] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
