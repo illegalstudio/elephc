@@ -9498,6 +9498,69 @@ echo EvalAotStaticIncDec::$count;');
     assert_eq!(out.stdout, "6|11");
 }
 
+/// Verifies eval static property array writes and appends update static storage.
+#[test]
+fn test_eval_static_property_array_write_statements() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotStaticPropertyArrayWrite {
+    public static array $items = [];
+}
+eval('class EvalDynamicStaticPropertyArrayWrite {
+    public static $items = [];
+    public static $dyn = [];
+}
+class EvalStaticPropertyArrayAccessBox implements ArrayAccess {
+    public array $data = [];
+    public function offsetExists(mixed $offset): bool {
+        return true;
+    }
+    public function offsetGet(mixed $offset): mixed {
+        return $this->data[$offset];
+    }
+    public function offsetSet(mixed $offset, mixed $value): void {
+        if ($offset === null) {
+            $this->data[] = $value;
+        } else {
+            $this->data[$offset] = $value;
+        }
+    }
+    public function offsetUnset(mixed $offset): void {
+        unset($this->data[$offset]);
+    }
+}
+class EvalStaticPropertyArrayAccessHolder {
+    public static $box;
+}
+EvalDynamicStaticPropertyArrayWrite::$items[0] = "a";
+EvalDynamicStaticPropertyArrayWrite::$items[] = "b";
+EvalDynamicStaticPropertyArrayWrite::$items[0] .= "A";
+$class = "EvalDynamicStaticPropertyArrayWrite";
+$class::$dyn[1] = "x";
+$class::$dyn[] = "y";
+echo EvalDynamicStaticPropertyArrayWrite::$items[0] . ":";
+echo EvalDynamicStaticPropertyArrayWrite::$items[1] . ":";
+echo EvalDynamicStaticPropertyArrayWrite::$dyn[1] . ":";
+echo EvalDynamicStaticPropertyArrayWrite::$dyn[2] . "|";
+EvalAotStaticPropertyArrayWrite::$items[0] = "m";
+EvalAotStaticPropertyArrayWrite::$items[] = "n";
+EvalAotStaticPropertyArrayWrite::$items[0] .= "M";
+echo EvalAotStaticPropertyArrayWrite::$items[0] . ":";
+echo EvalAotStaticPropertyArrayWrite::$items[1] . "|";
+EvalStaticPropertyArrayAccessHolder::$box = new EvalStaticPropertyArrayAccessBox();
+EvalStaticPropertyArrayAccessHolder::$box[] = "q";
+EvalStaticPropertyArrayAccessHolder::$box[0] .= "Q";
+echo EvalStaticPropertyArrayAccessHolder::$box[0];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "aA:b:x:y|mM:n|qQ");
+}
+
 /// Verifies eval `isset()` and `empty()` probe static properties without normal read fatals.
 #[test]
 fn test_eval_static_property_isset_empty_probes() {

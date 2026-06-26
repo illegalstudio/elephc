@@ -273,45 +273,18 @@ impl Parser {
         Ok(EvalAttribute::new(name, args))
     }
 
-    /// Returns true when the current tokens form `Class::$property <assign-op>`.
+    /// Returns true when current tokens form direct or indexed `Class::$property` assignment.
     pub(super) fn current_starts_static_property_assignment(&self) -> bool {
-        let mut pos = self.pos;
-        if matches!(self.tokens.get(pos), Some(TokenKind::Backslash)) {
-            pos += 1;
-        }
-        if !matches!(self.tokens.get(pos), Some(TokenKind::Ident(_))) {
-            return false;
-        }
-        pos += 1;
-        while matches!(self.tokens.get(pos), Some(TokenKind::Backslash)) {
-            pos += 1;
-            if !matches!(self.tokens.get(pos), Some(TokenKind::Ident(_))) {
-                return false;
-            }
-            pos += 1;
-        }
-        if !matches!(self.tokens.get(pos), Some(TokenKind::DoubleColon)) {
-            return false;
-        }
-        pos += 1;
-        let Some(TokenKind::DollarIdent(_)) = self.tokens.get(pos) else {
-            return false;
-        };
-        pos += 1;
-        self.tokens
-            .get(pos)
-            .is_some_and(|token| assignment_op(token).is_some())
+        self.static_property_tokens_end(self.pos)
+            .is_some_and(|pos| self.static_property_assignment_suffix_starts(pos))
     }
 
-    /// Returns true when the current tokens form `$class::$property <assign-op>`.
+    /// Returns true when current tokens form direct or indexed `$class::$property` assignment.
     pub(super) fn current_starts_dynamic_static_property_assignment(&self) -> bool {
         matches!(self.current(), TokenKind::DollarIdent(_))
             && matches!(self.peek(), TokenKind::DoubleColon)
             && matches!(self.tokens.get(self.pos + 2), Some(TokenKind::DollarIdent(_)))
-            && self
-                .tokens
-                .get(self.pos + 3)
-                .is_some_and(|token| assignment_op(token).is_some())
+            && self.static_property_assignment_suffix_starts(self.pos + 3)
     }
 
     /// Returns true when the current tokens form `Class::$property++` or `Class::$property--`.
@@ -380,6 +353,40 @@ impl Parser {
             return None;
         }
         Some(pos + 1)
+    }
+
+    /// Returns true when tokens after a static property form direct or indexed assignment.
+    fn static_property_assignment_suffix_starts(&self, pos: usize) -> bool {
+        self.tokens
+            .get(pos)
+            .is_some_and(|token| assignment_op(token).is_some())
+            || self.static_property_array_assignment_suffix_starts(pos)
+    }
+
+    /// Returns true when tokens at `pos` form `[expr] <assign-op>` or `[] =`.
+    fn static_property_array_assignment_suffix_starts(&self, pos: usize) -> bool {
+        if !matches!(self.tokens.get(pos), Some(TokenKind::LBracket)) {
+            return false;
+        }
+        let mut cursor = pos;
+        let mut depth = 0usize;
+        loop {
+            match self.tokens.get(cursor) {
+                Some(TokenKind::LBracket) => depth += 1,
+                Some(TokenKind::RBracket) => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return self
+                            .tokens
+                            .get(cursor + 1)
+                            .is_some_and(|token| assignment_op(token).is_some());
+                    }
+                }
+                Some(TokenKind::Eof) | None => return false,
+                _ => {}
+            }
+            cursor += 1;
+        }
     }
 
     /// Parses `do { ... } while (expr);`.
@@ -2628,6 +2635,37 @@ impl Parser {
         };
         let property = property.clone();
         self.advance();
+        if self.consume(TokenKind::LBracket) {
+            if self.consume(TokenKind::RBracket) {
+                self.expect(TokenKind::Equal)?;
+                let value = self.parse_expr()?;
+                if require_semicolon {
+                    self.expect_semicolon()?;
+                }
+                return Ok(vec![EvalStmt::StaticPropertyArrayAppend {
+                    class_name,
+                    property,
+                    value,
+                }]);
+            }
+            let index = self.parse_expr()?;
+            self.expect(TokenKind::RBracket)?;
+            let Some(op) = assignment_op(self.current()) else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            self.advance();
+            let value = self.parse_expr()?;
+            if require_semicolon {
+                self.expect_semicolon()?;
+            }
+            return Ok(vec![EvalStmt::StaticPropertyArraySet {
+                class_name,
+                property,
+                index,
+                op,
+                value,
+            }]);
+        }
         let Some(op) = assignment_op(self.current()) else {
             return Err(EvalParseError::UnexpectedToken);
         };
@@ -2670,6 +2708,37 @@ impl Parser {
         };
         let property = property.clone();
         self.advance();
+        if self.consume(TokenKind::LBracket) {
+            if self.consume(TokenKind::RBracket) {
+                self.expect(TokenKind::Equal)?;
+                let value = self.parse_expr()?;
+                if require_semicolon {
+                    self.expect_semicolon()?;
+                }
+                return Ok(vec![EvalStmt::DynamicStaticPropertyArrayAppend {
+                    class_name,
+                    property,
+                    value,
+                }]);
+            }
+            let index = self.parse_expr()?;
+            self.expect(TokenKind::RBracket)?;
+            let Some(op) = assignment_op(self.current()) else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            self.advance();
+            let value = self.parse_expr()?;
+            if require_semicolon {
+                self.expect_semicolon()?;
+            }
+            return Ok(vec![EvalStmt::DynamicStaticPropertyArraySet {
+                class_name,
+                property,
+                index,
+                op,
+                value,
+            }]);
+        }
         let Some(op) = assignment_op(self.current()) else {
             return Err(EvalParseError::UnexpectedToken);
         };
@@ -3512,15 +3581,34 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
         }
         EvalStmt::DynamicStaticPropertySet {
             class_name, value, ..
+        }
+        | EvalStmt::DynamicStaticPropertyArrayAppend {
+            class_name, value, ..
         } => {
             eval_expr_uses_this_property(class_name, property_name)
+                || eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::DynamicStaticPropertyArraySet {
+            class_name,
+            index,
+            value,
+            ..
+        } => {
+            eval_expr_uses_this_property(class_name, property_name)
+                || eval_expr_uses_this_property(index, property_name)
                 || eval_expr_uses_this_property(value, property_name)
         }
         EvalStmt::DynamicStaticPropertyIncDec { class_name, .. } => {
             eval_expr_uses_this_property(class_name, property_name)
         }
-        EvalStmt::StaticPropertySet { value, .. } | EvalStmt::StoreVar { value, .. } => {
+        EvalStmt::StaticPropertySet { value, .. }
+        | EvalStmt::StaticPropertyArrayAppend { value, .. }
+        | EvalStmt::StoreVar { value, .. } => {
             eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::StaticPropertyArraySet { index, value, .. } => {
+            eval_expr_uses_this_property(index, property_name)
+                || eval_expr_uses_this_property(value, property_name)
         }
         EvalStmt::Switch { expr, cases } => {
             eval_expr_uses_this_property(expr, property_name)

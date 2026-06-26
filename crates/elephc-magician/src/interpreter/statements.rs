@@ -292,6 +292,28 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_static_property_set_result(class_name, property, value, context, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::StaticPropertyArrayAppend {
+            class_name,
+            property,
+            value,
+        } => {
+            eval_static_property_array_append_result(
+                class_name, property, value, context, scope, values,
+            )?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::StaticPropertyArraySet {
+            class_name,
+            property,
+            index,
+            op,
+            value,
+        } => {
+            eval_static_property_array_set_result(
+                class_name, property, index, *op, value, context, scope, values,
+            )?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::StaticPropertyIncDec {
             class_name,
             property,
@@ -311,6 +333,44 @@ pub(in crate::interpreter) fn execute_stmt(
             let class_name = eval_dynamic_class_name(class_name, context, values)?;
             let value = eval_expr(value, context, scope, values)?;
             eval_static_property_set_result(&class_name, property, value, context, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::DynamicStaticPropertyArrayAppend {
+            class_name,
+            property,
+            value,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            eval_static_property_array_append_result(
+                &class_name,
+                property,
+                value,
+                context,
+                scope,
+                values,
+            )?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::DynamicStaticPropertyArraySet {
+            class_name,
+            property,
+            index,
+            op,
+            value,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            eval_static_property_array_set_result(
+                &class_name,
+                property,
+                index,
+                *op,
+                value,
+                context,
+                scope,
+                values,
+            )?;
             Ok(EvalControl::None)
         }
         EvalStmt::DynamicStaticPropertyIncDec {
@@ -740,6 +800,77 @@ fn eval_property_array_set_value(
     let current = eval_array_get_result(array, index, context, values)?;
     let right = eval_expr(value, context, scope, values)?;
     eval_binary_result(op, current, right, context, values)
+}
+
+/// Executes `Class::$property[] = value`, including ArrayAccess static-property values.
+fn eval_static_property_array_append_result(
+    class_name: &str,
+    property: &str,
+    value: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let array = eval_static_property_get_result(class_name, property, context, values)?;
+    if values.type_tag(array)? == EVAL_TAG_OBJECT {
+        if !eval_array_access_object_matches(array, context, values)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let offset = values.null()?;
+        let value = eval_expr(value, context, scope, values)?;
+        let result =
+            eval_method_call_result(array, "offsetSet", vec![offset, value], context, values)?;
+        values.release(result)?;
+        return Ok(());
+    }
+    let array = if values.is_array_like(array)? {
+        let tag = values.type_tag(array)?;
+        if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+            return Err(EvalStatus::UnsupportedConstruct);
+        }
+        array
+    } else {
+        values.array_new(1)?
+    };
+    let index = eval_array_append_key(array, values)?;
+    let value = eval_expr(value, context, scope, values)?;
+    let array = values.array_set(array, index, value)?;
+    eval_static_property_set_result(class_name, property, array, context, values)
+}
+
+/// Executes `Class::$property[index] = value` and compound indexed static-property writes.
+fn eval_static_property_array_set_result(
+    class_name: &str,
+    property: &str,
+    index: &EvalExpr,
+    op: Option<EvalBinOp>,
+    value: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let array = eval_static_property_get_result(class_name, property, context, values)?;
+    if values.type_tag(array)? == EVAL_TAG_OBJECT {
+        if !eval_array_access_object_matches(array, context, values)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let index = eval_expr(index, context, scope, values)?;
+        let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
+        let result =
+            eval_method_call_result(array, "offsetSet", vec![index, value], context, values)?;
+        values.release(result)?;
+        return Ok(());
+    }
+    let index = eval_array_set_index(index, context, scope, values)?;
+    let array = if values.is_array_like(array)? {
+        array
+    } else {
+        values.array_new(1)?
+    };
+    let array = eval_array_set_target_for_index(array, index, values)?;
+    let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
+    let array = values.array_set(array, index, value)?;
+    eval_static_property_set_result(class_name, property, array, context, values)
 }
 
 /// Evaluates an array-set index and normalizes PHP integer-string keys.

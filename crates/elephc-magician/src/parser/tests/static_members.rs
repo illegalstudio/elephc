@@ -268,3 +268,69 @@ fn parse_fragment_accepts_static_property_compound_assignment() {
         }]
     );
 }
+
+/// Verifies indexed static-property writes parse as dedicated EvalIR statements.
+#[test]
+fn parse_fragment_accepts_static_property_array_write_source() {
+    let program =
+        parse_fragment(br#"EvalStaticBox::$items[0] = "x"; EvalStaticBox::$items[] = "y";"#)
+            .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::StaticPropertyArraySet {
+                class_name: "EvalStaticBox".to_string(),
+                property: "items".to_string(),
+                index: EvalExpr::Const(EvalConst::Int(0)),
+                op: None,
+                value: EvalExpr::Const(EvalConst::String("x".to_string())),
+            },
+            EvalStmt::StaticPropertyArrayAppend {
+                class_name: "EvalStaticBox".to_string(),
+                property: "items".to_string(),
+                value: EvalExpr::Const(EvalConst::String("y".to_string())),
+            },
+        ]
+    );
+}
+
+/// Verifies indexed static-property compound assignment retains the static target.
+#[test]
+fn parse_fragment_accepts_static_property_array_compound_assignment_source() {
+    let program =
+        parse_fragment(br#"EvalStaticBox::$items[0] .= "x";"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::StaticPropertyArraySet {
+            class_name: "EvalStaticBox".to_string(),
+            property: "items".to_string(),
+            index: EvalExpr::Const(EvalConst::Int(0)),
+            op: Some(EvalBinOp::Concat),
+            value: EvalExpr::Const(EvalConst::String("x".to_string())),
+        }]
+    );
+}
+
+/// Verifies runtime-valued static receivers support indexed static-property writes.
+#[test]
+fn parse_fragment_accepts_dynamic_static_property_array_write_source() {
+    let program = parse_fragment(br#"$class::$items[0] = "x"; $class::$items[] = "y";"#)
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::DynamicStaticPropertyArraySet {
+                class_name: EvalExpr::LoadVar("class".to_string()),
+                property: "items".to_string(),
+                index: EvalExpr::Const(EvalConst::Int(0)),
+                op: None,
+                value: EvalExpr::Const(EvalConst::String("x".to_string())),
+            },
+            EvalStmt::DynamicStaticPropertyArrayAppend {
+                class_name: EvalExpr::LoadVar("class".to_string()),
+                property: "items".to_string(),
+                value: EvalExpr::Const(EvalConst::String("y".to_string())),
+            },
+        ]
+    );
+}
