@@ -3227,26 +3227,30 @@ pub(in crate::interpreter) fn eval_reflection_method_create_from_method_name_res
     }
     let args = bind_evaluated_function_args(&[String::from("method")], evaluated_args)?;
     let target = eval_reflection_string_arg(args[0], values)?;
-    let (class_name, method_name) = eval_reflection_method_target_parts(&target)?;
-    eval_reflection_method_object_result_if_exists(
+    let Some((class_name, method_name)) = eval_reflection_method_target_parts(&target) else {
+        return eval_throw_reflection_exception(
+            "ReflectionMethod::createFromMethodName(): Argument #1 ($method) must be a valid method name",
+            context,
+            values,
+        );
+    };
+    eval_reflection_method_object_result_or_throw(
         &class_name,
         &method_name,
         context,
         values,
-    )?
-    .map(Some)
-    .ok_or(EvalStatus::RuntimeFatal)
+    )
 }
 
 /// Splits PHP's `ClassName::methodName` reflection-method target string.
-fn eval_reflection_method_target_parts(target: &str) -> Result<(String, String), EvalStatus> {
+fn eval_reflection_method_target_parts(target: &str) -> Option<(String, String)> {
     let Some((class_name, method_name)) = target.rsplit_once("::") else {
-        return Err(EvalStatus::RuntimeFatal);
+        return None;
     };
     if class_name.is_empty() || method_name.is_empty() {
-        return Err(EvalStatus::RuntimeFatal);
+        return None;
     }
-    Ok((class_name.to_string(), method_name.to_string()))
+    Some((class_name.to_string(), method_name.to_string()))
 }
 
 /// Extracts the deprecated one-argument `ReflectionMethod("Class::method")` target.
@@ -3302,10 +3306,14 @@ fn eval_reflection_method_object_result_if_exists(
         &reflected_name,
         requested_method_name,
         context,
-    )
-    .ok_or(EvalStatus::RuntimeFatal)?;
-    let method = eval_reflection_method_metadata(&reflected_name, &method_name, context)
-        .ok_or(EvalStatus::RuntimeFatal)?;
+    );
+    let Some(method_name) = method_name else {
+        return Ok(None);
+    };
+    let Some(method) = eval_reflection_method_metadata(&reflected_name, &method_name, context)
+    else {
+        return Ok(None);
+    };
     eval_reflection_member_object_result(
         EVAL_REFLECTION_OWNER_METHOD,
         &method_name,
@@ -3314,6 +3322,41 @@ fn eval_reflection_method_object_result_if_exists(
         values,
     )
     .map(Some)
+}
+
+/// Builds a `ReflectionMethod` object or throws PHP's catchable reflection error.
+fn eval_reflection_method_object_result_or_throw(
+    class_name: &str,
+    requested_method_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if let Some(result) = eval_reflection_method_object_result_if_exists(
+        class_name,
+        requested_method_name,
+        context,
+        values,
+    )? {
+        return Ok(Some(result));
+    }
+    let reflected_name = context
+        .resolve_class_like_name(class_name)
+        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    if !eval_reflection_class_like_or_runtime_exists(&reflected_name, context, values)? {
+        return eval_throw_reflection_exception(
+            &format!("Class \"{}\" does not exist", reflected_name),
+            context,
+            values,
+        );
+    }
+    eval_throw_reflection_exception(
+        &format!(
+            "Method {}::{}() does not exist",
+            reflected_name, requested_method_name
+        ),
+        context,
+        values,
+    )
 }
 
 /// Builds an eval-backed `ReflectionMethod` object when the reflected method exists in eval.
@@ -3325,8 +3368,14 @@ fn eval_reflection_method_new(
     if evaluated_args.len() == 1 {
         let target = eval_reflection_method_single_target_arg(evaluated_args)?;
         let target = eval_reflection_string_arg(target, values)?;
-        let (class_name, method_name) = eval_reflection_method_target_parts(&target)?;
-        return eval_reflection_method_object_result_if_exists(
+        let Some((class_name, method_name)) = eval_reflection_method_target_parts(&target) else {
+            return eval_throw_reflection_exception(
+                "ReflectionMethod::__construct(): Argument #1 ($objectOrMethod) must be a valid method name",
+                context,
+                values,
+            );
+        };
+        return eval_reflection_method_object_result_or_throw(
             &class_name,
             &method_name,
             context,
@@ -3339,7 +3388,7 @@ fn eval_reflection_method_new(
     )?;
     let class_name = eval_reflection_class_target_name(args[0], context, values)?;
     let requested_method_name = eval_reflection_string_arg(args[1], values)?;
-    eval_reflection_method_object_result_if_exists(
+    eval_reflection_method_object_result_or_throw(
         &class_name,
         &requested_method_name,
         context,
@@ -6271,6 +6320,19 @@ fn eval_reflection_class_like_exists(name: &str, context: &ElephcEvalContext) ->
         || context.has_interface(name)
         || context.has_trait(name)
         || context.has_enum(name)
+}
+
+/// Returns true when a name resolves to eval or runtime class-like metadata.
+fn eval_reflection_class_like_or_runtime_exists(
+    name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(eval_reflection_class_like_exists(name, context)
+        || values.class_exists(name)?
+        || eval_runtime_interface_exists(name, values)?
+        || values.trait_exists(name)?
+        || values.enum_exists(name)?)
 }
 
 /// Returns true when one name exists as an eval or runtime interface.
