@@ -435,12 +435,13 @@ reflected method is `__construct` or `__destruct`.
 `ReflectionFunction::getName()`, `ReflectionFunction::getParameters()`,
 `ReflectionMethod::getParameters()`, `getNumberOfParameters()`, and
 `getNumberOfRequiredParameters()` report retained eval-declared function and
-method metadata, plus registered generated/AOT method parameter names, declared
-parameter and return types, required/optional counts, by-reference and variadic
-flags, and scalar, null, empty-array, supported array-valued, or supported object-valued default values when native
-method/static-method or constructor signatures are registered. Eval code can
-also reflect supported callable-builtin signatures, including
-internal origin, parameter names, parameter types, and return type metadata.
+method metadata, plus registered generated/AOT free-function, method,
+static-method, and constructor parameter names, declared parameter and return
+types, required/optional counts, by-reference and variadic flags, and scalar,
+null, empty-array, supported array-valued, or supported object-valued default
+values when native signatures are registered. Eval code can also reflect
+supported callable-builtin signatures, including internal origin, parameter
+names, parameter types, and return type metadata.
 Eval-declared
 functions and methods expose declared-type presence for parameters and return types, simple
 named type metadata through
@@ -473,9 +474,13 @@ binding used by direct eval function calls. Runtime-held generated/AOT
 `ReflectionFunction` objects can invoke registered generated functions through
 the native bridge with parameter names, supported defaults, named arguments, and
 indexed or string-keyed runtime argument arrays. Registered generated/AOT
-free-function parameter defaults are also exposed through `ReflectionParameter`
-metadata. Supported callable-builtin invocation is covered by the general
-Reflection support documented in `docs/php/classes.md`.
+free-function parameter names, declared types, return types, by-reference and
+variadic flags, required/optional counts, and supported defaults are also
+exposed through `ReflectionFunction` / `ReflectionParameter` metadata.
+Unsupported generated/AOT free-function bridge shapes remain reflectable as
+metadata but are not invocable through eval. Supported callable-builtin
+invocation is covered by the general Reflection support documented in
+`docs/php/classes.md`.
 Defaulted eval method parameters are
 bound when omitted and reported through `ReflectionParameter::isOptional()`,
 `isDefaultValueAvailable()`, `isDefaultValueConstant()`,
@@ -821,10 +826,10 @@ parameter and generated property default-value materialization beyond scalar,
 null, empty-array, supported array-valued defaults, and supported object-valued parameter defaults during generated/AOT invocation,
 and broader generated/AOT method and constructor bridge signatures beyond the current visibility-checked
 scalar/nullable scalar/Mixed/array/iterable/object parameter slice plus scalar/nullable scalar/Mixed/array/iterable/object returns and
-`__clone()` hooks. Generated/AOT method type
-metadata, by-reference and variadic parameter flags, and generated/AOT
-class/method/property/class-constant attributes are exposed for registered metadata slices, while
-other unsupported bridge shapes remain metadata-only
+`__clone()` hooks. Generated/AOT free-function and method type metadata,
+return metadata, by-reference and variadic parameter flags, and generated/AOT
+class/method/property/class-constant attributes are exposed for registered
+metadata slices, while other unsupported bridge shapes remain metadata-only
 rather than invocable through eval.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after

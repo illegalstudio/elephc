@@ -3132,10 +3132,14 @@ fn eval_reflection_native_function_parameters(
     let parameter_names = eval_reflection_native_function_parameter_names(function);
     let parameter_count = parameter_names.len();
     let parameter_attributes = vec![Vec::new(); parameter_count];
-    let parameter_types: Vec<Option<EvalParameterType>> = vec![None; parameter_count];
+    let parameter_types = eval_reflection_native_function_parameter_types(function);
     let parameter_defaults = eval_reflection_native_function_parameter_defaults(function);
-    let parameter_is_by_ref = vec![false; parameter_count];
-    let parameter_is_variadic = vec![false; parameter_count];
+    let parameter_is_by_ref = (0..parameter_count)
+        .map(|index| function.param_by_ref(index))
+        .collect::<Vec<_>>();
+    let parameter_is_variadic = (0..parameter_count)
+        .map(|index| function.param_variadic(index))
+        .collect::<Vec<_>>();
     eval_reflection_function_parameters(
         function_name,
         &parameter_names,
@@ -3146,6 +3150,15 @@ fn eval_reflection_native_function_parameters(
         &parameter_is_by_ref,
         &parameter_is_variadic,
     )
+}
+
+/// Converts registered native function parameter types into reflection metadata input.
+fn eval_reflection_native_function_parameter_types(
+    function: &NativeFunction,
+) -> Vec<Option<EvalParameterType>> {
+    (0..function.param_count())
+        .map(|index| function.param_type(index).cloned())
+        .collect()
 }
 
 /// Converts registered native function defaults into eval constant expressions.
@@ -8934,44 +8947,71 @@ fn eval_reflection_function_method_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalReflectionFunctionMethodTarget>, EvalStatus> {
     if let Some(name) = context.eval_reflection_function_name(identity) {
-        let function = context.function(&name.to_ascii_lowercase());
-        let is_variadic = function
-            .is_some_and(|function| function.parameter_is_variadic().iter().any(|flag| *flag));
-        let parameters = function
-            .map(|function| {
-                eval_reflection_function_parameters(
-                    function.name(),
-                    function.params(),
-                    function.attributes().to_vec(),
-                    function.parameter_attributes(),
-                    function.parameter_types(),
-                    function.parameter_defaults(),
-                    function.parameter_is_by_ref(),
-                    function.parameter_is_variadic(),
-                )
-            })
-            .unwrap_or_default();
-        let source_location = function.and_then(EvalFunction::source_location);
-        let return_type_metadata = function
-            .and_then(EvalFunction::return_type)
-            .and_then(eval_reflection_parameter_type_metadata);
-        let static_key = function.map(|function| function.name().to_string());
-        let static_variables = function
-            .map(|function| static_var_initializers(function.body()))
-            .unwrap_or_default();
-        let is_deprecated = function
-            .map(EvalFunction::attributes)
-            .is_some_and(eval_reflection_attributes_include_deprecated);
+        let lookup_name = name.to_ascii_lowercase();
+        if let Some(function) = context.function(&lookup_name) {
+            let is_variadic = function
+                .parameter_is_variadic()
+                .iter()
+                .any(|flag| *flag);
+            let parameters = eval_reflection_function_parameters(
+                function.name(),
+                function.params(),
+                function.attributes().to_vec(),
+                function.parameter_attributes(),
+                function.parameter_types(),
+                function.parameter_defaults(),
+                function.parameter_is_by_ref(),
+                function.parameter_is_variadic(),
+            );
+            let source_location = function.source_location();
+            let return_type_metadata = function
+                .return_type()
+                .and_then(eval_reflection_parameter_type_metadata);
+            let static_key = Some(function.name().to_string());
+            let static_variables = static_var_initializers(function.body());
+            let is_deprecated =
+                eval_reflection_attributes_include_deprecated(function.attributes());
+            return Ok(Some(EvalReflectionFunctionMethodTarget::Function {
+                name: name.to_string(),
+                static_key,
+                static_variables,
+                parameters,
+                source_location,
+                is_variadic,
+                is_static: false,
+                is_deprecated,
+                return_type_metadata,
+            }));
+        }
+        if let Some(function) = context.native_function(&lookup_name) {
+            let parameters = eval_reflection_native_function_parameters(name, &function);
+            let is_variadic =
+                (0..function.param_count()).any(|index| function.param_variadic(index));
+            let return_type_metadata = function
+                .return_type()
+                .and_then(eval_reflection_parameter_type_metadata);
+            return Ok(Some(EvalReflectionFunctionMethodTarget::Function {
+                name: name.to_string(),
+                static_key: None,
+                static_variables: Vec::new(),
+                parameters,
+                source_location: None,
+                is_variadic,
+                is_static: false,
+                is_deprecated: false,
+                return_type_metadata,
+            }));
+        }
         return Ok(Some(EvalReflectionFunctionMethodTarget::Function {
             name: name.to_string(),
-            static_key,
-            static_variables,
-            parameters,
-            source_location,
-            is_variadic,
+            static_key: None,
+            static_variables: Vec::new(),
+            parameters: Vec::new(),
+            source_location: None,
+            is_variadic: false,
             is_static: false,
-            is_deprecated,
-            return_type_metadata,
+            is_deprecated: false,
+            return_type_metadata: None,
         }));
     }
     let Some((declaring_class, method_name)) = context.eval_reflection_method(identity) else {

@@ -49,7 +49,7 @@ const NATIVE_ARRAY_DEFAULT_KEY_STRING: u8 = 2;
 const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = u8::MAX as usize;
 
 #[derive(Clone, Copy)]
-enum NativeCallableTypePosition {
+pub(super) enum NativeCallableTypePosition {
     Parameter,
     Return,
 }
@@ -2127,7 +2127,7 @@ fn native_attribute_take_u64(bytes: &[u8], offset: &mut usize) -> Option<u64> {
 }
 
 /// Decodes one generated type-spec string into eval Reflection type metadata.
-fn native_callable_type_from_abi(
+pub(super) fn native_callable_type_from_abi(
     type_spec_ptr: *const u8,
     type_spec_len: u64,
     position: NativeCallableTypePosition,

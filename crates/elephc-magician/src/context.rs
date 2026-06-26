@@ -91,7 +91,12 @@ pub struct NativeFunction {
     invoker: NativeFunctionInvoker,
     param_count: usize,
     param_names: Vec<String>,
+    param_types: Vec<Option<EvalParameterType>>,
     param_defaults: Vec<Option<NativeCallableDefault>>,
+    param_by_ref: Vec<bool>,
+    variadic_index: Option<usize>,
+    return_type: Option<EvalParameterType>,
+    bridge_supported: bool,
 }
 
 impl NativeFunction {
@@ -106,7 +111,12 @@ impl NativeFunction {
             invoker,
             param_count,
             param_names: Vec::new(),
+            param_types: Vec::new(),
             param_defaults: Vec::new(),
+            param_by_ref: Vec::new(),
+            variadic_index: None,
+            return_type: None,
+            bridge_supported: true,
         }
     }
 
@@ -132,6 +142,28 @@ impl NativeFunction {
         &self.param_names
     }
 
+    /// Records the PHP declared type metadata for one positional callback slot.
+    pub fn set_param_type(&mut self, index: usize, param_type: EvalParameterType) -> bool {
+        if index >= self.param_count {
+            return false;
+        }
+        if self.param_types.len() < self.param_count {
+            self.param_types.resize(self.param_count, None);
+        }
+        self.param_types[index] = Some(param_type);
+        true
+    }
+
+    /// Returns PHP declared parameter types registered for this callback.
+    pub fn param_types(&self) -> &[Option<EvalParameterType>] {
+        &self.param_types
+    }
+
+    /// Returns the registered declared type for one parameter slot, if any.
+    pub fn param_type(&self, index: usize) -> Option<&EvalParameterType> {
+        self.param_types.get(index).and_then(Option::as_ref)
+    }
+
     /// Records a PHP default value for one positional callback slot.
     pub fn set_param_default(&mut self, index: usize, default: NativeCallableDefault) -> bool {
         if index >= self.param_count {
@@ -149,8 +181,64 @@ impl NativeFunction {
         self.param_defaults.get(index).and_then(Option::as_ref)
     }
 
+    /// Records whether one positional callback parameter is by-reference.
+    pub fn set_param_by_ref(&mut self, index: usize, by_ref: bool) -> bool {
+        if index >= self.param_count {
+            return false;
+        }
+        if self.param_by_ref.len() < self.param_count {
+            self.param_by_ref.resize(self.param_count, false);
+        }
+        self.param_by_ref[index] = by_ref;
+        true
+    }
+
+    /// Records which positional callback parameter is variadic.
+    pub fn set_variadic_index(&mut self, index: usize) -> bool {
+        if index >= self.param_count {
+            return false;
+        }
+        self.variadic_index = Some(index);
+        true
+    }
+
+    /// Records the PHP declared return type metadata for this callback.
+    pub fn set_return_type(&mut self, return_type: EvalParameterType) {
+        self.return_type = Some(return_type);
+    }
+
+    /// Records whether eval may dispatch this callback through the generated bridge.
+    pub fn set_bridge_supported(&mut self, supported: bool) {
+        self.bridge_supported = supported;
+    }
+
+    /// Returns whether one registered parameter is by-reference.
+    pub fn param_by_ref(&self, index: usize) -> bool {
+        self.param_by_ref.get(index).copied().unwrap_or(false)
+    }
+
+    /// Returns whether one registered parameter is the variadic parameter.
+    pub fn param_variadic(&self, index: usize) -> bool {
+        self.variadic_index == Some(index)
+    }
+
+    /// Returns the registered declared return type, if any.
+    pub fn return_type(&self) -> Option<&EvalParameterType> {
+        self.return_type.as_ref()
+    }
+
+    /// Returns whether eval may dispatch this callback through the generated bridge.
+    pub const fn bridge_supported(&self) -> bool {
+        self.bridge_supported
+    }
+
     /// Returns the minimum number of required parameters implied by defaults.
     pub fn required_param_count(&self) -> usize {
+        if let Some(index) = self.variadic_index {
+            return (0..index)
+                .rfind(|position| self.param_default(*position).is_none())
+                .map_or(0, |position| position + 1);
+        }
         (0..self.param_count)
             .rfind(|index| self.param_default(*index).is_none())
             .map_or(0, |index| index + 1)
@@ -2133,6 +2221,18 @@ impl ElephcEvalContext {
             .is_some_and(|function| function.set_param_name(index, param_name))
     }
 
+    /// Records one parameter type for an already registered native AOT callback.
+    pub fn define_native_function_param_type(
+        &mut self,
+        function_name: &str,
+        index: usize,
+        param_type: EvalParameterType,
+    ) -> bool {
+        self.native_functions
+            .get_mut(function_name)
+            .is_some_and(|function| function.set_param_type(index, param_type))
+    }
+
     /// Records one parameter default for an already registered native AOT callback.
     pub fn define_native_function_param_default(
         &mut self,
@@ -2143,6 +2243,57 @@ impl ElephcEvalContext {
         self.native_functions
             .get_mut(function_name)
             .is_some_and(|function| function.set_param_default(index, default))
+    }
+
+    /// Records whether one native AOT callback parameter is by-reference.
+    pub fn define_native_function_param_by_ref(
+        &mut self,
+        function_name: &str,
+        index: usize,
+        by_ref: bool,
+    ) -> bool {
+        self.native_functions
+            .get_mut(function_name)
+            .is_some_and(|function| function.set_param_by_ref(index, by_ref))
+    }
+
+    /// Records which native AOT callback parameter is variadic.
+    pub fn define_native_function_variadic_param(
+        &mut self,
+        function_name: &str,
+        index: usize,
+    ) -> bool {
+        self.native_functions
+            .get_mut(function_name)
+            .is_some_and(|function| function.set_variadic_index(index))
+    }
+
+    /// Records one native AOT callback return type.
+    pub fn define_native_function_return_type(
+        &mut self,
+        function_name: &str,
+        return_type: EvalParameterType,
+    ) -> bool {
+        self.native_functions
+            .get_mut(function_name)
+            .is_some_and(|function| {
+                function.set_return_type(return_type);
+                true
+            })
+    }
+
+    /// Records whether eval may dispatch a native AOT callback through its bridge.
+    pub fn define_native_function_bridge_supported(
+        &mut self,
+        function_name: &str,
+        supported: bool,
+    ) -> bool {
+        self.native_functions
+            .get_mut(function_name)
+            .is_some_and(|function| {
+                function.set_bridge_supported(supported);
+                true
+            })
     }
 
     /// Defines native AOT instance-method signature metadata for eval named-argument binding.

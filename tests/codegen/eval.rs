@@ -17170,6 +17170,42 @@ return count($default) . ":" . $default[0] . ":" . $default[1];');
     assert_eq!(out.stdout, "left:required:right:O:D:B:items:O:2:1:2");
 }
 
+/// Verifies eval ReflectionParameter exposes generated/AOT function type flags.
+#[test]
+fn test_eval_reflection_parameter_exposes_aot_function_type_flags() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function eval_aot_reflect_typed_function(int &$id, ?string $name, array ...$items): ?string {
+    return $name;
+}
+echo eval('$ref = new ReflectionFunction("eval_aot_reflect_typed_function");
+$params = $ref->getParameters();
+foreach ($params as $param) {
+    echo $param->getName() . ":";
+    echo ($param->hasType() ? "T" : "t") . ":";
+    $type = $param->getType();
+    echo ($type ? $type->getName() : "none") . ":";
+    echo ($type && $type->allowsNull() ? "N" : "n") . ":";
+    echo ($param->isVariadic() ? "V" : "v") . ":";
+    echo ($param->isPassedByReference() ? "R" : "r") . "|";
+}
+echo ":";
+echo ($ref->hasReturnType() ? "R" : "r") . ":";
+$return = $ref->getReturnType();
+return $return->getName() . ":" . ($return->allowsNull() ? "N" : "n");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "id:T:int:n:v:R|name:T:string:N:v:r|items:T:array:n:V:r|:R:string:N"
+    );
+}
+
 /// Verifies eval ReflectionClass::isCloneable uses eval class metadata through the bridge.
 #[test]
 fn test_eval_reflection_class_cloneable_predicate() {

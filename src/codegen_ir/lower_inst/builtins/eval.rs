@@ -105,6 +105,7 @@ struct EvalGlobalAlias {
 struct EvalNativeFunctionRegistration {
     name: String,
     signature: FunctionSig,
+    bridge_supported: bool,
 }
 
 /// A module-local method signature that can be registered with the eval context.
@@ -558,10 +559,11 @@ fn eval_native_function_registrations(
     ctx.module
         .functions
         .iter()
-        .filter(|function| function_can_register_with_eval(function))
+        .filter(|function| function_has_eval_metadata(function))
         .map(|function| EvalNativeFunctionRegistration {
             name: function.name.clone(),
             signature: function_signature_from_eir(function),
+            bridge_supported: function_signature_can_bridge_with_eval(function),
         })
         .collect()
 }
@@ -1025,14 +1027,17 @@ fn collect_eval_native_static_methods(
     }
 }
 
-/// Returns true when a module function is a PHP-visible AOT function supported by this bridge.
-fn function_can_register_with_eval(function: &Function) -> bool {
-    !function.flags.is_main
-        && !function.name.starts_with('_')
-        && function
-            .params
-            .iter()
-            .all(|param| !param.by_ref && !param.variadic)
+/// Returns true when a module function should expose metadata to eval fragments.
+fn function_has_eval_metadata(function: &Function) -> bool {
+    !function.flags.is_main && !function.name.starts_with('_')
+}
+
+/// Returns true when eval can dispatch a native function through the generated bridge.
+fn function_signature_can_bridge_with_eval(function: &Function) -> bool {
+    function
+        .params
+        .iter()
+        .all(|param| !param.by_ref && !param.variadic)
 }
 
 /// Returns true when eval can dispatch a native method through the generated bridge.
@@ -1544,6 +1549,14 @@ fn register_eval_native_function(
         .target
         .extern_symbol("__elephc_eval_register_native_function");
     abi::emit_call_label(ctx.emitter, &symbol);
+    register_eval_native_function_bridge_support(
+        ctx,
+        context_offset,
+        &name_label,
+        name_len,
+        registration.bridge_supported,
+    );
+    let param_type_specs = eval_native_callable_param_type_specs(&registration.signature);
     for (index, (param_name, _)) in registration.signature.params.iter().enumerate() {
         register_eval_native_function_param(
             ctx,
@@ -1553,6 +1566,30 @@ fn register_eval_native_function(
             index,
             param_name,
         );
+        register_eval_native_function_param_flags(
+            ctx,
+            context_offset,
+            &name_label,
+            name_len,
+            index,
+            registration
+                .signature
+                .ref_params
+                .get(index)
+                .copied()
+                .unwrap_or(false),
+            signature_param_is_variadic(&registration.signature, index, param_name),
+        );
+        if let Some(type_spec) = param_type_specs.get(index).and_then(Option::as_deref) {
+            register_eval_native_function_param_type(
+                ctx,
+                context_offset,
+                &name_label,
+                name_len,
+                index,
+                type_spec,
+            );
+        }
     }
     for (index, default) in registration.signature.defaults.iter().enumerate() {
         let Some(default) = default.as_ref().and_then(eval_native_callable_default) else {
@@ -1565,6 +1602,15 @@ fn register_eval_native_function(
             name_len,
             index,
             &default,
+        );
+    }
+    if let Some(type_spec) = eval_native_callable_return_type_spec(&registration.signature) {
+        register_eval_native_function_return_type(
+            ctx,
+            context_offset,
+            &name_label,
+            name_len,
+            &type_spec,
         );
     }
     Ok(())
@@ -2656,6 +2702,160 @@ fn register_eval_native_function_param(
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_function_param");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native-function bridge-support registration call.
+fn register_eval_native_function_bridge_support(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    function_name_label: &str,
+    function_name_len: usize,
+    bridge_supported: bool,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        function_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        function_name_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        if bridge_supported { 1 } else { 0 },
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_function_bridge_support");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native-function parameter-flags registration call.
+fn register_eval_native_function_param_flags(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    function_name_label: &str,
+    function_name_len: usize,
+    param_index: usize,
+    is_by_ref: bool,
+    is_variadic: bool,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        function_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        function_name_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        param_index as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        if is_by_ref { 1 } else { 0 },
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        if is_variadic { 1 } else { 0 },
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_function_param_flags");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native-function parameter-type registration call.
+fn register_eval_native_function_param_type(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    function_name_label: &str,
+    function_name_len: usize,
+    param_index: usize,
+    type_spec: &str,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        function_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        function_name_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        param_index as i64,
+    );
+    let (type_label, type_len) = ctx.data.add_string(type_spec.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        &type_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        type_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_function_param_type");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native-function return-type registration call.
+fn register_eval_native_function_return_type(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    function_name_label: &str,
+    function_name_len: usize,
+    type_spec: &str,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        function_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        function_name_len as i64,
+    );
+    let (type_label, type_len) = ctx.data.add_string(type_spec.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        &type_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        type_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_function_return_type");
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 

@@ -1343,6 +1343,9 @@ pub(super) fn eval_native_function_with_values(
     evaluated_args: Vec<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !function.bridge_supported() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     if evaluated_args.len() != function.param_count() {
         return Err(EvalStatus::RuntimeFatal);
     }

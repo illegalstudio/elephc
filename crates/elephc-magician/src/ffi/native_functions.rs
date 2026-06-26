@@ -12,6 +12,7 @@
 
 use super::native_methods::{
     native_callable_array_default, native_callable_object_default, native_callable_scalar_default,
+    native_callable_type_from_abi, NativeCallableTypePosition,
 };
 use super::util::abi_name_to_string;
 use crate::abi::{ElephcEvalContext, ABI_VERSION};
@@ -61,6 +62,108 @@ pub unsafe extern "C" fn __elephc_eval_register_native_function_param(
             param_index,
             param_name_ptr,
             param_name_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers whether a generated native PHP function can be invoked through its bridge.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Function name must be readable for
+/// its declared byte length.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_bridge_support(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    supported: i32,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_function_bridge_support_inner(
+            ctx,
+            function_name_ptr,
+            function_name_len,
+            supported,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP function parameter's by-ref and variadic flags.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Function name must be readable for
+/// its declared byte length.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_param_flags(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    is_by_ref: i32,
+    is_variadic: i32,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_function_param_flags_inner(
+            ctx,
+            function_name_ptr,
+            function_name_len,
+            param_index,
+            is_by_ref,
+            is_variadic,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP function parameter type in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Function name and type-spec
+/// pointers must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_param_type(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_function_param_type_inner(
+            ctx,
+            function_name_ptr,
+            function_name_len,
+            param_index,
+            type_spec_ptr,
+            type_spec_len,
+        )
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP function return type in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. Function name and type-spec
+/// pointers must be readable for their declared byte lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_function_return_type(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_function_return_type_inner(
+            ctx,
+            function_name_ptr,
+            function_name_len,
+            type_spec_ptr,
+            type_spec_len,
         )
     })
     .unwrap_or(0)
@@ -242,6 +345,143 @@ unsafe fn register_native_function_param_inner(
         &function_name.to_ascii_lowercase(),
         param_index,
         param_name,
+    ))
+}
+
+/// Runs native function bridge-support registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_function_bridge_support`; invalid
+/// handles or names fail closed as `false`.
+unsafe fn register_native_function_bridge_support_inner(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    supported: i32,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(function_name) = abi_name_to_string(function_name_ptr, function_name_len) else {
+        return 0;
+    };
+    i32::from(context.define_native_function_bridge_supported(
+        &function_name.to_ascii_lowercase(),
+        supported != 0,
+    ))
+}
+
+/// Runs native function parameter-flags registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_function_param_flags`; invalid
+/// handles, names, or indexes fail closed as `false`.
+unsafe fn register_native_function_param_flags_inner(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    is_by_ref: i32,
+    is_variadic: i32,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(function_name) = abi_name_to_string(function_name_ptr, function_name_len) else {
+        return 0;
+    };
+    let Ok(param_index) = usize::try_from(param_index) else {
+        return 0;
+    };
+    let function_name = function_name.to_ascii_lowercase();
+    if !context.define_native_function_param_by_ref(&function_name, param_index, is_by_ref != 0) {
+        return 0;
+    }
+    if is_variadic != 0 {
+        return i32::from(context.define_native_function_variadic_param(
+            &function_name,
+            param_index,
+        ));
+    }
+    1
+}
+
+/// Runs native function parameter-type registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_function_param_type`; invalid handles,
+/// names, indexes, or type specs fail closed as `false`.
+unsafe fn register_native_function_param_type_inner(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    param_index: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(function_name) = abi_name_to_string(function_name_ptr, function_name_len) else {
+        return 0;
+    };
+    let Ok(param_index) = usize::try_from(param_index) else {
+        return 0;
+    };
+    let Some(param_type) = native_callable_type_from_abi(
+        type_spec_ptr,
+        type_spec_len,
+        NativeCallableTypePosition::Parameter,
+    ) else {
+        return 0;
+    };
+    i32::from(context.define_native_function_param_type(
+        &function_name.to_ascii_lowercase(),
+        param_index,
+        param_type,
+    ))
+}
+
+/// Runs native function return-type registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_function_return_type`; invalid handles,
+/// names, or type specs fail closed as `false`.
+unsafe fn register_native_function_return_type_inner(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(function_name) = abi_name_to_string(function_name_ptr, function_name_len) else {
+        return 0;
+    };
+    let Some(return_type) = native_callable_type_from_abi(
+        type_spec_ptr,
+        type_spec_len,
+        NativeCallableTypePosition::Return,
+    ) else {
+        return 0;
+    };
+    i32::from(context.define_native_function_return_type(
+        &function_name.to_ascii_lowercase(),
+        return_type,
     ))
 }
 
