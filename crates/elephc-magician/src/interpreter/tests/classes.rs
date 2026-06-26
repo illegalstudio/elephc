@@ -1271,6 +1271,40 @@ return $name->value;"#,
     assert_eq!(values.get(result), FakeValue::String("Ada!".to_string()));
 }
 
+/// Verifies short set hooks assign their expression result into the raw backing slot.
+#[test]
+fn execute_program_routes_eval_short_set_property_hooks() {
+    let program = parse_fragment(
+        br#"class EvalShortSetHookName {
+    public string $value {
+        get => $this->value;
+        set => trim($value);
+    }
+}
+class EvalShortSetHookLabel {
+    public string $text {
+        get => $this->text;
+        set(string $raw) => strtoupper($raw);
+    }
+}
+$name = new EvalShortSetHookName();
+$name->value = "  Ada  ";
+echo "[" . $name->value . "]:";
+$label = new EvalShortSetHookLabel();
+$label->text = "hi";
+echo $label->text;
+return $label->text;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "[Ada]:HI");
+    assert_eq!(values.get(result), FakeValue::String("HI".to_string()));
+}
+
 /// Verifies undefined eval property reads and writes dispatch through `__get` and `__set`.
 #[test]
 fn execute_program_dispatches_eval_magic_get_and_set() {

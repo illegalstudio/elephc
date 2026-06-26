@@ -754,7 +754,7 @@ fn parse_fragment_accepts_concrete_class_property_hooks() {
         br#"class DynEvalHooked {
     public int $value {
         get => 7;
-        set { return; }
+        set => $value + 1;
     }
 }"#,
     )
@@ -774,20 +774,32 @@ fn parse_fragment_accepts_concrete_class_property_hooks() {
                 vec![EvalParameterTypeVariant::Int],
                 false
             )))
-            .with_hooks(true, true)],
+            .with_hooks(true, true)
+            .with_virtual(false)],
             vec![
                 EvalClassMethod::new(
                     "__propget_value",
                     Vec::new(),
                     vec![EvalStmt::Return(Some(EvalExpr::Const(EvalConst::Int(7))))]
-                ),
+                )
+                .with_source_location(EvalSourceLocation::new(3, 3)),
                 EvalClassMethod::new(
                     "__propset_value",
                     vec!["value".to_string()],
-                    vec![EvalStmt::Return(None)]
+                    vec![EvalStmt::PropertySet {
+                        object: EvalExpr::LoadVar("this".to_string()),
+                        property: "value".to_string(),
+                        value: EvalExpr::Binary {
+                            op: EvalBinOp::Add,
+                            left: Box::new(EvalExpr::LoadVar("value".to_string())),
+                            right: Box::new(EvalExpr::Const(EvalConst::Int(1)))
+                        }
+                    }]
                 )
+                .with_source_location(EvalSourceLocation::new(4, 4))
             ]
-        ))]
+        )
+        .with_source_location(EvalSourceLocation::new(1, 6)))]
     );
 }
 

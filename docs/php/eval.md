@@ -572,7 +572,9 @@ non-final constant metadata, and the enum-case reflection classes expose the
 same inherited `IS_*` constants as PHP.
 Concrete property hooks are lowered to eval accessor methods; reads and writes
 route through inherited hooks, while access from the accessor itself uses the
-raw backing slot. `readonly` eval properties require a declared type, may be
+raw backing slot. Both `get => expr;` and `set => expr;` short forms are
+supported; short set hooks store the expression result in the raw backing slot.
+`readonly` eval properties require a declared type, may be
 assigned from the constructor of the declaring class, and later writes fail as
 eval runtime fatals. A `readonly class` makes declared instance properties
 readonly implicitly, while declared static properties remain mutable and are not
