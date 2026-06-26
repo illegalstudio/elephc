@@ -3673,6 +3673,55 @@ fn eval_throw_dynamic_property_creation_error<T>(
     )
 }
 
+/// Throws PHP's undeclared static property error for static property access.
+fn eval_throw_undeclared_static_property_error<T>(
+    class_name: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Access to undeclared static property {}::${}",
+            class_name.trim_start_matches('\\'),
+            property_name
+        ),
+        context,
+        values,
+    )
+}
+
+/// Throws PHP's uninitialized typed static property error.
+fn eval_throw_uninitialized_static_property_error<T>(
+    declaring_class: &str,
+    property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Typed static property {}::${} must not be accessed before initialization",
+            declaring_class.trim_start_matches('\\'),
+            property_name
+        ),
+        context,
+        values,
+    )
+}
+
+/// Throws PHP's class-not-found error for unresolved static member receivers.
+fn eval_throw_class_not_found_error<T>(
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!("Class \"{}\" not found", class_name.trim_start_matches('\\')),
+        context,
+        values,
+    )
+}
+
 /// Throws PHP's inaccessible constant error for eval-declared class constants.
 fn eval_throw_constant_access_error<T>(
     declaring_class: &str,
@@ -3724,7 +3773,12 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
     if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
         if !property.is_static() {
-            return Err(EvalStatus::RuntimeFatal);
+            return eval_throw_undeclared_static_property_error(
+                &class_name,
+                property_name,
+                context,
+                values,
+            );
         }
         if validate_eval_member_access(&declaring_class, property.visibility(), context).is_err() {
             return eval_throw_property_access_error(
@@ -3735,12 +3789,23 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
                 values,
             );
         }
-        return context
-            .static_property(&declaring_class, property.name())
-            .ok_or(EvalStatus::RuntimeFatal);
+        if let Some(value) = context.static_property(&declaring_class, property.name()) {
+            return Ok(value);
+        }
+        return eval_throw_uninitialized_static_property_error(
+            &declaring_class,
+            property.name(),
+            context,
+            values,
+        );
     }
     if eval_static_member_context_owns_class(&class_name, context) {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_undeclared_static_property_error(
+            &class_name,
+            property_name,
+            context,
+            values,
+        );
     }
     if let Some((declaring_class, visibility, _, is_static)) =
         eval_reflection_aot_static_property_access_metadata(
@@ -3750,19 +3815,34 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
             values,
         )?
     {
-        if is_static && validate_eval_member_access(&declaring_class, visibility, context).is_err() {
-            return eval_throw_property_access_error(
-                &declaring_class,
-                property_name,
-                visibility,
-                context,
-                values,
-            );
+        if is_static {
+            if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+                return eval_throw_property_access_error(
+                    &declaring_class,
+                    property_name,
+                    visibility,
+                    context,
+                    values,
+                );
+            }
+            if !values.static_property_is_initialized(&declaring_class, property_name)? {
+                return eval_throw_uninitialized_static_property_error(
+                    &declaring_class,
+                    property_name,
+                    context,
+                    values,
+                );
+            }
         }
     }
-    values
-        .static_property_get(&class_name, property_name)?
-        .ok_or(EvalStatus::RuntimeFatal)
+    if let Some(value) = values.static_property_get(&class_name, property_name)? {
+        return Ok(value);
+    }
+    if eval_runtime_class_like_exists(&class_name, context, values)? {
+        eval_throw_undeclared_static_property_error(&class_name, property_name, context, values)
+    } else {
+        eval_throw_class_not_found_error(&class_name, context, values)
+    }
 }
 
 /// Reads one eval-declared class constant after resolving the class-like receiver.
@@ -3937,7 +4017,12 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
     if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
         if !property.is_static() {
-            return Err(EvalStatus::RuntimeFatal);
+            return eval_throw_undeclared_static_property_error(
+                &class_name,
+                property_name,
+                context,
+                values,
+            );
         }
         if validate_eval_property_write_access(&declaring_class, &property, context).is_err() {
             return eval_throw_property_access_error(
@@ -3962,7 +4047,12 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
         return Ok(());
     }
     if eval_static_member_context_owns_class(&class_name, context) {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_undeclared_static_property_error(
+            &class_name,
+            property_name,
+            context,
+            values,
+        );
     }
     if let Some((declaring_class, _, write_visibility, is_static)) =
         eval_reflection_aot_static_property_access_metadata(
@@ -3985,9 +4075,12 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
         }
     }
     if values.static_property_set(&class_name, property_name, value)? {
-        Ok(())
+        return Ok(());
+    }
+    if eval_runtime_class_like_exists(&class_name, context, values)? {
+        eval_throw_undeclared_static_property_error(&class_name, property_name, context, values)
     } else {
-        Err(EvalStatus::RuntimeFatal)
+        eval_throw_class_not_found_error(&class_name, context, values)
     }
 }
 
@@ -4445,6 +4538,19 @@ fn eval_static_member_context_owns_class(
         || context.has_interface(class_name)
         || context.has_trait(class_name)
         || context.has_enum(class_name)
+}
+
+/// Returns whether a static member receiver exists in eval metadata or generated metadata.
+fn eval_runtime_class_like_exists(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(eval_static_member_context_owns_class(class_name, context)
+        || values.class_exists(class_name)?
+        || eval_runtime_interface_exists(class_name, values)?
+        || values.trait_exists(class_name)?
+        || values.enum_exists(class_name)?)
 }
 
 /// Resolves class-name literal receivers without requiring named classes to exist.

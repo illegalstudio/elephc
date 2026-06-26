@@ -4832,6 +4832,54 @@ $right->run();
     );
 }
 
+/// Verifies eval fragments throw Error for invalid AOT static property access.
+#[test]
+fn test_eval_fragment_invalid_aot_static_property_access_throws_error() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalInvalidAotStaticPropBox {
+    public int $instance = 1;
+    public static int $typed;
+}
+
+eval('try {
+    EvalInvalidAotStaticPropBox::$missing;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    EvalInvalidAotStaticPropBox::$instance;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    EvalInvalidAotStaticPropBox::$typed;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    EvalMissingAotStaticPropBox::$missing;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error:Access to undeclared static property EvalInvalidAotStaticPropBox::$missing|\
+Error:Access to undeclared static property EvalInvalidAotStaticPropBox::$instance|\
+Error:Typed static property EvalInvalidAotStaticPropBox::$typed must not be accessed before initialization|\
+Error:Class \"EvalMissingAotStaticPropBox\" not found"
+    );
+}
+
 /// Verifies eval fragments can replace public array AOT static properties.
 #[test]
 fn test_eval_fragment_can_mutate_aot_array_static_property() {
@@ -8330,6 +8378,54 @@ echo EvalStaticBase::baseRead();');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "1:3:3:14:5:5");
+
+    let errors = compile_and_run_capture(
+        r#"<?php
+eval('class EvalInvalidStaticPropBox {
+    public int $instance = 1;
+    public static int $typed;
+}
+try {
+    EvalInvalidStaticPropBox::$missing;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    EvalInvalidStaticPropBox::$instance;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    EvalInvalidStaticPropBox::$typed;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    EvalInvalidStaticPropBox::$missing = 9;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        errors.success,
+        "program failed: stdout={:?} stderr={}",
+        errors.stdout, errors.stderr
+    );
+    assert_eq!(
+        errors.stdout,
+        "Error:Access to undeclared static property EvalInvalidStaticPropBox::$missing|\
+Error:Access to undeclared static property EvalInvalidStaticPropBox::$instance|\
+Error:Typed static property EvalInvalidStaticPropBox::$typed must not be accessed before initialization|\
+Error:Access to undeclared static property EvalInvalidStaticPropBox::$missing"
+    );
 }
 
 /// Verifies eval-declared static interface methods are validated and reflected.
