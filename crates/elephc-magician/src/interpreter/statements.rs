@@ -2832,7 +2832,7 @@ fn validate_property_parent_redeclaration(
         return Err(EvalStatus::RuntimeFatal);
     }
     if parent_property.is_static() != property.is_static()
-        || parent_property.is_readonly() != property.is_readonly()
+        || (parent_property.is_readonly() && !property.is_readonly())
         || property_visibility_rank(property.visibility())
             < property_visibility_rank(parent_property.visibility())
         || property_visibility_rank(property.write_visibility())

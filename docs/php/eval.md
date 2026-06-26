@@ -164,8 +164,9 @@ Abstract classes may defer missing interface methods and property contracts, but
 declared or inherited members that cover an interface contract are validated at
 declaration time.
 Eval validates inherited property redeclarations with PHP-style invariant
-property types, matching static/readonly modifiers, and compatible read/write
-visibility.
+property types, matching static storage, compatible read/write visibility, and
+readonly compatibility: child redeclarations may add `readonly`, but may not
+remove inherited `readonly`.
 Eval validates inherited class/interface constant redeclarations with PHP-style
 visibility compatibility, and rejects non-public interface constants.
 Eval-declared method calls also enforce declared return values at runtime, with

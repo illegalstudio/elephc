@@ -814,9 +814,26 @@ class EvalPropertyRelativeChild extends EvalPropertyRelativeBase {
     public self $selfValue;
     public parent $parentValue;
 }
+class EvalPropertyReadonlyAddBase {
+    public int $count = 0;
+}
+class EvalPropertyReadonlyAddChild extends EvalPropertyReadonlyAddBase {
+    public readonly int $count;
+    public function __construct() { $this->count = 7; }
+}
+class EvalPropertyReadonlyWidenBase {
+    protected int $count = 0;
+    public function count() { return $this->count; }
+}
+class EvalPropertyReadonlyWidenChild extends EvalPropertyReadonlyWidenBase {
+    public readonly int $count;
+    public function __construct() { $this->count = 9; }
+}
 $box = new EvalPropertyRedeclareChild();
 $box->value = "ok";
-return $box->value;"#,
+$readonly = new EvalPropertyReadonlyAddChild();
+$widened = new EvalPropertyReadonlyWidenChild();
+return $box->value . ":" . $readonly->count . ":" . $widened->count . ":" . $widened->count();"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
@@ -824,7 +841,7 @@ return $box->value;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.get(result), FakeValue::String("ok".to_string()));
+    assert_eq!(values.get(result), FakeValue::String("ok:7:9:9".to_string()));
 }
 
 /// Verifies eval rejects inherited property redeclarations that violate PHP invariance.
