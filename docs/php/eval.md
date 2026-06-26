@@ -156,6 +156,8 @@ properties, static methods, static interface method contracts, class, interface,
 trait, and enum constants including `final` constants, class-level attributes,
 `ClassName::class` literals, magic method fallback through `__call()` and
 `__callStatic()`, and magic property fallback through `__get()` and `__set()`.
+PHP's global `#[Override]` marker is validated on eval-declared methods against
+non-private parent methods and eval interface method contracts.
 Eval validates method override and interface method parameter and return types
 with PHP-style parameter contravariance and return covariance for supported
 declared type metadata, including nullable, union, `mixed`, `self`, `parent`,
