@@ -1376,8 +1376,10 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     validate_eval_class_does_not_implement_throwable_interfaces(class, context)?;
     validate_eval_class_does_not_implement_enum_interfaces(class, context)?;
     validate_declared_class_interface_members(class, context)?;
+    validate_declared_class_builtin_interface_members(class, context)?;
     if !class.is_abstract() {
         validate_concrete_class_requirements(class, context)?;
+        validate_concrete_class_builtin_interface_requirements(class, context)?;
     }
     if context.define_class(class.clone()) {
         initialize_eval_declared_constants(
@@ -1538,6 +1540,8 @@ fn validate_eval_enum_decl(
     let enum_class = enum_decl.as_class_metadata();
     validate_eval_class_modifiers(&enum_class, context)?;
     validate_eval_enum_interfaces(enum_decl, &enum_class, context, values)?;
+    validate_declared_class_builtin_interface_members(&enum_class, context)?;
+    validate_concrete_class_builtin_interface_requirements(&enum_class, context)?;
     validate_concrete_class_requirements(&enum_class, context)
 }
 
@@ -3044,6 +3048,36 @@ fn validate_declared_class_interface_members(
     Ok(())
 }
 
+/// Validates declared class methods against PHP builtin runtime interface contracts.
+fn validate_declared_class_builtin_interface_members(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    for (requirement_owner, requirement) in
+        pending_class_builtin_interface_method_requirements(class, context)
+    {
+        let Some((declaring_class, method)) =
+            pending_class_method(class, requirement.name(), context)
+        else {
+            continue;
+        };
+        if method.visibility() != EvalVisibility::Public
+            || method.is_static() != requirement.is_static()
+            || !class_method_satisfies_interface_signature(
+                &method,
+                &declaring_class,
+                &requirement,
+                &requirement_owner,
+                Some(class),
+                context,
+            )
+        {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
+}
+
 /// Validates class methods present for an eval interface, even on abstract classes.
 fn validate_declared_class_interface_methods(
     class: &EvalClass,
@@ -3221,6 +3255,21 @@ fn validate_concrete_class_requirements(
     for interface in pending_class_interface_names(class, context) {
         if context.has_interface(&interface) {
             validate_class_implements_eval_interface(class, &interface, context)?;
+        }
+    }
+    Ok(())
+}
+
+/// Validates concrete class methods required by PHP builtin runtime interfaces.
+fn validate_concrete_class_builtin_interface_requirements(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    for (requirement_owner, requirement) in
+        pending_class_builtin_interface_method_requirements(class, context)
+    {
+        if !class_has_interface_method(class, &requirement_owner, &requirement, context) {
+            return Err(EvalStatus::RuntimeFatal);
         }
     }
     Ok(())
@@ -3421,6 +3470,18 @@ fn push_pending_class_interface_name(
     if seen.insert(interface.to_ascii_lowercase()) {
         interfaces.push(interface.to_string());
     }
+}
+
+/// Returns PHP builtin interface method requirements inherited by a pending class.
+fn pending_class_builtin_interface_method_requirements(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Vec<(String, EvalInterfaceMethod)> {
+    let mut requirements = Vec::new();
+    for interface in pending_class_interface_names(class, context) {
+        requirements.extend(builtin_interface_method_requirements(&interface));
+    }
+    requirements
 }
 
 /// Validates that one eval class provides methods required by one eval interface.

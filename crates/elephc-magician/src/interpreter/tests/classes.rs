@@ -97,6 +97,66 @@ class EvalInvalidThrowableMarkerClass implements EvalThrowableMarker {}"#,
     }
 }
 
+/// Verifies eval classes must satisfy methods required by PHP builtin interfaces.
+#[test]
+fn execute_program_rejects_invalid_builtin_interface_implementations() {
+    for (source, label) in [
+        (
+            br#"class EvalMissingCountable implements Countable {}"# as &[u8],
+            "missing Countable::count should fail",
+        ),
+        (
+            br#"class EvalBadCountableReturn implements Countable {
+    public function count(): string { return "1"; }
+}"#,
+            "incompatible Countable::count return type should fail",
+        ),
+        (
+            br#"class EvalMissingStringable implements Stringable {}"#,
+            "missing Stringable::__toString should fail",
+        ),
+        (
+            br#"class EvalBadIterator implements Iterator {
+    public function current(): mixed { return null; }
+    public function key(): mixed { return null; }
+    public function next(): void {}
+    public function valid(): bool { return false; }
+}"#,
+            "missing Iterator::rewind should fail",
+        ),
+        (
+            br#"class EvalBadJsonSerializable implements JsonSerializable {
+    public static function jsonSerialize(): mixed { return []; }
+}"#,
+            "static JsonSerializable::jsonSerialize should fail",
+        ),
+    ] {
+        let program = parse_fragment(source).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let err = execute_program(&program, &mut scope, &mut values).expect_err(label);
+
+        assert_eq!(err, EvalStatus::RuntimeFatal);
+    }
+}
+
+/// Verifies abstract eval classes can defer PHP builtin interface methods.
+#[test]
+fn execute_program_allows_abstract_builtin_interface_implementations() {
+    let program = parse_fragment(
+        br#"abstract class EvalAbstractCountable implements Countable {}
+return class_exists("EvalAbstractCountable");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval-declared `ArrayAccess` objects dispatch reads, writes, append, probes, and unset.
 #[test]
 fn execute_program_dispatches_eval_array_access_objects() {

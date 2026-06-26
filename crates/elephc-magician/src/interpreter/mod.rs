@@ -12,6 +12,7 @@
 //!   to `RuntimeValueOps`, which will be backed by elephc runtime hooks.
 
 mod array_literals;
+mod builtin_interfaces;
 mod builtins;
 mod constant_eval;
 mod constants;
@@ -49,6 +50,7 @@ use crate::parser::parse_fragment;
 use crate::scope::{ElephcEvalScope, ScopeCellOwnership, ScopeEntry};
 use crate::value::RuntimeCellHandle;
 use array_literals::*;
+use builtin_interfaces::*;
 use builtins::*;
 use constant_eval::*;
 use constants::*;

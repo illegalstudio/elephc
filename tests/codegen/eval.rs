@@ -7510,6 +7510,31 @@ class EvalDynInvalidThrowableMarker implements EvalDynThrowableMarker {}');
     );
 }
 
+/// Verifies eval-declared classes must satisfy PHP builtin interface methods.
+#[test]
+fn test_eval_declared_class_rejects_missing_builtin_interface_methods() {
+    let out = compile_and_run(
+        r#"<?php
+eval('abstract class EvalDynAbstractCountable implements Countable {}
+class EvalDynValidCountable implements Countable {
+    public function count(): int { return 4; }
+}
+echo count(new EvalDynValidCountable());');
+"#,
+    );
+    assert_eq!(out, "4");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class EvalDynMissingCountable implements Countable {}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval enum `from()` misses throw catchable `ValueError` objects.
 #[test]
 fn test_eval_fragment_enum_from_miss_throws_value_error() {
