@@ -3324,6 +3324,42 @@ echo $box->accepts($box);');
     );
 }
 
+/// Verifies eval-declared objects support nullsafe property reads and method calls.
+#[test]
+fn test_eval_declared_nullsafe_property_and_method_access() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalNullsafeProfile {
+    public string $name = "Ada";
+
+    public function label($value) {
+        echo "method:";
+        return $this->name . ":" . $value;
+    }
+}
+
+class EvalNullsafeUser {
+    public $profile = null;
+}
+
+function eval_nullsafe_side() {
+    echo "bad";
+    return "side";
+}
+
+$with = new EvalNullsafeUser();
+$with->profile = new EvalNullsafeProfile();
+$without = new EvalNullsafeUser();
+
+echo $with->profile?->name ?? "none"; echo "|";
+echo $without->profile?->name ?? "none"; echo "|";
+echo $with?->profile?->label("ok") ?? "none"; echo "|";
+echo $without?->profile?->label(eval_nullsafe_side()) ?? "none";');
+"#,
+    );
+    assert_eq!(out, "Ada|none|method:Ada:ok|none");
+}
+
 /// Verifies eval string contexts dispatch AOT `__toString()` through the runtime method bridge.
 #[test]
 fn test_eval_aot_tostring_string_contexts() {

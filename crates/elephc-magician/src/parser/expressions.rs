@@ -492,28 +492,45 @@ impl Parser {
                 };
                 continue;
             }
-            if self.consume(TokenKind::Arrow) {
-                let TokenKind::Ident(member) = self.current() else {
-                    return Err(EvalParseError::UnexpectedToken);
-                };
-                let member = member.clone();
-                self.advance();
-                if matches!(self.current(), TokenKind::LParen) {
-                    let args = self.parse_call_args()?;
-                    expr = EvalExpr::MethodCall {
+            let nullsafe = if self.consume(TokenKind::Arrow) {
+                false
+            } else if self.consume(TokenKind::QuestionArrow) {
+                true
+            } else {
+                break;
+            };
+            let TokenKind::Ident(member) = self.current() else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            let member = member.clone();
+            self.advance();
+            if matches!(self.current(), TokenKind::LParen) {
+                let args = self.parse_call_args()?;
+                expr = if nullsafe {
+                    EvalExpr::NullsafeMethodCall {
                         object: Box::new(expr),
                         method: member,
                         args,
-                    };
+                    }
                 } else {
-                    expr = EvalExpr::PropertyGet {
+                    EvalExpr::MethodCall {
                         object: Box::new(expr),
-                        property: member,
-                    };
-                }
-                continue;
+                        method: member,
+                        args,
+                    }
+                };
+            } else if nullsafe {
+                expr = EvalExpr::NullsafePropertyGet {
+                    object: Box::new(expr),
+                    property: member,
+                };
+            } else {
+                expr = EvalExpr::PropertyGet {
+                    object: Box::new(expr),
+                    property: member,
+                };
             }
-            break;
+            continue;
         }
         Ok(expr)
     }
