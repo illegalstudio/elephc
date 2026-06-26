@@ -302,42 +302,51 @@ pub(in crate::interpreter) fn eval_expr(
             }
             let left = eval_expr(left, context, scope, values)?;
             let right = eval_expr(right, context, scope, values)?;
-            match op {
-                EvalBinOp::Add => values.add(left, right),
-                EvalBinOp::Sub => values.sub(left, right),
-                EvalBinOp::Mul => values.mul(left, right),
-                EvalBinOp::Div => values.div(left, right),
-                EvalBinOp::Mod => values.modulo(left, right),
-                EvalBinOp::Pow => values.pow(left, right),
-                EvalBinOp::BitAnd
-                | EvalBinOp::BitOr
-                | EvalBinOp::BitXor
-                | EvalBinOp::ShiftLeft
-                | EvalBinOp::ShiftRight => values.bitwise(*op, left, right),
-                EvalBinOp::Concat => {
-                    let left = eval_string_context_value(left, context, values)?;
-                    let right = eval_string_context_value(right, context, values)?;
-                    values.concat(left, right)
-                }
-                EvalBinOp::LogicalXor => {
-                    let left_truthy = values.truthy(left)?;
-                    let right_truthy = values.truthy(right)?;
-                    values.bool_value(left_truthy ^ right_truthy)
-                }
-                EvalBinOp::LooseEq
-                | EvalBinOp::LooseNotEq
-                | EvalBinOp::StrictEq
-                | EvalBinOp::StrictNotEq
-                | EvalBinOp::Lt
-                | EvalBinOp::LtEq
-                | EvalBinOp::Gt
-                | EvalBinOp::GtEq => values.compare(*op, left, right),
-                EvalBinOp::Spaceship => values.spaceship(left, right),
-                EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr => {
-                    Err(EvalStatus::UnsupportedConstruct)
-                }
-            }
+            eval_binary_result(*op, left, right, context, values)
         }
+    }
+}
+
+/// Applies one already-evaluated binary operation with eval runtime semantics.
+pub(in crate::interpreter) fn eval_binary_result(
+    op: EvalBinOp,
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match op {
+        EvalBinOp::Add => values.add(left, right),
+        EvalBinOp::Sub => values.sub(left, right),
+        EvalBinOp::Mul => values.mul(left, right),
+        EvalBinOp::Div => values.div(left, right),
+        EvalBinOp::Mod => values.modulo(left, right),
+        EvalBinOp::Pow => values.pow(left, right),
+        EvalBinOp::BitAnd
+        | EvalBinOp::BitOr
+        | EvalBinOp::BitXor
+        | EvalBinOp::ShiftLeft
+        | EvalBinOp::ShiftRight => values.bitwise(op, left, right),
+        EvalBinOp::Concat => {
+            let left = eval_string_context_value(left, context, values)?;
+            let right = eval_string_context_value(right, context, values)?;
+            values.concat(left, right)
+        }
+        EvalBinOp::LogicalXor => {
+            let left_truthy = values.truthy(left)?;
+            let right_truthy = values.truthy(right)?;
+            values.bool_value(left_truthy ^ right_truthy)
+        }
+        EvalBinOp::LooseEq
+        | EvalBinOp::LooseNotEq
+        | EvalBinOp::StrictEq
+        | EvalBinOp::StrictNotEq
+        | EvalBinOp::Lt
+        | EvalBinOp::LtEq
+        | EvalBinOp::Gt
+        | EvalBinOp::GtEq => values.compare(op, left, right),
+        EvalBinOp::Spaceship => values.spaceship(left, right),
+        EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr => Err(EvalStatus::UnsupportedConstruct),
     }
 }
 

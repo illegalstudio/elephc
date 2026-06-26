@@ -3503,6 +3503,50 @@ echo $aot->count;');
     assert_eq!(out.stdout, "n|n|7|10");
 }
 
+/// Verifies eval object property compound assignments work for named and dynamic properties.
+#[test]
+fn test_eval_object_property_compound_assignment_statements() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotPropertyCompoundAssign {
+    public int $count = 10;
+    public string $label = "a";
+}
+eval('class EvalDynamicPropertyCompoundAssign {
+    public $count = 1;
+    public $label = "x";
+}
+function eval_property_compound_name() {
+    echo "n|";
+    return "count";
+}
+function eval_property_compound_rhs() {
+    echo "r|";
+    return 4;
+}
+$box = new EvalDynamicPropertyCompoundAssign();
+$box->count += 2;
+$box->count *= 3;
+$box->label .= "y";
+$name = "count";
+$box->{$name} -= 1;
+$box->{eval_property_compound_name()} += eval_property_compound_rhs();
+echo $box->count; echo ":"; echo $box->label; echo "|";
+$aot = new EvalAotPropertyCompoundAssign();
+$aot->count += 5;
+$aot->count %= 6;
+$aot->label .= "b";
+echo $aot->count; echo ":"; echo $aot->label;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "n|r|12:xy|3:ab");
+}
+
 /// Verifies eval string contexts dispatch AOT `__toString()` through the runtime method bridge.
 #[test]
 fn test_eval_aot_tostring_string_contexts() {
