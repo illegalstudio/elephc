@@ -136,6 +136,21 @@ fn eval_call_arg_value(
                 }),
             ))
         }
+        EvalExpr::DynamicPropertyGet { object, property } => {
+            let access_scope = context.execution_scope();
+            let object = eval_expr(object, context, caller_scope, values)?;
+            let property = eval_dynamic_member_name(property, context, caller_scope, values)?;
+            let value = eval_property_get_result(object, &property, context, values)?;
+            validate_property_ref_target(object, &property, context, values)?;
+            Ok((
+                value,
+                Some(EvalReferenceTarget::ObjectProperty {
+                    object,
+                    property,
+                    access_scope,
+                }),
+            ))
+        }
         EvalExpr::StaticPropertyGet {
             class_name,
             property,
