@@ -12,7 +12,7 @@ use super::cursor::*;
 use super::state::*;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{
-    EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalCallArg, EvalCatch, EvalClass,
+    EvalArrayElement, EvalAttribute, EvalAttributeArg, EvalBinOp, EvalCallArg, EvalCatch, EvalClass,
     EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalConst, EvalEnum,
     EvalEnumBackingType, EvalEnumCase, EvalExpr, EvalInstanceOfTarget, EvalInterface,
     EvalInterfaceMethod, EvalInterfaceProperty, EvalParameterType, EvalParameterTypeVariant,
@@ -2836,6 +2836,27 @@ impl Parser {
             }
             return property_inc_dec_stmt(target, increment).map(|stmt| vec![stmt]);
         }
+        if self.consume(TokenKind::LBracket) {
+            if self.consume(TokenKind::RBracket) {
+                self.expect(TokenKind::Equal)?;
+                let value = self.parse_expr()?;
+                if require_semicolon {
+                    self.expect_semicolon()?;
+                }
+                return property_array_append_stmt(target, value).map(|stmt| vec![stmt]);
+            }
+            let index = self.parse_expr()?;
+            self.expect(TokenKind::RBracket)?;
+            let Some(op) = assignment_op(self.current()) else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            self.advance();
+            let value = self.parse_expr()?;
+            if require_semicolon {
+                self.expect_semicolon()?;
+            }
+            return property_array_set_stmt(target, index, op, value).map(|stmt| vec![stmt]);
+        }
         let Some(op) = assignment_op(self.current()) else {
             if require_semicolon {
                 self.expect_semicolon()?;
@@ -2848,6 +2869,9 @@ impl Parser {
             self.expect_semicolon()?;
         }
         match (target, op) {
+            (EvalExpr::ArrayGet { array, index }, op) => {
+                property_array_set_stmt(*array, *index, op, value).map(|stmt| vec![stmt])
+            }
             (EvalExpr::PropertyGet { object, property }, None) => Ok(vec![EvalStmt::PropertySet {
                 object: *object,
                 property,
@@ -3218,6 +3242,51 @@ fn property_inc_dec_stmt(target: EvalExpr, increment: bool) -> Result<EvalStmt, 
     }
 }
 
+/// Builds an object-property array append statement from a parsed property target.
+fn property_array_append_stmt(target: EvalExpr, value: EvalExpr) -> Result<EvalStmt, EvalParseError> {
+    match target {
+        EvalExpr::PropertyGet { object, property } => Ok(EvalStmt::PropertyArrayAppend {
+            object: *object,
+            property,
+            value,
+        }),
+        EvalExpr::DynamicPropertyGet { object, property } => {
+            Ok(EvalStmt::DynamicPropertyArrayAppend {
+                object: *object,
+                property: *property,
+                value,
+            })
+        }
+        _ => Err(EvalParseError::UnexpectedToken),
+    }
+}
+
+/// Builds an object-property array write statement from a parsed property target.
+fn property_array_set_stmt(
+    target: EvalExpr,
+    index: EvalExpr,
+    op: Option<EvalBinOp>,
+    value: EvalExpr,
+) -> Result<EvalStmt, EvalParseError> {
+    match target {
+        EvalExpr::PropertyGet { object, property } => Ok(EvalStmt::PropertyArraySet {
+            object: *object,
+            property,
+            index,
+            op,
+            value,
+        }),
+        EvalExpr::DynamicPropertyGet { object, property } => Ok(EvalStmt::DynamicPropertyArraySet {
+            object: *object,
+            property: *property,
+            index,
+            op,
+            value,
+        }),
+        _ => Err(EvalParseError::UnexpectedToken),
+    }
+}
+
 /// Converts a parsed attribute argument expression into retained literal metadata.
 fn eval_attribute_arg_from_expr(expr: &EvalExpr) -> Option<EvalAttributeArg> {
     match expr {
@@ -3367,6 +3436,11 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
             property,
             value,
         }
+        | EvalStmt::DynamicPropertyArrayAppend {
+            object,
+            property,
+            value,
+        }
         | EvalStmt::DynamicPropertyCompoundAssign {
             object,
             property,
@@ -3376,6 +3450,19 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
             eval_is_this_dynamic_property(object, property, property_name)
                 || eval_expr_uses_this_property(object, property_name)
                 || eval_expr_uses_this_property(property, property_name)
+                || eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::DynamicPropertyArraySet {
+            object,
+            property,
+            index,
+            value,
+            ..
+        } => {
+            eval_is_this_dynamic_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(property, property_name)
+                || eval_expr_uses_this_property(index, property_name)
                 || eval_expr_uses_this_property(value, property_name)
         }
         EvalStmt::DynamicPropertyIncDec {
@@ -3390,6 +3477,11 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
             property,
             value,
         }
+        | EvalStmt::PropertyArrayAppend {
+            object,
+            property,
+            value,
+        }
         | EvalStmt::PropertyCompoundAssign {
             object,
             property,
@@ -3398,6 +3490,18 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
         } => {
             eval_is_this_property(object, property, property_name)
                 || eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::PropertyArraySet {
+            object,
+            property,
+            index,
+            value,
+            ..
+        } => {
+            eval_is_this_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(index, property_name)
                 || eval_expr_uses_this_property(value, property_name)
         }
         EvalStmt::PropertyIncDec {

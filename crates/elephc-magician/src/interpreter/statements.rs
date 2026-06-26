@@ -177,6 +177,30 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_property_set_result(object, &property, value, context, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::DynamicPropertyArrayAppend {
+            object,
+            property,
+            value,
+        } => {
+            let object = eval_expr(object, context, scope, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_property_array_append_result(object, &property, value, context, scope, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::DynamicPropertyArraySet {
+            object,
+            property,
+            index,
+            op,
+            value,
+        } => {
+            let object = eval_expr(object, context, scope, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_property_array_set_result(
+                object, &property, index, *op, value, context, scope, values,
+            )?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::DynamicPropertyCompoundAssign {
             object,
             property,
@@ -213,6 +237,28 @@ pub(in crate::interpreter) fn execute_stmt(
             let object = eval_expr(object, context, scope, values)?;
             let value = eval_expr(value, context, scope, values)?;
             eval_property_set_result(object, property, value, context, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::PropertyArrayAppend {
+            object,
+            property,
+            value,
+        } => {
+            let object = eval_expr(object, context, scope, values)?;
+            eval_property_array_append_result(object, property, value, context, scope, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::PropertyArraySet {
+            object,
+            property,
+            index,
+            op,
+            value,
+        } => {
+            let object = eval_expr(object, context, scope, values)?;
+            eval_property_array_set_result(
+                object, property, index, *op, value, context, scope, values,
+            )?;
             Ok(EvalControl::None)
         }
         EvalStmt::PropertyCompoundAssign {
@@ -605,6 +651,95 @@ fn eval_non_object_array_set_var_stmt(
         values.release(replaced)?;
     }
     Ok(())
+}
+
+/// Executes `$object->property[] = value`, dispatching ArrayAccess property values when needed.
+fn eval_property_array_append_result(
+    object: RuntimeCellHandle,
+    property: &str,
+    value: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let array = eval_property_get_result(object, property, context, values)?;
+    if values.type_tag(array)? == EVAL_TAG_OBJECT {
+        if !eval_array_access_object_matches(array, context, values)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let offset = values.null()?;
+        let value = eval_expr(value, context, scope, values)?;
+        let result =
+            eval_method_call_result(array, "offsetSet", vec![offset, value], context, values)?;
+        values.release(result)?;
+        return Ok(());
+    }
+    let array = if values.is_array_like(array)? {
+        let tag = values.type_tag(array)?;
+        if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+            return Err(EvalStatus::UnsupportedConstruct);
+        }
+        array
+    } else {
+        values.array_new(1)?
+    };
+    let index = eval_array_append_key(array, values)?;
+    let value = eval_expr(value, context, scope, values)?;
+    let array = values.array_set(array, index, value)?;
+    eval_property_set_result(object, property, array, context, values)
+}
+
+/// Executes `$object->property[index] = value` and compound indexed property writes.
+fn eval_property_array_set_result(
+    object: RuntimeCellHandle,
+    property: &str,
+    index: &EvalExpr,
+    op: Option<EvalBinOp>,
+    value: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let array = eval_property_get_result(object, property, context, values)?;
+    if values.type_tag(array)? == EVAL_TAG_OBJECT {
+        if !eval_array_access_object_matches(array, context, values)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let index = eval_expr(index, context, scope, values)?;
+        let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
+        let result =
+            eval_method_call_result(array, "offsetSet", vec![index, value], context, values)?;
+        values.release(result)?;
+        return Ok(());
+    }
+    let index = eval_array_set_index(index, context, scope, values)?;
+    let array = if values.is_array_like(array)? {
+        array
+    } else {
+        values.array_new(1)?
+    };
+    let array = eval_array_set_target_for_index(array, index, values)?;
+    let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
+    let array = values.array_set(array, index, value)?;
+    eval_property_set_result(object, property, array, context, values)
+}
+
+/// Computes the value written by a simple or compound property-array assignment.
+fn eval_property_array_set_value(
+    array: RuntimeCellHandle,
+    index: RuntimeCellHandle,
+    op: Option<EvalBinOp>,
+    value: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(op) = op else {
+        return eval_expr(value, context, scope, values);
+    };
+    let current = eval_array_get_result(array, index, context, values)?;
+    let right = eval_expr(value, context, scope, values)?;
+    eval_binary_result(op, current, right, context, values)
 }
 
 /// Evaluates an array-set index and normalizes PHP integer-string keys.

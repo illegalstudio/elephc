@@ -3547,6 +3547,47 @@ echo $aot->count; echo ":"; echo $aot->label;');
     assert_eq!(out.stdout, "n|r|12:xy|3:ab");
 }
 
+/// Verifies eval object property array writes and appends update property storage.
+#[test]
+fn test_eval_object_property_array_write_statements() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotPropertyArrayWrite {
+    public array $items = [];
+}
+eval('class EvalDynamicPropertyArrayWrite {
+    public $items = [];
+    public $dyn = [];
+}
+function eval_property_array_name() {
+    echo "n|";
+    return "dyn";
+}
+$box = new EvalDynamicPropertyArrayWrite();
+$box->items[0] = "a";
+$box->items[] = "b";
+$box->items[0] .= "A";
+$name = "dyn";
+$box->{$name}[1] = "x";
+$box->{$name}[] = "y";
+$box->{eval_property_array_name()}[] = "z";
+echo $box->items[0] . ":" . $box->items[1] . ":";
+echo $box->dyn[1] . ":" . $box->dyn[2] . ":" . $box->dyn[3] . "|";
+$aot = new EvalAotPropertyArrayWrite();
+$aot->items[0] = "m";
+$aot->items[] = "n";
+$aot->items[0] .= "M";
+echo $aot->items[0] . ":" . $aot->items[1];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "n|aA:b:x:y:z|mM:n");
+}
+
 /// Verifies eval string contexts dispatch AOT `__toString()` through the runtime method bridge.
 #[test]
 fn test_eval_aot_tostring_string_contexts() {

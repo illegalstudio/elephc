@@ -146,6 +146,18 @@ pub enum EvalStmt {
         property: EvalExpr,
         value: EvalExpr,
     },
+    DynamicPropertyArrayAppend {
+        object: EvalExpr,
+        property: EvalExpr,
+        value: EvalExpr,
+    },
+    DynamicPropertyArraySet {
+        object: EvalExpr,
+        property: EvalExpr,
+        index: EvalExpr,
+        op: Option<EvalBinOp>,
+        value: EvalExpr,
+    },
     DynamicPropertyCompoundAssign {
         object: EvalExpr,
         property: EvalExpr,
@@ -160,6 +172,18 @@ pub enum EvalStmt {
     PropertySet {
         object: EvalExpr,
         property: String,
+        value: EvalExpr,
+    },
+    PropertyArrayAppend {
+        object: EvalExpr,
+        property: String,
+        value: EvalExpr,
+    },
+    PropertyArraySet {
+        object: EvalExpr,
+        property: String,
+        index: EvalExpr,
+        op: Option<EvalBinOp>,
         value: EvalExpr,
     },
     PropertyCompoundAssign {

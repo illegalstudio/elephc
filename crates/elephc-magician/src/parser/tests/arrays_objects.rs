@@ -370,6 +370,46 @@ fn parse_fragment_accepts_property_write_source() {
     );
 }
 
+/// Verifies object property array writes and appends parse as dedicated EvalIR statements.
+#[test]
+fn parse_fragment_accepts_property_array_write_source() {
+    let program = parse_fragment(br#"$this->items[0] = "x"; $this->items[] = "y";"#)
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::PropertyArraySet {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: "items".to_string(),
+                index: EvalExpr::Const(EvalConst::Int(0)),
+                op: None,
+                value: EvalExpr::Const(EvalConst::String("x".to_string())),
+            },
+            EvalStmt::PropertyArrayAppend {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: "items".to_string(),
+                value: EvalExpr::Const(EvalConst::String("y".to_string())),
+            },
+        ]
+    );
+}
+
+/// Verifies property array compound assignment retains the indexed property target.
+#[test]
+fn parse_fragment_accepts_property_array_compound_assignment_source() {
+    let program = parse_fragment(br#"$this->items[0] += 2;"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::PropertyArraySet {
+            object: EvalExpr::LoadVar("this".to_string()),
+            property: "items".to_string(),
+            index: EvalExpr::Const(EvalConst::Int(0)),
+            op: Some(EvalBinOp::Add),
+            value: EvalExpr::Const(EvalConst::Int(2)),
+        }]
+    );
+}
+
 /// Verifies object property increment/decrement parses as dedicated member updates.
 #[test]
 fn parse_fragment_accepts_property_inc_dec_source() {
@@ -402,6 +442,30 @@ fn parse_fragment_accepts_dynamic_property_write_source() {
             property: EvalExpr::LoadVar("name".to_string()),
             value: EvalExpr::Const(EvalConst::Int(7)),
         }]
+    );
+}
+
+/// Verifies dynamic property array writes keep the runtime property expression.
+#[test]
+fn parse_fragment_accepts_dynamic_property_array_write_source() {
+    let program = parse_fragment(br#"$this->{$name}[0] = "x"; $this->{$name}[] = "y";"#)
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::DynamicPropertyArraySet {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: EvalExpr::LoadVar("name".to_string()),
+                index: EvalExpr::Const(EvalConst::Int(0)),
+                op: None,
+                value: EvalExpr::Const(EvalConst::String("x".to_string())),
+            },
+            EvalStmt::DynamicPropertyArrayAppend {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: EvalExpr::LoadVar("name".to_string()),
+                value: EvalExpr::Const(EvalConst::String("y".to_string())),
+            },
+        ]
     );
 }
 
