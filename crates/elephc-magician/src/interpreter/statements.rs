@@ -6063,6 +6063,9 @@ pub(in crate::interpreter) fn eval_native_constructor_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if let Some(message) = eval_native_constructor_access_error(class_name, context, values)? {
+        return eval_throw_error(&message, context, values).map(|_| ());
+    }
     let signature = context.native_constructor_signature(class_name);
     let bound_args = bind_native_callable_bound_args(
         signature,
@@ -6075,6 +6078,62 @@ pub(in crate::interpreter) fn eval_native_constructor_with_evaluated_args(
     match (result, writeback) {
         (Err(status), _) | (_, Err(status)) => Err(status),
         (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+/// Returns PHP's constructor access error for generated/AOT constructors, if inaccessible.
+fn eval_native_constructor_access_error(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let Some((declaring_class, visibility)) =
+        eval_reflection_aot_non_public_constructor(class_name, values)?
+    else {
+        return Ok(None);
+    };
+    if eval_native_constructor_access_allowed(&declaring_class, visibility, context) {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "Call to {} {}::__construct() from {}",
+        eval_visibility_label(visibility),
+        declaring_class.trim_start_matches('\\'),
+        eval_native_constructor_scope_label(context)
+    )))
+}
+
+/// Returns whether the current eval scope may call one generated/AOT constructor.
+fn eval_native_constructor_access_allowed(
+    declaring_class: &str,
+    visibility: EvalVisibility,
+    context: &ElephcEvalContext,
+) -> bool {
+    match visibility {
+        EvalVisibility::Public => true,
+        EvalVisibility::Private => context
+            .current_class_scope()
+            .is_some_and(|current| same_eval_class_name(current, declaring_class)),
+        EvalVisibility::Protected => context
+            .current_class_scope()
+            .is_some_and(|current| eval_classes_are_related(current, declaring_class, context)),
+    }
+}
+
+/// Returns PHP's scope phrase for constructor access diagnostics.
+fn eval_native_constructor_scope_label(context: &ElephcEvalContext) -> String {
+    context.current_class_scope().map_or_else(
+        || String::from("global scope"),
+        |class_name| format!("scope {}", class_name.trim_start_matches('\\')),
+    )
+}
+
+/// Returns PHP's lowercase visibility label.
+fn eval_visibility_label(visibility: EvalVisibility) -> &'static str {
+    match visibility {
+        EvalVisibility::Public => "public",
+        EvalVisibility::Protected => "protected",
+        EvalVisibility::Private => "private",
     }
 }
 
