@@ -14366,6 +14366,60 @@ echo $backedCases[0]->getEnum()->getBackingType()->getName();');
     );
 }
 
+/// Verifies eval ReflectionEnum construction errors are catchable objects.
+#[test]
+fn test_eval_reflection_enum_constructor_throws_reflection_exceptions() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalDynReflectNotEnumClass {}
+interface EvalDynReflectNotEnumIface {}
+trait EvalDynReflectNotEnumTrait {}
+enum EvalDynReflectActualEnum {
+    case Ready;
+}
+try {
+    new ReflectionEnum("EvalDynReflectNotEnumClass");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnum("EvalDynReflectNotEnumIface");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnum("EvalDynReflectNotEnumTrait");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnum("EvalDynReflectMissingEnum");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+echo (new ReflectionEnum("EvalDynReflectActualEnum"))->getName();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "ReflectionException:Class \"EvalDynReflectNotEnumClass\" is not an enum|Class \"EvalDynReflectNotEnumIface\" is not an enum|Class \"EvalDynReflectNotEnumTrait\" is not an enum|Class \"EvalDynReflectMissingEnum\" does not exist|EvalDynReflectActualEnum"
+    );
+}
+
 /// Verifies eval interface and trait constants work through the bridge.
 #[test]
 fn test_eval_declared_interface_and_trait_constants() {

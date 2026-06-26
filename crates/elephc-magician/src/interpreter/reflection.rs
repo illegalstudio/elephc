@@ -2773,15 +2773,26 @@ fn eval_reflection_enum_new(
     let class_name = eval_reflection_class_target_name(args[0], context, values)?;
     let reflected_name = context
         .resolve_enum_name(&class_name)
+        .or_else(|| context.resolve_class_like_name(&class_name))
         .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
-    if context.enum_decl(&reflected_name).is_none() {
-        return if eval_reflection_class_like_exists(&reflected_name, context) {
-            Err(EvalStatus::RuntimeFatal)
-        } else {
-            Ok(None)
-        };
+    if context.enum_decl(&reflected_name).is_some() {
+        return eval_reflection_enum_object_result(&reflected_name, context, values).map(Some);
     }
-    eval_reflection_enum_object_result(&reflected_name, context, values).map(Some)
+    if eval_reflection_class_like_exists(&reflected_name, context) {
+        return eval_throw_reflection_exception(
+            &format!("Class \"{}\" is not an enum", reflected_name),
+            context,
+            values,
+        );
+    }
+    if eval_reflection_class_like_or_runtime_exists(&reflected_name, context, values)? {
+        return Ok(None);
+    }
+    eval_throw_reflection_exception(
+        &format!("Class \"{}\" does not exist", reflected_name),
+        context,
+        values,
+    )
 }
 
 /// Materializes one eval-backed `ReflectionEnum` owner object.

@@ -3460,6 +3460,65 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionEnum construction throws catchable PHP reflection errors.
+#[test]
+fn execute_program_reflection_enum_constructor_throws_reflection_exceptions() {
+    let program = parse_fragment(
+        br#"class EvalReflectNotEnumClass {}
+interface EvalReflectNotEnumIface {}
+trait EvalReflectNotEnumTrait {}
+enum EvalReflectActualEnum {
+    case Ready;
+}
+try {
+    new ReflectionEnum("EvalReflectNotEnumClass");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnum("EvalReflectNotEnumIface");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnum("EvalReflectNotEnumTrait");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnum("EvalReflectMissingEnum");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+echo (new ReflectionEnum("EvalReflectActualEnum"))->getName();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values);
+    assert!(
+        result.is_ok(),
+        "execute eval ir failed after output {:?}",
+        values.output
+    );
+
+    assert_eq!(
+        values.output,
+        "ReflectionException:Class \"EvalReflectNotEnumClass\" is not an enum|Class \"EvalReflectNotEnumIface\" is not an enum|Class \"EvalReflectNotEnumTrait\" is not an enum|Class \"EvalReflectMissingEnum\" does not exist|EvalReflectActualEnum"
+    );
+    assert_eq!(values.get(result.expect("execute eval ir")), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionObject reflects the runtime class of an eval object instance.
 #[test]
 fn execute_program_reflection_object_reflects_eval_instances() {
