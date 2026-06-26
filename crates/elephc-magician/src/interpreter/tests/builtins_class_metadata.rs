@@ -813,7 +813,9 @@ echo count($trait_names); echo ":"; echo $trait_names[0]; echo ":";
 $trait_objects = (new ReflectionClass("KnownClass"))->getTraits();
 echo count($trait_objects); echo ":"; echo $trait_objects["KnownTrait"]->getName(); echo ":";
 $nested_trait_names = (new ReflectionClass("KnownTrait"))->getTraitNames();
-echo count($nested_trait_names); echo ":"; echo $nested_trait_names[0];
+echo count($nested_trait_names); echo ":"; echo $nested_trait_names[0]; echo ":";
+$aliases = (new ReflectionClass("KnownClass"))->getTraitAliases();
+echo count($aliases); echo ":"; echo $aliases["knownAlias"];
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -824,7 +826,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "1:KnownInterface:1:Traversable:1:KnownInterface:1:Traversable:1:KnownTrait:1:KnownTrait:1:KnownInnerTrait"
+        "1:KnownInterface:1:Traversable:1:KnownInterface:1:Traversable:1:KnownTrait:1:KnownTrait:1:KnownInnerTrait:1:KnownTrait::source"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

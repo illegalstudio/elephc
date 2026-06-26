@@ -259,6 +259,18 @@ pub trait RuntimeValueOps {
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Returns generated/AOT trait alias names visible for one reflected class-like symbol.
+    fn reflection_class_trait_alias_names(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Returns generated/AOT trait alias sources visible for one reflected class-like symbol.
+    fn reflection_class_trait_alias_sources(
+        &mut self,
+        class_name: &str,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Creates a named runtime object without constructor arguments.
     fn new_object(&mut self, class_name: &str) -> Result<RuntimeCellHandle, EvalStatus>;
 
