@@ -8828,6 +8828,32 @@ echo $box->hidden("C", name: "D");');
     assert_eq!(out.stdout, "DoThing:A:B:hidden:C:D");
 }
 
+/// Verifies missing eval-declared instance methods throw catchable PHP errors.
+#[test]
+fn test_eval_declared_missing_instance_method_throws_error() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalMissingInstanceCallBox {}
+$box = new EvalMissingInstanceCallBox();
+try {
+    echo $box->missing();
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Error:Call to undefined method EvalMissingInstanceCallBox::missing()"
+    );
+}
+
 /// Verifies eval static method fallback dispatches missing and inaccessible methods through `__callStatic`.
 #[test]
 fn test_eval_declared_magic_call_static_method_fallback() {

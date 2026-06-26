@@ -888,6 +888,34 @@ return true;"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies missing eval-declared instance methods throw PHP-compatible Error values.
+#[test]
+fn execute_program_missing_eval_method_call_throws_error() {
+    let program = parse_fragment(
+        br#"class EvalMissingMethodBox {}
+$box = new EvalMissingMethodBox();
+try {
+    echo $box->missing();
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Error:Call to undefined method EvalMissingMethodBox::missing()"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval rejects overriding a public method with lower visibility.
 #[test]
 fn execute_program_rejects_method_override_with_reduced_visibility() {

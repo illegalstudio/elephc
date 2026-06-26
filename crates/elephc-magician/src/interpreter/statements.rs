@@ -5411,7 +5411,7 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
             values,
         );
     }
-    Err(EvalStatus::RuntimeFatal)
+    eval_throw_undefined_method_call_error(&called_class_name, method_name, context, values)
 }
 
 /// Dispatches an invokable object through `__invoke()` without enforcing hook visibility.
