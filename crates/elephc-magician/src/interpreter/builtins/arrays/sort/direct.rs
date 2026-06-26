@@ -9,7 +9,8 @@
 //!   replacement while preserving source-order evaluation of callback arguments.
 
 use super::super::super::super::*;
-use super::super::{eval_array_mutation_lvalue_arg, eval_write_direct_ref_target};
+use super::super::super::eval_write_direct_ref_target;
+use super::super::eval_array_mutation_lvalue_arg;
 use super::*;
 
 /// Evaluates direct by-reference array ordering calls and writes back the array.

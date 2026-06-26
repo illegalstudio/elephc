@@ -2808,12 +2808,28 @@ $splitBoth = preg_split("/(,)/", "a,b", 0, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT
 echo count($splitBoth) . ":" . $splitBoth[1][0] . ":" . $splitBoth[1][1] . ":";
 $splitNoEmpty = preg_split("/,/", "a,,b", 0, PREG_SPLIT_NO_EMPTY | PREG_SPLIT_OFFSET_CAPTURE);
 echo $splitNoEmpty[1][0] . ":" . $splitNoEmpty[1][1] . ":";
+class EvalPregMatchesBox {
+    public array $matches = [];
+    public static array $staticMatches = [];
+}
+$box = new EvalPregMatchesBox();
+preg_match("/([a-z]+)([0-9]+)/", "ab12", $box->matches);
+echo $box->matches[0] . ":" . $box->matches[1] . ":" . $box->matches[2] . ":";
+$name = "matches";
+preg_match_all("/([a-z])([0-9])/", "a1 b2", $box->{$name}, PREG_SET_ORDER);
+echo count($box->matches) . ":" . $box->matches[1][0] . ":" . $box->matches[1][2] . ":";
+preg_match("/([A-Z]+)/", "ID", EvalPregMatchesBox::$staticMatches);
+echo EvalPregMatchesBox::$staticMatches[0] . ":";
+$class = "EvalPregMatchesBox";
+$staticName = "staticMatches";
+preg_match_all("/([a-z])/", "xy", $class::${$staticName});
+echo count(EvalPregMatchesBox::$staticMatches[0]) . ":" . EvalPregMatchesBox::$staticMatches[0][1] . ":";
 echo function_exists("preg_match") && function_exists("preg_match_all") && function_exists("preg_replace") && function_exists("preg_replace_callback") && function_exists("preg_split") && defined("PREG_SPLIT_NO_EMPTY") && defined("PREG_SET_ORDER") && defined("PREG_OFFSET_CAPTURE") && defined("PREG_SPLIT_OFFSET_CAPTURE") && defined("PREG_UNMATCHED_AS_NULL");');
 "#,
     );
     assert_eq!(
         out,
-        "1:3:id42:id:42:0:3:2:3:b22:a:22:2:2:a1:a:22:b:0::-1:b:0:b22:3:0:4:b22:3:1:4:n:b:n:n:-1:n:-1:n:b:n:n:-1:n:-1:3:0:0:0:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:a:0:b,c:2:3:,:1:b:3:1"
+        "1:3:id42:id:42:0:3:2:3:b22:a:22:2:2:a1:a:22:b:0::-1:b:0:b22:3:0:4:b22:3:1:4:n:b:n:n:-1:n:-1:n:b:n:n:-1:n:-1:3:0:0:0:1-a 2-b:[A][B]:2:a:b,c:2:b:1:aN:3:,:a:0:b,c:2:3:,:1:b:3:ab12:ab:12:2:b2:2:ID:2:y:1"
     );
 }
 

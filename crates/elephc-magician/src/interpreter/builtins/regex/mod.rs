@@ -18,6 +18,7 @@ mod replace;
 mod replacement;
 mod split;
 mod split_helpers;
+mod targets;
 
 pub(in crate::interpreter) use captures::*;
 pub(in crate::interpreter) use match_all::*;
@@ -27,3 +28,4 @@ pub(in crate::interpreter) use replace::*;
 pub(in crate::interpreter) use replacement::*;
 pub(in crate::interpreter) use split::*;
 pub(in crate::interpreter) use split_helpers::*;
+pub(in crate::interpreter) use targets::*;

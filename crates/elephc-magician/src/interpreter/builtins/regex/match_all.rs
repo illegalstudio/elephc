@@ -28,40 +28,20 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_all(
         [pattern, subject, matches] => {
             let pattern = eval_expr(pattern, context, scope, values)?;
             let subject = eval_expr(subject, context, scope, values)?;
-            let EvalExpr::LoadVar(matches_name) = matches else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
+            let matches_target = eval_preg_matches_target(matches, context, scope, values)?;
             let (result, matches_array) =
                 eval_preg_match_all_capture_result(pattern, subject, None, values)?;
-            for replaced in set_scope_cell(
-                context,
-                scope,
-                matches_name.clone(),
-                matches_array,
-                ScopeCellOwnership::Owned,
-            )? {
-                values.release(replaced)?;
-            }
+            eval_write_preg_matches_target(&matches_target, matches_array, context, values)?;
             Ok(result)
         }
         [pattern, subject, matches, flags] => {
             let pattern = eval_expr(pattern, context, scope, values)?;
             let subject = eval_expr(subject, context, scope, values)?;
-            let EvalExpr::LoadVar(matches_name) = matches else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
+            let matches_target = eval_preg_matches_target(matches, context, scope, values)?;
             let flags = eval_expr(flags, context, scope, values)?;
             let (result, matches_array) =
                 eval_preg_match_all_capture_result(pattern, subject, Some(flags), values)?;
-            for replaced in set_scope_cell(
-                context,
-                scope,
-                matches_name.clone(),
-                matches_array,
-                ScopeCellOwnership::Owned,
-            )? {
-                values.release(replaced)?;
-            }
+            eval_write_preg_matches_target(&matches_target, matches_array, context, values)?;
             Ok(result)
         }
         _ => Err(EvalStatus::RuntimeFatal),

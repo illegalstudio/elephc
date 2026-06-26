@@ -375,14 +375,18 @@ pub(in crate::interpreter) fn eval_builtin_flock(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (stream, operation, would_block_var) =
+    let (stream, operation, would_block_target) =
         eval_flock_direct_args(args, context, scope, values)?;
     let (success, would_block) = eval_flock_result(stream, operation, context, values)?;
-    if let Some(var_name) = would_block_var {
+    if let Some(target) = would_block_target {
         let value = values.bool_value(would_block)?;
-        for replaced in set_scope_cell(context, scope, var_name, value, ScopeCellOwnership::Owned)? {
-            values.release(replaced)?;
-        }
+        eval_write_direct_ref_target(
+            &target,
+            value,
+            context,
+            values,
+            Some(ScopeCellOwnership::Owned),
+        )?;
     }
     values.bool_value(success)
 }
@@ -408,7 +412,14 @@ fn eval_flock_direct_args(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
-) -> Result<(RuntimeCellHandle, RuntimeCellHandle, Option<String>), EvalStatus> {
+) -> Result<
+    (
+        RuntimeCellHandle,
+        RuntimeCellHandle,
+        Option<EvalReferenceTarget>,
+    ),
+    EvalStatus,
+> {
     let mut stream = None;
     let mut operation = None;
     let mut would_block = None;
@@ -453,10 +464,8 @@ fn eval_flock_direct_args(
                 if would_block.is_some() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                let EvalExpr::LoadVar(name) = arg.value() else {
-                    return Err(EvalStatus::RuntimeFatal);
-                };
-                would_block = Some(name.clone());
+                let (_, target) = eval_call_arg_value(arg.value(), context, scope, values)?;
+                would_block = Some(target.ok_or(EvalStatus::RuntimeFatal)?);
             }
             _ => return Err(EvalStatus::RuntimeFatal),
         }
