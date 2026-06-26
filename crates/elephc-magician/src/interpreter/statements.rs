@@ -3940,6 +3940,16 @@ fn eval_reference_target_value(
             context.replace_execution_scope(previous_scope);
             result
         }
+        EvalReferenceTarget::StaticProperty {
+            class_name,
+            property,
+            access_scope,
+        } => {
+            let previous_scope = context.replace_execution_scope(access_scope.clone());
+            let result = eval_static_property_get_result(class_name, property, context, values);
+            context.replace_execution_scope(previous_scope);
+            result
+        }
         EvalReferenceTarget::Cell { cell } => Ok(*cell),
     }
 }
@@ -6933,6 +6943,22 @@ fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalReferenceTarge
             EvalReferenceTarget::Cell { cell: left_cell },
             EvalReferenceTarget::Cell { cell: right_cell },
         ) => left_cell == right_cell,
+        (
+            EvalReferenceTarget::StaticProperty {
+                class_name: left_class_name,
+                property: left_property,
+                access_scope: left_access_scope,
+            },
+            EvalReferenceTarget::StaticProperty {
+                class_name: right_class_name,
+                property: right_property,
+                access_scope: right_access_scope,
+            },
+        ) => {
+            left_class_name == right_class_name
+                && left_property == right_property
+                && left_access_scope == right_access_scope
+        }
         _ => false,
     }
 }
@@ -7037,6 +7063,18 @@ fn write_back_method_ref_target(
             context,
             values,
         ),
+        EvalReferenceTarget::StaticProperty {
+            class_name,
+            property,
+            access_scope,
+        } => write_back_method_static_property_ref_target(
+            class_name,
+            property,
+            access_scope.clone(),
+            value,
+            context,
+            values,
+        ),
         EvalReferenceTarget::Cell { .. } => Ok(()),
     }
 }
@@ -7081,6 +7119,21 @@ fn write_back_method_object_property_ref_target(
 ) -> Result<(), EvalStatus> {
     let previous_scope = context.replace_execution_scope(access_scope);
     let result = eval_property_set_result(object, property, value, context, values);
+    context.replace_execution_scope(previous_scope);
+    result
+}
+
+/// Stores one by-reference method result in a caller-side static property.
+fn write_back_method_static_property_ref_target(
+    class_name: &str,
+    property: &str,
+    access_scope: ElephcEvalExecutionScope,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let previous_scope = context.replace_execution_scope(access_scope);
+    let result = eval_static_property_set_result(class_name, property, value, context, values);
     context.replace_execution_scope(previous_scope);
     result
 }

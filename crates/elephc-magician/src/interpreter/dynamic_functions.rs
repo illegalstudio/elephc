@@ -136,8 +136,72 @@ fn eval_call_arg_value(
                 }),
             ))
         }
+        EvalExpr::StaticPropertyGet {
+            class_name,
+            property,
+        } => {
+            let access_scope = context.execution_scope();
+            let class_name = resolve_eval_static_member_class_name(class_name, context)?;
+            eval_static_property_call_arg_value(
+                class_name,
+                property.clone(),
+                access_scope,
+                context,
+                values,
+            )
+        }
+        EvalExpr::DynamicStaticPropertyGet {
+            class_name,
+            property,
+        } => {
+            let access_scope = context.execution_scope();
+            let class_name = eval_expr(class_name, context, caller_scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            eval_static_property_call_arg_value(
+                class_name,
+                property.clone(),
+                access_scope,
+                context,
+                values,
+            )
+        }
+        EvalExpr::DynamicStaticPropertyNameGet {
+            class_name,
+            property,
+        } => {
+            let access_scope = context.execution_scope();
+            let class_name = eval_expr(class_name, context, caller_scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let property = eval_dynamic_member_name(property, context, caller_scope, values)?;
+            eval_static_property_call_arg_value(
+                class_name,
+                property,
+                access_scope,
+                context,
+                values,
+            )
+        }
         _ => eval_expr(expr, context, caller_scope, values).map(|value| (value, None)),
     }
+}
+
+/// Evaluates one static-property lvalue and records it as a by-reference call target.
+fn eval_static_property_call_arg_value(
+    class_name: String,
+    property: String,
+    access_scope: ElephcEvalExecutionScope,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    let value = eval_static_property_get_result(&class_name, &property, context, values)?;
+    Ok((
+        value,
+        Some(EvalReferenceTarget::StaticProperty {
+            class_name,
+            property,
+            access_scope,
+        }),
+    ))
 }
 
 /// Converts a `call_user_func_array` argument array into ordered call arguments.

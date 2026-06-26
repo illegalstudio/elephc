@@ -53,6 +53,11 @@ pub enum EvalReferenceTarget {
         property: String,
         access_scope: ElephcEvalExecutionScope,
     },
+    StaticProperty {
+        class_name: String,
+        property: String,
+        access_scope: ElephcEvalExecutionScope,
+    },
     Cell {
         cell: RuntimeCellHandle,
     },

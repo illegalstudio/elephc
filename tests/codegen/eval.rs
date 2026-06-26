@@ -9409,6 +9409,57 @@ echo $ctor . ":" . $value . ":" . $named . ":" . $items["k"] . ":" . $prop->valu
     );
 }
 
+/// Verifies eval-declared methods can mutate eval static properties passed by reference.
+#[test]
+fn test_eval_declared_method_by_ref_static_property_arguments() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotByRefStaticPropertyBox {
+    public static $value = "aot";
+}
+eval('class EvalByRefStaticPropertyChanger {
+    public function set(&$value, $next) {
+        $value = $next;
+    }
+    public function pair(&$left, &$right) {
+        $left = "left";
+        $right = "right";
+        return $left;
+    }
+}
+class EvalByRefStaticPropertyBox {
+    public static $value = "old";
+    public static $other = "second";
+    public static $third = "third";
+    private static $secret = "private";
+    public static function updatePrivate($changer) {
+        $changer->set(self::$secret, "secret");
+        return self::$secret;
+    }
+}
+$changer = new EvalByRefStaticPropertyChanger();
+$changer->set(EvalByRefStaticPropertyBox::$value, "changed");
+echo $changer->pair(EvalByRefStaticPropertyBox::$value, EvalByRefStaticPropertyBox::$value) . ":";
+echo EvalByRefStaticPropertyBox::$value . ":";
+$class = "EvalByRefStaticPropertyBox";
+$changer->set($class::$other, "dynamic");
+$name = "third";
+$changer->set($class::${$name}, "name");
+echo EvalByRefStaticPropertyBox::$other . ":";
+echo EvalByRefStaticPropertyBox::$third . ":";
+echo EvalByRefStaticPropertyBox::updatePrivate($changer) . ":";
+$changer->set(EvalAotByRefStaticPropertyBox::$value, "aot-changed");
+echo EvalAotByRefStaticPropertyBox::$value;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "right:right:dynamic:name:secret:aot-changed");
+}
+
 /// Verifies eval dynamic static callables dispatch eval-declared static methods.
 #[test]
 fn test_eval_declared_static_method_dynamic_callables() {

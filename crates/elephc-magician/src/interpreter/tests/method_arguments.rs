@@ -328,6 +328,53 @@ return $private->update($changer);"#,
     assert_eq!(values.get(result), FakeValue::String("secret".to_string()));
 }
 
+/// Verifies eval-declared by-reference method params write back static-property lvalues.
+#[test]
+fn execute_program_writes_back_eval_method_by_ref_static_properties() {
+    let program = parse_fragment(
+        br#"class EvalByRefStaticPropertyChanger {
+    public function set(&$value, $next) {
+        $value = $next;
+    }
+    public function pair(&$left, &$right) {
+        $left = "left";
+        $right = "right";
+        return $left;
+    }
+}
+class EvalByRefStaticPropertyBox {
+    public static string $value = "old";
+    public static string $other = "second";
+    public static string $third = "third";
+    private static string $secret = "private";
+    public static function updatePrivate($changer) {
+        $changer->set(self::$secret, "secret");
+        return self::$secret;
+    }
+}
+$changer = new EvalByRefStaticPropertyChanger();
+$changer->set(EvalByRefStaticPropertyBox::$value, "changed");
+echo $changer->pair(EvalByRefStaticPropertyBox::$value, EvalByRefStaticPropertyBox::$value);
+echo ":";
+echo EvalByRefStaticPropertyBox::$value; echo ":";
+$class = "EvalByRefStaticPropertyBox";
+$changer->set($class::$other, "dynamic");
+$name = "third";
+$changer->set($class::${$name}, "name");
+echo EvalByRefStaticPropertyBox::$other; echo ":";
+echo EvalByRefStaticPropertyBox::$third; echo ":";
+return EvalByRefStaticPropertyBox::updatePrivate($changer);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "right:right:dynamic:name:");
+    assert_eq!(values.get(result), FakeValue::String("secret".to_string()));
+}
+
 /// Verifies eval-declared by-reference method params keep property access restrictions.
 #[test]
 fn execute_program_rejects_invalid_eval_method_by_ref_object_property_targets() {
