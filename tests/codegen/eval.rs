@@ -10208,6 +10208,8 @@ function eval_expression_static_receiver_writes() {
 (eval_expression_static_receiver_writes())::$items[] = 4;
 (eval_expression_static_receiver_writes())::$items[0] = 5;
 (eval_expression_static_receiver_writes())::$count++;
+++(eval_expression_static_receiver_writes())::$count;
+--(eval_expression_static_receiver_writes())::$count;
 echo (eval_expression_static_receiver_writes())::$count . "|";
 echo (eval_expression_static_receiver_writes())::$items[0] . ":";
 echo (eval_expression_static_receiver_writes())::$items[1];');
