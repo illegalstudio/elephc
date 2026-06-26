@@ -11647,6 +11647,129 @@ echo (new ReflectionProperty("EvalAotReflectMissingPropertyTarget", "known"))->g
     );
 }
 
+/// Verifies eval ReflectionClassConstant construction errors are catchable objects.
+#[test]
+fn test_eval_reflection_class_constant_constructor_throws_reflection_exceptions() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectMissingConstantTarget {
+    public const OK = 1;
+}
+eval('
+try {
+    new ReflectionClassConstant("EvalAotReflectMissingConstantTarget", "missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+class EvalDynReflectMissingConstantTarget {
+    public const OK = 1;
+}
+try {
+    new ReflectionClassConstant("EvalDynReflectMissingConstantTarget", "missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionClassConstant("EvalDynReflectMissingConstantClass", "VALUE");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+echo (new ReflectionClassConstant("EvalDynReflectMissingConstantTarget", "OK"))->getName() . ":";
+echo (new ReflectionClassConstant("EvalAotReflectMissingConstantTarget", "OK"))->getName();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "ReflectionException:Constant EvalAotReflectMissingConstantTarget::missing does not exist|Constant EvalDynReflectMissingConstantTarget::missing does not exist|Class \"EvalDynReflectMissingConstantClass\" does not exist|OK:OK"
+    );
+}
+
+/// Verifies eval ReflectionEnumUnitCase/BackedCase construction errors are catchable objects.
+#[test]
+fn test_eval_reflection_enum_case_constructor_throws_reflection_exceptions() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('enum EvalDynReflectMissingCaseUnit {
+    case Ready;
+    public const TOKEN = 1;
+}
+enum EvalDynReflectMissingCaseBacked: string {
+    case Ready = "ready";
+    public const TOKEN = 1;
+}
+class EvalDynReflectMissingCaseClass {
+    public const TOKEN = 1;
+}
+try {
+    new ReflectionEnumUnitCase("EvalDynReflectMissingCaseUnit", "Missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnumUnitCase("EvalDynReflectMissingCaseClass", "TOKEN");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnumUnitCase("EvalDynReflectMissingCaseUnit", "TOKEN");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnumBackedCase("EvalDynReflectMissingCaseUnit", "Ready");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnumBackedCase("EvalDynReflectMissingCaseBacked", "Missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnumBackedCase("EvalDynReflectMissingCaseClass", "Missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+echo (new ReflectionEnumUnitCase("EvalDynReflectMissingCaseBacked", "Ready"))->getName() . ":";
+echo (new ReflectionEnumBackedCase("EvalDynReflectMissingCaseBacked", "Ready"))->getBackingValue();
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "ReflectionException:Constant EvalDynReflectMissingCaseUnit::Missing does not exist|Constant EvalDynReflectMissingCaseClass::TOKEN is not a case|Constant EvalDynReflectMissingCaseUnit::TOKEN is not a case|Enum case EvalDynReflectMissingCaseUnit::Ready is not a backed case|Constant EvalDynReflectMissingCaseBacked::Missing does not exist|Constant EvalDynReflectMissingCaseClass::Missing does not exist|Ready:ready"
+    );
+}
+
 /// Verifies eval-declared final properties cannot be redeclared by subclasses.
 #[test]
 fn test_eval_declared_final_property_override_fails() {

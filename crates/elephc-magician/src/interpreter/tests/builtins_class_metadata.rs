@@ -1865,6 +1865,127 @@ return true;"#,
     assert_eq!(values.get(result.expect("execute eval ir")), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClassConstant construction throws catchable PHP reflection errors.
+#[test]
+fn execute_program_reflection_class_constant_constructor_throws_reflection_exceptions() {
+    let program = parse_fragment(
+        br#"class EvalReflectMissingConstantTarget {
+    public const OK = 1;
+}
+try {
+    new ReflectionClassConstant("EvalReflectMissingConstantTarget", "missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionClassConstant("EvalReflectMissingConstantClass", "VALUE");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+echo (new ReflectionClassConstant("EvalReflectMissingConstantTarget", "OK"))->getName();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values);
+    assert!(
+        result.is_ok(),
+        "execute eval ir failed after output {:?}",
+        values.output
+    );
+
+    assert_eq!(
+        values.output,
+        "ReflectionException:Constant EvalReflectMissingConstantTarget::missing does not exist|Class \"EvalReflectMissingConstantClass\" does not exist|OK"
+    );
+    assert_eq!(values.get(result.expect("execute eval ir")), FakeValue::Bool(true));
+}
+
+/// Verifies ReflectionEnumUnitCase/BackedCase construction throws PHP reflection errors.
+#[test]
+fn execute_program_reflection_enum_case_constructor_throws_reflection_exceptions() {
+    let program = parse_fragment(
+        br#"enum EvalReflectMissingCaseUnit {
+    case Ready;
+    public const TOKEN = 1;
+}
+enum EvalReflectMissingCaseBacked: string {
+    case Ready = "ready";
+    public const TOKEN = 1;
+}
+class EvalReflectMissingCaseClass {
+    public const TOKEN = 1;
+}
+try {
+    new ReflectionEnumUnitCase("EvalReflectMissingCaseUnit", "Missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnumUnitCase("EvalReflectMissingCaseClass", "TOKEN");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnumUnitCase("EvalReflectMissingCaseUnit", "TOKEN");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnumBackedCase("EvalReflectMissingCaseUnit", "Ready");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnumBackedCase("EvalReflectMissingCaseBacked", "Missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionEnumBackedCase("EvalReflectMissingCaseClass", "Missing");
+    echo "bad";
+} catch (ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+echo (new ReflectionEnumUnitCase("EvalReflectMissingCaseBacked", "Ready"))->getName(); echo ":";
+echo (new ReflectionEnumBackedCase("EvalReflectMissingCaseBacked", "Ready"))->getBackingValue();
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values);
+    assert!(
+        result.is_ok(),
+        "execute eval ir failed after output {:?}",
+        values.output
+    );
+
+    assert_eq!(
+        values.output,
+        "ReflectionException:Constant EvalReflectMissingCaseUnit::Missing does not exist|Constant EvalReflectMissingCaseClass::TOKEN is not a case|Constant EvalReflectMissingCaseUnit::TOKEN is not a case|Enum case EvalReflectMissingCaseUnit::Ready is not a backed case|Constant EvalReflectMissingCaseBacked::Missing does not exist|Constant EvalReflectMissingCaseClass::Missing does not exist|Ready:ready"
+    );
+    assert_eq!(values.get(result.expect("execute eval ir")), FakeValue::Bool(true));
+}
+
 /// Verifies eval member and enum-case reflectors expose their declaring class.
 #[test]
 fn execute_program_reflects_eval_declaring_class_metadata() {
