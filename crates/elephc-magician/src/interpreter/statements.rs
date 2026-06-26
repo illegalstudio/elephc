@@ -4696,7 +4696,7 @@ pub(in crate::interpreter) fn resolve_eval_static_class_name(
 }
 
 /// Resolves static member receivers while allowing non-eval class names to reach AOT lookup.
-fn resolve_eval_static_member_class_name(
+pub(in crate::interpreter) fn resolve_eval_static_member_class_name(
     class_name: &str,
     context: &ElephcEvalContext,
 ) -> Result<String, EvalStatus> {

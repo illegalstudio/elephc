@@ -282,6 +282,99 @@ TypeError:call_user_func_array(): Argument #1 ($callback) must be a valid callba
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies call_user_func rejects invalid object-method callable arrays with PHP's TypeError.
+#[test]
+fn execute_program_call_user_func_rejects_invalid_object_method_arrays() {
+    let program = parse_fragment(
+        br#"class EvalMissingCallbackArray {}
+class EvalPrivateCallbackArray {
+    private function hidden() {
+        return "bad";
+    }
+}
+class EvalInstanceCallbackArray {
+    public function inst() {
+        return "bad";
+    }
+}
+$missing = new EvalMissingCallbackArray();
+try {
+    call_user_func([$missing, "MiSsInG"]);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    call_user_func_array([$missing, "missing"], []);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    call_user_func([new EvalPrivateCallbackArray(), "hidden"]);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    call_user_func(["EvalInstanceCallbackArray", "inst"]);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, class EvalMissingCallbackArray does not have a method \"MiSsInG\"|\
+TypeError:call_user_func_array(): Argument #1 ($callback) must be a valid callback, class EvalMissingCallbackArray does not have a method \"missing\"|\
+TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method EvalPrivateCallbackArray::hidden()|\
+TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, non-static method EvalInstanceCallbackArray::inst() cannot be called statically"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies call_user_func callable arrays still dispatch through magic method fallbacks.
+#[test]
+fn execute_program_call_user_func_arrays_dispatch_magic_method_fallbacks() {
+    let program = parse_fragment(
+        br#"class EvalMagicCallbackArray {
+    public function __call($method, $args) {
+        return $method . ":" . $args[0];
+    }
+    public static function __callStatic($method, $args) {
+        return $method . ":" . $args[0];
+    }
+}
+$box = new EvalMagicCallbackArray();
+echo is_callable([$box, "missing"]) ? "Y:" : "N:";
+echo call_user_func([$box, "missing"], "A") . ":";
+echo call_user_func_array([$box, "missing"], ["B"]) . ":";
+echo is_callable(["EvalMagicCallbackArray", "static_missing"]) ? "S:" : "s:";
+return call_user_func(["EvalMagicCallbackArray", "static_missing"], "C");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Y:missing:A:missing:B:S:");
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("static_missing:C".to_string())
+    );
+}
+
 /// Verifies object-method callable arrays preserve eval named-argument binding.
 #[test]
 fn execute_program_object_method_callable_array_binds_eval_named_args() {

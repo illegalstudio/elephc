@@ -790,7 +790,10 @@ fn eval_object_method_callable_probe(
     let Some((declaring_class, method)) =
         eval_dynamic_method_for_call(class.name(), method_name, context)
     else {
-        return Ok(false);
+        return Ok(eval_instance_magic_method_callable_probe(
+            class.name(),
+            context,
+        ));
     };
     if method.is_abstract() {
         return Ok(false);
@@ -798,7 +801,8 @@ fn eval_object_method_callable_probe(
     if method_name.eq_ignore_ascii_case("__invoke") {
         return Ok(true);
     }
-    Ok(validate_eval_member_access(&declaring_class, method.visibility(), context).is_ok())
+    Ok(validate_eval_member_access(&declaring_class, method.visibility(), context).is_ok()
+        || eval_instance_magic_method_callable_probe(class.name(), context))
 }
 
 /// Returns whether one static method can be called from the current eval scope.
@@ -811,9 +815,28 @@ fn eval_static_method_callable_probe(
         return true;
     }
     let Some((declaring_class, method)) = context.class_method(class_name, method_name) else {
-        return false;
+        return eval_static_magic_method_callable_probe(class_name, context);
     };
-    method.is_static()
-        && !method.is_abstract()
-        && validate_eval_member_access(&declaring_class, method.visibility(), context).is_ok()
+    if !method.is_static() || method.is_abstract() {
+        return false;
+    }
+    validate_eval_member_access(&declaring_class, method.visibility(), context).is_ok()
+        || eval_static_magic_method_callable_probe(class_name, context)
+}
+
+/// Returns whether an eval class has a callable instance `__call()` fallback.
+fn eval_instance_magic_method_callable_probe(
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    context
+        .class_method(class_name, "__call")
+        .is_some_and(|(_, method)| !method.is_static() && !method.is_abstract())
+}
+
+/// Returns whether an eval class has a callable static `__callStatic()` fallback.
+fn eval_static_magic_method_callable_probe(class_name: &str, context: &ElephcEvalContext) -> bool {
+    context
+        .class_method(class_name, "__callStatic")
+        .is_some_and(|(_, method)| method.is_static() && !method.is_abstract())
 }

@@ -8852,6 +8852,95 @@ TypeError:call_user_func_array(): Argument #1 ($callback) must be a valid callba
     );
 }
 
+/// Verifies eval call_user_func rejects invalid method callable arrays with PHP's TypeError.
+#[test]
+fn test_eval_call_user_func_rejects_invalid_method_callable_arrays() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalMissingCallbackArray {}
+class EvalPrivateCallbackArray {
+    private function hidden() {
+        return "bad";
+    }
+}
+class EvalInstanceCallbackArray {
+    public function inst() {
+        return "bad";
+    }
+}
+$missing = new EvalMissingCallbackArray();
+try {
+    call_user_func([$missing, "MiSsInG"]);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    call_user_func_array([$missing, "missing"], []);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    call_user_func([new EvalPrivateCallbackArray(), "hidden"]);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    call_user_func(["EvalInstanceCallbackArray", "inst"]);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, class EvalMissingCallbackArray does not have a method \"MiSsInG\"|\
+TypeError:call_user_func_array(): Argument #1 ($callback) must be a valid callback, class EvalMissingCallbackArray does not have a method \"missing\"|\
+TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method EvalPrivateCallbackArray::hidden()|\
+TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, non-static method EvalInstanceCallbackArray::inst() cannot be called statically"
+    );
+}
+
+/// Verifies eval callable arrays use `__call` and `__callStatic` magic fallbacks.
+#[test]
+fn test_eval_call_user_func_method_callable_arrays_use_magic_fallbacks() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalMagicCallbackArray {
+    public function __call($method, $args) {
+        return $method . ":" . $args[0];
+    }
+    public static function __callStatic($method, $args) {
+        return $method . ":" . $args[0];
+    }
+}
+$box = new EvalMagicCallbackArray();
+echo is_callable([$box, "missing"]) ? "Y:" : "N:";
+echo call_user_func([$box, "missing"], "A") . ":";
+echo call_user_func_array([$box, "missing"], ["B"]) . ":";
+echo is_callable(["EvalMagicCallbackArray", "static_missing"]) ? "S:" : "s:";
+echo call_user_func(["EvalMagicCallbackArray", "static_missing"], "C");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Y:missing:A:missing:B:S:static_missing:C");
+}
+
 /// Verifies eval object method fallback dispatches missing and inaccessible methods through `__call`.
 #[test]
 fn test_eval_declared_magic_call_method_fallback() {
