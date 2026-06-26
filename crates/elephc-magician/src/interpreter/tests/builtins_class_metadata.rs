@@ -3189,6 +3189,50 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionClass instantiation throws Error for eval non-instantiable class-likes.
+#[test]
+fn execute_program_reflection_class_new_instance_rejects_eval_non_instantiable_class_likes() {
+    let program = parse_fragment(
+        br#"abstract class EvalReflectNewAbstract {}
+interface EvalReflectNewIface {}
+trait EvalReflectNewTrait {}
+enum EvalReflectNewEnum { case Ready; }
+function eval_reflect_new_error($class, $without) {
+    try {
+        $ref = new ReflectionClass($class);
+        if ($without) {
+            $ref->newInstanceWithoutConstructor();
+        } else {
+            $ref->newInstance();
+        }
+        echo "bad";
+    } catch (Error $e) {
+        echo get_class($e) . ":" . $e->getMessage();
+    }
+}
+eval_reflect_new_error("EvalReflectNewAbstract", false); echo "|";
+eval_reflect_new_error("EvalReflectNewAbstract", true); echo "|";
+eval_reflect_new_error("EvalReflectNewIface", false); echo "|";
+eval_reflect_new_error("EvalReflectNewIface", true); echo "|";
+eval_reflect_new_error("EvalReflectNewTrait", false); echo "|";
+eval_reflect_new_error("EvalReflectNewTrait", true); echo "|";
+eval_reflect_new_error("EvalReflectNewEnum", false); echo "|";
+eval_reflect_new_error("EvalReflectNewEnum", true);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Error:Cannot instantiate abstract class EvalReflectNewAbstract|Error:Cannot instantiate abstract class EvalReflectNewAbstract|Error:Cannot instantiate interface EvalReflectNewIface|Error:Cannot instantiate interface EvalReflectNewIface|Error:Cannot instantiate trait EvalReflectNewTrait|Error:Cannot instantiate trait EvalReflectNewTrait|Error:Cannot instantiate enum EvalReflectNewEnum|Error:Cannot instantiate enum EvalReflectNewEnum"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionMethod::invoke dispatches eval-declared methods.
 #[test]
 fn execute_program_reflection_method_invoke_calls_eval_method() {

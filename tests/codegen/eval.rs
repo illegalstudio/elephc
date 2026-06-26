@@ -13993,6 +13993,44 @@ $ref->newInstance();');
     }
 }
 
+/// Verifies eval ReflectionClass instantiation rejects eval non-instantiable class-likes like PHP.
+#[test]
+fn test_eval_reflection_class_new_instance_rejects_eval_non_instantiable_class_likes() {
+    let out = compile_and_run(
+        r#"<?php
+eval('abstract class EvalReflectNewAbstract {}
+interface EvalReflectNewIface {}
+trait EvalReflectNewTrait {}
+enum EvalReflectNewEnum { case Ready; }
+function eval_reflect_new_error($class, $without) {
+    try {
+        $ref = new ReflectionClass($class);
+        if ($without) {
+            $ref->newInstanceWithoutConstructor();
+        } else {
+            $ref->newInstance();
+        }
+        echo "bad";
+    } catch (Error $e) {
+        echo get_class($e) . ":" . $e->getMessage();
+    }
+}
+eval_reflect_new_error("EvalReflectNewAbstract", false); echo "|";
+eval_reflect_new_error("EvalReflectNewAbstract", true); echo "|";
+eval_reflect_new_error("EvalReflectNewIface", false); echo "|";
+eval_reflect_new_error("EvalReflectNewIface", true); echo "|";
+eval_reflect_new_error("EvalReflectNewTrait", false); echo "|";
+eval_reflect_new_error("EvalReflectNewTrait", true); echo "|";
+eval_reflect_new_error("EvalReflectNewEnum", false); echo "|";
+eval_reflect_new_error("EvalReflectNewEnum", true);');
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error:Cannot instantiate abstract class EvalReflectNewAbstract|Error:Cannot instantiate abstract class EvalReflectNewAbstract|Error:Cannot instantiate interface EvalReflectNewIface|Error:Cannot instantiate interface EvalReflectNewIface|Error:Cannot instantiate trait EvalReflectNewTrait|Error:Cannot instantiate trait EvalReflectNewTrait|Error:Cannot instantiate enum EvalReflectNewEnum|Error:Cannot instantiate enum EvalReflectNewEnum"
+    );
+}
+
 /// Verifies eval ReflectionMethod::invoke and invokeArgs call eval-declared methods.
 #[test]
 fn test_eval_reflection_method_invoke_calls_eval_method() {
