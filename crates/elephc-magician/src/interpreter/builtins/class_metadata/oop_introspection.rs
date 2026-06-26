@@ -16,6 +16,7 @@ use super::{eval_class_metadata_name, eval_class_relation_name_exists};
 use std::collections::HashSet;
 
 const EVAL_CLASS_METADATA_FLAG_PUBLIC: u64 = 2;
+const EVAL_CLASS_METADATA_FLAG_PRIVATE: u64 = 8;
 
 /// Evaluates `method_exists()` or `property_exists()` from eval expressions.
 pub(in crate::interpreter) fn eval_builtin_member_exists(
@@ -205,6 +206,15 @@ fn eval_method_exists_on_class(
             .iter()
             .any(|name| name.eq_ignore_ascii_case(method_name)));
     }
+    if target_is_object {
+        return Ok(eval_aot_method_dispatch_metadata_in_hierarchy(
+            class_name,
+            method_name,
+            context,
+            values,
+        )?
+        .is_some());
+    }
     values
         .reflection_method_flags(class_name, method_name)
         .map(|flags| flags.is_some())
@@ -235,9 +245,21 @@ fn eval_property_exists_on_class(
             .iter()
             .any(|name| name == property_name));
     }
-    values
-        .reflection_property_flags(class_name, property_name)
-        .map(|flags| flags.is_some())
+    let Some(flags) = values.reflection_property_flags(class_name, property_name)? else {
+        return Ok(false);
+    };
+    if flags & EVAL_CLASS_METADATA_FLAG_PRIVATE == 0 {
+        return Ok(true);
+    }
+    let Some(declaring_class) = values.reflection_property_declaring_class(
+        class_name,
+        property_name,
+    )? else {
+        return Ok(true);
+    };
+    Ok(declaring_class
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case(class_name.trim_start_matches('\\')))
 }
 
 /// Resolves an object-or-class argument to a PHP class name and records whether it was an object.

@@ -7797,6 +7797,48 @@ echo function_exists("get_class_methods"); echo function_exists("get_object_vars
     );
 }
 
+/// Verifies eval OOP introspection builtins honor AOT inherited private-member rules.
+#[test]
+fn test_eval_oop_introspection_builtins_for_aot_inherited_private_members() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotIntrospectBase {
+    private int $baseSecret;
+    protected int $baseProtectedProp;
+    public int $basePublicProp;
+    private function basePrivate() {}
+    protected function baseProtected() {}
+    public function basePublic() {}
+}
+class EvalAotIntrospectChild extends EvalAotIntrospectBase {
+    private int $childSecret;
+    public int $childPublicProp;
+    private function childPrivate() {}
+    public function childPublic() {}
+}
+
+eval('$object = new EvalAotIntrospectChild();
+echo method_exists("EvalAotIntrospectChild", "basePrivate") ? "bad" : "noClassParentPrivateMethod"; echo ":";
+echo method_exists($object, "basePrivate") ? "objectParentPrivateMethod" : "bad"; echo ":";
+echo method_exists("EvalAotIntrospectChild", "baseProtected") ? "classProtectedMethod" : "bad"; echo ":";
+echo method_exists($object, "childPrivate") ? "objectChildPrivateMethod" : "bad"; echo ":";
+echo property_exists("EvalAotIntrospectChild", "baseSecret") ? "bad" : "noClassParentPrivateProperty"; echo ":";
+echo property_exists($object, "baseSecret") ? "bad" : "noObjectParentPrivateProperty"; echo ":";
+echo property_exists("EvalAotIntrospectChild", "baseProtectedProp") ? "classProtectedProperty" : "bad"; echo ":";
+echo property_exists($object, "childSecret") ? "objectChildPrivateProperty" : "bad";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "noClassParentPrivateMethod:objectParentPrivateMethod:classProtectedMethod:objectChildPrivateMethod:noClassParentPrivateProperty:noObjectParentPrivateProperty:classProtectedProperty:objectChildPrivateProperty"
+    );
+}
+
 /// Verifies eval-declared private parent properties keep separate storage when a child shadows them.
 #[test]
 fn test_eval_declared_private_parent_property_shadowing() {
