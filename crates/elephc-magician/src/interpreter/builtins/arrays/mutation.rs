@@ -22,7 +22,13 @@ pub(in crate::interpreter) fn eval_builtin_settype_call(
     let Some(converted) = eval_settype_cast_value(value, type_name, values)? else {
         return values.bool_value(false);
     };
-    eval_settype_write_ref_target(&target, converted, context, values)?;
+    eval_write_direct_ref_target(
+        &target,
+        converted,
+        context,
+        values,
+        Some(ScopeCellOwnership::Owned),
+    )?;
     values.bool_value(true)
 }
 
@@ -82,24 +88,31 @@ pub(in crate::interpreter) fn eval_settype_direct_args(
     Ok((value, target, type_name))
 }
 
-/// Writes a direct `settype()` result back to the captured caller lvalue.
-fn eval_settype_write_ref_target(
+/// Writes a direct by-reference builtin result back to the captured caller lvalue.
+fn eval_write_direct_ref_target(
     target: &EvalReferenceTarget,
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
+    variable_ownership: Option<ScopeCellOwnership>,
 ) -> Result<(), EvalStatus> {
     match target {
         EvalReferenceTarget::Variable { scope, name } => {
             let Some(scope) = (unsafe { scope.as_mut() }) else {
                 return Err(EvalStatus::RuntimeFatal);
             };
+            let ownership = variable_ownership.unwrap_or_else(|| {
+                scope_entry(context, scope, name)
+                    .filter(|entry| entry.flags().is_visible())
+                    .map(|entry| entry.flags().ownership)
+                    .unwrap_or(ScopeCellOwnership::Owned)
+            });
             for replaced in set_scope_cell(
                 context,
                 scope,
                 name.clone(),
                 value,
-                ScopeCellOwnership::Owned,
+                ownership,
             )? {
                 values.release(replaced)?;
             }
@@ -107,6 +120,24 @@ fn eval_settype_write_ref_target(
         }
         _ => write_back_method_ref_target(target, value, context, values),
     }
+}
+
+/// Captures the first by-reference array mutator argument as a writable lvalue.
+fn eval_array_mutation_lvalue_arg(
+    arg: &EvalCallArg,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, EvalReferenceTarget), EvalStatus> {
+    if arg.is_spread() || !matches!(arg.name(), None | Some("array")) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let (array, target) = eval_call_arg_value(arg.value(), context, scope, values)?;
+    let target = target.ok_or(EvalStatus::RuntimeFatal)?;
+    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok((array, target))
 }
 
 /// Applies the eval-supported `settype()` scalar target conversion.
@@ -179,27 +210,10 @@ pub(in crate::interpreter) fn eval_builtin_array_pop_shift_call(
     let [arg] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    if arg.is_spread() || !matches!(arg.name(), None | Some("array")) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let EvalExpr::LoadVar(var_name) = arg.value() else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let Some(entry) =
-        scope_entry(context, scope, var_name).filter(|entry| entry.flags().is_visible())
-    else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let array = entry.cell();
-    let ownership = entry.flags().ownership;
-    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
+    let (array, target) = eval_array_mutation_lvalue_arg(arg, context, scope, values)?;
 
     let (result, replacement) = eval_array_pop_shift_replacement(name, array, values)?;
-    for replaced in set_scope_cell(context, scope, var_name.clone(), replacement, ownership)? {
-        values.release(replaced)?;
-    }
+    eval_write_direct_ref_target(&target, replacement, context, values, None)?;
     Ok(result)
 }
 
@@ -214,28 +228,14 @@ pub(in crate::interpreter) fn eval_builtin_array_push_unshift_call(
     if args.len() < 2 || !eval_call_args_are_plain_positional(args) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let EvalExpr::LoadVar(var_name) = args[0].value() else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
+    let (array, target) = eval_array_mutation_lvalue_arg(&args[0], context, scope, values)?;
     let mut inserted = Vec::with_capacity(args.len() - 1);
     for arg in &args[1..] {
         inserted.push(eval_expr(arg.value(), context, scope, values)?);
     }
-    let Some(entry) =
-        scope_entry(context, scope, var_name).filter(|entry| entry.flags().is_visible())
-    else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let array = entry.cell();
-    let ownership = entry.flags().ownership;
-    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
 
     let replacement = eval_array_push_unshift_replacement(name, array, &inserted, values)?;
     let result = eval_array_push_unshift_count_result(array, inserted.len(), values)?;
-    for replaced in set_scope_cell(context, scope, var_name.clone(), replacement, ownership)? {
-        values.release(replaced)?;
-    }
+    eval_write_direct_ref_target(&target, replacement, context, values, None)?;
     Ok(result)
 }

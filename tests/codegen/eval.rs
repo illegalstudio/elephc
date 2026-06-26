@@ -1261,7 +1261,7 @@ echo function_exists("array_walk");');
     assert_eq!(out, "a=2;b=3;T:0=4;1=5;z=6;1");
 }
 
-/// Verifies eval `array_pop()` and `array_shift()` mutate direct variable arguments only.
+/// Verifies eval `array_pop()` and `array_shift()` mutate writable lvalue arguments.
 #[test]
 fn test_eval_dispatches_array_pop_shift_builtin_calls() {
     let out = compile_and_run(
@@ -1274,13 +1274,28 @@ $c = [4, 5];
 echo call_user_func("array_pop", $c) . ":" . count($c) . ":" . $c[1] . ":";
 $d = [6, 7];
 echo call_user_func_array("array_shift", ["array" => $d]) . ":" . count($d) . ":" . $d[0] . ":";
+class EvalArrayPopShiftPropertyBox {
+    public array $items = ["p", "q"];
+    public static array $staticItems = ["s", "t"];
+}
+$box = new EvalArrayPopShiftPropertyBox();
+echo array_pop($box->items) . ":" . count($box->items) . ":" . $box->items[0] . ":";
+$name = "items";
+echo array_push($box->{$name}, "r") . ":" . $box->items[1] . ":";
+echo array_shift(EvalArrayPopShiftPropertyBox::$staticItems) . ":" . EvalArrayPopShiftPropertyBox::$staticItems[0] . ":";
+$class = "EvalArrayPopShiftPropertyBox";
+$staticName = "staticItems";
+echo array_unshift($class::${$staticName}, "u") . ":" . EvalArrayPopShiftPropertyBox::$staticItems[0] . ":" . EvalArrayPopShiftPropertyBox::$staticItems[1] . ":";
 echo function_exists("array_pop") && function_exists("array_shift");');
 "#,
     );
-    assert_eq!(out, "3:2:2:1:2:3:4:5:2:5:6:2:6:1");
+    assert_eq!(
+        out,
+        "3:2:2:1:2:3:4:5:2:5:6:2:6:q:1:p:2:r:s:t:2:u:t:1"
+    );
 }
 
-/// Verifies eval `array_push()` and `array_unshift()` mutate direct variable arguments only.
+/// Verifies eval `array_push()` and `array_unshift()` mutate writable lvalue arguments.
 #[test]
 fn test_eval_dispatches_array_push_unshift_builtin_calls() {
     let out = compile_and_run(
@@ -1297,10 +1312,25 @@ $e = [5];
 echo call_user_func("array_push", $e, 6) . ":" . count($e) . ":" . $e[0] . ":";
 $f = [7];
 echo call_user_func_array("array_unshift", [$f, 6]) . ":" . count($f) . ":" . $f[0] . ":";
+class EvalArrayPushUnshiftPropertyBox {
+    public array $items = ["p"];
+    public static array $staticItems = ["s"];
+}
+$box = new EvalArrayPushUnshiftPropertyBox();
+echo array_push($box->items, "q", "r") . ":" . $box->items[2] . ":";
+$name = "items";
+echo array_unshift($box->{$name}, "o") . ":" . $box->items[0] . ":" . $box->items[3] . ":";
+echo array_push(EvalArrayPushUnshiftPropertyBox::$staticItems, "t") . ":" . EvalArrayPushUnshiftPropertyBox::$staticItems[1] . ":";
+$class = "EvalArrayPushUnshiftPropertyBox";
+$staticName = "staticItems";
+echo array_unshift($class::${$staticName}, "r") . ":" . EvalArrayPushUnshiftPropertyBox::$staticItems[0] . ":" . EvalArrayPushUnshiftPropertyBox::$staticItems[2] . ":";
 echo function_exists("array_push") && function_exists("array_unshift");');
 "#,
     );
-    assert_eq!(out, "3:3:3:1:A:4:0:3:4:A:1:2:3:2:1:5:2:1:7:1");
+    assert_eq!(
+        out,
+        "3:3:3:1:A:4:0:3:4:A:1:2:3:2:1:5:2:1:7:3:r:4:o:r:2:t:3:r:t:1"
+    );
 }
 
 /// Verifies eval `array_splice()` mutates direct variable arguments only.
