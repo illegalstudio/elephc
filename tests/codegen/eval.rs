@@ -17139,6 +17139,37 @@ return $ref->invoke(left: "Q");');
     assert_eq!(out.stdout, "XY:QB");
 }
 
+/// Verifies eval ReflectionParameter exposes generated/AOT function defaults.
+#[test]
+fn test_eval_reflection_parameter_exposes_aot_function_defaults() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function eval_aot_reflect_default_function(string $left, string $right = "B", $items = [1, 2]): string {
+    return $left . $right . count($items);
+}
+echo eval('$ref = new ReflectionFunction("eval_aot_reflect_default_function");
+$params = $ref->getParameters();
+echo $params[0]->getName() . ":";
+echo ($params[0]->isDefaultValueAvailable() ? "bad" : "required") . ":";
+echo $params[1]->getName() . ":";
+echo ($params[1]->isOptional() ? "O" : "r") . ":";
+echo ($params[1]->isDefaultValueAvailable() ? "D" : "d") . ":";
+echo $params[1]->getDefaultValue() . ":";
+$direct = new ReflectionParameter("eval_aot_reflect_default_function", "items");
+echo $direct->getName() . ":";
+echo ($direct->isOptional() ? "O" : "r") . ":";
+$default = $direct->getDefaultValue();
+return count($default) . ":" . $default[0] . ":" . $default[1];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "left:required:right:O:D:B:items:O:2:1:2");
+}
+
 /// Verifies eval ReflectionClass::isCloneable uses eval class metadata through the bridge.
 #[test]
 fn test_eval_reflection_class_cloneable_predicate() {

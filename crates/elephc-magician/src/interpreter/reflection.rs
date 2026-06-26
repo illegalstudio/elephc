@@ -3095,24 +3095,8 @@ fn eval_reflection_function_new(
     }
     if let Some(function) = context.native_function(&lookup_name) {
         let reflected_name = requested_name.trim_start_matches('\\');
-        let parameter_names = eval_reflection_native_function_parameter_names(&function);
-        let parameter_attributes = vec![Vec::new(); parameter_names.len()];
-        let parameter_types: Vec<Option<EvalParameterType>> = vec![None; parameter_names.len()];
-        let parameter_defaults = vec![None; parameter_names.len()];
-        let parameter_is_by_ref = vec![false; parameter_names.len()];
-        let parameter_is_variadic = vec![false; parameter_names.len()];
-        let required_parameter_count =
-            eval_reflection_required_parameter_count(&parameter_defaults, &parameter_is_variadic);
-        let parameters = eval_reflection_function_parameters(
-            reflected_name,
-            &parameter_names,
-            Vec::new(),
-            &parameter_attributes,
-            &parameter_types,
-            &parameter_defaults,
-            &parameter_is_by_ref,
-            &parameter_is_variadic,
-        );
+        let required_parameter_count = function.required_param_count();
+        let parameters = eval_reflection_native_function_parameters(reflected_name, &function);
         return eval_reflection_function_object_result(
             reflected_name,
             &[],
@@ -3136,6 +3120,43 @@ fn eval_reflection_native_function_parameter_names(function: &NativeFunction) ->
                 .filter(|name| !name.is_empty())
                 .cloned()
                 .unwrap_or_else(|| format!("arg{}", index))
+        })
+        .collect()
+}
+
+/// Builds ReflectionParameter metadata for one registered native AOT function.
+fn eval_reflection_native_function_parameters(
+    function_name: &str,
+    function: &NativeFunction,
+) -> Vec<EvalReflectionParameterMetadata> {
+    let parameter_names = eval_reflection_native_function_parameter_names(function);
+    let parameter_count = parameter_names.len();
+    let parameter_attributes = vec![Vec::new(); parameter_count];
+    let parameter_types: Vec<Option<EvalParameterType>> = vec![None; parameter_count];
+    let parameter_defaults = eval_reflection_native_function_parameter_defaults(function);
+    let parameter_is_by_ref = vec![false; parameter_count];
+    let parameter_is_variadic = vec![false; parameter_count];
+    eval_reflection_function_parameters(
+        function_name,
+        &parameter_names,
+        Vec::new(),
+        &parameter_attributes,
+        &parameter_types,
+        &parameter_defaults,
+        &parameter_is_by_ref,
+        &parameter_is_variadic,
+    )
+}
+
+/// Converts registered native function defaults into eval constant expressions.
+fn eval_reflection_native_function_parameter_defaults(
+    function: &NativeFunction,
+) -> Vec<Option<EvalExpr>> {
+    (0..function.param_count())
+        .map(|index| {
+            function
+                .param_default(index)
+                .map(eval_reflection_native_callable_default_expr)
         })
         .collect()
 }
@@ -3347,22 +3368,7 @@ fn eval_reflection_function_parameter_metadata(
     }
     if let Some(function) = context.native_function(&lookup_name) {
         let reflected_name = requested_name.trim_start_matches('\\');
-        let parameter_names = eval_reflection_native_function_parameter_names(&function);
-        let parameter_attributes = vec![Vec::new(); parameter_names.len()];
-        let parameter_types: Vec<Option<EvalParameterType>> = vec![None; parameter_names.len()];
-        let parameter_defaults = vec![None; parameter_names.len()];
-        let parameter_is_by_ref = vec![false; parameter_names.len()];
-        let parameter_is_variadic = vec![false; parameter_names.len()];
-        let parameters = eval_reflection_function_parameters(
-            reflected_name,
-            &parameter_names,
-            Vec::new(),
-            &parameter_attributes,
-            &parameter_types,
-            &parameter_defaults,
-            &parameter_is_by_ref,
-            &parameter_is_variadic,
-        );
+        let parameters = eval_reflection_native_function_parameters(reflected_name, &function);
         return Ok(eval_reflection_parameter_for_selector(parameters, selector));
     }
     Ok(None)

@@ -472,9 +472,10 @@ dispatch eval-declared functions with the same named/default/variadic argument
 binding used by direct eval function calls. Runtime-held generated/AOT
 `ReflectionFunction` objects can invoke registered generated functions through
 the native bridge with parameter names, supported defaults, named arguments, and
-indexed or string-keyed runtime argument arrays. Supported callable-builtin
-invocation is covered by the general Reflection support documented in
-`docs/php/classes.md`.
+indexed or string-keyed runtime argument arrays. Registered generated/AOT
+free-function parameter defaults are also exposed through `ReflectionParameter`
+metadata. Supported callable-builtin invocation is covered by the general
+Reflection support documented in `docs/php/classes.md`.
 Defaulted eval method parameters are
 bound when omitted and reported through `ReflectionParameter::isOptional()`,
 `isDefaultValueAvailable()`, `isDefaultValueConstant()`,
