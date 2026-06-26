@@ -3081,6 +3081,22 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
                     .iter()
                     .any(|arg| eval_expr_uses_this_property(arg.value(), property_name))
         }
+        EvalExpr::DynamicMethodCall {
+            object,
+            method,
+            args,
+        }
+        | EvalExpr::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(method, property_name)
+                || args
+                    .iter()
+                    .any(|arg| eval_expr_uses_this_property(arg.value(), property_name))
+        }
         EvalExpr::Const(_)
         | EvalExpr::ConstFetch(_)
         | EvalExpr::ClassConstantFetch { .. }
@@ -3145,6 +3161,12 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
             eval_is_this_property(object, property, property_name)
                 || eval_expr_uses_this_property(object, property_name)
         }
+        EvalExpr::DynamicPropertyGet { object, property }
+        | EvalExpr::NullsafeDynamicPropertyGet { object, property } => {
+            eval_is_this_dynamic_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(property, property_name)
+        }
         EvalExpr::Ternary {
             condition,
             then_branch,
@@ -3166,6 +3188,21 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
 /// Returns whether one object/property pair is exactly `$this->{$property_name}`.
 fn eval_is_this_property(object: &EvalExpr, property: &str, property_name: &str) -> bool {
     matches!(object, EvalExpr::LoadVar(name) if name == "this") && property == property_name
+}
+
+/// Returns whether one dynamic object/property pair is exactly `$this->{"property"}`.
+fn eval_is_this_dynamic_property(
+    object: &EvalExpr,
+    property: &EvalExpr,
+    property_name: &str,
+) -> bool {
+    matches!(
+        (object, property),
+        (
+            EvalExpr::LoadVar(object_name),
+            EvalExpr::Const(EvalConst::String(property))
+        ) if object_name == "this" && property == property_name
+    )
 }
 
 /// Returns the synthetic get-hook method name for one property.

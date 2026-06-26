@@ -2277,6 +2277,15 @@ pub enum EvalExpr {
         callee: Box<EvalExpr>,
         args: Vec<EvalCallArg>,
     },
+    DynamicMethodCall {
+        object: Box<EvalExpr>,
+        method: Box<EvalExpr>,
+        args: Vec<EvalCallArg>,
+    },
+    DynamicPropertyGet {
+        object: Box<EvalExpr>,
+        property: Box<EvalExpr>,
+    },
     Include {
         path: Box<EvalExpr>,
         required: bool,
@@ -2312,6 +2321,11 @@ pub enum EvalExpr {
         method: String,
         args: Vec<EvalCallArg>,
     },
+    NullsafeDynamicMethodCall {
+        object: Box<EvalExpr>,
+        method: Box<EvalExpr>,
+        args: Vec<EvalCallArg>,
+    },
     Magic(EvalMagicConst),
     NewObject {
         class_name: String,
@@ -2344,6 +2358,10 @@ pub enum EvalExpr {
     NullsafePropertyGet {
         object: Box<EvalExpr>,
         property: String,
+    },
+    NullsafeDynamicPropertyGet {
+        object: Box<EvalExpr>,
+        property: Box<EvalExpr>,
     },
     PropertyGet {
         object: Box<EvalExpr>,

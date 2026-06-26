@@ -135,6 +135,31 @@ fn parse_fragment_accepts_method_call_source() {
         }))]
     );
 }
+/// Verifies braced dynamic object property reads parse as runtime-name EvalIR expressions.
+#[test]
+fn parse_fragment_accepts_dynamic_property_read_source() {
+    let program = parse_fragment(br#"return $this->{$name};"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::DynamicPropertyGet {
+            object: Box::new(EvalExpr::LoadVar("this".to_string())),
+            property: Box::new(EvalExpr::LoadVar("name".to_string())),
+        }))]
+    );
+}
+/// Verifies variable-name dynamic object method calls parse as runtime-name EvalIR calls.
+#[test]
+fn parse_fragment_accepts_dynamic_method_call_source() {
+    let program = parse_fragment(br#"return $this->$method();"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::DynamicMethodCall {
+            object: Box::new(EvalExpr::LoadVar("this".to_string())),
+            method: Box::new(EvalExpr::LoadVar("method".to_string())),
+            args: Vec::new(),
+        }))]
+    );
+}
 /// Verifies nullsafe object property reads parse as dedicated postfix EvalIR expressions.
 #[test]
 fn parse_fragment_accepts_nullsafe_property_read_source() {
@@ -156,6 +181,31 @@ fn parse_fragment_accepts_nullsafe_method_call_source() {
         &[EvalStmt::Return(Some(EvalExpr::NullsafeMethodCall {
             object: Box::new(EvalExpr::LoadVar("this".to_string())),
             method: "Answer".to_string(),
+            args: Vec::new(),
+        }))]
+    );
+}
+/// Verifies nullsafe braced dynamic property reads parse as runtime-name EvalIR expressions.
+#[test]
+fn parse_fragment_accepts_nullsafe_dynamic_property_read_source() {
+    let program = parse_fragment(br#"return $this?->{$name};"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::NullsafeDynamicPropertyGet {
+            object: Box::new(EvalExpr::LoadVar("this".to_string())),
+            property: Box::new(EvalExpr::LoadVar("name".to_string())),
+        }))]
+    );
+}
+/// Verifies nullsafe dynamic method calls parse as runtime-name EvalIR call expressions.
+#[test]
+fn parse_fragment_accepts_nullsafe_dynamic_method_call_source() {
+    let program = parse_fragment(br#"return $this?->$method();"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::NullsafeDynamicMethodCall {
+            object: Box::new(EvalExpr::LoadVar("this".to_string())),
+            method: Box::new(EvalExpr::LoadVar("method".to_string())),
             args: Vec::new(),
         }))]
     );

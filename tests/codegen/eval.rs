@@ -3360,6 +3360,59 @@ echo $without?->profile?->label(eval_nullsafe_side()) ?? "none";');
     assert_eq!(out, "Ada|none|method:Ada:ok|none");
 }
 
+/// Verifies eval-declared objects support runtime-name property reads and method calls.
+#[test]
+fn test_eval_declared_dynamic_property_and_method_access() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalDynamicMemberProfile {
+    public string $name = "Ada";
+
+    public function label($value) {
+        echo "call:";
+        return $this->name . ":" . $value;
+    }
+}
+
+class EvalDynamicMemberUser {
+    public $profile = null;
+}
+
+function eval_dynamic_member_name() {
+    echo "name:";
+    return "profile";
+}
+
+function eval_dynamic_member_method() {
+    echo "methodName:";
+    return "label";
+}
+
+function eval_dynamic_member_bad() {
+    echo "bad";
+    return "profile";
+}
+
+$with = new EvalDynamicMemberUser();
+$with->profile = new EvalDynamicMemberProfile();
+$missing = null;
+$name = "profile";
+$method = "label";
+
+echo $with->{$name}->name; echo "|";
+echo $with?->{eval_dynamic_member_name()}?->name ?? "none"; echo "|";
+echo $with->{$name}->$method("ok"); echo "|";
+echo $with->{$name}->{eval_dynamic_member_method()}("yes"); echo "|";
+echo $missing?->{eval_dynamic_member_bad()} ?? "none"; echo "|";
+echo $missing?->{eval_dynamic_member_bad()}(eval_dynamic_member_bad()) ?? "none";');
+"#,
+    );
+    assert_eq!(
+        out,
+        "Ada|name:Ada|call:Ada:ok|methodName:call:Ada:yes|none|none"
+    );
+}
+
 /// Verifies eval string contexts dispatch AOT `__toString()` through the runtime method bridge.
 #[test]
 fn test_eval_aot_tostring_string_contexts() {

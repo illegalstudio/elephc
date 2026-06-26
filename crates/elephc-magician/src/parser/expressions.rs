@@ -499,40 +499,109 @@ impl Parser {
             } else {
                 break;
             };
-            let TokenKind::Ident(member) = self.current() else {
-                return Err(EvalParseError::UnexpectedToken);
-            };
-            let member = member.clone();
-            self.advance();
-            if matches!(self.current(), TokenKind::LParen) {
-                let args = self.parse_call_args()?;
-                expr = if nullsafe {
-                    EvalExpr::NullsafeMethodCall {
-                        object: Box::new(expr),
-                        method: member,
-                        args,
-                    }
-                } else {
-                    EvalExpr::MethodCall {
-                        object: Box::new(expr),
-                        method: member,
-                        args,
-                    }
-                };
-            } else if nullsafe {
-                expr = EvalExpr::NullsafePropertyGet {
-                    object: Box::new(expr),
-                    property: member,
-                };
-            } else {
-                expr = EvalExpr::PropertyGet {
-                    object: Box::new(expr),
-                    property: member,
-                };
-            }
+            expr = self.parse_object_member_postfix(expr, nullsafe)?;
             continue;
         }
         Ok(expr)
+    }
+
+    /// Parses the member name after `->` or `?->` and builds the corresponding postfix expression.
+    fn parse_object_member_postfix(
+        &mut self,
+        object: EvalExpr,
+        nullsafe: bool,
+    ) -> Result<EvalExpr, EvalParseError> {
+        match self.current() {
+            TokenKind::Ident(member) => {
+                let member = member.clone();
+                self.advance();
+                self.parse_named_object_member_postfix(object, member, nullsafe)
+            }
+            TokenKind::DollarIdent(name) => {
+                let member = EvalExpr::LoadVar(name.clone());
+                self.advance();
+                self.parse_dynamic_object_member_postfix(object, member, nullsafe)
+            }
+            TokenKind::LBrace => {
+                self.advance();
+                let member = self.parse_expr()?;
+                self.expect(TokenKind::RBrace)?;
+                self.parse_dynamic_object_member_postfix(object, member, nullsafe)
+            }
+            _ => Err(EvalParseError::UnexpectedToken),
+        }
+    }
+
+    /// Builds a static-name property read or method call after parsing the member name.
+    fn parse_named_object_member_postfix(
+        &mut self,
+        object: EvalExpr,
+        member: String,
+        nullsafe: bool,
+    ) -> Result<EvalExpr, EvalParseError> {
+        if matches!(self.current(), TokenKind::LParen) {
+            let args = self.parse_call_args()?;
+            return Ok(if nullsafe {
+                EvalExpr::NullsafeMethodCall {
+                    object: Box::new(object),
+                    method: member,
+                    args,
+                }
+            } else {
+                EvalExpr::MethodCall {
+                    object: Box::new(object),
+                    method: member,
+                    args,
+                }
+            });
+        }
+        Ok(if nullsafe {
+            EvalExpr::NullsafePropertyGet {
+                object: Box::new(object),
+                property: member,
+            }
+        } else {
+            EvalExpr::PropertyGet {
+                object: Box::new(object),
+                property: member,
+            }
+        })
+    }
+
+    /// Builds a runtime-name property read or method call after parsing the member expression.
+    fn parse_dynamic_object_member_postfix(
+        &mut self,
+        object: EvalExpr,
+        member: EvalExpr,
+        nullsafe: bool,
+    ) -> Result<EvalExpr, EvalParseError> {
+        if matches!(self.current(), TokenKind::LParen) {
+            let args = self.parse_call_args()?;
+            return Ok(if nullsafe {
+                EvalExpr::NullsafeDynamicMethodCall {
+                    object: Box::new(object),
+                    method: Box::new(member),
+                    args,
+                }
+            } else {
+                EvalExpr::DynamicMethodCall {
+                    object: Box::new(object),
+                    method: Box::new(member),
+                    args,
+                }
+            });
+        }
+        Ok(if nullsafe {
+            EvalExpr::NullsafeDynamicPropertyGet {
+                object: Box::new(object),
+                property: Box::new(member),
+            }
+        } else {
+            EvalExpr::DynamicPropertyGet {
+                object: Box::new(object),
+                property: Box::new(member),
+            }
+        })
     }
 
     /// Parses primary expressions supported by the initial eval subset.

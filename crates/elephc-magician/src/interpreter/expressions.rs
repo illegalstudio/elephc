@@ -41,6 +41,27 @@ pub(in crate::interpreter) fn eval_expr(
         EvalExpr::DynamicCall { callee, args } => {
             eval_dynamic_call(callee, args, context, scope, values)
         }
+        EvalExpr::DynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            let object = eval_expr(object, context, scope, values)?;
+            let method = eval_dynamic_member_name(method, context, scope, values)?;
+            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
+            eval_method_call_result_with_evaluated_args(
+                object,
+                &method,
+                evaluated_args,
+                context,
+                values,
+            )
+        }
+        EvalExpr::DynamicPropertyGet { object, property } => {
+            let object = eval_expr(object, context, scope, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_property_get_result(object, &property, context, values)
+        }
         EvalExpr::Include {
             path,
             required,
@@ -157,6 +178,25 @@ pub(in crate::interpreter) fn eval_expr(
                 values,
             )
         }
+        EvalExpr::NullsafeDynamicMethodCall {
+            object,
+            method,
+            args,
+        } => {
+            let object = eval_expr(object, context, scope, values)?;
+            if values.is_null(object)? {
+                return values.null();
+            }
+            let method = eval_dynamic_member_name(method, context, scope, values)?;
+            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
+            eval_method_call_result_with_evaluated_args(
+                object,
+                &method,
+                evaluated_args,
+                context,
+                values,
+            )
+        }
         EvalExpr::NullCoalesce { value, default } => {
             let value = eval_expr(value, context, scope, values)?;
             if values.is_null(value)? {
@@ -171,6 +211,14 @@ pub(in crate::interpreter) fn eval_expr(
                 return values.null();
             }
             eval_property_get_result(object, property, context, values)
+        }
+        EvalExpr::NullsafeDynamicPropertyGet { object, property } => {
+            let object = eval_expr(object, context, scope, values)?;
+            if values.is_null(object)? {
+                return values.null();
+            }
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_property_get_result(object, &property, context, values)
         }
         EvalExpr::PropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
@@ -274,6 +322,19 @@ pub(in crate::interpreter) fn eval_expr(
             }
         }
     }
+}
+
+/// Evaluates a runtime property or method name expression and returns its PHP string bytes as UTF-8.
+fn eval_dynamic_member_name(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let value = eval_expr(expr, context, scope, values)?;
+    let value = eval_string_context_value(value, context, values)?;
+    let bytes = values.string_bytes(value)?;
+    String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
 }
 
 /// Reads an array element or dispatches `ArrayAccess::offsetGet()` for objects.
