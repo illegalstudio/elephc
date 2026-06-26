@@ -4747,6 +4747,12 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
                     values,
                 );
             }
+            if let Some(target) = context
+                .static_property_alias(&declaring_class, property_name)
+                .cloned()
+            {
+                return eval_reference_target_value(&target, context, values);
+            }
             if !values.static_property_is_initialized(&declaring_class, property_name)? {
                 return eval_throw_uninitialized_static_property_error(
                     &declaring_class,
@@ -4811,6 +4817,13 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
         }
         if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
             return Ok(false);
+        }
+        if let Some(target) = context
+            .static_property_alias(&declaring_class, property_name)
+            .cloned()
+        {
+            let value = eval_reference_target_value(&target, context, values)?;
+            return Ok(!values.is_null(value)?);
         }
         if !values.static_property_is_initialized(&declaring_class, property_name)? {
             return Ok(false);
@@ -5067,6 +5080,51 @@ fn eval_static_property_reference_bind_result(
             values,
         );
     }
+    if let Some((declaring_class, _, write_visibility, is_static)) =
+        eval_reflection_aot_static_property_access_metadata(
+            &class_name,
+            property_name,
+            context,
+            values,
+        )?
+    {
+        if !is_static {
+            return eval_throw_undeclared_static_property_error(
+                &class_name,
+                property_name,
+                context,
+                values,
+            );
+        }
+        if validate_eval_member_access(&declaring_class, write_visibility, context).is_err() {
+            return eval_throw_property_access_error(
+                &declaring_class,
+                property_name,
+                write_visibility,
+                context,
+                values,
+            );
+        }
+        let target = eval_static_property_reference_target(
+            &declaring_class,
+            property_name,
+            source_name,
+            context,
+            scope,
+            values,
+        )?;
+        let value = eval_reference_target_value(&target, context, values)?;
+        context.bind_static_property_alias(&declaring_class, property_name, target);
+        if values.static_property_set(&class_name, property_name, value)? {
+            return Ok(());
+        }
+        return eval_throw_undeclared_static_property_error(
+            &class_name,
+            property_name,
+            context,
+            values,
+        );
+    }
     if eval_runtime_class_like_exists(&class_name, context, values)? {
         eval_throw_undeclared_static_property_error(&class_name, property_name, context, values)
     } else {
@@ -5206,6 +5264,21 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                 context,
                 values,
             );
+        }
+        if is_static {
+            if let Some(target) = context
+                .static_property_alias(&declaring_class, property_name)
+                .cloned()
+            {
+                eval_static_reference_target_write(
+                    &declaring_class,
+                    property_name,
+                    target,
+                    value,
+                    context,
+                    values,
+                )?;
+            }
         }
     }
     if values.static_property_set(&class_name, property_name, value)? {
