@@ -405,6 +405,55 @@ fn parse_fragment_accepts_dynamic_property_write_source() {
     );
 }
 
+/// Verifies object property compound assignment parses as a dedicated member update.
+#[test]
+fn parse_fragment_accepts_property_compound_assignment_source() {
+    let program = parse_fragment(br#"$this->x += 2; $this->label .= "ok";"#)
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::PropertyCompoundAssign {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: "x".to_string(),
+                op: EvalBinOp::Add,
+                value: EvalExpr::Const(EvalConst::Int(2)),
+            },
+            EvalStmt::PropertyCompoundAssign {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: "label".to_string(),
+                op: EvalBinOp::Concat,
+                value: EvalExpr::Const(EvalConst::String("ok".to_string())),
+            },
+        ]
+    );
+}
+
+/// Verifies dynamic object property compound assignment keeps the runtime property expression.
+#[test]
+fn parse_fragment_accepts_dynamic_property_compound_assignment_source() {
+    let program =
+        parse_fragment(br#"$this->{$name} += 2; $this->{$label} .= "ok";"#)
+            .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::DynamicPropertyCompoundAssign {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: EvalExpr::LoadVar("name".to_string()),
+                op: EvalBinOp::Add,
+                value: EvalExpr::Const(EvalConst::Int(2)),
+            },
+            EvalStmt::DynamicPropertyCompoundAssign {
+                object: EvalExpr::LoadVar("this".to_string()),
+                property: EvalExpr::LoadVar("label".to_string()),
+                op: EvalBinOp::Concat,
+                value: EvalExpr::Const(EvalConst::String("ok".to_string())),
+            },
+        ]
+    );
+}
+
 /// Verifies dynamic object property increment/decrement keeps the runtime property expression.
 #[test]
 fn parse_fragment_accepts_dynamic_property_inc_dec_source() {

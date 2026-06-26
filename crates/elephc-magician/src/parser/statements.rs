@@ -2836,26 +2836,43 @@ impl Parser {
             }
             return property_inc_dec_stmt(target, increment).map(|stmt| vec![stmt]);
         }
-        if !self.consume(TokenKind::Equal) {
+        let Some(op) = assignment_op(self.current()) else {
             if require_semicolon {
                 self.expect_semicolon()?;
             }
             return Ok(vec![EvalStmt::Expr(target)]);
-        }
+        };
+        self.advance();
         let value = self.parse_expr()?;
         if require_semicolon {
             self.expect_semicolon()?;
         }
-        match target {
-            EvalExpr::PropertyGet { object, property } => Ok(vec![EvalStmt::PropertySet {
+        match (target, op) {
+            (EvalExpr::PropertyGet { object, property }, None) => Ok(vec![EvalStmt::PropertySet {
                 object: *object,
                 property,
                 value,
             }]),
-            EvalExpr::DynamicPropertyGet { object, property } => {
+            (EvalExpr::PropertyGet { object, property }, Some(op)) => {
+                Ok(vec![EvalStmt::PropertyCompoundAssign {
+                    object: *object,
+                    property,
+                    op,
+                    value,
+                }])
+            }
+            (EvalExpr::DynamicPropertyGet { object, property }, None) => {
                 Ok(vec![EvalStmt::DynamicPropertySet {
                     object: *object,
                     property: *property,
+                    value,
+                }])
+            }
+            (EvalExpr::DynamicPropertyGet { object, property }, Some(op)) => {
+                Ok(vec![EvalStmt::DynamicPropertyCompoundAssign {
+                    object: *object,
+                    property: *property,
+                    op,
                     value,
                 }])
             }
@@ -3349,6 +3366,12 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
             object,
             property,
             value,
+        }
+        | EvalStmt::DynamicPropertyCompoundAssign {
+            object,
+            property,
+            value,
+            ..
         } => {
             eval_is_this_dynamic_property(object, property, property_name)
                 || eval_expr_uses_this_property(object, property_name)
@@ -3366,6 +3389,12 @@ fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str) -> bool {
             object,
             property,
             value,
+        }
+        | EvalStmt::PropertyCompoundAssign {
+            object,
+            property,
+            value,
+            ..
         } => {
             eval_is_this_property(object, property, property_name)
                 || eval_expr_uses_this_property(object, property_name)
