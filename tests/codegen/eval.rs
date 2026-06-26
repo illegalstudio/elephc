@@ -7304,6 +7304,31 @@ echo get_class($parent); echo ":"; echo $parent->label;');
     );
 }
 
+/// Verifies eval supports PHP's legacy `var` public property marker through the bridge.
+#[test]
+fn test_eval_declared_legacy_var_properties() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalLegacyVarProperty {
+    var $plain = "p";
+    var ?int $count = null;
+}
+$object = new EvalLegacyVarProperty();
+$plain = new ReflectionProperty("EvalLegacyVarProperty", "plain");
+$count = new ReflectionProperty("EvalLegacyVarProperty", "count");
+$defaults = (new ReflectionClass("EvalLegacyVarProperty"))->getDefaultProperties();
+echo $object->plain; echo ":";
+echo $plain->isPublic() ? "P" : "p"; echo ":";
+echo $plain->hasType() ? "T" : "t"; echo ":";
+echo $count->isPublic() ? "C" : "c"; echo ":";
+echo $count->hasType() ? $count->getType()->getName() : "none"; echo ":";
+echo $count->getType()->allowsNull() ? "N" : "n"; echo ":";
+echo is_null($defaults["count"]) ? "null" : "bad";');
+"#,
+    );
+    assert_eq!(out, "p:P:t:C:int:N:null");
+}
+
 /// Verifies native callable probes can see functions declared by eval after the barrier.
 #[test]
 fn test_eval_declared_function_is_visible_to_callable_probes() {
