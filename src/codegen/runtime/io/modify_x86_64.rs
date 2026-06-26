@@ -104,12 +104,13 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload user-name pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload user-name length
     emitter.instruction("call __rt_cstr2");                                     // user name → secondary C string in rax
-    emitter.instruction("mov rdi, rax");                                        // first getpwnam arg = C user name
-    emitter.instruction("call getpwnam");                                       // libc getpwnam(name)
-    emitter.instruction("test rax, rax");                                       // user found?
-    emitter.instruction("jz __rt_chown_user_fail_x86");                         // unknown user name → false
+    emitter.instruction("mov rdi, rax");                                        // first lookup arg = C user name
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // second lookup arg = user-name length
+    emitter.instruction("call __rt_lookup_passwd_uid");                         // resolve uid from /etc/passwd without NSS
+    emitter.instruction("cmp eax, -1");                                         // was the user name absent?
+    emitter.instruction("je __rt_chown_user_fail_x86");                         // unknown user name → false
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first chown arg = C path
-    emitter.instruction("mov esi, DWORD PTR [rax + 16]");                       // second chown arg = passwd.pw_uid
+    emitter.instruction("mov esi, eax");                                        // second chown arg = resolved uid
     emitter.instruction("mov rdx, -1");                                         // gid = -1 (leave group unchanged)
     emitter.instruction("call chown");                                          // libc chown(path, uid, -1)
     emitter.instruction("cmp eax, 0");                                          // did libc chown() return success as a C int?
@@ -137,12 +138,13 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload user-name pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload user-name length
     emitter.instruction("call __rt_cstr2");                                     // user name → secondary C string in rax
-    emitter.instruction("mov rdi, rax");                                        // first getpwnam arg = C user name
-    emitter.instruction("call getpwnam");                                       // libc getpwnam(name)
-    emitter.instruction("test rax, rax");                                       // user found?
-    emitter.instruction("jz __rt_lchown_user_fail_x86");                        // unknown user name → false
+    emitter.instruction("mov rdi, rax");                                        // first lookup arg = C user name
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // second lookup arg = user-name length
+    emitter.instruction("call __rt_lookup_passwd_uid");                         // resolve uid from /etc/passwd without NSS
+    emitter.instruction("cmp eax, -1");                                         // was the user name absent?
+    emitter.instruction("je __rt_lchown_user_fail_x86");                        // unknown user name → false
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first lchown arg = C path
-    emitter.instruction("mov esi, DWORD PTR [rax + 16]");                       // second lchown arg = passwd.pw_uid
+    emitter.instruction("mov esi, eax");                                        // second lchown arg = resolved uid
     emitter.instruction("mov rdx, -1");                                         // gid = -1 (leave group unchanged)
     emitter.instruction("call lchown");                                         // libc lchown(path, uid, -1) without following symlinks
     emitter.instruction("cmp eax, 0");                                          // did libc lchown() return success as a C int?
@@ -170,13 +172,14 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload group-name pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload group-name length
     emitter.instruction("call __rt_cstr2");                                     // group name → secondary C string in rax
-    emitter.instruction("mov rdi, rax");                                        // first getgrnam arg = C group name
-    emitter.instruction("call getgrnam");                                       // libc getgrnam(name)
-    emitter.instruction("test rax, rax");                                       // group found?
-    emitter.instruction("jz __rt_chgrp_group_fail_x86");                        // unknown group name → false
+    emitter.instruction("mov rdi, rax");                                        // first lookup arg = C group name
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // second lookup arg = group-name length
+    emitter.instruction("call __rt_lookup_group_gid");                          // resolve gid from /etc/group without NSS
+    emitter.instruction("cmp eax, -1");                                         // was the group name absent?
+    emitter.instruction("je __rt_chgrp_group_fail_x86");                        // unknown group name → false
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first chown arg = C path
     emitter.instruction("mov rsi, -1");                                         // uid = -1 (leave owner unchanged)
-    emitter.instruction("mov edx, DWORD PTR [rax + 16]");                       // third chown arg = group.gr_gid
+    emitter.instruction("mov edx, eax");                                        // third chown arg = resolved gid
     emitter.instruction("call chown");                                          // libc chown(path, -1, gid)
     emitter.instruction("cmp eax, 0");                                          // did libc chown() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
@@ -203,13 +206,14 @@ pub(super) fn emit_modify_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload group-name pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload group-name length
     emitter.instruction("call __rt_cstr2");                                     // group name → secondary C string in rax
-    emitter.instruction("mov rdi, rax");                                        // first getgrnam arg = C group name
-    emitter.instruction("call getgrnam");                                       // libc getgrnam(name)
-    emitter.instruction("test rax, rax");                                       // group found?
-    emitter.instruction("jz __rt_lchgrp_group_fail_x86");                       // unknown group name → false
+    emitter.instruction("mov rdi, rax");                                        // first lookup arg = C group name
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // second lookup arg = group-name length
+    emitter.instruction("call __rt_lookup_group_gid");                          // resolve gid from /etc/group without NSS
+    emitter.instruction("cmp eax, -1");                                         // was the group name absent?
+    emitter.instruction("je __rt_lchgrp_group_fail_x86");                       // unknown group name → false
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first lchown arg = C path
     emitter.instruction("mov rsi, -1");                                         // uid = -1 (leave owner unchanged)
-    emitter.instruction("mov edx, DWORD PTR [rax + 16]");                       // third lchown arg = group.gr_gid
+    emitter.instruction("mov edx, eax");                                        // third lchown arg = resolved gid
     emitter.instruction("call lchown");                                         // libc lchown(path, -1, gid) without following symlinks
     emitter.instruction("cmp eax, 0");                                          // did libc lchown() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte

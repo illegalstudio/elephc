@@ -478,6 +478,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_realpath(emitter);
     io::emit_pathinfo_str(emitter);
     io::emit_pathinfo_array(emitter);
+    io::emit_principal_lookup(emitter);
     io::emit_modify(emitter);
     io::emit_streams_ext(emitter);
     io::emit_symlink(emitter);

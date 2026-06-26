@@ -704,6 +704,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _etc_protocols_path\n_etc_protocols_path:\n    .asciz \"/etc/protocols\"\n");
     out.push_str(".comm _servent_buf, 1048576, 3\n");
     out.push_str(".globl _etc_services_path\n_etc_services_path:\n    .asciz \"/etc/services\"\n");
+    out.push_str(".comm _principal_lookup_buf, 4096, 3\n");
+    out.push_str(".globl _etc_passwd_path\n_etc_passwd_path:\n    .asciz \"/etc/passwd\"\n");
+    out.push_str(".globl _etc_group_path\n_etc_group_path:\n    .asciz \"/etc/group\"\n");
+    out.push_str(".globl _principal_lookup_read_mode\n_principal_lookup_read_mode:\n    .asciz \"r\"\n");
     out.push_str(&emit_spl_autoload_extensions_data());
     out.push_str(".globl _heap_dbg_stats_prefix\n_heap_dbg_stats_prefix:\n    .ascii \"HEAP DEBUG: allocs=\"\n");
     out.push_str(".globl _heap_dbg_frees_label\n_heap_dbg_frees_label:\n    .ascii \" frees=\"\n");
