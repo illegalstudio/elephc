@@ -573,7 +573,104 @@ fn eval_array_unset_element_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    match array {
+        EvalExpr::LoadVar(name) => {
+            let existing = scope_entry(context, scope, name)
+                .filter(|entry| entry.flags().is_visible())
+                .map(|entry| (entry.cell(), entry.flags().ownership));
+            let Some((array, ownership)) = existing else {
+                return Ok(());
+            };
+            if let Some(array) =
+                eval_array_unset_target_result(array, index, context, scope, values)?
+            {
+                for replaced in set_scope_cell(context, scope, name.clone(), array, ownership)? {
+                    values.release(replaced)?;
+                }
+            }
+            return Ok(());
+        }
+        EvalExpr::PropertyGet { object, property } => {
+            let object = eval_expr(object, context, scope, values)?;
+            let array = eval_property_get_result(object, property, context, values)?;
+            if let Some(array) =
+                eval_array_unset_target_result(array, index, context, scope, values)?
+            {
+                eval_property_set_result(object, property, array, context, values)?;
+            }
+            return Ok(());
+        }
+        EvalExpr::DynamicPropertyGet { object, property } => {
+            let object = eval_expr(object, context, scope, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            let array = eval_property_get_result(object, &property, context, values)?;
+            if let Some(array) =
+                eval_array_unset_target_result(array, index, context, scope, values)?
+            {
+                eval_property_set_result(object, &property, array, context, values)?;
+            }
+            return Ok(());
+        }
+        EvalExpr::StaticPropertyGet {
+            class_name,
+            property,
+        } => {
+            let array = eval_static_property_get_result(class_name, property, context, values)?;
+            if let Some(array) =
+                eval_array_unset_target_result(array, index, context, scope, values)?
+            {
+                eval_static_property_set_result(class_name, property, array, context, values)?;
+            }
+            return Ok(());
+        }
+        EvalExpr::DynamicStaticPropertyGet {
+            class_name,
+            property,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let array = eval_static_property_get_result(&class_name, property, context, values)?;
+            if let Some(array) =
+                eval_array_unset_target_result(array, index, context, scope, values)?
+            {
+                eval_static_property_set_result(&class_name, property, array, context, values)?;
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
     let array = eval_expr(array, context, scope, values)?;
+    eval_array_access_unset_result(array, index, context, scope, values)
+}
+
+/// Unsets one offset from an already-resolved array-like target and returns a replacement array.
+fn eval_array_unset_target_result(
+    array: RuntimeCellHandle,
+    index: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if values.type_tag(array)? == EVAL_TAG_OBJECT {
+        eval_array_access_unset_result(array, index, context, scope, values)?;
+        return Ok(None);
+    }
+    let tag = values.type_tag(array)?;
+    if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    let index = eval_array_set_index(index, context, scope, values)?;
+    eval_array_without_key_result(array, index, values).map(Some)
+}
+
+/// Executes `unset($object[$key])` through `ArrayAccess::offsetUnset()`.
+fn eval_array_access_unset_result(
+    array: RuntimeCellHandle,
+    index: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     let index = eval_expr(index, context, scope, values)?;
     if values.type_tag(array)? != EVAL_TAG_OBJECT {
         return Err(EvalStatus::UnsupportedConstruct);
@@ -584,6 +681,31 @@ fn eval_array_unset_element_stmt(
     let result = eval_method_call_result(array, "offsetUnset", vec![index], context, values)?;
     values.release(result)?;
     Ok(())
+}
+
+/// Rebuilds an array without the strict-equal key requested by `unset($array[$key])`.
+fn eval_array_without_key_result(
+    array: RuntimeCellHandle,
+    index: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let len = values.array_len(array)?;
+    let tag = values.type_tag(array)?;
+    let mut result = if tag == EVAL_TAG_ASSOC {
+        values.assoc_new(len.saturating_sub(1))?
+    } else {
+        values.array_new(len.saturating_sub(1))?
+    };
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let equal = values.compare(EvalBinOp::StrictEq, key, index)?;
+        if values.truthy(equal)? {
+            continue;
+        }
+        let value = values.array_get(array, key)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
 }
 
 /// Executes `$var[] = value` and dispatches object writes through `ArrayAccess::offsetSet()`.

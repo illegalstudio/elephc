@@ -9561,6 +9561,74 @@ echo EvalStaticPropertyArrayAccessHolder::$box[0];');
     assert_eq!(out.stdout, "aA:b:x:y|mM:n|qQ");
 }
 
+/// Verifies eval unsets object-property and static-property array elements.
+#[test]
+fn test_eval_property_and_static_property_array_unset_statements() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalArrayUnsetAccessBox implements ArrayAccess {
+    public $removed = "";
+
+    public function offsetExists(mixed $offset): bool {
+        return true;
+    }
+
+    public function offsetGet(mixed $offset): mixed {
+        return "K";
+    }
+
+    public function offsetSet(mixed $offset, mixed $value): void {
+    }
+
+    public function offsetUnset(mixed $offset): void {
+        $this->removed = $offset;
+    }
+}
+
+class EvalAotPropertyArrayUnset {
+    public array $items = ["a", "b"];
+    public static array $staticItems = ["x", "y"];
+}
+
+eval('class EvalDynamicPropertyArrayUnset {
+    public array $items = ["a", "b"];
+    public static $staticItems = ["x", "y"];
+    public $box;
+    public static $staticBox;
+}
+$dyn = new EvalDynamicPropertyArrayUnset();
+unset($dyn->items[0]);
+$name = "items";
+unset($dyn->{$name}[1]);
+echo isset($dyn->items[0]) ? "bad" : "d0"; echo ":";
+echo isset($dyn->items[1]) ? "bad" : "d1"; echo "|";
+unset(EvalDynamicPropertyArrayUnset::$staticItems[0]);
+$class = "EvalDynamicPropertyArrayUnset";
+unset($class::$staticItems[1]);
+echo isset(EvalDynamicPropertyArrayUnset::$staticItems[0]) ? "bad" : "s0"; echo ":";
+echo isset(EvalDynamicPropertyArrayUnset::$staticItems[1]) ? "bad" : "s1"; echo "|";
+$aot = new EvalAotPropertyArrayUnset();
+unset($aot->items[0]);
+unset(EvalAotPropertyArrayUnset::$staticItems[0]);
+echo isset($aot->items[0]) ? "bad" : "a0"; echo ":";
+echo isset(EvalAotPropertyArrayUnset::$staticItems[0]) ? "bad" : "as0"; echo "|";
+$dyn->box = new EvalArrayUnsetAccessBox();
+unset($dyn->box["drop"]);
+echo $dyn->box->removed . ":" . $dyn->box["keep"] . "|";
+EvalDynamicPropertyArrayUnset::$staticBox = new EvalArrayUnsetAccessBox();
+unset(EvalDynamicPropertyArrayUnset::$staticBox["drop"]);
+echo EvalDynamicPropertyArrayUnset::$staticBox->removed . ":";
+echo EvalDynamicPropertyArrayUnset::$staticBox["keep"];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "d0:d1|s0:s1|a0:as0|drop:K|drop:K");
+}
+
 /// Verifies eval `isset()` and `empty()` probe static properties without normal read fatals.
 #[test]
 fn test_eval_static_property_isset_empty_probes() {

@@ -552,3 +552,29 @@ fn parse_fragment_accepts_dynamic_property_unset_source() {
         }]
     );
 }
+
+/// Verifies unsetting object-property array elements keeps the property expression target.
+#[test]
+fn parse_fragment_accepts_property_array_unset_source() {
+    let program = parse_fragment(br#"unset($this->items[0], $this->{$name}[1]);"#)
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::UnsetArrayElement {
+                array: EvalExpr::PropertyGet {
+                    object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                    property: "items".to_string(),
+                },
+                index: EvalExpr::Const(EvalConst::Int(0)),
+            },
+            EvalStmt::UnsetArrayElement {
+                array: EvalExpr::DynamicPropertyGet {
+                    object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                    property: Box::new(EvalExpr::LoadVar("name".to_string())),
+                },
+                index: EvalExpr::Const(EvalConst::Int(1)),
+            },
+        ]
+    );
+}
