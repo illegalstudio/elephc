@@ -101,7 +101,7 @@ const RT_CALLABLE_DESCRIPTOR_RELEASE: &str = r#"(func $__rt_callable_descriptor_
       (br_if $walk_end (i32.ge_u (local.get $i) (local.get $n)))   ;; i >= n -> end walk
       (local.set $tag (i32.load8_u (i32.add (local.get $tags) (local.get $i))))  ;; tag = tags[i]
       ;; refcounted tags: 1 (str), 4 (array), 5 (assoc), 6 (object), 7 (mixed), 10 (callable), 12 (iterable).
-      ;; Scalars (0/2/3), null (8), and the by-ref sentinel (0xFF) own no heap storage; 13 (buffer) is non-refcounted.
+      ;; Scalars (0/2/3), null (8), by-ref sentinel (0xFF), 13 (buffer), and 16 (tagged-scalar, inline 2-word, non-refcounted) own no heap storage.
       (if (i32.or (i32.or (i32.or (i32.eq (local.get $tag) (i32.const 1)) (i32.and (i32.ge_u (local.get $tag) (i32.const 4)) (i32.le_u (local.get $tag) (i32.const 7)))) (i32.eq (local.get $tag) (i32.const 10))) (i32.eq (local.get $tag) (i32.const 12))) (then  ;; tag in {1,4,5,6,7,10,12} -> release the slot
         (local.set $slot (i32.wrap_i64 (i64.load offset=32 (i32.add (local.get $ptr) (i32.mul (local.get $i) (i32.const 16))))))  ;; slot ptr = low 8 bytes of [ptr+32+i*16]
         (call $__rt_decref_any (local.get $slot))                  ;; release the child (kind-dispatched; callable recurses via kind 6)
@@ -135,15 +135,17 @@ const CAPTURE_SLOT_BYTES: i32 = 16;
 // P7b: by-value capture tag tables + capture-aware ClosureNew / wrapper unbox.
 // ---------------------------------------------------------------------------
 
-/// The runtime release-tag byte for a capture of `php` type, mirroring the native
-/// `type_tag` table (`src/codegen/callable_descriptor.rs:584`) with the by-ref
-/// override. The release runtime (`__rt_callable_descriptor_release`) releases a
-/// slot iff its tag is in `{1,4,5,6,7,10,12}` (str/array/assoc/object/mixed/callable/
-/// iterable); scalars (`0/2/3`), null (`8`), the by-ref sentinel (`0xFF`), and
-/// `13` (buffer, non-refcounted) own no heap storage and are skipped. Only the
-/// wrapper-supported set is reachable for P7b (see `lower_closure_new`), but the
-/// full table is emitted for forward-compat with P7c (by-ref), P7d1 (Mixed/Union),
-/// and P7d1b (Iterable) captures.
+/// The runtime release-tag byte for a capture of `php` type. Intentionally diverges
+/// from the native `type_tag` table (`src/codegen/callable_descriptor.rs:584`) for
+/// `PhpType::TaggedScalar`: native keeps `TaggedScalar => 7`, but the native backend
+/// never stamps or reads WASM capture descriptors, so tag 16 is only a WASM concept.
+/// The release runtime (`__rt_callable_descriptor_release`) releases a slot iff its
+/// tag is in `{1,4,5,6,7,10,12}` (str/array/assoc/object/mixed/callable/iterable);
+/// scalars (`0/2/3`), null (`8`), the by-ref sentinel (`0xFF`), `13` (buffer,
+/// non-refcounted), and `16` (TaggedScalar — a 2-word inline scalar; the payload is
+/// NOT a heap ptr, so no decref is correct) own no heap storage and are skipped.
+/// Only the wrapper-supported set is reachable for P7b–P7d1c (see `lower_closure_new`),
+/// but the full table is emitted for forward-compat with future capture phases.
 fn capture_tag_for_php_type(php: &PhpType, by_ref: bool) -> u8 {
     if by_ref {
         return 0xFF;
@@ -165,7 +167,7 @@ fn capture_tag_for_php_type(php: &PhpType, by_ref: bool) -> u8 {
         PhpType::Buffer(_) => 13,
         PhpType::Packed(_) => 14,
         PhpType::Never => 15,
-        PhpType::TaggedScalar => 7,
+        PhpType::TaggedScalar => 16,
     }
 }
 
@@ -240,7 +242,8 @@ pub(super) fn emit_closure_capture_tag_tables(
 /// (not the operand type), with an explicit operand/param type-drift cross-check so a
 /// future lowering divergence is a compile error, not a silent miscompile. By-ref
 /// captures (P7c/P7c0), by-ref/variadic visible params (m10), and
-/// `Buffer`/`TaggedScalar`/`Pointer`/`Resource`/`Packed`/`Never` captures are rejected.
+/// `Buffer`/`Pointer`/`Resource`/`Packed`/`Never` captures are rejected; `TaggedScalar`
+/// (P7d1c) is accepted via a 2-word slot with capture tag 16 (non-refcounted, skipped).
 /// Ownership: a non-`Owned` refcounted capture is `incref`'d (or `__rt_str_persist`'d
 /// for strings) so the descriptor owns a ref; an `Owned` operand's ref transfers
 /// directly (no incref), mirroring native
@@ -339,13 +342,16 @@ pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
 /// release set `{1,4,5,6,7,10,12}`); the by-ref path reuses the same Ptr-repr promote
 /// + cell-ptr stamp, so by-ref `Mixed`/`Union` only needs this reject lift.
 /// P7d1b accepts `IrHeapKind::Iterable` by-value and by-ref (single-i32 Ptr, tag 12,
-/// now in the release set). `Buffer` stays REJECTED — `BufferNew` is not lowered in
-/// WASM; a Buffer capture path would be dead-code scaffolding until that lands.
-/// `TaggedScalar` (P7d1c) is a 2-word `WasmRepr::Tagged` cell that diverges from the
-/// release walk's single-i32-ptr read. `Pointer`/`Resource`/`Packed`/`Never` would
-/// stamp a slot whose tag is not in the release set `{1,4,5,6,7,10,12}` (an unleakable
-/// ptr) — and a by-ref capture of them has no sound promote either. `Void` carries no
-/// value. Each rejected kind carries a phase tag so the caller knows where it lands.
+/// now in the release set). P7d1c accepts `IrType::TaggedScalar` by-value and by-ref:
+/// `TaggedScalar` is a `WasmRepr::Tagged` 2-word inline scalar stamped into the 16-byte
+/// capture slot as `[payload i64 @ slot+0, tag i32 @ slot+8]` with capture tag 16
+/// (non-refcounted, skipped by the release walk — the payload is an inline value, not a
+/// heap ptr). By-ref TaggedScalar reuses the existing ref-cell promote path (Ptr-repr
+/// after promote); only this reject lift is needed for by-ref. `Buffer` stays REJECTED —
+/// `BufferNew` is not lowered in WASM; a Buffer capture path would be dead-code
+/// scaffolding until that lands. `Pointer`/`Resource`/`Packed`/`Never` would stamp a
+/// slot whose tag is not in the release set or have no sound promote. `Void` carries no
+/// value.
 fn reject_unsupported_capture(name: &str, p: &crate::ir::FunctionParam) -> Result<()> {
     // Reject by php_type first: Pointer/Resource lower to a raw I64 and Packed to
     // Heap(Object), so the ir_type match below would otherwise accept them even
@@ -374,9 +380,9 @@ fn reject_unsupported_capture(name: &str, p: &crate::ir::FunctionParam) -> Resul
         IrType::Heap(IrHeapKind::Buffer) => Err(WasmError::Unsupported(format!(
             "ClosureNew {} Buffer capture on wasm32-wasi (BufferNew not yet lowered)", name,
         ))),
-        IrType::TaggedScalar | IrType::Void => Err(WasmError::Unsupported(format!(
-            "ClosureNew {:?} capture {} on wasm32-wasi",
-            p.ir_type, p.name
+        IrType::TaggedScalar => Ok(()),
+        IrType::Void => Err(WasmError::Unsupported(format!(
+            "ClosureNew {:?} capture {} on wasm32-wasi (Void carries no value)", p.ir_type, p.name
         ))),
     }
 }
@@ -492,6 +498,22 @@ fn stamp_capture_slot(
                     desc, off, ptr
                 ),
                 "store the container/cell pointer (i64) for the release walk's i64.load",
+            );
+        }
+        IrType::TaggedScalar => {
+            // 2-word inline scalar: [payload i64 @ off+0, tag i32 @ off+8]. No refcount (the
+            // payload is an inline value, not a heap ptr); the release walk skips tag 16.
+            let tag = ctx.fresh_temp(ValType::I32);
+            let payload = ctx.fresh_temp(ValType::I64);
+            ctx.fb.ins(&format!("local.set {}", tag), "capture tagged-scalar tag (i32, top of stack)");
+            ctx.fb.ins(&format!("local.set {}", payload), "capture tagged-scalar payload (i64)");
+            ctx.fb.ins(
+                &format!("(i64.store (i32.add (local.get {}) (i32.const {})) (local.get {}))", desc, off, payload),
+                "store the tagged-scalar payload @ slot+0",
+            );
+            ctx.fb.ins(
+                &format!("(i64.store (i32.add (local.get {}) (i32.const {})) (i64.extend_i32_u (local.get {})))", desc, off + 8, tag),
+                "store the tagged-scalar tag (zero-extended) @ slot+8",
             );
         }
         // Unsupported kinds are rejected up front by `reject_unsupported_capture`; the
@@ -965,10 +987,19 @@ fn unbox_capture_wat(slot_off: usize, ir: &IrType, php: &PhpType) -> Result<Stri
                 )));
             }
         },
-        IrType::TaggedScalar | IrType::Void => {
+        IrType::TaggedScalar => {
+            s.push_str(&wat_ins(
+                &format!("(i64.load offset={} (local.get $desc))", off),
+                "load the captured tagged-scalar payload (i64) for the body",
+            ));
+            s.push_str(&wat_ins(
+                &format!("(i32.wrap_i64 (i64.load offset={} (local.get $desc)))", off + 8),
+                "load the captured tagged-scalar tag (i32) for the body",
+            ));
+        }
+        IrType::Void => {
             return Err(WasmError::Unsupported(format!(
-                "closure capture ir {:?} on wasm32-wasi",
-                ir
+                "closure capture ir {:?} on wasm32-wasi", ir
             )));
         }
     }
@@ -1878,6 +1909,184 @@ mod tests {
             None,
         ) {
             assert_eq!(o, "0");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // P7d1c: TaggedScalar by-value capture — e2e correctness + release-walk safety.
+    // -------------------------------------------------------------------------
+
+    /// Like `run_driver` but also emits a single capture-tag byte at static address
+    /// 512 in the module's linear memory. The byte is the raw capture tag the
+    /// `__rt_callable_descriptor_release` walk reads from the `capture_tags_ptr` array.
+    /// Used by `closure_capture_tagged_scalar_release_safety` (which tests the release
+    /// walk directly without needing `__rt_closure_call` or a closure wrapper).
+    fn run_driver_with_tag_data(driver: &str, export: &str, tag_byte: u8) -> Option<String> {
+        use super::super::wat::DataSegment;
+        let mut wm = WatModule::new();
+        wm.set_memory(3, Some("memory"));
+        emit_heap_runtime(&mut wm, 1024, 3 * 65536);
+        emit_refcount_runtime(&mut wm);
+        emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
+        super::super::hashes::emit_hash_runtime(&mut wm);
+        emit_object_runtime(&mut wm);
+        emit_gc_desc_stub(&mut wm);
+        emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
+        emit_closure_runtime(&mut wm);
+        wm.add_data(DataSegment { offset: 512, bytes: vec![tag_byte] });
+        wm.add_raw_func(driver);
+        let wat = wm.render();
+        let bytes = ::wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("WAT did not assemble: {e}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|e| panic!("wasm did not validate: {e}\n{wat}"));
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = unique_tmp_dir();
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg(export)
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer --invoke {export} failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            wat
+        );
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// Builds a one-TaggedScalar-capture closure body `__eir_closure_cap_ts_0`:
+    /// receives `(param $payload i64) (param $tag i32)` (the `WasmRepr::Tagged` stack
+    /// layout pushed by `unbox_capture_wat`'s TaggedScalar arm) and returns the
+    /// payload as an `i64` int result. The body ignores the type-tag word, which is
+    /// sufficient for an e2e round-trip correctness check.
+    fn tagged_scalar_capture_body_wat() -> &'static str {
+        r#"(func $fn___eir_closure_cap_ts_0 (param $payload i64) (param $tag i32) (result i64)
+  (local.get $payload))                                               ;; return the captured tagged-scalar payload as the int result
+"#
+    }
+
+    /// Builds the closure `Function` (name, one TaggedScalar capture param, I64/Int
+    /// return) that `emit_closure_dispatch` reads to generate the TaggedScalar-aware
+    /// wrapper + ladder arm. The capture param carries `IrType::TaggedScalar` /
+    /// `PhpType::TaggedScalar`; the wrapper's `unbox_capture_wat` TaggedScalar arm
+    /// (Edit 4) pushes `[payload i64, tag i32]` for the body.
+    fn tagged_scalar_capture_fn() -> Function {
+        let mut f = Function::new(
+            "__eir_closure_cap_ts_0".to_string(),
+            IrType::I64,
+            PhpType::Int,
+        );
+        f.flags.is_closure = true;
+        f.flags.closure_capture_count = 1;
+        f.params.push(FunctionParam {
+            name: "ts".to_string(),
+            ir_type: IrType::TaggedScalar,
+            php_type: PhpType::TaggedScalar,
+            by_ref: false,
+            variadic: false,
+        });
+        f
+    }
+
+    /// A one-TaggedScalar-capture closure, created and called through the full P7d1c
+    /// path (stamp → wrapper unbox → body → box result → caller unbox), returns the
+    /// captured payload value. The driver manually stamps a descriptor (entry_index=0,
+    /// capture_count=1, capture_tags_ptr=512 pointing at tag byte 16) with payload=42
+    /// and type-tag=0 in the TaggedScalar slot (`[payload i64 @ slot+0, tag i32 @ slot+8]`);
+    /// the generated wrapper's `unbox_capture_wat` TaggedScalar arm (Edit 4) loads both
+    /// words and pushes them for the body; the body returns the payload 42; the wrapper
+    /// boxes it as an int cell; the driver calls `__rt_mixed_cast_int` and asserts 42.
+    /// Construction idiom: `IrType::TaggedScalar` / `PhpType::TaggedScalar` on the
+    /// `FunctionParam` directly (the EIR lowering path sets these from the captured
+    /// local's `codegen_repr()`-derived type; for WASM unit tests the type is injected
+    /// via the `Function` builder, matching the existing Iterable/Mixed test idiom).
+    #[test]
+    fn closure_capture_tagged_scalar_by_value_e2e() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $desc i32) (local $args i32) (local $rcell i32)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 48)))            ;; descriptor (32 + 1 TaggedScalar slot), rc = 1
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp heap-header kind = 6 (callable)
+  (i64.store (local.get $desc) (i64.const 1))                         ;; descriptor kind = 1 (Closure)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0 (only closure)
+  (i32.store offset=12 (local.get $desc) (i32.const 1))              ;; capture_count = 1
+  (i32.store offset=16 (local.get $desc) (i32.const 512))            ;; capture_tags_ptr = static tag array [16]
+  (i64.store offset=32 (local.get $desc) (i64.const 42))             ;; tagged-scalar payload = 42 @ slot+0
+  (i64.store offset=40 (local.get $desc) (i64.const 0))              ;; tagged-scalar type-tag = 0 @ slot+8
+  (local.set $args (call $__rt_array_new (i64.const 0) (i64.const 16))) ;; empty arg buffer (no visible args)
+  (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args))) ;; dispatch -> result cell
+  (call $__rt_mixed_cast_int (local.get $rcell))                      ;; unbox int result -> 42 (payload round-tripped)
+)
+"#;
+        if let Some(o) = run_p7b_capture_driver(
+            tagged_scalar_capture_fn(),
+            tagged_scalar_capture_body_wat(),
+            driver,
+            "t",
+            16,
+            None,
+        ) {
+            assert_eq!(o, "42");
+        }
+    }
+
+    /// A TaggedScalar-capture descriptor release-safety test using a victim heap block V.
+    /// The driver allocates V (a real kind-2 array block, rc = 1) and stamps it as the
+    /// i64 payload of a TaggedScalar capture slot (NO incref — TaggedScalar is
+    /// non-refcounted; the payload is an inline scalar, not a heap ptr). The descriptor
+    /// capture_tags_ptr points at static address 512, where the single tag byte is 16
+    /// (the TaggedScalar-specific WASM capture tag, non-refcounted, outside the release
+    /// condition `le_u 7`). After releasing the descriptor, the driver reads V's refcount
+    /// at `[V-12]`: tag 16 causes the walk to SKIP the slot (V untouched, rc=1); the
+    /// driver's own decref then frees V. Returns V.rc read immediately after descriptor
+    /// release; the assertion is rc==1 (V was not prematurely freed).
+    ///
+    /// NEGATIVE CONTROL: changing `tag_byte` from 16 to 7 makes the release walk treat
+    /// the TaggedScalar slot as a refcounted ptr → `__rt_decref_any(V)` frees V (rc 1→0,
+    /// `__rt_heap_free` writes 0 to `[V-12]`) during the descriptor release → the
+    /// driver reads `[V-12]` = 0 → `assert_eq!(o, "1")` fails. This makes the spurious
+    /// decref directly observable: V.rc after descriptor release is 0 (wrong) vs 1
+    /// (correct). The driver conditionally releases V (only if rc > 0) to avoid a
+    /// double-free in the negative-control run. Verified: tag-16 run returns "1" (pass);
+    /// tag-7 run returns "0" (assertion fails, negative control confirmed).
+    #[test]
+    fn closure_capture_tagged_scalar_release_safety() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $v i32) (local $desc i32) (local $v_rc i32)
+  (local.set $v (call $__rt_array_new (i64.const 0) (i64.const 16)))  ;; victim block V (kind-2 array, rc = 1 from alloc)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 48)))            ;; descriptor (32 + 1 capture slot), rc = 1
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp heap-header kind = 6 (callable)
+  (i64.store (local.get $desc) (i64.const 1))                         ;; descriptor kind = 1 (Closure)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0
+  (i32.store offset=12 (local.get $desc) (i32.const 1))              ;; capture_count = 1
+  (i32.store offset=16 (local.get $desc) (i32.const 512))            ;; capture_tags_ptr = tag byte at 512
+  (i64.store offset=32 (local.get $desc) (i64.extend_i32_u (local.get $v))) ;; payload @ slot+0 = V (real heap ptr as inline i64)
+  (i64.store offset=40 (local.get $desc) (i64.const 0))              ;; type-tag @ slot+8 = 0 (non-null)
+  (call $__rt_decref_any (local.get $desc))                          ;; release descriptor: tag 16 skips slot; tag 7 frees V
+  (local.set $v_rc (i32.load (i32.sub (local.get $v) (i32.const 12)))) ;; read V.rc at [V-12] (1=skipped, 0=freed by walk)
+  (if (i32.ne (local.get $v_rc) (i32.const 0))                       ;; release V only if still alive (guard double-free in neg-ctrl)
+    (then (call $__rt_decref_any (local.get $v))))
+  (i64.extend_i32_u (local.get $v_rc)))                              ;; return V.rc: 1 = correct (walk skipped), 0 = wrong (premature free)
+"#;
+        // Tag 16: release walk skips the TaggedScalar slot (non-refcounted, fails le_u 7) →
+        // V.rc = 1 after descriptor release → driver frees V → returns "1".
+        // NEGATIVE CONTROL (tag_byte: 7): walk treats slot as refcounted ptr →
+        // __rt_decref_any(V) frees V inside the release → [V-12] = 0 → returns "0" → FAIL.
+        if let Some(o) = run_driver_with_tag_data(driver, "t", 16) {
+            assert_eq!(o, "1");
         }
     }
 }
