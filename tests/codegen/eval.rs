@@ -1923,6 +1923,40 @@ echo function_exists("spl_classes"); echo is_callable("spl_classes");');
     );
 }
 
+/// Verifies eval fragments can construct and dispatch SPL container objects.
+#[test]
+fn test_eval_constructs_and_dispatches_spl_container_objects() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('$list = new SplDoublyLinkedList();
+$list->push("a");
+$list->push("b");
+echo count($list) . ":" . $list->bottom() . ":" . $list->top() . ":";
+foreach ($list as $value) {
+    echo $value;
+}
+$stack = new SplStack();
+$stack->push("s");
+echo ":" . count($stack) . $stack->pop();
+$queue = new SplQueue();
+$queue->enqueue("q");
+echo ":" . count($queue) . $queue->dequeue();
+$emptyFixed = new SplFixedArray();
+echo ":" . $emptyFixed->getSize();
+$fixed = new SplFixedArray(2);
+$fixed->offsetSet(0, "x");
+echo ":" . $fixed->getSize() . $fixed->offsetGet(0);
+');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "2:a:b:ab:1s:1q:0:2x");
+}
+
 /// Verifies eval `array_fill()` and `array_fill_keys()` create arrays with PHP key rules.
 #[test]
 fn test_eval_dispatches_array_fill_builtin_calls() {

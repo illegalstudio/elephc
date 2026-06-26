@@ -18,6 +18,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
+use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Function, LocalKind, Module};
 use crate::names::{method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;
@@ -42,6 +43,7 @@ struct EvalMethodSlot {
     ref_params: Vec<bool>,
     return_ty: PhpType,
     is_hidden_shadow: bool,
+    runtime_helper: Option<&'static str>,
 }
 
 /// Static method metadata needed by eval static method-call bridge dispatch.
@@ -194,7 +196,10 @@ fn collect_class_method_slots(
             .get(method)
             .map(String::as_str)
             .unwrap_or(class_name);
-        if !emitted_methods.contains(&(impl_class.to_string(), method.clone(), false)) {
+        let runtime_helper = eval_runtime_backed_instance_method_helper(class_name, method);
+        if runtime_helper.is_none()
+            && !emitted_methods.contains(&(impl_class.to_string(), method.clone(), false))
+        {
             continue;
         }
         slots.push(EvalMethodSlot {
@@ -208,6 +213,7 @@ fn collect_class_method_slots(
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
             return_ty: sig.return_type.codegen_repr(),
             is_hidden_shadow: false,
+            runtime_helper,
         });
     }
 }
@@ -253,9 +259,24 @@ fn collect_hidden_private_ancestor_method_slots(
                 ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
                 return_ty: sig.return_type.codegen_repr(),
                 is_hidden_shadow: true,
+                runtime_helper: None,
             });
         }
     }
+}
+
+/// Returns a normal-ABI runtime helper for builtin instance methods that eval can bridge.
+fn eval_runtime_backed_instance_method_helper(
+    class_name: &str,
+    method_name: &str,
+) -> Option<&'static str> {
+    if !matches!(
+        class_name.trim_start_matches('\\'),
+        "SplDoublyLinkedList" | "SplStack" | "SplQueue" | "SplFixedArray"
+    ) {
+        return None;
+    }
+    IntrinsicCall::instance_method(class_name, method_name)?.runtime_helper()
 }
 
 /// Adds bridge-supported static methods for one class.
@@ -1078,7 +1099,11 @@ fn emit_aarch64_method_bodies(
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
-        abi::emit_call_label(emitter, &method_symbol(&slot.impl_class, &slot.method));
+        let callee = slot
+            .runtime_helper
+            .map(str::to_string)
+            .unwrap_or_else(|| method_symbol(&slot.impl_class, &slot.method));
+        abi::emit_call_label(emitter, &callee);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
         emit_box_method_result(module, emitter, &slot.return_ty);
@@ -1108,7 +1133,11 @@ fn emit_x86_64_method_bodies(
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
-        abi::emit_call_label(emitter, &method_symbol(&slot.impl_class, &slot.method));
+        let callee = slot
+            .runtime_helper
+            .map(str::to_string)
+            .unwrap_or_else(|| method_symbol(&slot.impl_class, &slot.method));
+        abi::emit_call_label(emitter, &callee);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
         emit_box_method_result(module, emitter, &slot.return_ty);
