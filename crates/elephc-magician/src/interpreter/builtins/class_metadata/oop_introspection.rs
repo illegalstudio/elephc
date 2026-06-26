@@ -421,12 +421,19 @@ fn eval_add_declared_object_vars(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let identity = values.object_identity(object)?;
     for class in context.class_chain(class_name) {
         for property in class.properties() {
             if property.is_static()
                 || validate_eval_member_access(class.name(), property.visibility(), context)
                     .is_err()
                 || emitted_keys.contains(property.name())
+            {
+                continue;
+            }
+            let storage_property_name = eval_instance_property_storage_name(class.name(), property);
+            if !property.is_virtual()
+                && !context.dynamic_property_is_initialized(identity, &storage_property_name)
             {
                 continue;
             }
