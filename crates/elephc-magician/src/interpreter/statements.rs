@@ -3590,6 +3590,27 @@ fn eval_throw_constant_access_error<T>(
     )
 }
 
+/// Throws PHP's inaccessible method error for eval-declared methods.
+fn eval_throw_method_access_error<T>(
+    declaring_class: &str,
+    method_name: &str,
+    visibility: EvalVisibility,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!(
+            "Call to {} method {}::{}() from {}",
+            eval_visibility_label(visibility),
+            declaring_class.trim_start_matches('\\'),
+            method_name,
+            eval_native_constructor_scope_label(context)
+        ),
+        context,
+        values,
+    )
+}
+
 /// Reads one eval-declared static property after resolving the class-like receiver.
 pub(in crate::interpreter) fn eval_static_property_get_result(
     class_name: &str,
@@ -3865,7 +3886,13 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
             )? {
                 return Ok(result);
             }
-            return Err(EvalStatus::RuntimeFatal);
+            return eval_throw_method_access_error(
+                &declaring_class,
+                method.name(),
+                method.visibility(),
+                context,
+                values,
+            );
         }
         return eval_dynamic_static_method_with_values(
             &declaring_class,
@@ -4288,7 +4315,18 @@ pub(in crate::interpreter) fn eval_dynamic_class_new_object(
     if let Some((constructor_class, constructor)) =
         context.class_method(class.name(), "__construct")
     {
-        validate_eval_member_access(&constructor_class, constructor.visibility(), context)?;
+        if validate_eval_member_access(&constructor_class, constructor.visibility(), context)
+            .is_err()
+        {
+            let _ = values.release(object);
+            return eval_throw_method_access_error(
+                &constructor_class,
+                constructor.name(),
+                constructor.visibility(),
+                context,
+                values,
+            );
+        }
         let result = eval_dynamic_method_with_values(
             &constructor_class,
             class.name(),
@@ -4881,6 +4919,7 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
             values,
         );
     }
+    let mut inaccessible_method = None;
     if let Some((class_name, method)) =
         eval_dynamic_method_for_call(&called_class_name, method_name, context)
     {
@@ -4908,6 +4947,7 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
                 values,
             );
         }
+        inaccessible_method = Some((class_name, method));
     }
     if let Some(result) = eval_magic_instance_method_call(
         object,
@@ -4918,6 +4958,15 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         values,
     )? {
         return Ok(result);
+    }
+    if let Some((declaring_class, method)) = inaccessible_method {
+        return eval_throw_method_access_error(
+            &declaring_class,
+            method.name(),
+            method.visibility(),
+            context,
+            values,
+        );
     }
     Err(EvalStatus::RuntimeFatal)
 }

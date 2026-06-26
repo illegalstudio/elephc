@@ -860,24 +860,33 @@ return true;"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
-/// Verifies eval rejects calls to private methods from global scope.
+/// Verifies eval throws Error for calls to private methods from global scope.
 #[test]
-fn execute_program_rejects_private_eval_method_call_from_global_scope() {
+fn execute_program_private_eval_method_call_from_global_scope_throws_error() {
     let program = parse_fragment(
         br#"class EvalPrivateMethodBox {
     private function read() { return 4; }
 }
 $box = new EvalPrivateMethodBox();
-return $box->read();"#,
+try {
+    echo $box->read();
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+return true;"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("global private method call should fail");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(
+        values.output,
+        "Error:Call to private method EvalPrivateMethodBox::read() from global scope"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval rejects overriding a public method with lower visibility.
 #[test]

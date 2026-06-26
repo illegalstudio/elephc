@@ -14686,6 +14686,37 @@ try {
     );
 }
 
+/// Verifies eval throws Error for inaccessible eval-declared method calls.
+#[test]
+fn test_eval_declared_inaccessible_method_access_throws_error() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalPrivateMethodAccessBox {
+    private function hidden() { return 4; }
+    protected static function seed() { return 5; }
+}
+$box = new EvalPrivateMethodAccessBox();
+try {
+    echo $box->hidden();
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    echo EvalPrivateMethodAccessBox::seed();
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error:Call to private method EvalPrivateMethodAccessBox::hidden() from global scope|Error:Call to protected method EvalPrivateMethodAccessBox::seed() from global scope"
+    );
+}
+
 /// Verifies eval throws Error for protected class constant access from outside the declaring class.
 #[test]
 fn test_eval_declared_protected_class_constant_access_throws_error() {
