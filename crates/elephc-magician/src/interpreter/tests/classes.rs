@@ -73,6 +73,30 @@ return $self instanceof EvalRelativeFactoryBase
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval classes cannot directly implement PHP's special Throwable contract.
+#[test]
+fn execute_program_rejects_eval_class_implementing_throwable_contracts() {
+    for (source, label) in [
+        (
+            br#"class EvalInvalidThrowableClass implements Throwable {}"# as &[u8],
+            "direct Throwable implementation should fail",
+        ),
+        (
+            br#"interface EvalThrowableMarker extends Throwable {}
+class EvalInvalidThrowableMarkerClass implements EvalThrowableMarker {}"#,
+            "Throwable-derived interface implementation should fail",
+        ),
+    ] {
+        let program = parse_fragment(source).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+
+        let err = execute_program(&program, &mut scope, &mut values).expect_err(label);
+
+        assert_eq!(err, EvalStatus::RuntimeFatal);
+    }
+}
+
 /// Verifies eval-declared `ArrayAccess` objects dispatch reads, writes, append, probes, and unset.
 #[test]
 fn execute_program_dispatches_eval_array_access_objects() {
