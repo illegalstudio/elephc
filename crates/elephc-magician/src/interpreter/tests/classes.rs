@@ -543,22 +543,24 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies readonly classes reject static properties because PHP makes them readonly.
+/// Verifies readonly classes leave static properties mutable like ordinary classes.
 #[test]
-fn execute_program_rejects_readonly_class_static_property() {
+fn execute_program_allows_readonly_class_static_property() {
     let program = parse_fragment(
         br#"readonly class EvalReadonlyStaticBox {
     public static int $count = 1;
-}"#,
+}
+EvalReadonlyStaticBox::$count = EvalReadonlyStaticBox::$count + 1;
+echo EvalReadonlyStaticBox::$count;"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("readonly class static property should fail");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(values.output, "2");
+    assert_eq!(values.get(result), FakeValue::Null);
 }
 
 /// Verifies readonly classes may extend readonly parents and use inherited constructors.

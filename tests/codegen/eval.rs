@@ -8748,17 +8748,21 @@ echo $box->id() . ":" . $child->id();');
     );
     assert_eq!(out.stdout, "7:9");
 
-    let static_err = compile_and_run_expect_failure(
+    let static_out = compile_and_run_capture(
         r#"<?php
 eval('readonly class EvalReadonlyStaticPropertyBox {
     public static int $count = 1;
-}');
+}
+EvalReadonlyStaticPropertyBox::$count = EvalReadonlyStaticPropertyBox::$count + 1;
+echo EvalReadonlyStaticPropertyBox::$count;');
 "#,
     );
     assert!(
-        static_err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {static_err}"
+        static_out.success,
+        "program failed: stdout={:?} stderr={}",
+        static_out.stdout, static_out.stderr
     );
+    assert_eq!(static_out.stdout, "2");
 
     let untyped_err = compile_and_run_expect_failure(
         r#"<?php
