@@ -13229,6 +13229,37 @@ echo (new ReflectionClass($object))->hasProperty("dynamic") ? "C" : "c";');
     assert_eq!(out.stdout, "declared:d|dynamic:D|:D:value:2:0:HDmc");
 }
 
+/// Verifies eval ReflectionObject constructor type errors are catchable objects.
+#[test]
+fn test_eval_reflection_object_constructor_throws_type_errors() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('try {
+    new ReflectionObject("EvalReflectObjectChild");
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionObject([]);
+    echo "bad";
+} catch (TypeError $e) {
+    echo $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "TypeError:ReflectionObject::__construct(): Argument #1 ($object) must be of type object, string given|ReflectionObject::__construct(): Argument #1 ($object) must be of type object, array given"
+    );
+}
+
 /// Verifies eval Reflection origin metadata APIs are present on supported owners.
 #[test]
 fn test_eval_reflection_origin_metadata_defaults() {

@@ -1375,6 +1375,7 @@ fn fake_runtime_exception_like_class(class_name: &str) -> bool {
         "ReflectionException",
         "Error",
         "ValueError",
+        "TypeError",
     ]
     .iter()
     .any(|known| class_name.eq_ignore_ascii_case(known))
@@ -1420,7 +1421,7 @@ fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exclude_self: 
             .any(|known| class_name.eq_ignore_ascii_case(known));
     }
     if target_class.eq_ignore_ascii_case("Error") {
-        return ["Error", "ValueError"]
+        return ["Error", "ValueError", "TypeError"]
             .iter()
             .any(|known| class_name.eq_ignore_ascii_case(known));
     }

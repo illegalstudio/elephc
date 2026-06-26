@@ -3657,18 +3657,41 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies ReflectionObject rejects non-object constructor arguments.
+/// Verifies ReflectionObject constructor type errors are catchable.
 #[test]
-fn execute_program_reflection_object_rejects_non_objects() {
-    let program = parse_fragment(br#"new ReflectionObject("EvalReflectObjectChild");"#)
-        .expect("parse eval fragment");
+fn execute_program_reflection_object_constructor_throws_type_errors() {
+    let program = parse_fragment(
+        br#"try {
+    new ReflectionObject("EvalReflectObjectChild");
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+echo "|";
+try {
+    new ReflectionObject([]);
+    echo "bad";
+} catch (TypeError $e) {
+    echo $e->getMessage();
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("ReflectionObject requires an object");
+    let result = execute_program(&program, &mut scope, &mut values);
+    assert!(
+        result.is_ok(),
+        "execute eval ir failed after output {:?}",
+        values.output
+    );
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(
+        values.output,
+        "TypeError:ReflectionObject::__construct(): Argument #1 ($object) must be of type object, string given|ReflectionObject::__construct(): Argument #1 ($object) must be of type object, array given"
+    );
+    assert_eq!(values.get(result.expect("execute eval ir")), FakeValue::Bool(true));
 }
 
 /// Verifies unsupported attribute argument metadata remains name-visible but not materializable.
