@@ -1180,6 +1180,9 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionClassConstant::isProtected()` | Same as `ReflectionClassConstant::getName()` | Return whether the reflected class constant is protected; enum cases report `false` |
 | `ReflectionClassConstant::isPrivate()` | Same as `ReflectionClassConstant::getName()` | Return whether the reflected class constant is private; enum cases report `false` |
 | `ReflectionClassConstant::isFinal()` | Same as `ReflectionClassConstant::getName()` | Return whether the reflected class/interface/trait/enum constant is final; enum cases report `false` |
+| `ReflectionClassConstant::isDeprecated()` | Same as `ReflectionClassConstant::getName()` | Return PHP's current non-deprecated default for retained class-constant metadata |
+| `ReflectionClassConstant::hasType()` | Same as `ReflectionClassConstant::getName()` | Return `false` because elephc's current class-constant metadata is untyped |
+| `ReflectionClassConstant::getType()` | Same as `ReflectionClassConstant::getName()` | Return `null` for the current untyped class-constant metadata |
 | `ReflectionClassConstant::getModifiers()` | Same as `ReflectionClassConstant::getName()` | Return PHP's `ReflectionClassConstant::IS_*` visibility/finality bitmask |
 | `ReflectionEnumUnitCase::getName()` / `ReflectionEnumBackedCase::getName()` | `new ReflectionEnumUnitCase($enum_name, $case_name)` or `new ReflectionEnumBackedCase($enum_name, $case_name)` | Return the reflected enum-case name |
 | `ReflectionEnumUnitCase::getValue()` / `ReflectionEnumBackedCase::getValue()` | Same as enum-case `getName()` | Return the reflected enum-case object |
@@ -1187,6 +1190,9 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionEnumUnitCase::getAttributes()` / `ReflectionEnumBackedCase::getAttributes()` | Same as enum-case `getName()` | Return `ReflectionAttribute` objects for enum-case attributes |
 | `ReflectionEnumUnitCase::getDeclaringClass()` / `ReflectionEnumBackedCase::getDeclaringClass()` | Same as enum-case `getName()` | Return a `ReflectionClass` object for the enum that declares the reflected case |
 | `ReflectionEnumUnitCase::getEnum()` / `ReflectionEnumBackedCase::getEnum()` | Same as enum-case `getName()` | Return a `ReflectionEnum` object for the enum that declares the reflected case |
+| `ReflectionEnumUnitCase::isDeprecated()` / `ReflectionEnumBackedCase::isDeprecated()` | Same as enum-case `getName()` | Return PHP's current non-deprecated default for retained enum-case metadata |
+| `ReflectionEnumUnitCase::hasType()` / `ReflectionEnumBackedCase::hasType()` | Same as enum-case `getName()` | Return `false` because enum cases expose no class-constant type metadata |
+| `ReflectionEnumUnitCase::getType()` / `ReflectionEnumBackedCase::getType()` | Same as enum-case `getName()` | Return `null` for enum-case type metadata |
 | `ReflectionAttribute::newInstance()` | Internal only | Instantiate the attribute class from captured literal positional/named args |
 
 Limitations today:
@@ -1253,13 +1259,16 @@ Limitations today:
   modifier flags.
 - `ReflectionClassConstant` supports `getName()`, `getAttributes()`,
   `getDeclaringClass()`, `getValue()`, `isEnumCase()`,
-  visibility/finality predicates, and `getModifiers()`. It also exposes
+  visibility/finality predicates, `isDeprecated()`, `hasType()`, `getType()`,
+  and `getModifiers()`. It also exposes
   PHP-compatible `ReflectionClassConstant::IS_PUBLIC`,
   `ReflectionClassConstant::IS_PROTECTED`,
   `ReflectionClassConstant::IS_PRIVATE`, and `ReflectionClassConstant::IS_FINAL`
   constants. `ReflectionEnumUnitCase` and `ReflectionEnumBackedCase` support
   `getName()`, `getValue()`, `getAttributes()`, and `getDeclaringClass()`, and
-  `ReflectionEnumBackedCase` also supports `getBackingValue()`.
+  `ReflectionEnumBackedCase` also supports `getBackingValue()`. The enum-case
+  reflectors expose the same `isDeprecated()`, `hasType()`, and `getType()`
+  defaults as `ReflectionClassConstant`.
 - Broader APIs such as object parameter defaults beyond the limited literal
   constructor-argument slice, broader internal-function metadata beyond
   supported first-class-callable builtin signatures, and
