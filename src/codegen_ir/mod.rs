@@ -198,6 +198,7 @@ fn finalize_user_asm(
         &runtime_interfaces,
         &module.declared_interface_names,
         &module.trait_table.names,
+        &module.declared_trait_uses,
         &runtime_classes,
         &module.enum_infos,
         Some(&allowed_class_names),

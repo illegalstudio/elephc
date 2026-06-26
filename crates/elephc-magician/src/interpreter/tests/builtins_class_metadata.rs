@@ -100,13 +100,19 @@ $call = call_user_func("class_implements", "KnownClass");
 echo $call["KnownInterface"]; echo ":";
 $interfaceParents = class_implements("KnownInterface");
 echo $interfaceParents["Traversable"]; echo ":";
+$uses = class_uses("KnownClass");
+echo count($uses); echo ":"; echo $uses["KnownTrait"]; echo ":";
+$traitUses = class_uses("KnownTrait");
+echo $traitUses["KnownInnerTrait"]; echo ":";
 $named = call_user_func_array("class_parents", ["object_or_class" => "KnownClass"]);
 echo $named["ParentClass"]; echo ":";
 class_alias("KnownClass", "KnownAlias");
 $aliasImplements = class_implements("KnownAlias");
 echo $aliasImplements["KnownInterface"]; echo ":";
 $aliasParents = class_parents("KnownAlias");
-echo $aliasParents["ParentClass"];
+echo $aliasParents["ParentClass"]; echo ":";
+$aliasUses = class_uses("KnownAlias");
+echo $aliasUses["KnownTrait"];
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -121,7 +127,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "1:KnownInterface:1:ParentClass:KnownInterface:Traversable:ParentClass:KnownInterface:ParentClass"
+        "1:KnownInterface:1:ParentClass:KnownInterface:Traversable:1:KnownTrait:KnownInnerTrait:ParentClass:KnownInterface:ParentClass:KnownTrait"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

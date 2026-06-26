@@ -469,6 +469,10 @@ fn finish_user_asm(
     let data_output = data.emit();
     let interface_names: Vec<String> = interfaces.keys().cloned().collect();
     let trait_names: Vec<String> = traits.iter().cloned().collect();
+    let declared_trait_uses = trait_names
+        .iter()
+        .map(|name| (name.clone(), crate::codegen::declared_trait_uses(name)))
+        .collect::<HashMap<_, _>>();
     let user_data = runtime::emit_runtime_data_user(
         all_global_var_names,
         all_static_vars,
@@ -477,6 +481,7 @@ fn finish_user_asm(
         interfaces,
         &interface_names,
         &trait_names,
+        &declared_trait_uses,
         classes,
         enums,
         emitted_class_names,

@@ -7777,9 +7777,15 @@ fn test_eval_class_relation_builtins_expose_aot_metadata() {
         r#"<?php
 interface EvalAotRelationBaseIface {}
 interface EvalAotRelationChildIface extends EvalAotRelationBaseIface {}
+trait EvalAotRelationInnerTrait {}
+trait EvalAotRelationOuterTrait {
+    use EvalAotRelationInnerTrait;
+}
 class EvalAotRelationBase {}
 class EvalAotRelationMid extends EvalAotRelationBase {}
-class EvalAotRelationChild extends EvalAotRelationMid implements EvalAotRelationChildIface {}
+class EvalAotRelationChild extends EvalAotRelationMid implements EvalAotRelationChildIface {
+    use EvalAotRelationOuterTrait;
+}
 
 eval('$object = new EvalAotRelationChild();
 $implements = class_implements($object);
@@ -7792,6 +7798,12 @@ foreach ($stringImplements as $name) { echo $name . ","; }
 echo ":";
 $interfaceParents = class_implements("EvalAotRelationChildIface");
 foreach ($interfaceParents as $name) { echo $name . ","; }
+echo ":";
+$uses = class_uses("EvalAotRelationChild");
+foreach ($uses as $name) { echo $name . ","; }
+echo ":";
+$traitUses = class_uses("EvalAotRelationOuterTrait");
+foreach ($traitUses as $name) { echo $name . ","; }
 echo ":";
 $parents = class_parents($object);
 foreach ($parents as $name) { echo $name . ","; }
@@ -7817,7 +7829,7 @@ foreach ($aliasParents as $name) { echo $name . ","; }');
     );
     assert_eq!(
         out.stdout,
-        "EvalAotRelationBaseIface,EvalAotRelationChildIface,:EvalAotRelationBaseIface,EvalAotRelationChildIface,:EvalAotRelationBaseIface,:EvalAotRelationMid,EvalAotRelationBase,:EvalAotRelationMid,EvalAotRelationBase,:11:EvalAotRelationBaseIface,EvalAotRelationChildIface,:EvalAotRelationChild,EvalAotRelationMid,EvalAotRelationBase,"
+        "EvalAotRelationBaseIface,EvalAotRelationChildIface,:EvalAotRelationBaseIface,EvalAotRelationChildIface,:EvalAotRelationBaseIface,:EvalAotRelationOuterTrait,:EvalAotRelationInnerTrait,:EvalAotRelationMid,EvalAotRelationBase,:EvalAotRelationMid,EvalAotRelationBase,:11:EvalAotRelationBaseIface,EvalAotRelationChildIface,:EvalAotRelationChild,EvalAotRelationMid,EvalAotRelationBase,"
     );
 }
 
