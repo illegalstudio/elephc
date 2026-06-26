@@ -3994,6 +3994,13 @@ fn eval_reference_target_value(
                 visible_scope_cell(context, scope, array_name).map_or_else(|| values.null(), Ok)?;
             values.array_get(array, *index)
         }
+        EvalReferenceTarget::NestedArrayElement {
+            array_target,
+            index,
+        } => {
+            let array = eval_reference_target_value(array_target, context, values)?;
+            values.array_get(array, *index)
+        }
         EvalReferenceTarget::ObjectProperty {
             object,
             property,
@@ -7077,6 +7084,32 @@ fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalReferenceTarge
             },
         ) => left_scope == right_scope && left_name == right_name && left_index == right_index,
         (
+            EvalReferenceTarget::NestedArrayElement {
+                array_target: left_target,
+                index: left_index,
+            },
+            EvalReferenceTarget::NestedArrayElement {
+                array_target: right_target,
+                index: right_index,
+            },
+        ) => left_index == right_index && same_method_ref_target(left_target, right_target),
+        (
+            EvalReferenceTarget::ObjectProperty {
+                object: left_object,
+                property: left_property,
+                access_scope: left_access_scope,
+            },
+            EvalReferenceTarget::ObjectProperty {
+                object: right_object,
+                property: right_property,
+                access_scope: right_access_scope,
+            },
+        ) => {
+            left_object == right_object
+                && left_property == right_property
+                && left_access_scope == right_access_scope
+        }
+        (
             EvalReferenceTarget::Cell { cell: left_cell },
             EvalReferenceTarget::Cell { cell: right_cell },
         ) => left_cell == right_cell,
@@ -7188,6 +7221,16 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
                 scope, array_name, *index, value, context, values,
             )
         }
+        EvalReferenceTarget::NestedArrayElement {
+            array_target,
+            index,
+        } => write_back_method_nested_array_element_ref_target(
+            array_target,
+            *index,
+            value,
+            context,
+            values,
+        ),
         EvalReferenceTarget::ObjectProperty {
             object,
             property,
@@ -7243,6 +7286,24 @@ fn write_back_method_array_element_ref_target(
         values.release(replaced)?;
     }
     Ok(())
+}
+
+/// Stores one by-reference method result in an element of a nested caller-side array target.
+fn write_back_method_nested_array_element_ref_target(
+    array_target: &EvalReferenceTarget,
+    index: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let current = eval_reference_target_value(array_target, context, values)?;
+    let array = if values.is_array_like(current)? {
+        current
+    } else {
+        eval_new_array_for_index(index, values)?
+    };
+    let array = values.array_set(array, index, value)?;
+    write_back_method_ref_target(array_target, array, context, values)
 }
 
 /// Stores one by-reference method result in a caller-side object property.

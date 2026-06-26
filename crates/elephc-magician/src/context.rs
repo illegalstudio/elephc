@@ -48,6 +48,10 @@ pub enum EvalReferenceTarget {
         array_name: String,
         index: RuntimeCellHandle,
     },
+    NestedArrayElement {
+        array_target: Box<EvalReferenceTarget>,
+        index: RuntimeCellHandle,
+    },
     ObjectProperty {
         object: RuntimeCellHandle,
         property: String,
