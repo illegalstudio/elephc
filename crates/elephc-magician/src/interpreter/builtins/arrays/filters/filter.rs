@@ -11,7 +11,7 @@
 use super::super::super::super::*;
 use super::super::super::*;
 
-/// Evaluates PHP `array_filter()` for null and string-callback filtering modes.
+/// Evaluates PHP `array_filter()` for null and callable filtering modes.
 pub(in crate::interpreter) fn eval_builtin_array_filter(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -38,7 +38,7 @@ pub(in crate::interpreter) fn eval_builtin_array_filter(
     }
 }
 
-/// Filters eval array entries through PHP truthiness or a string callback.
+/// Filters eval array entries through PHP truthiness or a callable callback.
 pub(in crate::interpreter) fn eval_array_filter_result(
     array: RuntimeCellHandle,
     callback: Option<RuntimeCellHandle>,
@@ -47,7 +47,9 @@ pub(in crate::interpreter) fn eval_array_filter_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = match callback {
-        Some(callback) if !values.is_null(callback)? => Some(eval_callable_name(callback, values)?),
+        Some(callback) if !values.is_null(callback)? => {
+            Some(eval_callable(callback, context, values)?)
+        }
         _ => None,
     };
     let mode = match mode {
@@ -60,9 +62,9 @@ pub(in crate::interpreter) fn eval_array_filter_result(
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, key)?;
-        let keep = if let Some(callback) = callback.as_deref() {
+        let keep = if let Some(callback) = callback.as_ref() {
             let args = eval_array_filter_callback_args(mode, key, value)?;
-            let result = eval_callable_with_values(callback, args, context, values)?;
+            let result = eval_evaluated_callable_with_values(callback, args, context, values)?;
             values.truthy(result)?
         } else {
             values.truthy(value)?

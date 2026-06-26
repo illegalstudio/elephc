@@ -219,7 +219,7 @@ pub(in crate::interpreter) fn eval_array_fill_keys_result(
     Ok(result)
 }
 
-/// Evaluates PHP `array_map()` for one source array and a string or null callback.
+/// Evaluates PHP `array_map()` for one source array and a callable or null callback.
 pub(in crate::interpreter) fn eval_builtin_array_map(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -250,15 +250,15 @@ pub(in crate::interpreter) fn eval_array_map_result(
     let callback = if values.is_null(callback)? {
         None
     } else {
-        Some(eval_callable_name(callback, values)?)
+        Some(eval_callable(callback, context, values)?)
     };
     let len = values.array_len(*array)?;
     let mut result = values.assoc_new(len)?;
     for position in 0..len {
         let key = values.array_iter_key(*array, position)?;
         let value = values.array_get(*array, key)?;
-        let mapped = if let Some(callback) = callback.as_deref() {
-            eval_callable_with_values(callback, vec![value], context, values)?
+        let mapped = if let Some(callback) = callback.as_ref() {
+            eval_evaluated_callable_with_values(callback, vec![value], context, values)?
         } else {
             value
         };
@@ -280,7 +280,7 @@ pub(in crate::interpreter) fn eval_array_map_variadic_result(
     let callback = if values.is_null(callback)? {
         None
     } else {
-        Some(eval_callable_name(callback, values)?)
+        Some(eval_callable(callback, context, values)?)
     };
     let mut lengths = Vec::with_capacity(arrays.len());
     let mut max_len = 0;
@@ -302,8 +302,8 @@ pub(in crate::interpreter) fn eval_array_map_variadic_result(
             };
             callback_args.push(value);
         }
-        let mapped = if let Some(callback) = callback.as_deref() {
-            eval_callable_with_values(callback, callback_args, context, values)?
+        let mapped = if let Some(callback) = callback.as_ref() {
+            eval_evaluated_callable_with_values(callback, callback_args, context, values)?
         } else {
             eval_array_map_zipped_row(callback_args, values)?
         };
@@ -350,7 +350,7 @@ pub(in crate::interpreter) fn eval_builtin_array_reduce(
     eval_array_reduce_result(array, callback, initial, context, values)
 }
 
-/// Reduces one eval array by invoking a string callback with carry and item cells.
+/// Reduces one eval array by invoking a callable with carry and item cells.
 pub(in crate::interpreter) fn eval_array_reduce_result(
     array: RuntimeCellHandle,
     callback: RuntimeCellHandle,
@@ -358,13 +358,14 @@ pub(in crate::interpreter) fn eval_array_reduce_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_callable_name(callback, values)?;
+    let callback = eval_callable(callback, context, values)?;
     let len = values.array_len(array)?;
     let mut carry = initial;
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, key)?;
-        carry = eval_callable_with_values(&callback, vec![carry, value], context, values)?;
+        carry =
+            eval_evaluated_callable_with_values(&callback, vec![carry, value], context, values)?;
     }
     Ok(carry)
 }
@@ -384,19 +385,19 @@ pub(in crate::interpreter) fn eval_builtin_array_walk(
     eval_array_walk_result(array, callback, context, values)
 }
 
-/// Walks one eval array by invoking a string callback with value and key cells.
+/// Walks one eval array by invoking a callable with value and key cells.
 pub(in crate::interpreter) fn eval_array_walk_result(
     array: RuntimeCellHandle,
     callback: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_callable_name(callback, values)?;
+    let callback = eval_callable(callback, context, values)?;
     let len = values.array_len(array)?;
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, key)?;
-        let _ = eval_callable_with_values(&callback, vec![value, key], context, values)?;
+        let _ = eval_evaluated_callable_with_values(&callback, vec![value, key], context, values)?;
     }
     values.bool_value(true)
 }

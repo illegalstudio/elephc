@@ -38,6 +38,10 @@ pub(in crate::interpreter) fn eval_expr(
         EvalExpr::Cast { target, expr } => eval_cast_expr(target, expr, context, scope, values),
         EvalExpr::Const(value) => eval_const(value, values),
         EvalExpr::ConstFetch(name) => eval_const_fetch(name, context, values),
+        EvalExpr::FunctionCallable {
+            name,
+            fallback_name,
+        } => eval_function_callable_expr(name, fallback_name.as_deref(), context, values),
         EvalExpr::DynamicCall { callee, args } => {
             eval_dynamic_call(callee, args, context, scope, values)
         }
@@ -760,6 +764,28 @@ pub(in crate::interpreter) fn eval_namespaced_call(
         return eval_native_function(function, args, context, scope, values);
     }
     eval_call(fallback_name, args, context, scope, values)
+}
+
+/// Resolves a first-class function callable name with PHP namespace fallback rules.
+fn eval_function_callable_expr(
+    name: &str,
+    fallback_name: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if eval_function_probe_exists(context, name) {
+        return values.string(name);
+    }
+    if let Some(fallback_name) = fallback_name {
+        if eval_function_probe_exists(context, fallback_name) {
+            return values.string(fallback_name);
+        }
+    }
+    eval_throw_error(
+        &format!("Call to undefined function {}()", name.trim_start_matches('\\')),
+        context,
+        values,
+    )
 }
 
 /// Evaluates a variable or expression callable and dispatches it with source-order arguments.

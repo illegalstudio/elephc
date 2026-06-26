@@ -41,7 +41,7 @@ pub(in crate::interpreter) fn eval_user_sort_replacement(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let callback = eval_callable_name(callback, values)?;
+    let callback = eval_callable(callback, context, values)?;
     let mut entries = eval_user_sort_entries(array, values)?;
     eval_user_sort_entries_in_place(name, &callback, &mut entries, context, values)?;
     if name == "usort" {
@@ -68,7 +68,7 @@ pub(in crate::interpreter) fn eval_user_sort_entries(
 /// Sorts entries by repeatedly invoking the PHP comparator callback.
 pub(in crate::interpreter) fn eval_user_sort_entries_in_place(
     name: &str,
-    callback: &str,
+    callback: &EvaluatedCallable,
     entries: &mut [EvalUserSortEntry],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -95,7 +95,7 @@ pub(in crate::interpreter) fn eval_user_sort_entries_in_place(
 /// Invokes one user-sort comparator and returns its integer ordering result.
 pub(in crate::interpreter) fn eval_user_sort_compare(
     name: &str,
-    callback: &str,
+    callback: &EvaluatedCallable,
     left: &EvalUserSortEntry,
     right: &EvalUserSortEntry,
     context: &mut ElephcEvalContext,
@@ -106,7 +106,7 @@ pub(in crate::interpreter) fn eval_user_sort_compare(
     } else {
         vec![left.value, right.value]
     };
-    let result = eval_callable_with_values(callback, args, context, values)?;
+    let result = eval_evaluated_callable_with_values(callback, args, context, values)?;
     eval_int_value(result, values)
 }
 

@@ -554,6 +554,15 @@ impl Parser {
         nullsafe: bool,
     ) -> Result<EvalExpr, EvalParseError> {
         if matches!(self.current(), TokenKind::LParen) {
+            if self.consume_first_class_callable_marker() {
+                if nullsafe {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                return Ok(Self::callable_array_expr(
+                    object,
+                    EvalExpr::Const(EvalConst::String(member)),
+                ));
+            }
             let args = self.parse_call_args()?;
             return Ok(if nullsafe {
                 EvalExpr::NullsafeMethodCall {
@@ -590,6 +599,12 @@ impl Parser {
         nullsafe: bool,
     ) -> Result<EvalExpr, EvalParseError> {
         if matches!(self.current(), TokenKind::LParen) {
+            if self.consume_first_class_callable_marker() {
+                if nullsafe {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                return Ok(Self::callable_array_expr(object, member));
+            }
             let args = self.parse_call_args()?;
             return Ok(if nullsafe {
                 EvalExpr::NullsafeDynamicMethodCall {
@@ -788,6 +803,9 @@ impl Parser {
     /// Parses a function-like call expression and its source-order arguments.
     pub(super) fn parse_call_expr(&mut self, name: String) -> Result<EvalExpr, EvalParseError> {
         self.advance();
+        if self.consume_first_class_callable_marker() {
+            return Ok(self.function_callable_expr(name));
+        }
         let args = self.parse_call_args()?;
         Ok(self.call_expr(name, args))
     }
@@ -801,6 +819,9 @@ impl Parser {
         }
         let name = self.resolve_qualified_name(name);
         if matches!(self.current(), TokenKind::LParen) {
+            if self.consume_first_class_callable_marker() {
+                return Ok(Self::function_callable_value(name.to_ascii_lowercase(), None));
+            }
             let args = self.parse_call_args()?;
             return Ok(EvalExpr::Call {
                 name: name.to_ascii_lowercase(),
@@ -820,6 +841,12 @@ impl Parser {
                 let property = property.clone();
                 self.advance();
                 if matches!(self.current(), TokenKind::LParen) {
+                    if self.consume_first_class_callable_marker() {
+                        return Ok(Self::callable_array_expr(
+                            EvalExpr::ClassNameFetch { class_name },
+                            EvalExpr::LoadVar(property),
+                        ));
+                    }
                     let args = self.parse_call_args()?;
                     return Ok(EvalExpr::DynamicStaticMethodCall {
                         class_name: Box::new(EvalExpr::ClassNameFetch { class_name }),
@@ -850,6 +877,12 @@ impl Parser {
             TokenKind::Ident(method) if matches!(self.peek(), TokenKind::LParen) => {
                 let method = method.clone();
                 self.advance();
+                if self.consume_first_class_callable_marker() {
+                    return Ok(Self::callable_array_expr(
+                        EvalExpr::ClassNameFetch { class_name },
+                        EvalExpr::Const(EvalConst::String(method)),
+                    ));
+                }
                 let args = self.parse_call_args()?;
                 Ok(EvalExpr::StaticMethodCall {
                     class_name,
@@ -862,6 +895,12 @@ impl Parser {
                 let member = self.parse_expr()?;
                 self.expect(TokenKind::RBrace)?;
                 if matches!(self.current(), TokenKind::LParen) {
+                    if self.consume_first_class_callable_marker() {
+                        return Ok(Self::callable_array_expr(
+                            EvalExpr::ClassNameFetch { class_name },
+                            member,
+                        ));
+                    }
                     let args = self.parse_call_args()?;
                     return Ok(EvalExpr::DynamicStaticMethodCall {
                         class_name: Box::new(EvalExpr::ClassNameFetch { class_name }),
@@ -896,6 +935,12 @@ impl Parser {
                 let member = member.clone();
                 self.advance();
                 if matches!(self.current(), TokenKind::LParen) {
+                    if self.consume_first_class_callable_marker() {
+                        return Ok(Self::callable_array_expr(
+                            class_name,
+                            EvalExpr::LoadVar(member),
+                        ));
+                    }
                     let args = self.parse_call_args()?;
                     return Ok(EvalExpr::DynamicStaticMethodCall {
                         class_name: Box::new(class_name),
@@ -928,6 +973,12 @@ impl Parser {
             TokenKind::Ident(method) if matches!(self.peek(), TokenKind::LParen) => {
                 let method = method.clone();
                 self.advance();
+                if self.consume_first_class_callable_marker() {
+                    return Ok(Self::callable_array_expr(
+                        class_name,
+                        EvalExpr::Const(EvalConst::String(method)),
+                    ));
+                }
                 let args = self.parse_call_args()?;
                 Ok(EvalExpr::DynamicStaticMethodCall {
                     class_name: Box::new(class_name),
@@ -940,6 +991,9 @@ impl Parser {
                 let member = self.parse_expr()?;
                 self.expect(TokenKind::RBrace)?;
                 if matches!(self.current(), TokenKind::LParen) {
+                    if self.consume_first_class_callable_marker() {
+                        return Ok(Self::callable_array_expr(class_name, member));
+                    }
                     let args = self.parse_call_args()?;
                     return Ok(EvalExpr::DynamicStaticMethodCall {
                         class_name: Box::new(class_name),
@@ -1143,6 +1197,54 @@ impl Parser {
             }
         }
         self.parse_expr().map(EvalCallArg::positional)
+    }
+
+    /// Consumes PHP's `(...)` first-class callable marker when it is the whole argument list.
+    fn consume_first_class_callable_marker(&mut self) -> bool {
+        if matches!(self.current(), TokenKind::LParen)
+            && matches!(self.tokens.get(self.pos + 1), Some(TokenKind::Ellipsis))
+            && matches!(self.tokens.get(self.pos + 2), Some(TokenKind::RParen))
+        {
+            self.advance();
+            self.advance();
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Builds an eval function-callable expression with namespace fallback metadata.
+    fn function_callable_expr(&self, name: String) -> EvalExpr {
+        if let Some(imported) = self.imports.resolve_function(&name) {
+            return Self::function_callable_value(imported.to_ascii_lowercase(), None);
+        }
+        let fallback_name = name.to_ascii_lowercase();
+        if self.namespace.is_empty() {
+            Self::function_callable_value(fallback_name, None)
+        } else {
+            Self::function_callable_value(
+                self.qualify_name_in_current_namespace(&name)
+                    .to_ascii_lowercase(),
+                Some(fallback_name),
+            )
+        }
+    }
+
+    /// Builds the EvalIR node that resolves a first-class function callable at runtime.
+    fn function_callable_value(name: String, fallback_name: Option<String>) -> EvalExpr {
+        EvalExpr::FunctionCallable {
+            name,
+            fallback_name,
+        }
+    }
+
+    /// Builds the PHP callable-array value used for method first-class callables.
+    fn callable_array_expr(receiver: EvalExpr, method: EvalExpr) -> EvalExpr {
+        EvalExpr::Array(vec![
+            EvalArrayElement::Value(receiver),
+            EvalArrayElement::Value(method),
+        ])
     }
 
     /// Parses an array literal with source-order optional key/value element expressions.

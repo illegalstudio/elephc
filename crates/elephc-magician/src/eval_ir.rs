@@ -2423,6 +2423,10 @@ pub enum EvalExpr {
     },
     Const(EvalConst),
     ConstFetch(String),
+    FunctionCallable {
+        name: String,
+        fallback_name: Option<String>,
+    },
     DynamicCall {
         callee: Box<EvalExpr>,
         args: Vec<EvalCallArg>,

@@ -3990,6 +3990,7 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
         }
         EvalExpr::Const(_)
         | EvalExpr::ConstFetch(_)
+        | EvalExpr::FunctionCallable { .. }
         | EvalExpr::ClassConstantFetch { .. }
         | EvalExpr::ClassNameFetch { .. }
         | EvalExpr::LoadVar(_)

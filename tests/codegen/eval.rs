@@ -9714,6 +9714,79 @@ echo $named(right: "H", left: "G");');
     assert_eq!(out.stdout, "AB:CD:EF:GH");
 }
 
+/// Verifies eval first-class callable syntax dispatches functions and methods.
+#[test]
+fn test_eval_first_class_callables_dispatch_functions_and_methods() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('function eval_fc_double($value) {
+    return $value * 2;
+}
+class EvalFirstClassCallableBase {
+    public function __construct($offset = 1) {
+        $this->offset = $offset;
+    }
+    public function add($value) {
+        return $value + $this->offset;
+    }
+    public function keep($value) {
+        return $value > 2;
+    }
+    public function sum($carry, $value) {
+        return $carry + $value + $this->offset;
+    }
+    public function show($value, $key) {
+        echo $key . $value;
+    }
+    public static function join($left, $right) {
+        return $left . $right;
+    }
+    public static function compareDesc($left, $right) {
+        return $right - $left;
+    }
+    public static function label($value) {
+        return "base:" . $value;
+    }
+    public static function relay($value) {
+        $fn = static::label(...);
+        return $fn($value);
+    }
+}
+class EvalFirstClassCallableChild extends EvalFirstClassCallableBase {
+    public static function label($value) {
+        return "child:" . $value;
+    }
+}
+$function = eval_fc_double(...);
+echo $function(4) . ":";
+echo (strlen(...))("abcd") . ":";
+$box = new EvalFirstClassCallableBase(3);
+$method = $box->add(...);
+echo $method(4) . ":";
+echo call_user_func($box->add(...), 5) . ":";
+$static = EvalFirstClassCallableBase::join(...);
+echo $static(right: "B", left: "A") . ":";
+$mapped = array_map($box->add(...), [1, 2]);
+echo $mapped[0] . $mapped[1] . ":";
+$filtered = array_filter([1, 2, 3, 4], $box->keep(...));
+echo count($filtered) . ":";
+echo array_reduce([1, 2], $box->sum(...), 0) . ":";
+array_walk(["a" => 1], $box->show(...));
+echo ":";
+$sorted = [3, 1, 2];
+usort($sorted, EvalFirstClassCallableBase::compareDesc(...));
+echo $sorted[0] . $sorted[1] . $sorted[2] . ":";
+echo EvalFirstClassCallableChild::relay("ok");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "8:4:7:8:AB:45:2:9:a1:321:child:ok");
+}
+
 /// Verifies eval dynamic static receivers dispatch methods, properties, constants, and `::class`.
 #[test]
 fn test_eval_dynamic_static_receivers() {

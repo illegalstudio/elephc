@@ -90,6 +90,19 @@ fn parse_fragment_accepts_qualified_call_expression_source() {
         }))]
     );
 }
+/// Verifies first-class function callable syntax lowers to runtime callable resolution metadata.
+#[test]
+fn parse_fragment_accepts_first_class_function_callable_source() {
+    let program = parse_fragment(br#"namespace App; return strlen(...);"#)
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::FunctionCallable {
+                name: "app\\strlen".to_string(),
+                fallback_name: Some("strlen".to_string()),
+            }))]
+    );
+}
 /// Verifies variable callable expressions lower to dynamic calls with source-order args.
 #[test]
 fn parse_fragment_accepts_dynamic_call_expression_source() {

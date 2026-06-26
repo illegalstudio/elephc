@@ -201,6 +201,82 @@ return $named(right: "H", left: "G");"#,
     assert_eq!(values.get(result), FakeValue::String("GH".to_string()));
 }
 
+/// Verifies first-class callable syntax dispatches through eval's callback paths.
+#[test]
+fn execute_program_first_class_callables_dispatch_functions_and_methods() {
+    let program = parse_fragment(
+        br#"function eval_fc_double($value) {
+    return $value * 2;
+}
+class EvalFirstClassCallableBase {
+    public function __construct($offset = 1) {
+        $this->offset = $offset;
+    }
+    public function add($value) {
+        return $value + $this->offset;
+    }
+    public function keep($value) {
+        return $value > 2;
+    }
+    public function sum($carry, $value) {
+        return $carry + $value + $this->offset;
+    }
+    public function show($value, $key) {
+        echo $key . $value;
+    }
+    public static function join($left, $right) {
+        return $left . $right;
+    }
+    public static function compareDesc($left, $right) {
+        return $right - $left;
+    }
+    public static function label($value) {
+        return "base:" . $value;
+    }
+    public static function relay($value) {
+        $fn = static::label(...);
+        return $fn($value);
+    }
+}
+class EvalFirstClassCallableChild extends EvalFirstClassCallableBase {
+    public static function label($value) {
+        return "child:" . $value;
+    }
+}
+$function = eval_fc_double(...);
+echo $function(4); echo ":";
+echo (strlen(...))("abcd"); echo ":";
+$box = new EvalFirstClassCallableBase(3);
+$method = $box->add(...);
+echo $method(4); echo ":";
+echo call_user_func($box->add(...), 5); echo ":";
+$static = EvalFirstClassCallableBase::join(...);
+echo $static(right: "B", left: "A"); echo ":";
+$mapped = array_map($box->add(...), [1, 2]);
+echo $mapped[0] . $mapped[1] . ":";
+$filtered = array_filter([1, 2, 3, 4], $box->keep(...));
+echo count($filtered) . ":";
+echo array_reduce([1, 2], $box->sum(...), 0) . ":";
+array_walk(["a" => 1], $box->show(...));
+echo ":";
+$sorted = [3, 1, 2];
+usort($sorted, EvalFirstClassCallableBase::compareDesc(...));
+echo $sorted[0] . $sorted[1] . $sorted[2] . ":";
+return EvalFirstClassCallableChild::relay("ok");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "8:4:7:8:AB:45:2:9:a1:321:");
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("child:ok".to_string())
+    );
+}
+
 /// Verifies invokable eval objects dispatch through variable and callback call paths.
 #[test]
 fn execute_program_invokes_eval_object_callables() {
