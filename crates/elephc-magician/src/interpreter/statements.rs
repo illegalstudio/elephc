@@ -309,6 +309,16 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_static_property_set_result(class_name, property, value, context, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::StaticPropertyReferenceBind {
+            class_name,
+            property,
+            source,
+        } => {
+            eval_static_property_reference_bind_result(
+                class_name, property, source, context, scope, values,
+            )?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::StaticPropertyArrayAppend {
             class_name,
             property,
@@ -350,6 +360,23 @@ pub(in crate::interpreter) fn execute_stmt(
             let class_name = eval_dynamic_class_name(class_name, context, values)?;
             let value = eval_expr(value, context, scope, values)?;
             eval_static_property_set_result(&class_name, property, value, context, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::DynamicStaticPropertyReferenceBind {
+            class_name,
+            property,
+            source,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            eval_static_property_reference_bind_result(
+                &class_name,
+                property,
+                source,
+                context,
+                scope,
+                values,
+            )?;
             Ok(EvalControl::None)
         }
         EvalStmt::DynamicStaticPropertyArrayAppend {
@@ -416,6 +443,24 @@ pub(in crate::interpreter) fn execute_stmt(
             let property = eval_dynamic_member_name(property, context, scope, values)?;
             let value = eval_expr(value, context, scope, values)?;
             eval_static_property_set_result(&class_name, &property, value, context, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::DynamicStaticPropertyNameReferenceBind {
+            class_name,
+            property,
+            source,
+        } => {
+            let class_name = eval_expr(class_name, context, scope, values)?;
+            let class_name = eval_dynamic_class_name(class_name, context, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_static_property_reference_bind_result(
+                &class_name,
+                &property,
+                source,
+                context,
+                scope,
+                values,
+            )?;
             Ok(EvalControl::None)
         }
         EvalStmt::DynamicStaticPropertyNameArrayAppend {
@@ -4640,6 +4685,12 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
                 values,
             );
         }
+        if let Some(target) = context
+            .static_property_alias(&declaring_class, property.name())
+            .cloned()
+        {
+            return eval_reference_target_value(&target, context, values);
+        }
         if let Some(value) = context.static_property(&declaring_class, property.name()) {
             return Ok(value);
         }
@@ -4711,8 +4762,16 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
         if validate_eval_member_access(&declaring_class, property.visibility(), context).is_err() {
             return Ok(false);
         }
-        let Some(value) = context.static_property(&declaring_class, property.name()) else {
-            return Ok(false);
+        let value = if let Some(target) = context
+            .static_property_alias(&declaring_class, property.name())
+            .cloned()
+        {
+            eval_reference_target_value(&target, context, values)?
+        } else {
+            let Some(value) = context.static_property(&declaring_class, property.name()) else {
+                return Ok(false);
+            };
+            value
         };
         return Ok(!values.is_null(value)?);
     }
@@ -4928,6 +4987,125 @@ pub(in crate::interpreter) fn eval_class_name_fetch_result(
     values.string(&class_name)
 }
 
+/// Binds one eval-declared static property to a by-reference source variable.
+fn eval_static_property_reference_bind_result(
+    class_name: &str,
+    property_name: &str,
+    source_name: &str,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let class_name = resolve_eval_static_member_class_name(class_name, context)?;
+    if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
+        if !property.is_static() {
+            return eval_throw_undeclared_static_property_error(
+                &class_name,
+                property_name,
+                context,
+                values,
+            );
+        }
+        if validate_eval_property_write_access(&declaring_class, &property, context).is_err() {
+            return eval_throw_property_write_access_error(
+                &declaring_class,
+                &property,
+                context,
+                values,
+            );
+        }
+        if validate_eval_readonly_property_write(&declaring_class, &property, context).is_err() {
+            return eval_throw_readonly_property_modification_error(
+                &declaring_class,
+                property.name(),
+                context,
+                values,
+            );
+        }
+        let target = eval_static_property_reference_target(
+            &declaring_class,
+            property.name(),
+            source_name,
+            context,
+            scope,
+            values,
+        )?;
+        let value = eval_reference_target_value(&target, context, values)?;
+        context.bind_static_property_alias(&declaring_class, property.name(), target);
+        if let Some(replaced) =
+            context.set_static_property(&declaring_class, property.name(), value)
+        {
+            values.release(replaced)?;
+        }
+        return Ok(());
+    }
+    if eval_static_member_context_owns_class(&class_name, context) {
+        return eval_throw_undeclared_static_property_error(
+            &class_name,
+            property_name,
+            context,
+            values,
+        );
+    }
+    if eval_runtime_class_like_exists(&class_name, context, values)? {
+        eval_throw_undeclared_static_property_error(&class_name, property_name, context, values)
+    } else {
+        eval_throw_class_not_found_error(&class_name, context, values)
+    }
+}
+
+/// Resolves a local by-reference source into a persistent static-property alias target.
+fn eval_static_property_reference_target(
+    class_name: &str,
+    property_name: &str,
+    source_name: &str,
+    context: &ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalReferenceTarget, EvalStatus> {
+    if let Some(target) = scope.reference_target(source_name).cloned() {
+        return Ok(target);
+    }
+    if context.current_function().is_some() {
+        let cell =
+            visible_scope_cell(context, scope, source_name).map_or_else(|| values.null(), Ok)?;
+        return Ok(EvalReferenceTarget::Cell { cell });
+    }
+    let alias_name = eval_static_property_reference_alias_name(class_name, property_name);
+    for replaced in set_reference_alias(context, scope, &alias_name, source_name, values)? {
+        values.release(replaced)?;
+    }
+    Ok(EvalReferenceTarget::Variable {
+        scope: scope as *mut ElephcEvalScope,
+        name: alias_name,
+    })
+}
+
+/// Builds the hidden scope variable name backing one static-property reference alias.
+fn eval_static_property_reference_alias_name(class_name: &str, property_name: &str) -> String {
+    format!("\0elephc_static_property_ref:{class_name}:{property_name}")
+}
+
+/// Writes one eval static-property assignment through its persistent reference target.
+fn eval_static_reference_target_write(
+    class_name: &str,
+    property_name: &str,
+    target: EvalReferenceTarget,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if matches!(target, EvalReferenceTarget::Cell { .. }) {
+        context.bind_static_property_alias(
+            class_name,
+            property_name,
+            EvalReferenceTarget::Cell { cell: value },
+        );
+        return Ok(());
+    }
+    write_back_method_ref_target(&target, value, context, values)
+}
+
 /// Writes one eval-declared static property after resolving the class-like receiver.
 pub(in crate::interpreter) fn eval_static_property_set_result(
     class_name: &str,
@@ -4962,7 +5140,22 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                 values,
             );
         }
-        if let Some(replaced) = context.set_static_property(&declaring_class, property.name(), value) {
+        if let Some(target) = context
+            .static_property_alias(&declaring_class, property.name())
+            .cloned()
+        {
+            eval_static_reference_target_write(
+                &declaring_class,
+                property.name(),
+                target,
+                value,
+                context,
+                values,
+            )?;
+        }
+        if let Some(replaced) =
+            context.set_static_property(&declaring_class, property.name(), value)
+        {
             values.release(replaced)?;
         }
         return Ok(());

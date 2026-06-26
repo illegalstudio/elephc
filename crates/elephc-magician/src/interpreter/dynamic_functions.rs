@@ -1138,9 +1138,11 @@ fn visit_static_var_declarations(
             | EvalStmt::DynamicStaticPropertyArrayAppend { .. }
             | EvalStmt::DynamicStaticPropertyArraySet { .. }
             | EvalStmt::DynamicStaticPropertyIncDec { .. }
+            | EvalStmt::DynamicStaticPropertyReferenceBind { .. }
             | EvalStmt::DynamicStaticPropertyNameArrayAppend { .. }
             | EvalStmt::DynamicStaticPropertyNameArraySet { .. }
             | EvalStmt::DynamicStaticPropertyNameIncDec { .. }
+            | EvalStmt::DynamicStaticPropertyNameReferenceBind { .. }
             | EvalStmt::DynamicStaticPropertyNameSet { .. }
             | EvalStmt::DynamicStaticPropertySet { .. }
             | EvalStmt::PropertyReferenceBind { .. }
@@ -1154,6 +1156,7 @@ fn visit_static_var_declarations(
             | EvalStmt::StaticPropertyArrayAppend { .. }
             | EvalStmt::StaticPropertyArraySet { .. }
             | EvalStmt::StaticPropertyIncDec { .. }
+            | EvalStmt::StaticPropertyReferenceBind { .. }
             | EvalStmt::StaticPropertySet { .. }
             | EvalStmt::StoreVar { .. }
             | EvalStmt::Throw(_)

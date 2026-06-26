@@ -542,6 +542,48 @@ fn parse_fragment_accepts_static_property_compound_assignment() {
     );
 }
 
+/// Verifies static property reference bindings parse for named and dynamic targets.
+#[test]
+fn parse_fragment_accepts_static_property_reference_bind_source() {
+    let program = parse_fragment(
+        br#"EvalStaticBox::$count =& $source;
+$class::$count =& $dynamic;
+EvalStaticBox::${$name} =& $other;
+(factory())::${$name} =& $third;"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::StaticPropertyReferenceBind {
+                class_name: "EvalStaticBox".to_string(),
+                property: "count".to_string(),
+                source: "source".to_string(),
+            },
+            EvalStmt::DynamicStaticPropertyReferenceBind {
+                class_name: EvalExpr::LoadVar("class".to_string()),
+                property: "count".to_string(),
+                source: "dynamic".to_string(),
+            },
+            EvalStmt::DynamicStaticPropertyNameReferenceBind {
+                class_name: EvalExpr::ClassNameFetch {
+                    class_name: "EvalStaticBox".to_string(),
+                },
+                property: EvalExpr::LoadVar("name".to_string()),
+                source: "other".to_string(),
+            },
+            EvalStmt::DynamicStaticPropertyNameReferenceBind {
+                class_name: EvalExpr::Call {
+                    name: "factory".to_string(),
+                    args: Vec::new(),
+                },
+                property: EvalExpr::LoadVar("name".to_string()),
+                source: "third".to_string(),
+            },
+        ]
+    );
+}
+
 /// Verifies indexed static-property writes parse as dedicated EvalIR statements.
 #[test]
 fn parse_fragment_accepts_static_property_array_write_source() {
