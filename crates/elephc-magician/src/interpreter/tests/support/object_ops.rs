@@ -1287,6 +1287,13 @@ impl FakeOps {
             "Countable",
             "Iterator",
             "IteratorAggregate",
+            "JsonSerializable",
+            "OuterIterator",
+            "RecursiveIterator",
+            "SeekableIterator",
+            "SplObserver",
+            "SplSubject",
+            "Stringable",
             "Throwable",
             "Traversable",
         ]
