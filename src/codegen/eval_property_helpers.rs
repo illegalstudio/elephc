@@ -35,6 +35,7 @@ struct EvalPropertySlot {
     offset: usize,
     ty: PhpType,
     is_declared: bool,
+    is_hidden_shadow: bool,
 }
 
 /// Emits eval property helpers when any lowered function owns an eval context.
@@ -102,30 +103,90 @@ fn collect_class_property_slots(
     slots: &mut Vec<EvalPropertySlot>,
 ) {
     for (index, (property, ty)) in class_info.properties.iter().enumerate() {
-        if class_info.visible_property_index(property) != Some(index) {
+        let visible_index = class_info.visible_property_index(property);
+        let (declaring_class, visibility, is_hidden_shadow) = if visible_index == Some(index) {
+            let declaring_class = class_info
+                .property_declaring_classes
+                .get(property)
+                .map(String::as_str)
+                .unwrap_or(class_name)
+                .to_string();
+            (declaring_class, property_visibility(class_info, property).clone(), false)
+        } else {
+            let Some((declaring_class, visibility)) =
+                hidden_private_property_slot_metadata(module, class_name, index, property)
+            else {
+                continue;
+            };
+            (declaring_class, visibility, true)
+        };
+        if !property_visibility_supported(&visibility) || !property_type_supported(ty) {
             continue;
         }
-        let visibility = property_visibility(class_info, property);
-        if !property_visibility_supported(visibility) || !property_type_supported(ty) {
-            continue;
-        }
-        let declaring_class = class_info
-            .property_declaring_classes
-            .get(property)
-            .map(String::as_str)
-            .unwrap_or(class_name);
         slots.push(EvalPropertySlot {
             class_id: class_info.class_id,
             class_name: class_name.to_string(),
-            declaring_class: declaring_class.to_string(),
-            allowed_scopes: visibility_scope_names(module, declaring_class, visibility),
+            declaring_class: declaring_class.clone(),
+            allowed_scopes: visibility_scope_names(module, &declaring_class, &visibility),
             property: property.clone(),
-            visibility: visibility.clone(),
+            visibility,
             offset: 8 + index * 16,
             ty: ty.codegen_repr(),
             is_declared: class_info.property_slot_is_declared(index, property),
+            is_hidden_shadow,
         });
     }
+}
+
+/// Returns metadata for a private parent slot hidden by a same-named child property.
+fn hidden_private_property_slot_metadata(
+    module: &Module,
+    class_name: &str,
+    index: usize,
+    property: &str,
+) -> Option<(String, Visibility)> {
+    for (ancestor_name, ancestor_info) in class_ancestry(module, class_name) {
+        let Some((ancestor_property, _)) = ancestor_info.properties.get(index) else {
+            continue;
+        };
+        if ancestor_property != property || ancestor_info.visible_property_index(property) != Some(index)
+        {
+            continue;
+        }
+        let visibility = property_visibility(ancestor_info, property).clone();
+        if visibility != Visibility::Private {
+            continue;
+        }
+        let declaring_class = ancestor_info
+            .property_declaring_classes
+            .get(property)
+            .cloned()
+            .unwrap_or_else(|| ancestor_name.to_string());
+        return Some((declaring_class, visibility));
+    }
+    None
+}
+
+/// Returns class metadata from root parent to the requested class.
+fn class_ancestry<'a>(module: &'a Module, class_name: &'a str) -> Vec<(&'a str, &'a ClassInfo)> {
+    let mut chain = Vec::new();
+    collect_class_ancestry(module, class_name, &mut chain);
+    chain
+}
+
+/// Recursively collects class metadata from parent to child.
+fn collect_class_ancestry<'a>(
+    module: &'a Module,
+    class_name: &'a str,
+    chain: &mut Vec<(&'a str, &'a ClassInfo)>,
+) {
+    let Some(class_info) = module.class_infos.get(class_name) else {
+        return;
+    };
+    if let Some(parent) = class_info.parent.as_deref() {
+        collect_class_ancestry(module, parent, chain);
+    }
+    chain.push((class_name, class_info));
 }
 
 /// Returns the declared property visibility, defaulting to public metadata.
@@ -581,7 +642,12 @@ fn emit_aarch64_property_name_compare(
     let miss_label = slot_access_miss_label(module, slot, mode);
     emitter.instruction(&format!("cbz x0, {}", miss_label));                    // continue property dispatch when names differ
     let scope_ok_label = slot_scope_ok_label(module, slot, mode);
-    emit_aarch64_property_scope_check(emitter, data, slot, mode, &scope_ok_label, fail_label);
+    let scope_fail_label = if slot.is_hidden_shadow {
+        miss_label.as_str()
+    } else {
+        fail_label
+    };
+    emit_aarch64_property_scope_check(emitter, data, slot, mode, &scope_ok_label, scope_fail_label);
     emitter.label(&scope_ok_label);
     emitter.instruction(&format!("b {}", target_label));                        // dispatch after scoped visibility is satisfied
     emitter.label(&miss_label);
@@ -611,7 +677,12 @@ fn emit_x86_64_property_name_compare(
     let miss_label = slot_access_miss_label(module, slot, mode);
     emitter.instruction(&format!("je {}", miss_label));                         // continue property dispatch when names differ
     let scope_ok_label = slot_scope_ok_label(module, slot, mode);
-    emit_x86_64_property_scope_check(emitter, data, slot, mode, &scope_ok_label, fail_label);
+    let scope_fail_label = if slot.is_hidden_shadow {
+        miss_label.as_str()
+    } else {
+        fail_label
+    };
+    emit_x86_64_property_scope_check(emitter, data, slot, mode, &scope_ok_label, scope_fail_label);
     emitter.label(&scope_ok_label);
     emitter.instruction(&format!("jmp {}", target_label));                      // dispatch after scoped visibility is satisfied
     emitter.label(&miss_label);

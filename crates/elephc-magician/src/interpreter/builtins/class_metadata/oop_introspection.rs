@@ -408,6 +408,13 @@ fn eval_runtime_object_vars_result(
     let property_count = values.object_property_len(object)?;
     let mut result = values.assoc_new(declared_names.len() + property_count)?;
     let mut emitted_keys = HashSet::new();
+    result = eval_add_runtime_scope_private_object_vars(
+        result,
+        object,
+        &mut emitted_keys,
+        context,
+        values,
+    )?;
     result = eval_add_runtime_declared_object_vars(
         result,
         object,
@@ -418,6 +425,44 @@ fn eval_runtime_object_vars_result(
         values,
     )?;
     eval_add_dynamic_object_vars(result, object, &mut emitted_keys, &HashSet::new(), values)
+}
+
+/// Adds generated/AOT private properties declared by the current eval class scope.
+fn eval_add_runtime_scope_private_object_vars(
+    mut result: RuntimeCellHandle,
+    object: RuntimeCellHandle,
+    emitted_keys: &mut HashSet<String>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(current_class) = context.current_class_scope() else {
+        return Ok(result);
+    };
+    if !values.object_is_a(object, current_class, false)? {
+        return Ok(result);
+    }
+    let property_names = values.reflection_property_names(current_class)?;
+    let declared_names = eval_runtime_string_array_to_vec(property_names, values)?;
+    values.release(property_names)?;
+    for property_name in declared_names {
+        let Some((_, visibility, is_static)) =
+            eval_runtime_property_access_metadata(current_class, &property_name, values)?
+        else {
+            continue;
+        };
+        if is_static
+            || visibility != EvalVisibility::Private
+            || emitted_keys.contains(&property_name)
+            || !values.property_is_initialized(object, &property_name)?
+        {
+            continue;
+        }
+        emitted_keys.insert(property_name.clone());
+        let key = values.string(&property_name)?;
+        let value = values.property_get(object, &property_name)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
 }
 
 /// Adds generated/AOT declared instance properties visible from the current eval scope.
