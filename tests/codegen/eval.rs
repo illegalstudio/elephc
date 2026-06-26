@@ -4949,7 +4949,7 @@ class EvalPrivateAotCallableMethodBox {
 /// Verifies eval fragments reject private AOT instance methods from child scopes.
 #[test]
 fn test_eval_fragment_rejects_private_aot_method_from_child_scope() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class EvalPrivateAotMethodBase {
     private function secret(int $n): int {
@@ -4959,16 +4959,20 @@ class EvalPrivateAotMethodBase {
 
 class EvalPrivateAotMethodChild extends EvalPrivateAotMethodBase {
     public function run(): void {
-        echo eval('return $this->secret(3);');
+        echo eval('try {
+            return $this->secret(3);
+        } catch (Error $e) {
+            return get_class($e) . ":" . $e->getMessage();
+        }');
     }
 }
 
 (new EvalPrivateAotMethodChild())->run();
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "unexpected stderr: {err}"
+    assert_eq!(
+        out,
+        "Error:Call to private method EvalPrivateAotMethodBase::secret() from scope EvalPrivateAotMethodChild"
     );
 }
 
@@ -4998,7 +5002,7 @@ class EvalProtectedAotMethodChild extends EvalProtectedAotMethodBase {
 /// Verifies eval fragments reject protected AOT instance methods between sibling scopes.
 #[test]
 fn test_eval_fragment_rejects_protected_aot_method_from_sibling_scope() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class EvalProtectedAotMethodSiblingBase {}
 
@@ -5010,16 +5014,20 @@ class EvalProtectedAotMethodLeft extends EvalProtectedAotMethodSiblingBase {
 
 class EvalProtectedAotMethodRight extends EvalProtectedAotMethodSiblingBase {
     public function run(): void {
-        echo eval('return (new EvalProtectedAotMethodLeft())->add(3);');
+        echo eval('try {
+            return (new EvalProtectedAotMethodLeft())->add(3);
+        } catch (Error $e) {
+            return get_class($e) . ":" . $e->getMessage();
+        }');
     }
 }
 
 (new EvalProtectedAotMethodRight())->run();
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "unexpected stderr: {err}"
+    assert_eq!(
+        out,
+        "Error:Call to protected method EvalProtectedAotMethodLeft::add() from scope EvalProtectedAotMethodRight"
     );
 }
 
@@ -5712,7 +5720,7 @@ class EvalPrivateAotStaticMethodBox {
 /// Verifies eval fragments reject private AOT static methods from child scopes.
 #[test]
 fn test_eval_fragment_rejects_private_aot_static_method_from_child_scope() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class EvalPrivateAotStaticMethodBase {
     private static function secret(int $n): int {
@@ -5722,16 +5730,20 @@ class EvalPrivateAotStaticMethodBase {
 
 class EvalPrivateAotStaticMethodChild extends EvalPrivateAotStaticMethodBase {
     public function run(): void {
-        echo eval('return EvalPrivateAotStaticMethodBase::secret(3);');
+        echo eval('try {
+            return EvalPrivateAotStaticMethodBase::secret(3);
+        } catch (Error $e) {
+            return get_class($e) . ":" . $e->getMessage();
+        }');
     }
 }
 
 (new EvalPrivateAotStaticMethodChild())->run();
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "unexpected stderr: {err}"
+    assert_eq!(
+        out,
+        "Error:Call to private method EvalPrivateAotStaticMethodBase::secret() from scope EvalPrivateAotStaticMethodChild"
     );
 }
 
@@ -5784,7 +5796,7 @@ class EvalProtectedAotStaticCallableChild extends EvalProtectedAotStaticCallable
 /// Verifies eval fragments reject protected AOT static methods between sibling scopes.
 #[test]
 fn test_eval_fragment_rejects_protected_aot_static_method_from_sibling_scope() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 class EvalProtectedAotStaticMethodSiblingBase {}
 
@@ -5796,16 +5808,20 @@ class EvalProtectedAotStaticMethodLeft extends EvalProtectedAotStaticMethodSibli
 
 class EvalProtectedAotStaticMethodRight extends EvalProtectedAotStaticMethodSiblingBase {
     public function run(): void {
-        echo eval('return EvalProtectedAotStaticMethodLeft::add(3);');
+        echo eval('try {
+            return EvalProtectedAotStaticMethodLeft::add(3);
+        } catch (Error $e) {
+            return get_class($e) . ":" . $e->getMessage();
+        }');
     }
 }
 
 (new EvalProtectedAotStaticMethodRight())->run();
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "unexpected stderr: {err}"
+    assert_eq!(
+        out,
+        "Error:Call to protected method EvalProtectedAotStaticMethodLeft::add() from scope EvalProtectedAotStaticMethodRight"
     );
 }
 
