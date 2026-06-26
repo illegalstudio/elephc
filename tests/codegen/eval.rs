@@ -7760,7 +7760,7 @@ echo $box->id();');
     );
     assert_eq!(out.stdout, "7");
 
-    let err = compile_and_run_expect_failure(
+    let err = compile_and_run_capture(
         r#"<?php
 eval('class EvalReadonlyFailBox {
     public readonly int $id;
@@ -7768,12 +7768,47 @@ eval('class EvalReadonlyFailBox {
     public function replace($id) { $this->id = $id; }
 }
 $box = new EvalReadonlyFailBox(7);
-$box->replace(8);');
+try {
+    $box->replace(8);
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
 "#,
     );
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        err.success,
+        "program failed: stdout={:?} stderr={}",
+        err.stdout, err.stderr
+    );
+    assert_eq!(
+        err.stdout,
+        "Error:Cannot modify readonly property EvalReadonlyFailBox::$id"
+    );
+
+    let unset = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReadonlyUnsetBox {
+    public readonly int $id;
+    public function __construct($id) { $this->id = $id; }
+}
+$box = new EvalReadonlyUnsetBox(7);
+try {
+    unset($box->id);
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        unset.success,
+        "program failed: stdout={:?} stderr={}",
+        unset.stdout, unset.stderr
+    );
+    assert_eq!(
+        unset.stdout,
+        "Error:Cannot unset readonly property EvalReadonlyUnsetBox::$id"
     );
 }
 
@@ -7824,7 +7859,7 @@ eval('readonly class EvalReadonlyUntypedPropertyBox {
         "stderr did not contain eval runtime fatal diagnostic: {untyped_err}"
     );
 
-    let err = compile_and_run_expect_failure(
+    let err = compile_and_run_capture(
         r#"<?php
 eval('readonly class EvalReadonlyClassFailBox {
     public int $id;
@@ -7832,27 +7867,47 @@ eval('readonly class EvalReadonlyClassFailBox {
     public function replace($id) { $this->id = $id; }
 }
 $box = new EvalReadonlyClassFailBox(7);
-$box->replace(8);');
+try {
+    $box->replace(8);
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
 "#,
     );
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        err.success,
+        "program failed: stdout={:?} stderr={}",
+        err.stdout, err.stderr
+    );
+    assert_eq!(
+        err.stdout,
+        "Error:Cannot modify readonly property EvalReadonlyClassFailBox::$id"
     );
 
-    let dynamic_err = compile_and_run_expect_failure(
+    let dynamic_err = compile_and_run_capture(
         r#"<?php
 eval('readonly class EvalReadonlyClassDynamicFailBox {
     public int $id;
     public function __construct($id) { $this->id = $id; }
 }
 $box = new EvalReadonlyClassDynamicFailBox(7);
-$box->dynamic = 8;');
+try {
+    $box->dynamic = 8;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
 "#,
     );
     assert!(
-        dynamic_err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {dynamic_err}"
+        dynamic_err.success,
+        "program failed: stdout={:?} stderr={}",
+        dynamic_err.stdout, dynamic_err.stderr
+    );
+    assert_eq!(
+        dynamic_err.stdout,
+        "Error:Cannot create dynamic property EvalReadonlyClassDynamicFailBox::$dynamic"
     );
 
     let attribute_err = compile_and_run_expect_failure(

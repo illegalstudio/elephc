@@ -246,9 +246,9 @@ new EvalPromotedReadonlyRefBox($value);"#,
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
-/// Verifies promoted readonly properties keep the normal constructor-only write rule.
+/// Verifies promoted readonly properties throw Error outside their constructor.
 #[test]
-fn execute_program_rejects_promoted_readonly_property_write_after_constructor() {
+fn execute_program_promoted_readonly_property_write_after_constructor_throws_error() {
     let program = parse_fragment(
         br#"class EvalPromotedReadonlyBox {
     public function __construct(public readonly int $id) {}
@@ -256,16 +256,25 @@ fn execute_program_rejects_promoted_readonly_property_write_after_constructor() 
 }
 $box = new EvalPromotedReadonlyBox(7);
 echo $box->id;
-$box->replace(8);"#,
+try {
+    $box->replace(8);
+    echo "bad";
+} catch (Error $e) {
+    echo ":"; echo get_class($e); echo ":"; echo $e->getMessage();
+}
+return true;"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("promoted readonly property write should fail outside constructor");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(
+        values.output,
+        "7:Error:Cannot modify readonly property EvalPromotedReadonlyBox::$id"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies readonly eval properties can be initialized inside their constructor.
@@ -291,9 +300,9 @@ return $box->id();"#,
     assert_eq!(values.get(result), FakeValue::Int(7));
 }
 
-/// Verifies readonly eval properties reject writes outside the declaring constructor.
+/// Verifies readonly eval properties throw Error on writes outside the declaring constructor.
 #[test]
-fn execute_program_rejects_readonly_property_write_after_constructor() {
+fn execute_program_readonly_property_write_after_constructor_throws_error() {
     let program = parse_fragment(
         br#"class EvalReadonlyBox {
     public readonly int $id;
@@ -301,16 +310,25 @@ fn execute_program_rejects_readonly_property_write_after_constructor() {
     public function replace($id) { $this->id = $id; }
 }
 $box = new EvalReadonlyBox(7);
-$box->replace(8);"#,
+try {
+    $box->replace(8);
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+return true;"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("readonly property write should fail outside constructor");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(
+        values.output,
+        "Error:Cannot modify readonly property EvalReadonlyBox::$id"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies readonly eval properties must declare a type like PHP requires.
@@ -368,9 +386,9 @@ return $box->id();"#,
     assert_eq!(values.get(result), FakeValue::Int(11));
 }
 
-/// Verifies readonly class instance properties reject writes after construction.
+/// Verifies readonly class instance properties throw Error on writes after construction.
 #[test]
-fn execute_program_rejects_readonly_class_property_write_after_constructor() {
+fn execute_program_readonly_class_property_write_after_constructor_throws_error() {
     let program = parse_fragment(
         br#"readonly class EvalReadonlyClassFailBox {
     public int $id;
@@ -378,37 +396,55 @@ fn execute_program_rejects_readonly_class_property_write_after_constructor() {
     public function replace($id) { $this->id = $id; }
 }
 $box = new EvalReadonlyClassFailBox(11);
-$box->replace(12);"#,
+try {
+    $box->replace(12);
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+return true;"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("readonly class property write should fail outside constructor");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(
+        values.output,
+        "Error:Cannot modify readonly property EvalReadonlyClassFailBox::$id"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies readonly classes reject dynamic property creation when no magic setter handles it.
+/// Verifies readonly classes throw Error on dynamic property creation without a magic setter.
 #[test]
-fn execute_program_rejects_readonly_class_dynamic_property_creation() {
+fn execute_program_readonly_class_dynamic_property_creation_throws_error() {
     let program = parse_fragment(
         br#"readonly class EvalReadonlyDynamicFailBox {
     public int $id;
     public function __construct($id) { $this->id = $id; }
 }
 $box = new EvalReadonlyDynamicFailBox(11);
-$box->dynamic = 12;"#,
+try {
+    $box->dynamic = 12;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage();
+}
+return true;"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
-    let err = execute_program(&program, &mut scope, &mut values)
-        .expect_err("readonly class dynamic property creation should fail");
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(
+        values.output,
+        "Error:Cannot create dynamic property EvalReadonlyDynamicFailBox::$dynamic"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies readonly classes may still handle missing property writes through `__set()`.
