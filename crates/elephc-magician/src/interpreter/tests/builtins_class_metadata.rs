@@ -796,9 +796,9 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
-/// Verifies ReflectionClass::getInterfaceNames reads fake generated/AOT metadata.
+/// Verifies ReflectionClass relation-name helpers read fake generated/AOT metadata.
 #[test]
-fn execute_program_reflects_aot_class_interface_names() {
+fn execute_program_reflects_aot_class_relation_names() {
     let program = parse_fragment(
         br#"$class_names = (new ReflectionClass("KnownClass"))->getInterfaceNames();
 echo count($class_names); echo ":"; echo $class_names[0]; echo ":";
@@ -807,7 +807,13 @@ echo count($interface_names); echo ":"; echo $interface_names[0]; echo ":";
 $class_objects = (new ReflectionClass("KnownClass"))->getInterfaces();
 echo count($class_objects); echo ":"; echo $class_objects["KnownInterface"]->getName(); echo ":";
 $interface_objects = (new ReflectionClass("KnownInterface"))->getInterfaces();
-echo count($interface_objects); echo ":"; echo $interface_objects["Traversable"]->getName();
+echo count($interface_objects); echo ":"; echo $interface_objects["Traversable"]->getName(); echo ":";
+$trait_names = (new ReflectionClass("KnownClass"))->getTraitNames();
+echo count($trait_names); echo ":"; echo $trait_names[0]; echo ":";
+$trait_objects = (new ReflectionClass("KnownClass"))->getTraits();
+echo count($trait_objects); echo ":"; echo $trait_objects["KnownTrait"]->getName(); echo ":";
+$nested_trait_names = (new ReflectionClass("KnownTrait"))->getTraitNames();
+echo count($nested_trait_names); echo ":"; echo $nested_trait_names[0];
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -818,7 +824,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "1:KnownInterface:1:Traversable:1:KnownInterface:1:Traversable"
+        "1:KnownInterface:1:Traversable:1:KnownInterface:1:Traversable:1:KnownTrait:1:KnownTrait:1:KnownInnerTrait"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

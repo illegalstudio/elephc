@@ -12398,6 +12398,38 @@ echo $interfaceObjects["EvalAotReflectIfaceBase"]->getName();');
     );
 }
 
+/// Verifies eval ReflectionClass exposes generated/AOT direct trait-use metadata.
+#[test]
+fn test_eval_reflection_class_get_trait_names_for_aot_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+trait EvalAotReflectRelationInnerTrait {}
+trait EvalAotReflectRelationOuterTrait {
+    use EvalAotReflectRelationInnerTrait;
+}
+class EvalAotReflectRelationTarget {
+    use EvalAotReflectRelationOuterTrait;
+}
+eval('$ref = new ReflectionClass("EvalAotReflectRelationTarget");
+$traits = $ref->getTraitNames();
+echo count($traits) . ":" . $traits[0] . ":";
+$traitObjects = $ref->getTraits();
+echo count($traitObjects) . ":" . $traitObjects["EvalAotReflectRelationOuterTrait"]->getName() . ":";
+$nestedTraits = (new ReflectionClass("EvalAotReflectRelationOuterTrait"))->getTraitNames();
+echo count($nestedTraits) . ":" . $nestedTraits[0];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "1:EvalAotReflectRelationOuterTrait:1:EvalAotReflectRelationOuterTrait:1:EvalAotReflectRelationInnerTrait"
+    );
+}
+
 /// Verifies eval ReflectionClass::implementsInterface reports class, enum, and
 /// interface metadata through the bridge.
 #[test]

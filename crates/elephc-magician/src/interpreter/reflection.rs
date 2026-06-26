@@ -853,7 +853,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_relation_objects_result(
         } else if relation_kind == "interfaces" {
             eval_reflection_aot_class_interface_names(&reflected_name, values)?
         } else {
-            Vec::new()
+            eval_reflection_aot_class_trait_names(&reflected_name, values)?
         };
     eval_reflection_class_object_map_result(&names, context, values).map(Some)
 }
@@ -2751,6 +2751,7 @@ fn eval_reflection_class_owner_object_result(
             values,
         )?;
         let interface_names = eval_reflection_aot_class_interface_names(reflected_name, values)?;
+        let trait_names = eval_reflection_aot_class_trait_names(reflected_name, values)?;
         let parent_class_name = eval_reflection_aot_parent_class_name(reflected_name, values)?;
         let attributes = context.native_class_attributes(reflected_name);
         return eval_reflection_owner_object(
@@ -2758,7 +2759,7 @@ fn eval_reflection_class_owner_object_result(
             reflected_name,
             &attributes,
             &interface_names,
-            &[],
+            &trait_names,
             &method_names,
             &property_names,
             parent_class_name.as_deref(),
@@ -5014,6 +5015,7 @@ fn eval_reflection_full_class_object_result(
         )?;
         let interface_names =
             eval_reflection_aot_class_interface_names(runtime_class_name, values)?;
+        let trait_names = eval_reflection_aot_class_trait_names(runtime_class_name, values)?;
         let parent_class_name = eval_reflection_aot_parent_class_name(runtime_class_name, values)?;
         let attributes = context.native_class_attributes(runtime_class_name);
         return eval_reflection_owner_object(
@@ -5021,7 +5023,7 @@ fn eval_reflection_full_class_object_result(
             runtime_class_name,
             &attributes,
             &interface_names,
-            &[],
+            &trait_names,
             &method_names,
             &property_names,
             parent_class_name.as_deref(),
@@ -5072,13 +5074,14 @@ fn eval_reflection_shallow_class_object_result(
             return values.bool_value(false);
         };
         let interface_names = eval_reflection_aot_class_interface_names(class_name, values)?;
+        let trait_names = eval_reflection_aot_class_trait_names(class_name, values)?;
         let attributes = context.native_class_attributes(class_name);
         return eval_reflection_owner_object_with_members(
             EVAL_REFLECTION_OWNER_CLASS,
             class_name.trim_start_matches('\\'),
             &attributes,
             &interface_names,
-            &[],
+            &trait_names,
             &[],
             &[],
             None,
@@ -5864,6 +5867,18 @@ fn eval_reflection_aot_class_interface_names(
     Ok(names)
 }
 
+/// Returns generated AOT trait names for one reflected class-like symbol.
+fn eval_reflection_aot_class_trait_names(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let runtime_class_name = class_name.trim_start_matches('\\');
+    let names_array = values.reflection_class_trait_names(runtime_class_name)?;
+    let names = eval_reflection_string_array_to_vec(names_array, values)?;
+    values.release(names_array)?;
+    Ok(names)
+}
+
 /// Copies a runtime string array into Rust-owned strings for reflection metadata assembly.
 fn eval_reflection_string_array_to_vec(
     array: RuntimeCellHandle,
@@ -6280,6 +6295,7 @@ fn eval_reflection_class_to_string_metadata(
         values,
     )?;
     let interface_names = eval_reflection_aot_class_interface_names(runtime_class_name, values)?;
+    let trait_names = eval_reflection_aot_class_trait_names(runtime_class_name, values)?;
     let parent_class_name = eval_reflection_aot_parent_class_name(runtime_class_name, values)?;
     Ok(Some(EvalReflectionClassMetadata {
         resolved_name: runtime_class_name.to_string(),
@@ -6288,7 +6304,7 @@ fn eval_reflection_class_to_string_metadata(
         flags,
         modifiers,
         interface_names,
-        trait_names: Vec::new(),
+        trait_names,
         method_names,
         property_names,
         parent_class_name,
