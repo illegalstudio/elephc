@@ -10139,6 +10139,60 @@ echo EvalFirstClassStaticForwardChild::relaySelf();');
     assert_eq!(out.stdout, "child:child");
 }
 
+/// Verifies eval `get_called_class()` follows late-static scopes and remains call-time scoped.
+#[test]
+fn test_eval_get_called_class_preserves_late_static_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalGetCalledClassBase {
+    public function instanceWho() {
+        return get_called_class();
+    }
+    public function instanceCall() {
+        return call_user_func("get_called_class");
+    }
+    public static function staticWho() {
+        return get_called_class();
+    }
+    public static function staticCallArray() {
+        return call_user_func_array("get_called_class", []);
+    }
+    public static function makeCallable() {
+        return get_called_class(...);
+    }
+}
+class EvalGetCalledClassChild extends EvalGetCalledClassBase {}
+$child = new EvalGetCalledClassChild();
+echo $child->instanceWho() . ":";
+echo $child->instanceCall() . ":";
+echo EvalGetCalledClassChild::staticWho() . ":";
+echo EvalGetCalledClassChild::staticCallArray() . ":";
+echo EvalGetCalledClassBase::staticWho() . ":";
+try {
+    get_called_class();
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage() . ":";
+}
+$fn = EvalGetCalledClassChild::makeCallable();
+try {
+    $fn();
+} catch (Error $e) {
+    echo "callable:";
+}
+echo function_exists("get_called_class") . ":" . is_callable("get_called_class");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalGetCalledClassChild:EvalGetCalledClassChild:EvalGetCalledClassChild:EvalGetCalledClassChild:EvalGetCalledClassBase:Error:get_called_class() must be called from within a class:callable:1:1"
+    );
+}
+
 /// Verifies eval dynamic static receivers dispatch methods, properties, constants, and `::class`.
 #[test]
 fn test_eval_dynamic_static_receivers() {

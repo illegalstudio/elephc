@@ -151,6 +151,7 @@ pub(in crate::interpreter) fn eval_php_visible_builtin_exists(name: &str) -> boo
             | "getprotobynumber"
             | "getservbyname"
             | "getservbyport"
+            | "get_called_class"
             | "get_class"
             | "get_class_methods"
             | "get_declared_classes"

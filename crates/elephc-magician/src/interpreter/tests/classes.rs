@@ -103,6 +103,51 @@ return EvalForwardB::relayStatic();"#,
     assert_eq!(values.get(result), FakeValue::String("B".to_string()));
 }
 
+/// Verifies `get_called_class()` follows eval late-static method scopes.
+#[test]
+fn execute_program_dispatches_get_called_class_builtin() {
+    let program = parse_fragment(
+        br#"class EvalCalledClassBase {
+    public function instanceWho() { return get_called_class(); }
+    public function instanceCall() { return call_user_func("get_called_class"); }
+    public static function staticWho() { return get_called_class(); }
+    public static function staticCallArray() { return call_user_func_array("get_called_class", []); }
+    public static function makeCallable() { return get_called_class(...); }
+}
+class EvalCalledClassChild extends EvalCalledClassBase {}
+$child = new EvalCalledClassChild();
+echo $child->instanceWho(); echo ":";
+echo $child->instanceCall(); echo ":";
+echo EvalCalledClassChild::staticWho(); echo ":";
+echo EvalCalledClassChild::staticCallArray(); echo ":";
+echo EvalCalledClassBase::staticWho(); echo ":";
+try {
+    get_called_class();
+} catch (Error $e) {
+    echo get_class($e); echo ":"; echo $e->getMessage(); echo ":";
+}
+$fn = EvalCalledClassChild::makeCallable();
+try {
+    $fn();
+} catch (Error $e) {
+    echo "callable:";
+}
+echo function_exists("get_called_class"); echo is_callable("get_called_class");
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "EvalCalledClassChild:EvalCalledClassChild:EvalCalledClassChild:EvalCalledClassChild:EvalCalledClassBase:Error:get_called_class() must be called from within a class:callable:11"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval classes can extend runtime/AOT classes through the dynamic backing object.
 #[test]
 fn execute_program_extends_runtime_class_from_eval_declaration() {

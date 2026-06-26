@@ -137,6 +137,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         | "is_iterable" | "is_long" | "is_nan" | "is_null" | "is_numeric" | "is_object"
         | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
         "settype" => Some(&["var", "type"]),
+        "get_called_class" => Some(&[]),
         "get_class" => Some(&["object"]),
         "get_class_methods" => Some(&["object_or_class"]),
         "get_object_vars" => Some(&["object"]),

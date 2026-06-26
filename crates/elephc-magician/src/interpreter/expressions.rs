@@ -1003,6 +1003,7 @@ pub(in crate::interpreter) fn eval_positional_expr_call(
         "getprotobynumber" => eval_builtin_getprotobynumber(args, context, scope, values),
         "getservbyname" => eval_builtin_getservbyname(args, context, scope, values),
         "getservbyport" => eval_builtin_getservbyport(args, context, scope, values),
+        "get_called_class" => eval_builtin_get_called_class(args, context, values),
         "get_class" => eval_builtin_get_class(args, context, scope, values),
         "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" => {
             eval_builtin_get_declared_symbols(name, args, context, values)

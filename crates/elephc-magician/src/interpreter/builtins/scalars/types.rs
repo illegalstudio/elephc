@@ -67,6 +67,36 @@ pub(in crate::interpreter) fn eval_gettype_result(
     values.string(eval_gettype_name(tag))
 }
 
+/// Evaluates PHP's `get_called_class()` against the current eval method scope.
+pub(in crate::interpreter) fn eval_builtin_get_called_class(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !args.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    eval_get_called_class_result(context, values)
+}
+
+/// Returns the current late-static-bound class name or throws PHP's class-scope error.
+pub(in crate::interpreter) fn eval_get_called_class_result(
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(class_name) = context
+        .current_called_class_scope()
+        .or_else(|| context.current_class_scope())
+    else {
+        return eval_throw_error(
+            "get_called_class() must be called from within a class",
+            context,
+            values,
+        );
+    };
+    values.string(class_name.trim_start_matches('\\'))
+}
+
 /// Evaluates PHP's `get_class(...)` over one eval object expression.
 pub(in crate::interpreter) fn eval_builtin_get_class(
     args: &[EvalExpr],
