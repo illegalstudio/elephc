@@ -79,13 +79,14 @@ fn eval_call_user_func_callback(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvaluatedCallable, EvalStatus> {
     match eval_callable(callback, context, values) {
-        Ok(callback) => Ok(callback),
+        Ok(callback) => {
+            eval_validate_call_user_func_callback(&callback, function_name, context, values)?;
+            Ok(callback)
+        }
         Err(EvalStatus::UnsupportedConstruct) if values.type_tag(callback)? == EVAL_TAG_OBJECT => {
-            eval_throw_type_error(
-                &format!(
-                    "{}(): Argument #1 ($callback) must be a valid callback, no array or string given",
-                    function_name
-                ),
+            eval_call_user_func_type_error(
+                function_name,
+                "no array or string given",
                 context,
                 values,
             )
