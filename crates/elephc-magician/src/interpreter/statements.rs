@@ -6149,6 +6149,17 @@ pub(in crate::interpreter) fn eval_native_method_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some((declaring_class, visibility)) =
+        eval_native_method_access_error(class_name, method_name, context, values)?
+    {
+        return eval_throw_method_access_error(
+            &declaring_class,
+            method_name,
+            visibility,
+            context,
+            values,
+        );
+    }
     let signature = context.native_method_signature(class_name, method_name);
     let bound_args = bind_native_callable_bound_args(
         signature,
@@ -6172,6 +6183,17 @@ pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some((declaring_class, visibility)) =
+        eval_native_method_access_error(class_name, method_name, context, values)?
+    {
+        return eval_throw_method_access_error(
+            &declaring_class,
+            method_name,
+            visibility,
+            context,
+            values,
+        );
+    }
     let signature = context.native_static_method_signature(class_name, method_name);
     let bound_args = bind_native_callable_bound_args(
         signature,
@@ -6185,6 +6207,50 @@ pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args(
     match (result, writeback) {
         (Err(status), _) | (_, Err(status)) => Err(status),
         (Ok(result), Ok(())) => Ok(result),
+    }
+}
+
+/// Returns generated/AOT method access metadata when current eval scope cannot call it.
+fn eval_native_method_access_error(
+    class_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, EvalVisibility)>, EvalStatus> {
+    let Some((declaring_class, visibility, _, is_abstract)) =
+        eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?
+    else {
+        return Ok(None);
+    };
+    if is_abstract {
+        return Ok(None);
+    }
+    if validate_eval_member_access(&declaring_class, visibility, context).is_ok() {
+        return Ok(None);
+    }
+    Ok(Some((declaring_class, visibility)))
+}
+
+/// Finds generated/AOT method metadata on a class or its native parent chain.
+fn eval_aot_method_dispatch_metadata_in_hierarchy(
+    class_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, EvalVisibility, bool, bool)>, EvalStatus> {
+    let mut current = class_name.trim_start_matches('\\').to_string();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if !seen.insert(current.to_ascii_lowercase()) {
+            return Ok(None);
+        }
+        if let Some(metadata) = eval_aot_method_dispatch_metadata(&current, method_name, values)? {
+            return Ok(Some(metadata));
+        }
+        let Some(parent) = context.native_class_parent(&current) else {
+            return Ok(None);
+        };
+        current = parent.to_string();
     }
 }
 
