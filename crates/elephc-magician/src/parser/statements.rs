@@ -3115,6 +3115,22 @@ fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str) -> bool {
                     .iter()
                     .any(|arg| eval_expr_uses_this_property(arg.value(), property_name))
         }
+        EvalExpr::DynamicStaticMethodCall {
+            class_name,
+            method,
+            args,
+        } => {
+            eval_expr_uses_this_property(class_name, property_name)
+                || eval_expr_uses_this_property(method, property_name)
+                || args
+                    .iter()
+                    .any(|arg| eval_expr_uses_this_property(arg.value(), property_name))
+        }
+        EvalExpr::DynamicStaticPropertyGet { class_name, .. }
+        | EvalExpr::DynamicClassConstantFetch { class_name, .. }
+        | EvalExpr::DynamicClassNameFetch { class_name } => {
+            eval_expr_uses_this_property(class_name, property_name)
+        }
         EvalExpr::DynamicMethodCall {
             object,
             method,

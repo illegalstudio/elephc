@@ -9248,6 +9248,51 @@ echo $named(right: "H", left: "G");');
     assert_eq!(out.stdout, "AB:CD:EF:GH");
 }
 
+/// Verifies eval dynamic static receivers dispatch methods, properties, constants, and `::class`.
+#[test]
+fn test_eval_dynamic_static_receivers() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotDynamicStaticReceiver {
+    public const KIND = "aot";
+    public static $label = "A";
+    public static function make($value) {
+        return self::KIND . ":" . self::$label . ":" . $value;
+    }
+}
+eval('class EvalDynamicStaticReceiver {
+    public const KIND = "eval";
+    public static $label = "E";
+    public static function make($value) {
+        return self::KIND . ":" . self::$label . ":" . $value;
+    }
+}
+$evalClass = "EvalDynamicStaticReceiver";
+$method = "make";
+echo $evalClass::make("one"); echo "|";
+echo $evalClass::$method("two"); echo "|";
+echo $evalClass::$label; echo "|";
+echo $evalClass::KIND; echo "|";
+$prototype = new EvalDynamicStaticReceiver();
+echo $prototype::make("object"); echo "|";
+echo $prototype::class; echo "|";
+$aotClass = "EvalAotDynamicStaticReceiver";
+echo $aotClass::make("three"); echo "|";
+echo $aotClass::$label; echo "|";
+echo $aotClass::KIND;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "eval:E:one|eval:E:two|E|eval|eval:E:object|EvalDynamicStaticReceiver|aot:A:three|A|aot"
+    );
+}
+
 /// Verifies eval invokable objects dispatch through variable and callback call paths.
 #[test]
 fn test_eval_declared_invokable_object_dynamic_callables() {

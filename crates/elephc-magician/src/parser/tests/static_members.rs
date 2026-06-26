@@ -82,6 +82,66 @@ fn parse_fragment_accepts_named_static_method_call_expression() {
     );
 }
 
+/// Verifies runtime-valued static receivers lower to dynamic static method calls.
+#[test]
+fn parse_fragment_accepts_dynamic_static_method_receiver() {
+    let program =
+        parse_fragment(br#"return $class::Read(step: 2);"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::DynamicStaticMethodCall {
+            class_name: Box::new(EvalExpr::LoadVar("class".to_string())),
+            method: Box::new(EvalExpr::Const(EvalConst::String("Read".to_string()))),
+            args: vec![EvalCallArg::named(
+                "step",
+                EvalExpr::Const(EvalConst::Int(2)),
+            )],
+        }))]
+    );
+}
+
+/// Verifies runtime-valued static receivers support variable method names.
+#[test]
+fn parse_fragment_accepts_dynamic_static_method_name() {
+    let program =
+        parse_fragment(br#"return $class::$method(2);"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::DynamicStaticMethodCall {
+            class_name: Box::new(EvalExpr::LoadVar("class".to_string())),
+            method: Box::new(EvalExpr::LoadVar("method".to_string())),
+            args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::Int(2)))],
+        }))]
+    );
+}
+
+/// Verifies runtime-valued static receivers support properties, constants, and `::class`.
+#[test]
+fn parse_fragment_accepts_dynamic_static_metadata_receiver() {
+    let program = parse_fragment(br#"return $class::$count . $class::VALUE . $object::class;"#)
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Binary {
+            op: EvalBinOp::Concat,
+            left: Box::new(EvalExpr::Binary {
+                op: EvalBinOp::Concat,
+                left: Box::new(EvalExpr::DynamicStaticPropertyGet {
+                    class_name: Box::new(EvalExpr::LoadVar("class".to_string())),
+                    property: "count".to_string(),
+                }),
+                right: Box::new(EvalExpr::DynamicClassConstantFetch {
+                    class_name: Box::new(EvalExpr::LoadVar("class".to_string())),
+                    constant: "VALUE".to_string(),
+                }),
+            }),
+            right: Box::new(EvalExpr::DynamicClassNameFetch {
+                class_name: Box::new(EvalExpr::LoadVar("object".to_string())),
+            }),
+        }))]
+    );
+}
+
 /// Verifies static property compound assignments lower to one read-modify-write statement.
 #[test]
 fn parse_fragment_accepts_static_property_compound_assignment() {
