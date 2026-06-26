@@ -428,6 +428,11 @@ impl Parser {
         let mut expr = EvalExpr::LoadVar(name.clone());
         self.advance();
         loop {
+            if matches!(self.current(), TokenKind::LBracket)
+                && matches!(self.tokens.get(self.pos + 1), Some(TokenKind::RBracket))
+            {
+                break;
+            }
             if self.consume(TokenKind::LBracket) {
                 let index = self.parse_expr()?;
                 self.expect(TokenKind::RBracket)?;
@@ -482,6 +487,11 @@ impl Parser {
                     args,
                 };
                 continue;
+            }
+            if matches!(self.current(), TokenKind::LBracket)
+                && matches!(self.tokens.get(self.pos + 1), Some(TokenKind::RBracket))
+            {
+                break;
             }
             if self.consume(TokenKind::LBracket) {
                 let index = self.parse_expr()?;
