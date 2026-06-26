@@ -972,6 +972,32 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies readonly anonymous eval classes initialize and reject property writes.
+#[test]
+fn execute_program_instantiates_readonly_anonymous_class_expressions() {
+    let program = parse_fragment(
+        br#"$box = new readonly class("frozen") {
+    public function __construct(public string $label) {}
+};
+echo $box->label; echo ":";
+try {
+    $box->label = "bad";
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e);
+}
+return $box->label;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "frozen:Error");
+    assert_eq!(values.get(result), FakeValue::String("frozen".to_string()));
+}
+
 /// Verifies eval object cloning copies properties before running `__clone()`.
 #[test]
 fn execute_program_clones_eval_object_and_runs_clone_hook() {

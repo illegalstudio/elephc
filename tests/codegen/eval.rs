@@ -11870,6 +11870,26 @@ echo $ref->implementsInterface("EvalRuntimeAnonLabel") ? "iface" : "bad";');
     assert_eq!(out.stdout, "A:anon:B:anon:same:anonymous:iface");
 }
 
+/// Verifies eval readonly anonymous class expressions initialize and reject writes.
+#[test]
+fn test_eval_readonly_anonymous_class_expression_runtime() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$box = new readonly class("frozen") {
+    public function __construct(public string $label) {}
+};
+echo $box->label . ":";
+try {
+    $box->label = "bad";
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e);
+}');
+"#,
+    );
+    assert_eq!(out, "frozen:Error");
+}
+
 /// Verifies eval ReflectionClass reports method, property, and constant membership through the bridge.
 #[test]
 fn test_eval_reflection_class_member_existence() {
