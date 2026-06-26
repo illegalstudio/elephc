@@ -4068,6 +4068,20 @@ fn eval_throw_reflection_exception(
     Err(EvalStatus::UncaughtThrowable)
 }
 
+/// Creates and schedules an `Error` through eval's normal Throwable channel.
+fn eval_throw_error(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let exception = values.new_object("Error")?;
+    let message = values.string(message)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
+}
+
 /// Resolves a static method using private-method scope rules.
 fn eval_dynamic_static_method_for_call(
     class_name: &str,
@@ -4966,6 +4980,11 @@ fn eval_reflection_class_new_instance_result(
     else {
         return Ok(None);
     };
+    if let Some(message) =
+        eval_reflection_eval_instantiation_error_message(&reflected_name, context)
+    {
+        return eval_throw_error(&message, context, values);
+    }
     if let Some(class) = context.class(&reflected_name).cloned() {
         if let Some((_, constructor)) = context.class_method(class.name(), "__construct") {
             if constructor.visibility() != EvalVisibility::Public {
@@ -5045,6 +5064,11 @@ fn eval_reflection_class_new_instance_without_constructor_result(
     else {
         return Ok(None);
     };
+    if let Some(message) =
+        eval_reflection_eval_instantiation_error_message(&reflected_name, context)
+    {
+        return eval_throw_error(&message, context, values);
+    }
     if let Some(class) = context.class(&reflected_name).cloned() {
         let mut scope = ElephcEvalScope::new();
         return eval_dynamic_class_allocate_object(&class, context, &mut scope, values).map(Some);
@@ -5064,6 +5088,31 @@ fn eval_reflection_class_new_instance_without_constructor_result(
         return Err(EvalStatus::RuntimeFatal);
     }
     values.new_object(&class_name).map(Some)
+}
+
+/// Builds PHP's reflection instantiation error for eval non-instantiable class-likes.
+fn eval_reflection_eval_instantiation_error_message(
+    reflected_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<String> {
+    if let Some(class) = context.class(reflected_name) {
+        if class.is_abstract() {
+            return Some(format!("Cannot instantiate abstract class {}", class.name()));
+        }
+        if let Some(enum_decl) = context.enum_decl(class.name()) {
+            return Some(format!("Cannot instantiate enum {}", enum_decl.name()));
+        }
+        return None;
+    }
+    if let Some(interface) = context.interface(reflected_name) {
+        return Some(format!("Cannot instantiate interface {}", interface.name()));
+    }
+    if let Some(trait_decl) = context.trait_decl(reflected_name) {
+        return Some(format!("Cannot instantiate trait {}", trait_decl.name()));
+    }
+    context
+        .enum_decl(reflected_name)
+        .map(|enum_decl| format!("Cannot instantiate enum {}", enum_decl.name()))
 }
 
 /// Instantiates an attribute class for `ReflectionAttribute::newInstance()`.
