@@ -61,7 +61,8 @@ pub(super) enum EvaluatedCallable {
 
 /// Bound argument tuple for direct `array_splice()` calls.
 pub(super) type EvalArraySpliceDirectArgs = (
-    String,
+    RuntimeCellHandle,
+    EvalReferenceTarget,
     RuntimeCellHandle,
     Option<RuntimeCellHandle>,
     Option<RuntimeCellHandle>,

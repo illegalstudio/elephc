@@ -89,7 +89,7 @@ pub(in crate::interpreter) fn eval_settype_direct_args(
 }
 
 /// Writes a direct by-reference builtin result back to the captured caller lvalue.
-fn eval_write_direct_ref_target(
+pub(in crate::interpreter) fn eval_write_direct_ref_target(
     target: &EvalReferenceTarget,
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
@@ -123,7 +123,7 @@ fn eval_write_direct_ref_target(
 }
 
 /// Captures the first by-reference array mutator argument as a writable lvalue.
-fn eval_array_mutation_lvalue_arg(
+pub(in crate::interpreter) fn eval_array_mutation_lvalue_arg(
     arg: &EvalCallArg,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,

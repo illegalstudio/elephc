@@ -225,7 +225,7 @@ return function_exists("array_push") && function_exists("array_unshift");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
-/// Verifies eval `array_splice()` returns removed values and writes back direct variable calls.
+/// Verifies eval `array_splice()` returns removed values and writes back writable lvalue calls.
 #[test]
 fn execute_program_dispatches_array_splice_builtin() {
     let program = parse_fragment(
@@ -253,6 +253,22 @@ echo count($rep3) . ":" . $rep3[0] . ":" . $rep3[1] . ":" . count($g) . ":" . $g
 $h = [1, 2, 3];
 $removed2 = call_user_func_array("array_splice", ["array" => $h, "offset" => 1, "replacement" => [9]]);
 echo count($removed2) . ":" . $removed2[0] . ":" . $removed2[1] . ":" . count($h) . ":" . $h[1] . ":";
+class EvalArraySplicePropertyBox {
+    public array $items = ["a", "b", "c"];
+    public static array $staticItems = ["x", "y", "z"];
+}
+$box = new EvalArraySplicePropertyBox();
+$propRemoved = array_splice($box->items, 1, 1, ["B"]);
+echo count($propRemoved) . ":" . $propRemoved[0] . ":" . $box->items[1] . ":" . $box->items[2] . ":";
+$name = "items";
+$dynRemoved = array_splice($box->{$name}, 0, 1);
+echo $dynRemoved[0] . ":" . count($box->items) . ":" . $box->items[0] . ":";
+$staticRemoved = array_splice(EvalArraySplicePropertyBox::$staticItems, 1, 1);
+echo $staticRemoved[0] . ":" . count(EvalArraySplicePropertyBox::$staticItems) . ":" . EvalArraySplicePropertyBox::$staticItems[1] . ":";
+$class = "EvalArraySplicePropertyBox";
+$staticName = "staticItems";
+$dynStaticRemoved = array_splice($class::${$staticName}, 0, 1, ["w"]);
+echo $dynStaticRemoved[0] . ":" . EvalArraySplicePropertyBox::$staticItems[0] . ":" . EvalArraySplicePropertyBox::$staticItems[1] . ":";
 return function_exists("array_splice");"#,
         )
         .expect("parse eval fragment");
@@ -263,7 +279,7 @@ return function_exists("array_splice");"#,
 
     assert_eq!(
         values.output,
-        "2:20:30:2:40:2:3:1:4:3:4:3:2:6:7:3:2:2:3:1:A:B:4:2:3:1:S:N:4:2:2:3:2:9:2:2:3:3:2:"
+        "2:20:30:2:40:2:3:1:4:3:4:3:2:6:7:3:2:2:3:1:A:B:4:2:3:1:S:N:4:2:2:3:2:9:2:2:3:3:2:1:b:B:c:a:2:B:y:2:z:x:w:z:"
     );
     assert_eq!(
         values.warnings,
@@ -275,7 +291,7 @@ return function_exists("array_splice");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
-/// Verifies eval `sort()` and `rsort()` reindex direct variable arrays only.
+/// Verifies eval `sort()` and `rsort()` reindex writable array lvalues.
 #[test]
 fn execute_program_dispatches_sort_builtins() {
     let program = parse_fragment(
@@ -290,6 +306,18 @@ $d = [3, 1, 2];
 echo call_user_func("sort", $d) . ":" . $d[0] . $d[1] . $d[2] . ":";
 $e = [1, 2, 3];
 echo call_user_func_array("rsort", ["array" => $e]) . ":" . $e[0] . ":" . $e[2] . ":";
+class EvalSortPropertyBox {
+    public array $items = [3, 1, 2];
+    public static array $staticItems = ["b", "a"];
+}
+$box = new EvalSortPropertyBox();
+echo sort($box->items) . ":" . $box->items[0] . $box->items[1] . $box->items[2] . ":";
+$name = "items";
+echo rsort($box->{$name}) . ":" . $box->items[0] . ":" . $box->items[2] . ":";
+echo sort(EvalSortPropertyBox::$staticItems) . ":" . EvalSortPropertyBox::$staticItems[0] . EvalSortPropertyBox::$staticItems[1] . ":";
+$class = "EvalSortPropertyBox";
+$staticName = "staticItems";
+echo rsort($class::${$staticName}) . ":" . EvalSortPropertyBox::$staticItems[0] . EvalSortPropertyBox::$staticItems[1] . ":";
 return function_exists("sort") && function_exists("rsort");"#,
     )
     .expect("parse eval fragment");
@@ -298,7 +326,10 @@ return function_exists("sort") && function_exists("rsort");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "1:123:1:cherry:apple:123:1:312:1:1:3:");
+    assert_eq!(
+        values.output,
+        "1:123:1:cherry:apple:123:1:312:1:1:3:1:123:1:3:1:1:ab:1:ba:"
+    );
     assert_eq!(
         values.warnings,
         vec![
@@ -308,7 +339,7 @@ return function_exists("sort") && function_exists("rsort");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
-/// Verifies eval key-preserving array ordering builtins write back direct variable calls.
+/// Verifies eval key-preserving array ordering builtins write back writable lvalue calls.
 #[test]
 fn execute_program_dispatches_key_preserving_sort_builtins() {
     let program = parse_fragment(
@@ -332,6 +363,26 @@ $e = ["x" => 2, "y" => 1];
 echo call_user_func("asort", $e) . ":" . $e["x"] . $e["y"] . ":";
 $f = ["b" => 1, "a" => 2];
 echo call_user_func_array("krsort", ["array" => $f]) . ":" . $f["b"] . $f["a"] . ":";
+class EvalKeySortPropertyBox {
+    public array $items = ["x" => 2, "y" => 1];
+    public static array $staticItems = ["b" => 1, "a" => 2];
+}
+$box = new EvalKeySortPropertyBox();
+echo asort($box->items) . ":";
+foreach ($box->items as $key => $value) { echo $key . $value; }
+echo ":";
+$name = "items";
+echo arsort($box->{$name}) . ":";
+foreach ($box->items as $key => $value) { echo $key . $value; }
+echo ":";
+echo ksort(EvalKeySortPropertyBox::$staticItems) . ":";
+foreach (EvalKeySortPropertyBox::$staticItems as $key => $value) { echo $key . $value; }
+echo ":";
+$class = "EvalKeySortPropertyBox";
+$staticName = "staticItems";
+echo krsort($class::${$staticName}) . ":";
+foreach (EvalKeySortPropertyBox::$staticItems as $key => $value) { echo $key . $value; }
+echo ":";
 return function_exists("asort") && function_exists("arsort") && function_exists("ksort") && function_exists("krsort");"#,
         )
         .expect("parse eval fragment");
@@ -342,7 +393,7 @@ return function_exists("asort") && function_exists("arsort") && function_exists(
 
     assert_eq!(
         values.output,
-        "1:y1z2x3:1:y3z2x1:1:34a2b1:1:b1a234:1:21:1:12:"
+        "1:y1z2x3:1:y3z2x1:1:34a2b1:1:b1a234:1:21:1:12:1:y1x2:1:x2y1:1:a2b1:1:b1a2:"
     );
     assert_eq!(
         values.warnings,
@@ -367,6 +418,19 @@ foreach ($b as $key => $value) { echo $key . $value . ";"; }
 echo ":";
 $c = ["x" => "b", "y" => "a"];
 echo call_user_func("natsort", $c) . ":" . $c["x"] . $c["y"] . ":";
+class EvalNaturalSortPropertyBox {
+    public array $items = ["img10", "img2", "img1"];
+    public static array $staticItems = ["b" => "Img10", "a" => "img2", "c" => "IMG1"];
+}
+$box = new EvalNaturalSortPropertyBox();
+echo natsort($box->items) . ":";
+foreach ($box->items as $key => $value) { echo $key . $value . ";"; }
+echo ":";
+$class = "EvalNaturalSortPropertyBox";
+$staticName = "staticItems";
+echo natcasesort($class::${$staticName}) . ":";
+foreach (EvalNaturalSortPropertyBox::$staticItems as $key => $value) { echo $key . $value . ";"; }
+echo ":";
 return function_exists("natsort") && function_exists("natcasesort");"#,
     )
     .expect("parse eval fragment");
@@ -377,7 +441,7 @@ return function_exists("natsort") && function_exists("natcasesort");"#,
 
     assert_eq!(
         values.output,
-        "1:2img1;1img2;0img10;:1:cIMG1;aimg2;bImg10;:1:ba:"
+        "1:2img1;1img2;0img10;:1:cIMG1;aimg2;bImg10;:1:ba:1:2img1;1img2;0img10;:1:cIMG1;aimg2;bImg10;:"
     );
     assert_eq!(
         values.warnings,
@@ -385,7 +449,7 @@ return function_exists("natsort") && function_exists("natcasesort");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
-/// Verifies eval `shuffle()` reindexes direct variable arrays only.
+/// Verifies eval `shuffle()` reindexes writable array lvalues.
 #[test]
 fn execute_program_dispatches_shuffle_builtin() {
     let program = parse_fragment(
@@ -393,6 +457,15 @@ fn execute_program_dispatches_shuffle_builtin() {
 echo shuffle($a) . ":" . (isset($a["x"]) ? "bad" : "reindexed") . ":" . count($a) . ":" . array_sum($a) . ":";
 $b = ["x" => 1, "y" => 2];
 echo call_user_func("shuffle", $b) . ":" . $b["x"] . $b["y"] . ":";
+class EvalShufflePropertyBox {
+    public array $items = ["x" => 1, "y" => 2];
+    public static array $staticItems = ["a" => 3, "b" => 4];
+}
+$box = new EvalShufflePropertyBox();
+echo shuffle($box->items) . ":" . (isset($box->items["x"]) ? "bad" : "prop") . ":" . count($box->items) . ":" . array_sum($box->items) . ":";
+$class = "EvalShufflePropertyBox";
+$staticName = "staticItems";
+echo shuffle($class::${$staticName}) . ":" . (isset(EvalShufflePropertyBox::$staticItems["a"]) ? "bad" : "static") . ":" . count(EvalShufflePropertyBox::$staticItems) . ":" . array_sum(EvalShufflePropertyBox::$staticItems) . ":";
 return function_exists("shuffle");"#,
         )
         .expect("parse eval fragment");
@@ -401,19 +474,20 @@ return function_exists("shuffle");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "1:reindexed:2:3:1:12:");
+    assert_eq!(values.output, "1:reindexed:2:3:1:12:1:prop:2:3:1:static:2:7:");
     assert_eq!(
         values.warnings,
         vec!["shuffle(): Argument #1 ($array) must be passed by reference, value given"]
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
-/// Verifies eval user-comparator sort builtins call callbacks and write back direct arrays.
+/// Verifies eval user-comparator sort builtins call callbacks and write back writable lvalues.
 #[test]
 fn execute_program_dispatches_user_sort_builtins() {
     let program = parse_fragment(
         br#"function eval_sort_cmp($left, $right) { echo "c"; return $left <=> $right; }
 function eval_key_cmp($left, $right) { return strcmp($left, $right); }
+function eval_sort_quiet_cmp($left, $right) { return $left <=> $right; }
 $a = [3, 1, 2];
 echo usort($a, "eval_sort_cmp") . ":";
 foreach ($a as $value) { echo $value; }
@@ -428,6 +502,21 @@ foreach ($c as $key => $value) { echo $key . $value; }
 echo ":";
 $d = [2, 1];
 echo call_user_func("usort", $d, "eval_sort_cmp") . ":" . $d[0] . $d[1] . ":";
+class EvalUserSortPropertyBox {
+    public array $items = [3, 1, 2];
+    public static array $staticItems = ["b" => 1, "a" => 2];
+}
+$box = new EvalUserSortPropertyBox();
+echo usort($box->items, "eval_sort_quiet_cmp") . ":";
+foreach ($box->items as $value) { echo $value; }
+echo ":";
+$name = "items";
+echo usort($box->{$name}, "eval_sort_quiet_cmp") . ":" . $box->items[0] . $box->items[2] . ":";
+$class = "EvalUserSortPropertyBox";
+$staticName = "staticItems";
+echo uksort($class::${$staticName}, "eval_key_cmp") . ":";
+foreach (EvalUserSortPropertyBox::$staticItems as $key => $value) { echo $key . $value; }
+echo ":";
 return function_exists("usort") && function_exists("uasort") && function_exists("uksort");"#,
     )
     .expect("parse eval fragment");
@@ -436,7 +525,10 @@ return function_exists("usort") && function_exists("uasort") && function_exists(
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "ccc1:123:ccc1:b1c2a3:1:a2b1:c1:21:");
+    assert_eq!(
+        values.output,
+        "ccc1:123:ccc1:b1c2a3:1:a2b1:c1:21:1:123:1:13:1:a2b1:"
+    );
     assert_eq!(
         values.warnings,
         vec!["usort(): Argument #1 ($array) must be passed by reference, value given"]

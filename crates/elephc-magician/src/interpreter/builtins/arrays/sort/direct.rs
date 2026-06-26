@@ -5,10 +5,11 @@
 //! - `crate::interpreter::builtins::arrays::sort` re-exports.
 //!
 //! Key details:
-//! - Direct calls extract a writable variable cell and write back the sorted
+//! - Direct calls extract a writable lvalue cell and write back the sorted
 //!   replacement while preserving source-order evaluation of callback arguments.
 
 use super::super::super::super::*;
+use super::super::{eval_array_mutation_lvalue_arg, eval_write_direct_ref_target};
 use super::*;
 
 /// Evaluates direct by-reference array ordering calls and writes back the array.
@@ -19,23 +20,11 @@ pub(in crate::interpreter) fn eval_builtin_array_sort_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let array_name = eval_array_sort_direct_arg(args)?;
-    let Some(entry) =
-        scope_entry(context, scope, &array_name).filter(|entry| entry.flags().is_visible())
-    else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let array = entry.cell();
-    let ownership = entry.flags().ownership;
-    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
+    let (array, target) = eval_array_sort_direct_arg(args, context, scope, values)?;
 
     let replacement = eval_array_sort_replacement(name, array, values)?;
     let result = values.bool_value(true)?;
-    for replaced in set_scope_cell(context, scope, array_name, replacement, ownership)? {
-        values.release(replaced)?;
-    }
+    eval_write_direct_ref_target(&target, replacement, context, values, None)?;
     Ok(result)
 }
 
@@ -47,23 +36,11 @@ pub(in crate::interpreter) fn eval_builtin_user_sort_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (array_name, callback) = eval_user_sort_direct_args(args, context, scope, values)?;
-    let Some(entry) =
-        scope_entry(context, scope, &array_name).filter(|entry| entry.flags().is_visible())
-    else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let array = entry.cell();
-    let ownership = entry.flags().ownership;
-    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
+    let (array, target, callback) = eval_user_sort_direct_args(args, context, scope, values)?;
 
     let replacement = eval_user_sort_replacement(name, array, callback, context, values)?;
     let result = values.bool_value(true)?;
-    for replaced in set_scope_cell(context, scope, array_name, replacement, ownership)? {
-        values.release(replaced)?;
-    }
+    eval_write_direct_ref_target(&target, replacement, context, values, None)?;
     Ok(result)
 }
 
@@ -73,7 +50,7 @@ pub(in crate::interpreter) fn eval_user_sort_direct_args(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
-) -> Result<(String, RuntimeCellHandle), EvalStatus> {
+) -> Result<(RuntimeCellHandle, EvalReferenceTarget, RuntimeCellHandle), EvalStatus> {
     let mut array = None;
     let mut callback = None;
     let mut positional_index = 0;
@@ -104,10 +81,9 @@ pub(in crate::interpreter) fn eval_user_sort_direct_args(
                 if array.is_some() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                let EvalExpr::LoadVar(name) = arg.value() else {
-                    return Err(EvalStatus::RuntimeFatal);
-                };
-                array = Some(name.clone());
+                array = Some(eval_array_mutation_lvalue_arg(
+                    arg, context, scope, values,
+                )?);
             }
             "callback" => {
                 if callback.is_some() {
@@ -119,23 +95,20 @@ pub(in crate::interpreter) fn eval_user_sort_direct_args(
         }
     }
 
-    let array = array.ok_or(EvalStatus::RuntimeFatal)?;
+    let (array, target) = array.ok_or(EvalStatus::RuntimeFatal)?;
     let callback = callback.ok_or(EvalStatus::RuntimeFatal)?;
-    Ok((array, callback))
+    Ok((array, target, callback))
 }
 
-/// Extracts the direct variable argument accepted by eval array ordering builtins.
+/// Extracts the writable array lvalue accepted by eval array ordering builtins.
 pub(in crate::interpreter) fn eval_array_sort_direct_arg(
     args: &[EvalCallArg],
-) -> Result<String, EvalStatus> {
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, EvalReferenceTarget), EvalStatus> {
     let [arg] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    if arg.is_spread() || !matches!(arg.name(), None | Some("array")) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let EvalExpr::LoadVar(name) = arg.value() else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    Ok(name.clone())
+    eval_array_mutation_lvalue_arg(arg, context, scope, values)
 }

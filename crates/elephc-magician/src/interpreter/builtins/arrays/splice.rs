@@ -19,24 +19,12 @@ pub(in crate::interpreter) fn eval_builtin_array_splice_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (array_name, offset, length, replacement_arg) =
+    let (array, target, offset, length, replacement_arg) =
         eval_array_splice_direct_args(args, context, scope, values)?;
-    let Some(entry) =
-        scope_entry(context, scope, &array_name).filter(|entry| entry.flags().is_visible())
-    else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let array = entry.cell();
-    let ownership = entry.flags().ownership;
-    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
 
     let (removed, replacement) =
         eval_array_splice_removed_and_replacement(array, offset, length, replacement_arg, values)?;
-    for replaced in set_scope_cell(context, scope, array_name, replacement, ownership)? {
-        values.release(replaced)?;
-    }
+    eval_write_direct_ref_target(&target, replacement, context, values, None)?;
     Ok(removed)
 }
 
@@ -81,10 +69,9 @@ pub(in crate::interpreter) fn eval_array_splice_direct_args(
                 if array.is_some() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                let EvalExpr::LoadVar(name) = arg.value() else {
-                    return Err(EvalStatus::RuntimeFatal);
-                };
-                array = Some(name.clone());
+                array = Some(eval_array_mutation_lvalue_arg(
+                    arg, context, scope, values,
+                )?);
             }
             "offset" => {
                 if offset.is_some() {
@@ -108,9 +95,9 @@ pub(in crate::interpreter) fn eval_array_splice_direct_args(
         }
     }
 
-    let array = array.ok_or(EvalStatus::RuntimeFatal)?;
+    let (array, target) = array.ok_or(EvalStatus::RuntimeFatal)?;
     let offset = offset.ok_or(EvalStatus::RuntimeFatal)?;
-    Ok((array, offset, length, replacement))
+    Ok((array, target, offset, length, replacement))
 }
 
 /// Returns the removed elements that `array_splice()` would produce without mutating the source.
