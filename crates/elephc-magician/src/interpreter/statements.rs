@@ -2179,7 +2179,16 @@ fn append_eval_trait_properties(
             continue;
         }
         if let Some(existing) = trait_properties.get(property.name()) {
-            validate_eval_trait_property_compatibility(existing, property)?;
+            let resolved = resolve_eval_trait_property_conflict(existing, property)?;
+            if &resolved != existing {
+                trait_properties.insert(property.name().to_string(), resolved.clone());
+                if let Some(slot) = properties
+                    .iter_mut()
+                    .find(|candidate| candidate.name() == property.name())
+                {
+                    *slot = resolved;
+                }
+            }
             continue;
         }
         trait_properties.insert(property.name().to_string(), property.clone());
@@ -2193,7 +2202,42 @@ fn validate_eval_trait_property_compatibility(
     existing: &EvalClassProperty,
     incoming: &EvalClassProperty,
 ) -> Result<(), EvalStatus> {
-    if existing.visibility() == incoming.visibility()
+    resolve_eval_trait_property_conflict(existing, incoming).map(|_| ())
+}
+
+/// Resolves compatible same-name properties imported from classes and traits.
+fn resolve_eval_trait_property_conflict(
+    existing: &EvalClassProperty,
+    incoming: &EvalClassProperty,
+) -> Result<EvalClassProperty, EvalStatus> {
+    if existing.is_abstract() && !incoming.is_abstract() {
+        return class_property_satisfies_abstract_contract(incoming, existing)
+            .then(|| incoming.clone())
+            .ok_or(EvalStatus::RuntimeFatal);
+    }
+    if incoming.is_abstract() && !existing.is_abstract() {
+        return class_property_satisfies_abstract_contract(existing, incoming)
+            .then(|| existing.clone())
+            .ok_or(EvalStatus::RuntimeFatal);
+    }
+    if existing.is_abstract() && incoming.is_abstract() {
+        return eval_trait_abstract_properties_are_compatible(existing, incoming)
+            .then(|| merge_abstract_property_contracts(existing, incoming))
+            .ok_or(EvalStatus::RuntimeFatal);
+    }
+    if eval_trait_concrete_properties_are_compatible(existing, incoming) {
+        Ok(existing.clone())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Returns whether two concrete same-name trait properties are identical enough to deduplicate.
+fn eval_trait_concrete_properties_are_compatible(
+    existing: &EvalClassProperty,
+    incoming: &EvalClassProperty,
+) -> bool {
+    existing.visibility() == incoming.visibility()
         && existing.set_visibility() == incoming.set_visibility()
         && existing.is_static() == incoming.is_static()
         && existing.is_final() == incoming.is_final()
@@ -2206,11 +2250,20 @@ fn validate_eval_trait_property_compatibility(
         && existing.is_virtual() == incoming.is_virtual()
         && existing.property_type() == incoming.property_type()
         && existing.default() == incoming.default()
-    {
-        Ok(())
-    } else {
-        Err(EvalStatus::RuntimeFatal)
-    }
+}
+
+/// Returns whether two abstract trait property contracts can be merged.
+fn eval_trait_abstract_properties_are_compatible(
+    existing: &EvalClassProperty,
+    incoming: &EvalClassProperty,
+) -> bool {
+    existing.visibility() == incoming.visibility()
+        && existing.set_visibility() == incoming.set_visibility()
+        && existing.is_static() == incoming.is_static()
+        && existing.is_final() == incoming.is_final()
+        && existing.is_readonly() == incoming.is_readonly()
+        && existing.property_type() == incoming.property_type()
+        && existing.default() == incoming.default()
 }
 
 /// Appends trait methods unless the class provides a same-name method.
@@ -3213,6 +3266,7 @@ fn class_property_satisfies_abstract_contract(
 ) -> bool {
     if property.is_abstract()
         || property.is_static()
+        || property.property_type() != requirement.property_type()
         || !property_contract_visibility_allows(requirement, property)
     {
         return false;
