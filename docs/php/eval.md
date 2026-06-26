@@ -262,12 +262,14 @@ name. `ReflectionMethod::getShortName()` reports the reflected method name,
 while `ReflectionMethod::getNamespaceName()` reports an empty string and
 `inNamespace()` reports `false`, matching PHP's method reflection behavior.
 `ReflectionFunction` and `ReflectionMethod` report eval user-symbol defaults
-through `isInternal()`, `isUserDefined()`, `isClosure()`, `isDeprecated()`,
-`returnsReference()`, `isGenerator()`, `isVariadic()`, `isStatic()`,
+through `isInternal()`, `isUserDefined()`, `isClosure()`, `returnsReference()`,
+`isGenerator()`, `isVariadic()`, `isStatic()`,
 `hasTentativeReturnType()`, and `getTentativeReturnType()`. `hasReturnType()`
 and `getReturnType()` expose retained eval return type metadata for supported
 named, nullable, union, and intersection declarations, including `void` and
 `never` as builtin non-nullable named types.
+`isDeprecated()` reflects PHP's global `#[Deprecated]` attribute on
+eval-declared functions and methods, and reports `false` otherwise.
 `ReflectionFunction::isAnonymous()` reports `false` for eval-declared named
 functions, and `getClosureThis()`, `getClosureScopeClass()`, and
 `getClosureCalledClass()` report `null` for eval-visible non-closure function

@@ -15608,6 +15608,37 @@ echo ($static->isStatic() ? "S" : "s");');
     );
 }
 
+/// Verifies eval ReflectionFunction/Method derive deprecation predicates from `#[Deprecated]`.
+#[test]
+fn test_eval_reflection_function_and_method_deprecated_attributes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('#[\Deprecated]
+function eval_reflect_deprecated_fn() {}
+function eval_reflect_plain_fn() {}
+class EvalReflectDeprecatedMethodTarget {
+    #[\Deprecated]
+    public function old() {}
+    public function fresh() {}
+}
+$deprecatedFn = new \ReflectionFunction("eval_reflect_deprecated_fn");
+$plainFn = new \ReflectionFunction("eval_reflect_plain_fn");
+$deprecatedMethod = new \ReflectionMethod(EvalReflectDeprecatedMethodTarget::class, "old");
+$plainMethod = new \ReflectionMethod(EvalReflectDeprecatedMethodTarget::class, "fresh");
+echo ($deprecatedFn->isDeprecated() ? "D" : "d") . ":";
+echo ($plainFn->isDeprecated() ? "D" : "d") . ":";
+echo ($deprecatedMethod->isDeprecated() ? "D" : "d") . ":";
+echo ($plainMethod->isDeprecated() ? "D" : "d");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "D:d:D:d");
+}
+
 /// Verifies eval ReflectionFunction/Method expose static local variables through the bridge.
 #[test]
 fn test_eval_reflection_function_and_method_static_variables() {

@@ -24,6 +24,7 @@ const EVAL_REFLECTION_MEMBER_FLAG_HAS_DEFAULT_VALUE: u64 = 256;
 const EVAL_REFLECTION_MEMBER_FLAG_PROMOTED: u64 = 512;
 const EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL: u64 = 1024;
 const EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC: u64 = 8192;
+const EVAL_REFLECTION_CALLABLE_FLAG_DEPRECATED: u64 = 16384;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
@@ -763,8 +764,11 @@ impl FakeOps {
             owner_kind,
             EVAL_REFLECTION_OWNER_METHOD | EVAL_REFLECTION_OWNER_FUNCTION
         ) {
+            let is_deprecated =
+                self.bool_value((flags & EVAL_REFLECTION_CALLABLE_FLAG_DEPRECATED) != 0)?;
             properties.push(("__parameters".to_string(), method_objects));
             properties.push(("__required_parameter_count".to_string(), modifiers_cell));
+            properties.push(("__is_deprecated".to_string(), is_deprecated));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
             let is_final = self.bool_value((flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL) != 0)?;
