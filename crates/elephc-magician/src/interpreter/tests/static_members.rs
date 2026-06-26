@@ -66,6 +66,38 @@ return EvalStaticBase::baseRead();"#,
     assert_eq!(values.get(result), FakeValue::Int(5));
 }
 
+/// Verifies `isset()` and `empty()` support dynamic static property-name expressions.
+#[test]
+fn execute_program_probes_dynamic_static_property_names() {
+    let program = parse_fragment(
+        br#"class EvalStaticNameProbe {
+    public static $nullish = null;
+    public static $empty = "";
+    public static $value = "x";
+}
+$class = "EvalStaticNameProbe";
+$valueName = "value";
+$nullName = "nullish";
+$emptyName = "empty";
+$missingName = "missing";
+echo isset($class::${$valueName}) ? "set" : "bad"; echo ":";
+echo isset($class::${$nullName}) ? "bad" : "null"; echo ":";
+echo empty($class::${$emptyName}) ? "empty" : "bad"; echo ":";
+echo empty($class::${$valueName}) ? "bad" : "value"; echo ":";
+echo isset($class::${$missingName}) ? "bad" : "missing"; echo ":";
+echo empty($class::${$missingName}) ? "missing-empty" : "bad";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "set:null:empty:value:missing:missing-empty");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies private static property access from global eval scope throws Error.
 #[test]
 fn execute_program_private_eval_static_property_from_global_scope_throws_error() {

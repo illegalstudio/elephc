@@ -709,6 +709,20 @@ pub(in crate::interpreter) fn eval_empty_arg(
         let value = eval_static_property_get_result(&class_name, property, context, values)?;
         return Ok(!values.truthy(value)?);
     }
+    if let EvalExpr::DynamicStaticPropertyNameGet {
+        class_name,
+        property,
+    } = arg
+    {
+        let class_name = eval_expr(class_name, context, scope, values)?;
+        let class_name = eval_dynamic_class_name(class_name, context, values)?;
+        let property = eval_dynamic_member_name(property, context, scope, values)?;
+        if !eval_static_property_isset_result(&class_name, &property, context, values)? {
+            return Ok(true);
+        }
+        let value = eval_static_property_get_result(&class_name, &property, context, values)?;
+        return Ok(!values.truthy(value)?);
+    }
     if let EvalExpr::ArrayGet { array, index } = arg {
         let array = eval_expr(array, context, scope, values)?;
         let index = eval_expr(index, context, scope, values)?;
@@ -774,6 +788,16 @@ pub(in crate::interpreter) fn eval_isset_arg(
         let class_name = eval_expr(class_name, context, scope, values)?;
         let class_name = eval_dynamic_class_name(class_name, context, values)?;
         return eval_static_property_isset_result(&class_name, property, context, values);
+    }
+    if let EvalExpr::DynamicStaticPropertyNameGet {
+        class_name,
+        property,
+    } = arg
+    {
+        let class_name = eval_expr(class_name, context, scope, values)?;
+        let class_name = eval_dynamic_class_name(class_name, context, values)?;
+        let property = eval_dynamic_member_name(property, context, scope, values)?;
+        return eval_static_property_isset_result(&class_name, &property, context, values);
     }
     if let EvalExpr::ArrayGet { array, index } = arg {
         let array = eval_expr(array, context, scope, values)?;
