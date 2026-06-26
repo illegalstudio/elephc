@@ -172,6 +172,29 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionFunction derives `isDeprecated()` from eval-retained attributes.
+#[test]
+fn execute_program_reflection_function_reports_deprecated_attribute() {
+    let program = parse_fragment(
+        br#"#[Deprecated]
+function eval_reflect_deprecated_function() {}
+function eval_reflect_plain_function() {}
+$deprecated = new ReflectionFunction("eval_reflect_deprecated_function");
+$plain = new ReflectionFunction("eval_reflect_plain_function");
+echo $deprecated->isDeprecated() ? "D" : "d"; echo ":";
+echo $plain->isDeprecated() ? "D" : "d";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "D:d");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionFunction exposes PHP-compatible name and origin predicate metadata.
 #[test]
 fn execute_program_reflection_function_reports_name_and_origin_predicates() {

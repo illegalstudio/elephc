@@ -49,6 +49,7 @@ const EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL: u64 = 1024;
 const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET: u64 = 2048;
 const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET: u64 = 4096;
 const EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC: u64 = 8192;
+const EVAL_REFLECTION_CALLABLE_FLAG_DEPRECATED: u64 = 16384;
 const EVAL_REFLECTION_PARAMETER_FLAG_OPTIONAL: u64 = 1;
 const EVAL_REFLECTION_PARAMETER_FLAG_VARIADIC: u64 = 2;
 const EVAL_REFLECTION_PARAMETER_FLAG_BY_REF: u64 = 4;
@@ -201,6 +202,7 @@ enum EvalReflectionFunctionMethodTarget {
         source_location: Option<EvalSourceLocation>,
         is_variadic: bool,
         is_static: bool,
+        is_deprecated: bool,
         return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     },
     Method {
@@ -215,6 +217,7 @@ enum EvalReflectionFunctionMethodTarget {
         is_static: bool,
         is_final: bool,
         is_abstract: bool,
+        is_deprecated: bool,
         return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     },
 }
@@ -1221,10 +1224,15 @@ pub(in crate::interpreter) fn eval_reflection_function_method_metadata_result(
         }
         "isinternal"
         | "isclosure"
-        | "isdeprecated"
         | "returnsreference"
         | "isgenerator"
         | "hastentativereturntype" => eval_reflection_false_metadata_result(evaluated_args, values),
+        "isdeprecated" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            values
+                .bool_value(eval_reflection_function_method_is_deprecated(&target))
+                .map(Some)
+        }
         "isanonymous" => match target {
             EvalReflectionFunctionMethodTarget::Function { .. } => {
                 eval_reflection_false_metadata_result(evaluated_args, values)
@@ -3113,7 +3121,7 @@ fn eval_reflection_function_object_result(
         parameters,
         None,
         None,
-        0,
+        eval_reflection_callable_flags(attributes),
         required_parameter_count as u64,
         0,
         None,
@@ -5567,6 +5575,9 @@ fn eval_reflection_member_object_result(
     if member.is_dynamic {
         flags |= EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC;
     }
+    if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        flags |= eval_reflection_callable_flags(&member.attributes);
+    }
     let owner_modifiers = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
         member.required_parameter_count as u64
     } else {
@@ -6895,13 +6906,14 @@ fn eval_reflection_method_metadata(
                 method.parameter_defaults(),
                 method.parameter_is_variadic(),
             );
-            let flags = eval_reflection_member_flags(
+            let mut flags = eval_reflection_member_flags(
                 method.visibility(),
                 method.is_static(),
                 method.is_final(),
                 method.is_abstract(),
                 false,
             );
+            flags |= eval_reflection_callable_flags(method.attributes());
             let return_type_metadata = method
                 .return_type()
                 .and_then(eval_reflection_parameter_type_metadata);
@@ -6965,13 +6977,14 @@ fn eval_reflection_method_metadata(
                     method.parameter_defaults(),
                     method.parameter_is_variadic(),
                 );
-                let flags = eval_reflection_member_flags(
+                let mut flags = eval_reflection_member_flags(
                     EvalVisibility::Public,
                     method.is_static(),
                     false,
                     true,
                     false,
                 );
+                flags |= eval_reflection_callable_flags(method.attributes());
                 let return_type_metadata = method
                     .return_type()
                     .and_then(eval_reflection_parameter_type_metadata);
@@ -7029,13 +7042,14 @@ fn eval_reflection_method_metadata(
                     method.parameter_defaults(),
                     method.parameter_is_variadic(),
                 );
-                let flags = eval_reflection_member_flags(
+                let mut flags = eval_reflection_member_flags(
                     method.visibility(),
                     method.is_static(),
                     method.is_final(),
                     method.is_abstract(),
                     false,
                 );
+                flags |= eval_reflection_callable_flags(method.attributes());
                 let return_type_metadata = method
                     .return_type()
                     .and_then(eval_reflection_parameter_type_metadata);
@@ -8516,11 +8530,12 @@ fn eval_reflection_function_parameters(
         .iter()
         .map(Option::is_some)
         .collect::<Vec<_>>();
+    let flags = eval_reflection_callable_flags(&function_attributes);
     let declaring_function = EvalReflectionDeclaringFunctionMetadata {
         name: function_name.to_string(),
         declaring_class_name: None,
         attributes: function_attributes,
-        flags: 0,
+        flags,
         required_parameter_count: eval_reflection_required_parameter_count(
             defaults,
             variadic_flags,
@@ -8723,6 +8738,9 @@ fn eval_reflection_function_method_target(
         let static_variables = function
             .map(|function| static_var_initializers(function.body()))
             .unwrap_or_default();
+        let is_deprecated = function
+            .map(EvalFunction::attributes)
+            .is_some_and(eval_reflection_attributes_include_deprecated);
         return Ok(Some(EvalReflectionFunctionMethodTarget::Function {
             name: name.to_string(),
             static_key,
@@ -8731,6 +8749,7 @@ fn eval_reflection_function_method_target(
             source_location,
             is_variadic,
             is_static: false,
+            is_deprecated,
             return_type_metadata,
         }));
     }
@@ -8757,6 +8776,7 @@ fn eval_reflection_function_method_target(
         is_static,
         is_final,
         is_abstract,
+        is_deprecated,
         return_type_metadata,
     ) = match method_metadata {
         Some(method) => {
@@ -8764,6 +8784,8 @@ fn eval_reflection_function_method_target(
                 .parameters
                 .iter()
                 .any(|parameter| parameter.is_variadic);
+            let is_deprecated =
+                eval_reflection_attributes_include_deprecated(&method.attributes);
             (
                 method.parameters,
                 method.source_location,
@@ -8772,10 +8794,11 @@ fn eval_reflection_function_method_target(
                 method.is_static,
                 method.is_final,
                 method.is_abstract,
+                is_deprecated,
                 method.return_type_metadata,
             )
         }
-        None => (Vec::new(), None, None, false, false, false, false, None),
+        None => (Vec::new(), None, None, false, false, false, false, false, None),
     };
     let static_method =
         eval_reflection_eval_method_static_target(declaring_class, method_name, context);
@@ -8801,6 +8824,7 @@ fn eval_reflection_function_method_target(
         is_static,
         is_final,
         is_abstract,
+        is_deprecated,
         return_type_metadata,
     }))
 }
@@ -9023,6 +9047,16 @@ fn eval_reflection_function_method_is_static(target: &EvalReflectionFunctionMeth
     }
 }
 
+/// Returns whether the reflected function-like target carries `#[Deprecated]`.
+fn eval_reflection_function_method_is_deprecated(
+    target: &EvalReflectionFunctionMethodTarget,
+) -> bool {
+    match target {
+        EvalReflectionFunctionMethodTarget::Function { is_deprecated, .. }
+        | EvalReflectionFunctionMethodTarget::Method { is_deprecated, .. } => *is_deprecated,
+    }
+}
+
 /// Returns the retained return type metadata for a reflected function or method.
 fn eval_reflection_function_method_return_type(
     target: &EvalReflectionFunctionMethodTarget,
@@ -9162,6 +9196,22 @@ fn eval_reflection_member_flags(
         flags |= EVAL_REFLECTION_MEMBER_FLAG_READONLY;
     }
     flags
+}
+
+/// Packs callable-only ReflectionFunctionAbstract predicate flags.
+fn eval_reflection_callable_flags(attributes: &[EvalAttribute]) -> u64 {
+    if eval_reflection_attributes_include_deprecated(attributes) {
+        EVAL_REFLECTION_CALLABLE_FLAG_DEPRECATED
+    } else {
+        0
+    }
+}
+
+/// Returns whether an attribute list contains PHP's global `#[Deprecated]` marker.
+fn eval_reflection_attributes_include_deprecated(attributes: &[EvalAttribute]) -> bool {
+    attributes
+        .iter()
+        .any(|attribute| attribute.name().eq_ignore_ascii_case("Deprecated"))
 }
 
 /// Packs ReflectionParameter predicate flags for the runtime parameter factory.

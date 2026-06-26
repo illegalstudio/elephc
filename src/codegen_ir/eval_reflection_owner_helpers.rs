@@ -76,6 +76,8 @@ struct ReflectionOwnerLayout {
     is_internal_hi: Option<usize>,
     is_user_defined_lo: Option<usize>,
     is_user_defined_hi: Option<usize>,
+    is_deprecated_lo: Option<usize>,
+    is_deprecated_hi: Option<usize>,
     modifiers_lo: Option<usize>,
     modifiers_hi: Option<usize>,
     in_namespace_lo: Option<usize>,
@@ -259,6 +261,7 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let is_iterable_lo = reflection_property_offset(info, "__is_iterable");
     let is_internal_lo = reflection_property_offset(info, "__is_internal");
     let is_user_defined_lo = reflection_property_offset(info, "__is_user_defined");
+    let is_deprecated_lo = reflection_property_offset(info, "__is_deprecated");
     let modifiers_lo = reflection_property_offset(info, "__modifiers");
     let in_namespace_lo = reflection_property_offset(info, "__in_namespace");
     let is_static_lo = reflection_property_offset(info, "__is_static");
@@ -344,6 +347,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         is_internal_hi: is_internal_lo.map(|offset| offset + 8),
         is_user_defined_lo,
         is_user_defined_hi: is_user_defined_lo.map(|offset| offset + 8),
+        is_deprecated_lo,
+        is_deprecated_hi: is_deprecated_lo.map(|offset| offset + 8),
         modifiers_lo,
         modifiers_hi: modifiers_lo.map(|offset| offset + 8),
         in_namespace_lo,
@@ -1675,6 +1680,15 @@ fn emit_set_owner_required_parameter_count_property_aarch64(
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "x10", "x9", required_parameter_count_lo);
     abi::emit_store_zero_to_address(emitter, "x9", required_parameter_count_hi);
+    if let (Some(is_deprecated_lo), Some(is_deprecated_hi)) =
+        (layout.is_deprecated_lo, layout.is_deprecated_hi)
+    {
+        emitter.instruction("ldr x10, [sp, #48]");                              // reload ReflectionFunctionAbstract predicate flags
+        emitter.instruction("lsr x10, x10, #14");                               // move the deprecated-callable bit into position
+        emitter.instruction("and x10, x10, #1");                                // extract the deprecated-callable flag as a boolean
+        abi::emit_store_to_address(emitter, "x10", "x9", is_deprecated_lo);
+        abi::emit_store_zero_to_address(emitter, "x9", is_deprecated_hi);
+    }
 }
 
 /// Stores incoming x86_64 ReflectionMethod required-parameter count.
@@ -1692,6 +1706,15 @@ fn emit_set_owner_required_parameter_count_property_x86_64(
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the Reflection owner object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", required_parameter_count_lo);
     abi::emit_store_zero_to_address(emitter, "r10", required_parameter_count_hi);
+    if let (Some(is_deprecated_lo), Some(is_deprecated_hi)) =
+        (layout.is_deprecated_lo, layout.is_deprecated_hi)
+    {
+        emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                   // reload ReflectionFunctionAbstract predicate flags
+        emitter.instruction("shr rax, 14");                                     // move the deprecated-callable bit into position
+        emitter.instruction("and rax, 1");                                      // extract the deprecated-callable flag as a boolean
+        abi::emit_store_to_address(emitter, "rax", "r10", is_deprecated_lo);
+        abi::emit_store_zero_to_address(emitter, "r10", is_deprecated_hi);
+    }
 }
 
 /// Stores incoming ARM64 ReflectionParameter position and predicate flags.

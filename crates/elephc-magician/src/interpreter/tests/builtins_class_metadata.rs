@@ -477,6 +477,31 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionMethod derives `isDeprecated()` from eval-retained attributes.
+#[test]
+fn execute_program_reflection_method_reports_deprecated_attribute() {
+    let program = parse_fragment(
+        br#"class EvalReflectDeprecatedMethodTarget {
+    #[\Deprecated]
+    public function old() {}
+    public function fresh() {}
+}
+$deprecated = new ReflectionMethod(EvalReflectDeprecatedMethodTarget::class, "old");
+$plain = new ReflectionMethod(EvalReflectDeprecatedMethodTarget::class, "fresh");
+echo $deprecated->isDeprecated() ? "D" : "d"; echo ":";
+echo $plain->isDeprecated() ? "D" : "d";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "D:d");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionMethod exposes eval static locals using the declaring class key.
 #[test]
 fn execute_program_reflection_method_reports_static_variables() {
