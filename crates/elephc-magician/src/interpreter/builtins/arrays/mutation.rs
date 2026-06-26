@@ -18,20 +18,11 @@ pub(in crate::interpreter) fn eval_builtin_settype_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (var_name, type_name) = eval_settype_direct_args(args, context, scope, values)?;
-    let value = visible_scope_cell(context, scope, &var_name).map_or_else(|| values.null(), Ok)?;
+    let (value, target, type_name) = eval_settype_direct_args(args, context, scope, values)?;
     let Some(converted) = eval_settype_cast_value(value, type_name, values)? else {
         return values.bool_value(false);
     };
-    for replaced in set_scope_cell(
-        context,
-        scope,
-        var_name,
-        converted,
-        ScopeCellOwnership::Owned,
-    )? {
-        values.release(replaced)?;
-    }
+    eval_settype_write_ref_target(&target, converted, context, values)?;
     values.bool_value(true)
 }
 
@@ -41,8 +32,8 @@ pub(in crate::interpreter) fn eval_settype_direct_args(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
-) -> Result<(String, RuntimeCellHandle), EvalStatus> {
-    let mut var_name = None;
+) -> Result<(RuntimeCellHandle, EvalReferenceTarget, RuntimeCellHandle), EvalStatus> {
+    let mut var_target = None;
     let mut type_name = None;
     let mut positional_index = 0;
     let mut saw_named = false;
@@ -69,13 +60,12 @@ pub(in crate::interpreter) fn eval_settype_direct_args(
 
         match parameter {
             "var" => {
-                if var_name.is_some() {
+                if var_target.is_some() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                let EvalExpr::LoadVar(name) = arg.value() else {
-                    return Err(EvalStatus::RuntimeFatal);
-                };
-                var_name = Some(name.clone());
+                let (value, target) = eval_call_arg_value(arg.value(), context, scope, values)?;
+                let target = target.ok_or(EvalStatus::RuntimeFatal)?;
+                var_target = Some((value, target));
             }
             "type" => {
                 if type_name.is_some() {
@@ -87,9 +77,36 @@ pub(in crate::interpreter) fn eval_settype_direct_args(
         }
     }
 
-    let var_name = var_name.ok_or(EvalStatus::RuntimeFatal)?;
+    let (value, target) = var_target.ok_or(EvalStatus::RuntimeFatal)?;
     let type_name = type_name.ok_or(EvalStatus::RuntimeFatal)?;
-    Ok((var_name, type_name))
+    Ok((value, target, type_name))
+}
+
+/// Writes a direct `settype()` result back to the captured caller lvalue.
+fn eval_settype_write_ref_target(
+    target: &EvalReferenceTarget,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    match target {
+        EvalReferenceTarget::Variable { scope, name } => {
+            let Some(scope) = (unsafe { scope.as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            for replaced in set_scope_cell(
+                context,
+                scope,
+                name.clone(),
+                value,
+                ScopeCellOwnership::Owned,
+            )? {
+                values.release(replaced)?;
+            }
+            Ok(())
+        }
+        _ => write_back_method_ref_target(target, value, context, values),
+    }
 }
 
 /// Applies the eval-supported `settype()` scalar target conversion.

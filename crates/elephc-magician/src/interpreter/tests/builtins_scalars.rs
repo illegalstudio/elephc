@@ -151,6 +151,25 @@ echo ":";
 $z = 3.8;
 echo call_user_func("settype", $z, "integer") ? gettype($z) . ":" . $z : "bad";
 echo ":";
+$items = ["k" => "6"];
+echo settype($items["k"], "integer") ? gettype($items["k"]) . ":" . $items["k"] : "bad";
+echo ":";
+class EvalSettypePropertyBox {
+    public $value = 42;
+    public static $staticValue = "5";
+}
+$box = new EvalSettypePropertyBox();
+echo settype($box->value, "string") ? gettype($box->value) . ":" . $box->value : "bad";
+echo ":";
+$name = "value";
+echo settype($box->{$name}, "integer") ? gettype($box->value) . ":" . $box->value : "bad";
+echo ":";
+echo settype(EvalSettypePropertyBox::$staticValue, "integer") ? gettype(EvalSettypePropertyBox::$staticValue) . ":" . EvalSettypePropertyBox::$staticValue : "bad";
+echo ":";
+$class = "EvalSettypePropertyBox";
+$staticName = "staticValue";
+echo settype($class::${$staticName}, "bool") ? gettype(EvalSettypePropertyBox::$staticValue) . ":" . (EvalSettypePropertyBox::$staticValue ? "true" : "false") : "bad";
+echo ":";
 return function_exists("settype");"#,
     )
     .expect("parse eval fragment");
@@ -161,7 +180,7 @@ return function_exists("settype");"#,
 
     assert_eq!(
         values.output,
-        "string:42:boolean:false:integer:0:double:3.8:"
+        "string:42:boolean:false:integer:0:double:3.8:integer:6:string:42:integer:42:integer:5:boolean:true:"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
     assert_eq!(
