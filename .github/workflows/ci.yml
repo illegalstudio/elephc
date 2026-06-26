@@ -240,6 +240,34 @@ jobs:
       - name: Run codegen test shard
         run: cargo nextest run --profile ci --archive-file nextest-archive.tar.zst -E 'binary(codegen_tests)' --partition hash:${{ matrix.shard }}/16 --no-fail-fast --retries 1 --flaky-result pass -j ${{ matrix.platform.nextest_jobs }}
 
+  # Linux musl (Alpine/musl via Docker) — fidelity gate. The glibc fan-out
+  # above is fast, but float formatting and other libc-sensitive runtime paths
+  # differ under musl. Reuse the canonical scripts/test-linux-*.sh developers
+  # run locally: the checkout runs on the glibc host (JavaScript actions do not
+  # run inside a musl container), then the script builds the rust:1.95-alpine
+  # image and runs the full cargo test suite in the container. Native arch on
+  # both runners, so --platform linux/{amd64,arm64} does not emulate.
+  linux-musl-tests:
+    name: Linux musl Full Suite (${{ matrix.arch.name }})
+    runs-on: ${{ matrix.arch.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - { name: x86_64, runner: ubuntu-24.04, script: test-linux-x86_64.sh }
+          - { name: aarch64, runner: ubuntu-24.04-arm, script: test-linux-arm64.sh }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run full test suite in Alpine/musl Docker
+        run: ./scripts/${{ matrix.arch.script }}
+        env:
+          # The script defaults to serial (RUST_TEST_THREADS=1) for emulated
+          # local runs; native CI runners can safely parallelize isolated
+          # codegen tests.
+          ELEPHC_TEST_THREADS: "4"
+
   image-api-sync:
     name: Image API stubs in sync
     runs-on: ubuntu-latest
@@ -297,6 +325,7 @@ jobs:
       - build
       - non-codegen-tests
       - codegen-tests
+      - linux-musl-tests
       - image-api-sync
       - builtins-docs-sync
     if: always()
@@ -306,6 +335,7 @@ jobs:
           test "${{ needs.build.result }}" = "success"
           test "${{ needs.non-codegen-tests.result }}" = "success"
           test "${{ needs.codegen-tests.result }}" = "success"
+          test "${{ needs.linux-musl-tests.result }}" = "success"
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
 
