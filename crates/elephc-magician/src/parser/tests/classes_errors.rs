@@ -298,6 +298,31 @@ fn parse_fragment_accepts_legacy_var_properties() {
     );
 }
 
+/// Verifies legacy `var` property syntax also works inside eval traits.
+#[test]
+fn parse_fragment_accepts_legacy_var_trait_properties() {
+    let program = parse_fragment(
+        br#"trait DynEvalVarTrait {
+    var ?int $count = null;
+}"#,
+    )
+    .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::TraitDecl(EvalTrait::new(
+            "DynEvalVarTrait",
+            vec![
+                EvalClassProperty::new("count", Some(EvalExpr::Const(EvalConst::Null)))
+                    .with_type(Some(EvalParameterType::new(
+                        vec![EvalParameterTypeVariant::Int],
+                        true
+                    )))
+            ],
+            Vec::new(),
+        ))]
+    );
+}
+
 /// Verifies legacy `var` cannot be combined with other property modifiers.
 #[test]
 fn parse_fragment_rejects_legacy_var_modifier_combinations() {

@@ -7309,13 +7309,18 @@ echo get_class($parent); echo ":"; echo $parent->label;');
 fn test_eval_declared_legacy_var_properties() {
     let out = compile_and_run(
         r#"<?php
-eval('class EvalLegacyVarProperty {
+eval('trait EvalLegacyVarTrait {
+    var ?string $label = "trait";
+}
+class EvalLegacyVarProperty {
+    use EvalLegacyVarTrait;
     var $plain = "p";
     var ?int $count = null;
 }
 $object = new EvalLegacyVarProperty();
 $plain = new ReflectionProperty("EvalLegacyVarProperty", "plain");
 $count = new ReflectionProperty("EvalLegacyVarProperty", "count");
+$label = new ReflectionProperty("EvalLegacyVarProperty", "label");
 $defaults = (new ReflectionClass("EvalLegacyVarProperty"))->getDefaultProperties();
 echo $object->plain; echo ":";
 echo $plain->isPublic() ? "P" : "p"; echo ":";
@@ -7323,10 +7328,13 @@ echo $plain->hasType() ? "T" : "t"; echo ":";
 echo $count->isPublic() ? "C" : "c"; echo ":";
 echo $count->hasType() ? $count->getType()->getName() : "none"; echo ":";
 echo $count->getType()->allowsNull() ? "N" : "n"; echo ":";
-echo is_null($defaults["count"]) ? "null" : "bad";');
+echo is_null($defaults["count"]) ? "null" : "bad"; echo ":";
+echo $object->label; echo ":";
+echo $label->isPublic() ? "L" : "l"; echo ":";
+echo $label->getType()->getName();');
 "#,
     );
-    assert_eq!(out, "p:P:t:C:int:N:null");
+    assert_eq!(out, "p:P:t:C:int:N:null:trait:L:string");
 }
 
 /// Verifies native callable probes can see functions declared by eval after the barrier.
