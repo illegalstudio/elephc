@@ -765,9 +765,9 @@ fn eval_callable_probe_exists(
         EvaluatedCallable::ObjectMethod { object, method } => {
             eval_object_method_callable_probe(*object, method, context, values)
         }
-        EvaluatedCallable::StaticMethod { class_name, method } => Ok(
-            eval_static_method_callable_probe(class_name, method, context),
-        ),
+        EvaluatedCallable::StaticMethod { class_name, method } => {
+            eval_static_method_callable_probe(class_name, method, context, values)
+        }
     }
 }
 
@@ -782,7 +782,7 @@ fn eval_object_method_callable_probe(
         return Ok(false);
     };
     let Some(class) = context.dynamic_object_class(identity) else {
-        return Ok(false);
+        return eval_aot_object_method_callable_probe(object, method_name, context, values);
     };
     if eval_enum_static_builtin_applies(class.name(), method_name, context).is_some() {
         return Ok(true);
@@ -810,18 +810,94 @@ fn eval_static_method_callable_probe(
     class_name: &str,
     method_name: &str,
     context: &ElephcEvalContext,
-) -> bool {
-    if eval_enum_static_builtin_applies(class_name, method_name, context).is_some() {
-        return true;
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let class_name = resolve_eval_static_member_class_name(class_name, context)?;
+    if eval_enum_static_builtin_applies(&class_name, method_name, context).is_some() {
+        return Ok(true);
     }
-    let Some((declaring_class, method)) = context.class_method(class_name, method_name) else {
-        return eval_static_magic_method_callable_probe(class_name, context);
+    if let Some((declaring_class, method)) = context.class_method(&class_name, method_name) {
+        if !method.is_static() || method.is_abstract() {
+            return Ok(false);
+        }
+        return Ok(validate_eval_member_access(&declaring_class, method.visibility(), context)
+            .is_ok()
+            || eval_static_magic_method_callable_probe(&class_name, context));
+    }
+    if context.has_class(&class_name)
+        || context.has_interface(&class_name)
+        || context.has_trait(&class_name)
+        || context.has_enum(&class_name)
+    {
+        return Ok(eval_static_magic_method_callable_probe(&class_name, context));
+    }
+    eval_aot_static_method_callable_probe(&class_name, method_name, context, values)
+}
+
+/// Returns whether a generated/AOT object method can be called from the current eval scope.
+fn eval_aot_object_method_callable_probe(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let class_name = runtime_object_class_name(object, values)?;
+    let Some((declaring_class, visibility, _, is_abstract)) =
+        eval_aot_method_dispatch_metadata_in_hierarchy(&class_name, method_name, context, values)?
+    else {
+        return eval_aot_instance_magic_method_callable_probe(&class_name, context, values);
     };
-    if !method.is_static() || method.is_abstract() {
-        return false;
+    if is_abstract {
+        return Ok(false);
     }
-    validate_eval_member_access(&declaring_class, method.visibility(), context).is_ok()
-        || eval_static_magic_method_callable_probe(class_name, context)
+    Ok(validate_eval_member_access(&declaring_class, visibility, context).is_ok()
+        || eval_aot_instance_magic_method_callable_probe(&class_name, context, values)?)
+}
+
+/// Returns whether a generated/AOT static method can be called from the current eval scope.
+fn eval_aot_static_method_callable_probe(
+    class_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some((declaring_class, visibility, is_static, is_abstract)) =
+        eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?
+    else {
+        return eval_aot_static_magic_method_callable_probe(class_name, context, values);
+    };
+    if !is_static || is_abstract {
+        return Ok(false);
+    }
+    Ok(validate_eval_member_access(&declaring_class, visibility, context).is_ok()
+        || eval_aot_static_magic_method_callable_probe(class_name, context, values)?)
+}
+
+/// Returns whether a generated/AOT class has a callable instance `__call()` fallback.
+fn eval_aot_instance_magic_method_callable_probe(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(eval_aot_method_dispatch_metadata_in_hierarchy(class_name, "__call", context, values)?
+        .is_some_and(|(_, _, is_static, is_abstract)| !is_static && !is_abstract))
+}
+
+/// Returns whether a generated/AOT class has a callable static `__callStatic()` fallback.
+fn eval_aot_static_magic_method_callable_probe(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(
+        eval_aot_method_dispatch_metadata_in_hierarchy(
+            class_name,
+            "__callStatic",
+            context,
+            values,
+        )?
+        .is_some_and(|(_, _, is_static, is_abstract)| is_static && !is_abstract),
+    )
 }
 
 /// Returns whether an eval class has a callable instance `__call()` fallback.
