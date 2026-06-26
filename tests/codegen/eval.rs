@@ -8912,6 +8912,59 @@ TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, no
     );
 }
 
+/// Verifies eval call_user_func validates method callable arrays for AOT classes too.
+#[test]
+fn test_eval_call_user_func_rejects_invalid_aot_method_callable_arrays() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotMissingCallbackArray {}
+class EvalAotPrivateCallbackArray {
+    private function hidden() {
+        return "bad";
+    }
+}
+class EvalAotInstanceCallbackArray {
+    public function inst() {
+        return "bad";
+    }
+}
+
+eval('$missing = new EvalAotMissingCallbackArray();
+try {
+    call_user_func([$missing, "missing"]);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    call_user_func([new EvalAotPrivateCallbackArray(), "hidden"]);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+try {
+    call_user_func_array(["EvalAotInstanceCallbackArray", "inst"], []);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, class EvalAotMissingCallbackArray does not have a method \"missing\"|\
+TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method EvalAotPrivateCallbackArray::hidden()|\
+TypeError:call_user_func_array(): Argument #1 ($callback) must be a valid callback, non-static method EvalAotInstanceCallbackArray::inst() cannot be called statically"
+    );
+}
+
 /// Verifies eval callable arrays use `__call` and `__callStatic` magic fallbacks.
 #[test]
 fn test_eval_call_user_func_method_callable_arrays_use_magic_fallbacks() {
