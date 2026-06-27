@@ -2476,6 +2476,17 @@ fn lower_static_property_array_push(
 
     let property_value = load_static_property(ctx, receiver, property, span);
     let value = lower_expr(ctx, value);
+    if static_property_may_be_eval_dynamic(ctx, receiver) {
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![property_value.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+        store_static_property(ctx, receiver, property, property_value.value, span);
+        return;
+    }
     ctx.emit_void(
         Op::RuntimeCall,
         vec![property_value.value, value.value],
@@ -2523,6 +2534,17 @@ fn lower_static_property_array_assign(
     };
     let index = lower_expr(ctx, index);
     let value = lower_expr(ctx, value);
+    if static_property_may_be_eval_dynamic(ctx, receiver) {
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![property_value.value, index.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        store_static_property(ctx, receiver, property, property_value.value, span);
+        return;
+    }
     ctx.emit_void(
         Op::RuntimeCall,
         vec![property_value.value, index.value, value.value],
@@ -2530,6 +2552,20 @@ fn lower_static_property_array_assign(
         effects_lookup::runtime_effects(),
         Some(span),
     );
+}
+
+/// Returns true when a named static-property receiver may resolve through eval metadata.
+fn static_property_may_be_eval_dynamic(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+) -> bool {
+    let StaticReceiver::Named(class_name) = receiver else {
+        return false;
+    };
+    ctx.has_eval_barrier()
+        && !ctx
+            .classes
+            .contains_key(class_name.as_str().trim_start_matches('\\'))
 }
 
 /// Lowers `$object->prop[] = value`.

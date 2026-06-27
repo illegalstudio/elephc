@@ -19148,6 +19148,28 @@ echo DynEvalNativeStaticWriteChild::$count;
     assert_eq!(out, "new:7");
 }
 
+/// Verifies native static property array writes update eval-declared classes after the barrier.
+#[test]
+fn test_eval_declared_class_native_static_property_array_write_after_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class DynEvalNativeStaticArrayWrite {
+    public static $items = [1];
+    public static $map = ["a" => "old"];
+}');
+DynEvalNativeStaticArrayWrite::$items[] = 4;
+DynEvalNativeStaticArrayWrite::$items[0] = 5;
+DynEvalNativeStaticArrayWrite::$map["a"] = "new";
+DynEvalNativeStaticArrayWrite::$map["b"] = "bee";
+echo DynEvalNativeStaticArrayWrite::$items[0] . ":";
+echo DynEvalNativeStaticArrayWrite::$items[1] . ":";
+echo DynEvalNativeStaticArrayWrite::$map["a"] . ":";
+echo DynEvalNativeStaticArrayWrite::$map["b"];
+"#,
+    );
+    assert_eq!(out, "5:4:new:bee");
+}
+
 /// Verifies eval class declarations from a namespace are registered globally.
 #[test]
 fn test_eval_declared_class_in_namespace_is_global() {
