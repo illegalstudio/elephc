@@ -9,7 +9,7 @@
 //! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{ClassProperty, Visibility};
+use crate::parser::ast::{ClassProperty, Expr, ExprKind, Visibility};
 use crate::span::Span;
 use crate::types::traits::FlattenedClass;
 use crate::types::PhpType;
@@ -101,7 +101,7 @@ fn apply_static_property(
             &format!("Static property {}::${} default", class.name, prop.name),
         )?;
         state.declared_static_properties.insert(prop.name.clone());
-        declared_ty
+        refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         state.declared_static_properties.remove(&prop.name);
         infer_expr_type_syntactic(default)
@@ -255,7 +255,7 @@ fn apply_instance_property(
             &format!("Property {}::${} default", class.name, prop.name),
         )?;
         state.declared_properties.insert(prop.name.clone());
-        declared_ty
+        refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         infer_expr_type_syntactic(default)
     } else {
@@ -348,7 +348,7 @@ fn apply_instance_property_redeclaration(
             &format!("Property {}::${} default", class.name, prop.name),
         )?;
         state.declared_properties.insert(prop.name.clone());
-        declared_ty
+        refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         infer_expr_type_syntactic(default)
     } else {
@@ -635,7 +635,7 @@ where
         )),
         (true, Some(child)) => {
             let parent = parent_ty();
-            if &parent != child {
+            if !php_property_types_invariant(&parent, child) {
                 return Err(CompileError::new(
                     span,
                     &format!(
@@ -648,6 +648,39 @@ where
         }
         (false, None) => Ok(()),
     }
+}
+
+/// Reports whether `ty` is one of elephc's PHP `array` storage shapes. The compiler internally
+/// splits the single PHP `array` hint into integer-keyed `Array` (list) and `AssocArray` (hash)
+/// storage; both correspond to the same PHP-visible `array` type.
+fn is_php_array_family(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+}
+
+/// Checks PHP property-type invariance between a parent and child redeclaration. Property types
+/// are invariant in PHP, but both `Array` and `AssocArray` (and any element/value refinement of
+/// them) denote the same PHP `array` hint, so any two array-family types are treated as invariant.
+/// This keeps associative-default refinement from spuriously rejecting a redeclared `array`
+/// property whose default has a different element shape.
+fn php_property_types_invariant(parent: &PhpType, child: &PhpType) -> bool {
+    if is_php_array_family(parent) && is_php_array_family(child) {
+        return true;
+    }
+    parent == child
+}
+
+/// Refines a declared generic `array` property type using its default value. PHP's `array` hint is
+/// ambiguous between list and hash storage; an associative literal default (`['a' => 1]`) is stored
+/// as `AssocArray` so string-key access type-checks, mirroring how untyped associative-default
+/// properties are inferred. Non-array hints, missing defaults, and positional/empty array defaults
+/// keep the declared type unchanged.
+fn refine_declared_array_type_from_default(declared_ty: PhpType, default: Option<&Expr>) -> PhpType {
+    if let (PhpType::Array(_), Some(default)) = (&declared_ty, default) {
+        if matches!(default.kind, ExprKind::ArrayLiteralAssoc(_)) {
+            return infer_expr_type_syntactic(default);
+        }
+    }
+    declared_ty
 }
 
 /// Resolves the declared type for a property from its `type_expr` using

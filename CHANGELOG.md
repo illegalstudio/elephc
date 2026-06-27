@@ -3,6 +3,9 @@
 All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
+## [Unreleased]
+- Fixed associative-array property defaults (issue #407): a typed `array` (or untyped) property initialized with an associative literal such as `['a' => 1]` is now stored as associative (hash) storage, so string-key reads and writes (`$this->data['a']`, `$this->data[$key]`) type-check and run instead of failing with "Array index must be integer". The EIR backend also lowers string-keyed associative literal defaults for instance and static properties instead of rejecting them as an unsupported `object_new` feature.
+
 ## [0.25.2] - 2026-06-26
 - `--web`: compile a PHP program into a standalone prefork HTTP server binary with per-request top-level execution, `echo`/`print` response bodies, `$_SERVER`/`$_GET`/`$_POST` and `php://input` request input, PHP-compatible `http_response_code()`/`header()` handling, configurable listen address/workers/body limit, clean signal shutdown, worker respawn, bounded keep-alive handling, fixed-heap request cleanup, and full sharded CI coverage across macOS ARM64, Linux x86_64, and Linux ARM64.
 - Fixed a heap leak when releasing string-keyed associative arrays (issue #408): promoting an indexed array to hash storage (`array_to_hash`) built the result hash from a copy of the source array but never freed that source array, leaking one allocation per conversion. Reassigning an assoc array in a loop — or, under `--web`, rebuilding the request superglobals each request — slowly exhausted the heap. The conversion now releases the temporary source array, so the heap stays flat.
@@ -402,6 +405,7 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.25.2...HEAD
 [0.25.2]: https://github.com/illegalstudio/elephc/compare/v0.25.1...v0.25.2
 [0.25.1]: https://github.com/illegalstudio/elephc/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/illegalstudio/elephc/compare/v0.24.3...v0.25.0

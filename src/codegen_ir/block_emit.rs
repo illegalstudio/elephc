@@ -653,9 +653,9 @@ fn emit_static_property_default_value(
         }
         LiteralDefaultValue::AssocArray {
             value_type,
-            elements,
+            entries,
         } => {
-            emit_assoc_array_literal_default_to_result(ctx, value_type, elements)?;
+            emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
         }
         LiteralDefaultValue::EmptyAssocArray { value_type } => {
             emit_empty_assoc_array_literal_to_result(ctx, value_type);
