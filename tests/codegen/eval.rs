@@ -12382,6 +12382,41 @@ eval('class EvalOverrideMissing {
     );
 }
 
+/// Verifies eval-declared interface `#[Override]` methods require parent methods.
+#[test]
+fn test_eval_declared_interface_override_attribute_validation() {
+    let out = compile_and_run(
+        r#"<?php
+eval('interface EvalIfaceOverrideParent {
+    public function label(): string;
+}
+interface EvalIfaceOverrideChild extends EvalIfaceOverrideParent {
+    #[\Override]
+    public function label(): string;
+}
+class EvalIfaceOverrideImpl implements EvalIfaceOverrideChild {
+    public function label(): string { return "child"; }
+}
+$box = new EvalIfaceOverrideImpl();
+echo $box->label();');
+"#,
+    );
+    assert_eq!(out, "child");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('interface EvalIfaceOverrideMissing {
+    #[\Override]
+    public function missing(): string;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval rejects global builtin attributes on unsupported OOP targets.
 #[test]
 fn test_eval_declared_builtin_attribute_target_validation() {

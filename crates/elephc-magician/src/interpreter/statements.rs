@@ -1855,6 +1855,7 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
         }
     }
     validate_eval_interface_attribute_targets(interface)?;
+    validate_eval_interface_override_attributes(interface, context)?;
     validate_eval_declared_constants(interface.constants())?;
     validate_eval_interface_constants(interface.constants())?;
     validate_interface_constant_parent_redeclarations(interface, context)?;
@@ -2628,6 +2629,41 @@ fn validate_eval_interface_attribute_targets(
     Ok(())
 }
 
+/// Validates PHP's global `#[Override]` marker on eval-declared interface methods.
+fn validate_eval_interface_override_attributes(
+    interface: &EvalInterface,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    let parent_requirements = eval_interface_parent_method_requirements(interface, context);
+    for method in interface.methods() {
+        if !eval_interface_method_has_global_builtin_attribute(method, "Override") {
+            continue;
+        }
+        if !parent_requirements.iter().any(|(_, requirement)| {
+            requirement.name().eq_ignore_ascii_case(method.name())
+                && requirement.is_static() == method.is_static()
+        }) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
+}
+
+/// Returns method requirements inherited by one eval interface declaration.
+fn eval_interface_parent_method_requirements(
+    interface: &EvalInterface,
+    context: &ElephcEvalContext,
+) -> Vec<(String, EvalInterfaceMethod)> {
+    let mut requirements = Vec::new();
+    for parent in interface.parents() {
+        if context.has_interface(parent) {
+            requirements.extend(context.interface_method_requirements_with_owners(parent));
+        }
+        requirements.extend(builtin_interface_method_requirements(parent));
+    }
+    requirements
+}
+
 /// Rejects builtin attributes that cannot target eval-declared traits.
 fn validate_eval_trait_attribute_targets(trait_decl: &EvalTrait) -> Result<(), EvalStatus> {
     validate_eval_non_class_attribute_targets(trait_decl.attributes())?;
@@ -2720,6 +2756,14 @@ fn validate_eval_override_attribute(
 
 /// Returns whether a method has a global builtin marker attribute.
 fn eval_method_has_global_builtin_attribute(method: &EvalClassMethod, builtin: &str) -> bool {
+    eval_attributes_have_global_builtin_attribute(method.attributes(), builtin)
+}
+
+/// Returns whether an interface method has a global builtin marker attribute.
+fn eval_interface_method_has_global_builtin_attribute(
+    method: &EvalInterfaceMethod,
+    builtin: &str,
+) -> bool {
     eval_attributes_have_global_builtin_attribute(method.attributes(), builtin)
 }
 

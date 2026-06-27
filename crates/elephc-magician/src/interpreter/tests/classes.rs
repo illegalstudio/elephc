@@ -941,6 +941,46 @@ echo $box->name() . ":" . $box->label();"#,
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies interface `#[Override]` methods require an inherited interface method.
+#[test]
+fn execute_program_validates_interface_override_attribute_targets() {
+    let valid = parse_fragment(
+        br#"interface EvalIfaceOverrideParent {
+    public function label(): string;
+}
+interface EvalIfaceOverrideChild extends EvalIfaceOverrideParent {
+    #[\Override]
+    public function label(): string;
+}
+class EvalIfaceOverrideImpl implements EvalIfaceOverrideChild {
+    public function label(): string { return "child"; }
+}
+$box = new EvalIfaceOverrideImpl();
+echo $box->label();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&valid, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "child");
+
+    let invalid = parse_fragment(
+        br#"interface EvalIfaceOverrideMissing {
+    #[\Override]
+    public function missing(): string;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&invalid, &mut scope, &mut values)
+        .expect_err("interface override marker without parent method should fail");
+
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval rejects global builtin attributes on unsupported OOP targets.
 #[test]
 fn execute_program_rejects_invalid_builtin_attribute_targets() {
