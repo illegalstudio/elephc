@@ -8,7 +8,9 @@
 //! Key details:
 //! - This slice supports public scalar/string/array/object static properties with
 //!   named, lexical `self`, and lexical `parent` receivers, but not late static
-//!   binding, references, or non-indexed array mutation.
+//!   references or non-indexed array mutation.
+//! - `static::` receivers use native class-id branches for generated classes and
+//!   the eval native-frame override when late static scope points at an eval class.
 //! - Typed static properties use the same high-word uninitialized sentinel as
 //!   the emitted code before reads.
 
@@ -54,15 +56,24 @@ pub(super) fn lower_load_static_property(
     }
     let slot = resolve_static_property_slot(ctx, inst, true)?;
     ensure_static_property_type_supported(&slot.php_type, inst)?;
+    let eval_done_label = emit_eval_native_frame_static_property_get_if_needed(ctx, inst, &slot)?;
     if slot.late_bound && !slot.branches.is_empty() {
         let class_id_reg = class_id_work_reg(ctx.emitter);
         if emit_called_class_id_to_reg(ctx, class_id_reg)? {
             emit_dynamic_load_static_property_result(ctx, &slot, class_id_reg)?;
-            return store_if_result(ctx, inst);
+            store_if_result(ctx, inst)?;
+            if let Some(done_label) = eval_done_label {
+                ctx.emitter.label(&done_label);
+            }
+            return Ok(());
         }
     }
     emit_direct_load_static_property_result(ctx, &slot);
-    store_if_result(ctx, inst)
+    store_if_result(ctx, inst)?;
+    if let Some(done_label) = eval_done_label {
+        ctx.emitter.label(&done_label);
+    }
+    Ok(())
 }
 
 /// Returns an eval dynamic static-property target when no AOT class owns the receiver.
@@ -101,16 +112,24 @@ pub(super) fn lower_store_static_property(
     ensure_static_property_type_supported(&slot.php_type, inst)?;
     let value_ty = ctx.value_php_type(value)?;
     ensure_static_property_value_supported(&slot, &value_ty, inst)?;
-    load_static_property_store_value_to_result(ctx, value, &slot.php_type)?;
     let release_previous = !value_is_same_static_property_load(ctx, value, &slot)?;
+    let eval_done_label =
+        emit_eval_native_frame_static_property_set_if_needed(ctx, inst, value, &slot)?;
+    load_static_property_store_value_to_result(ctx, value, &slot.php_type)?;
     if slot.late_bound && !slot.branches.is_empty() {
         let class_id_reg = class_id_work_reg(ctx.emitter);
         if emit_called_class_id_to_reg(ctx, class_id_reg)? {
             emit_dynamic_store_static_property_result(ctx, &slot, class_id_reg, release_previous);
+            if let Some(done_label) = eval_done_label {
+                ctx.emitter.label(&done_label);
+            }
             return Ok(());
         }
     }
     emit_direct_store_static_property_result(ctx, &slot, release_previous);
+    if let Some(done_label) = eval_done_label {
+        ctx.emitter.label(&done_label);
+    }
     Ok(())
 }
 
@@ -321,6 +340,56 @@ fn emit_called_class_id_to_reg(
     let offset = ctx.local_offset(slot)?;
     abi::load_at_offset(ctx.emitter, dest_reg, offset);
     Ok(true)
+}
+
+/// Emits an eval late-static override read before falling back to native slots.
+fn emit_eval_native_frame_static_property_get_if_needed(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    slot: &StaticPropertySlot,
+) -> Result<Option<String>> {
+    if !slot.late_bound || !ctx.module.required_runtime_features.eval {
+        return Ok(None);
+    }
+    let frame_class = super::current_method_class(ctx)?.to_string();
+    let no_override_label = ctx.next_label("eval_late_static_prop_get_no_override");
+    let done_label = ctx.next_label("eval_late_static_prop_get_done");
+    builtins::lower_eval_native_frame_static_property_get(
+        ctx,
+        inst,
+        &frame_class,
+        &slot.property,
+        &no_override_label,
+        &done_label,
+    )?;
+    ctx.emitter.label(&no_override_label);
+    Ok(Some(done_label))
+}
+
+/// Emits an eval late-static override write before falling back to native slots.
+fn emit_eval_native_frame_static_property_set_if_needed(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+    slot: &StaticPropertySlot,
+) -> Result<Option<String>> {
+    if !slot.late_bound || !ctx.module.required_runtime_features.eval {
+        return Ok(None);
+    }
+    let frame_class = super::current_method_class(ctx)?.to_string();
+    let no_override_label = ctx.next_label("eval_late_static_prop_set_no_override");
+    let done_label = ctx.next_label("eval_late_static_prop_set_done");
+    builtins::lower_eval_native_frame_static_property_set(
+        ctx,
+        inst,
+        value,
+        &frame_class,
+        &slot.property,
+        &no_override_label,
+        &done_label,
+    )?;
+    ctx.emitter.label(&no_override_label);
+    Ok(Some(done_label))
 }
 
 /// Emits a late-bound static property read selected by the runtime called-class id.

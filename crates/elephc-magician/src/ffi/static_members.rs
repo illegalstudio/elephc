@@ -7,6 +7,7 @@
 //! - Generated EIR backend assembly through `__elephc_eval_class_constant_fetch`.
 //! - Generated EIR backend assembly through `__elephc_eval_static_property_get`.
 //! - Generated EIR backend assembly through `__elephc_eval_static_property_set`.
+//! - Generated AOT frames through the native-frame late-static property hooks.
 //!
 //! Key details:
 //! - Returned value cells are retained before crossing back to generated code.
@@ -14,6 +15,7 @@
 
 use super::util::{abi_name_to_string, clear_result, write_outcome};
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
+use crate::context::native_frame_called_class_override_context;
 use crate::errors::EvalStatus;
 use crate::interpreter::{self, EvalOutcome, RuntimeValueOps};
 use crate::runtime_hooks::ElephcRuntimeOps;
@@ -61,6 +63,32 @@ pub unsafe extern "C" fn __elephc_eval_static_property_get(
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
+/// Reads a static property through an active eval late-static native-frame override.
+///
+/// # Safety
+/// The frame class and property name byte ranges must be readable when their
+/// lengths are non-zero, and `out` may be null. Returns `-1` when no matching
+/// native-frame override is active.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_native_frame_static_property_get(
+    frame_class_ptr: *const u8,
+    frame_class_len: u64,
+    property_ptr: *const u8,
+    property_len: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_native_frame_static_property_get_inner(
+            frame_class_ptr,
+            frame_class_len,
+            property_ptr,
+            property_len,
+            out,
+        )
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
 /// Writes a static property through eval dynamic metadata.
 ///
 /// # Safety
@@ -77,6 +105,34 @@ pub unsafe extern "C" fn __elephc_eval_static_property_set(
 ) -> i32 {
     std::panic::catch_unwind(|| unsafe {
         eval_static_property_set_inner(ctx, target_ptr, target_len, value, out)
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Writes a static property through an active eval late-static native-frame override.
+///
+/// # Safety
+/// The frame class and property name byte ranges must be readable when their
+/// lengths are non-zero, `value` must be a valid runtime cell, and `out` may be
+/// null. Returns `-1` when no matching native-frame override is active.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_native_frame_static_property_set(
+    frame_class_ptr: *const u8,
+    frame_class_len: u64,
+    property_ptr: *const u8,
+    property_len: u64,
+    value: *mut RuntimeCell,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_native_frame_static_property_set_inner(
+            frame_class_ptr,
+            frame_class_len,
+            property_ptr,
+            property_len,
+            value,
+            out,
+        )
     })
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
@@ -161,6 +217,49 @@ unsafe fn eval_static_property_get_inner(
     }
 }
 
+/// Runs the native-frame static-property get ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_native_frame_static_property_get`; callers must
+/// provide readable frame/property name bytes and optional result storage.
+unsafe fn eval_native_frame_static_property_get_inner(
+    frame_class_ptr: *const u8,
+    frame_class_len: u64,
+    property_ptr: *const u8,
+    property_len: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    let Ok(frame_class) = abi_name_to_string(frame_class_ptr, frame_class_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let Ok(property_name) = abi_name_to_string(property_ptr, property_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let Some((context, called_class)) = native_frame_called_class_override_context(&frame_class)
+    else {
+        return -1;
+    };
+    let Some(context) = context.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    clear_result(out);
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    match interpreter::execute_context_static_property_get(
+        context,
+        &called_class,
+        &property_name,
+        &mut values,
+    )
+    .and_then(|outcome| retain_value_outcome(outcome, &mut values))
+    {
+        Ok(outcome) => write_outcome(outcome, out).code(),
+        Err(status) => status.code(),
+    }
+}
+
 /// Runs the static-property set ABI body after installing a panic boundary.
 ///
 /// # Safety
@@ -195,6 +294,54 @@ unsafe fn eval_static_property_set_inner(
         context,
         class_name,
         property_name,
+        RuntimeCellHandle::from_raw(value),
+        &mut values,
+    ) {
+        Ok(Some(outcome)) => write_outcome(outcome, out).code(),
+        Ok(None) => EvalStatus::Ok.code(),
+        Err(status) => status.code(),
+    }
+}
+
+/// Runs the native-frame static-property set ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_native_frame_static_property_set`; callers must
+/// provide readable frame/property name bytes, a valid value cell, and optional
+/// result storage for thrown PHP objects.
+unsafe fn eval_native_frame_static_property_set_inner(
+    frame_class_ptr: *const u8,
+    frame_class_len: u64,
+    property_ptr: *const u8,
+    property_len: u64,
+    value: *mut RuntimeCell,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    if value.is_null() {
+        return EvalStatus::RuntimeFatal.code();
+    }
+    let Ok(frame_class) = abi_name_to_string(frame_class_ptr, frame_class_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let Ok(property_name) = abi_name_to_string(property_ptr, property_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let Some((context, called_class)) = native_frame_called_class_override_context(&frame_class)
+    else {
+        return -1;
+    };
+    let Some(context) = context.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    clear_result(out);
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    match interpreter::execute_context_static_property_set(
+        context,
+        &called_class,
+        &property_name,
         RuntimeCellHandle::from_raw(value),
         &mut values,
     ) {

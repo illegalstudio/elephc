@@ -6455,6 +6455,50 @@ echo EvalAotDirectStaticCallChild::staticCall();');
     assert_eq!(out.stdout, "child|child");
 }
 
+/// Verifies eval classes keep late-static `static::$property` access in inherited AOT methods.
+#[test]
+fn test_eval_declared_child_inherited_aot_method_static_property_preserves_late_static_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotDirectStaticPropParent {
+    public static string $value = "parent";
+
+    public function instanceRead(): string {
+        return static::$value;
+    }
+
+    public static function staticRead(): string {
+        return static::$value;
+    }
+
+    public function instanceWrite(string $value): void {
+        static::$value = $value;
+    }
+
+    public static function staticWrite(string $value): void {
+        static::$value = $value;
+    }
+}
+
+eval('class EvalAotDirectStaticPropChild extends EvalAotDirectStaticPropParent {
+    public static string $value = "child";
+}
+echo (new EvalAotDirectStaticPropChild())->instanceRead() . "|";
+echo EvalAotDirectStaticPropChild::staticRead() . "|";
+(new EvalAotDirectStaticPropChild())->instanceWrite("one");
+echo EvalAotDirectStaticPropChild::$value . ":" . EvalAotDirectStaticPropParent::$value . "|";
+EvalAotDirectStaticPropChild::staticWrite("two");
+echo EvalAotDirectStaticPropChild::$value . ":" . EvalAotDirectStaticPropParent::$value;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "child|child|one:parent|two:parent");
+}
+
 /// Verifies eval fragments resolve `parent::` through AOT parent metadata.
 #[test]
 fn test_eval_fragment_in_aot_method_resolves_parent_scope() {
