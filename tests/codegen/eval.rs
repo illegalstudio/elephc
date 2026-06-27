@@ -14575,6 +14575,42 @@ echo ":" . $listed->getNumberOfParameters() . "/" . $listed->getParameters()[2]-
     );
 }
 
+/// Verifies direct ReflectionParameter construction accepts generated/AOT method targets.
+#[test]
+fn test_eval_reflection_parameter_accepts_aot_method_targets() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotDirectParamTarget {
+    public function join(string $left, string $right = "B"): string {
+        return $left . $right;
+    }
+
+    public static function collect(int $count, string ...$items): string {
+        return implode(":", $items);
+    }
+}
+echo eval('$direct = new ReflectionParameter(["EvalAotDirectParamTarget", "join"], "right");
+echo $direct->getName() . ":" . $direct->getPosition() . ":";
+echo $direct->getDeclaringClass()->getName() . ":";
+echo $direct->getDeclaringFunction()->getName() . ":";
+echo ($direct->isOptional() ? "O" : "r") . ":" . $direct->getDefaultValue() . ":";
+$objectParam = new ReflectionParameter([new EvalAotDirectParamTarget(), "join"], 0);
+echo $objectParam->getName() . ":" . $objectParam->getType()->getName() . ":";
+$static = new ReflectionParameter(["EvalAotDirectParamTarget", "collect"], "items");
+echo $static->getName() . ":" . ($static->isVariadic() ? "V" : "v") . ":" . ($static->isOptional() ? "O" : "r");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "right:1:EvalAotDirectParamTarget:join:O:B:left:string:items:V:O"
+    );
+}
+
 /// Verifies eval ReflectionMethod exposes generated/AOT empty-array defaults.
 #[test]
 fn test_eval_reflection_method_exposes_aot_empty_array_default() {
