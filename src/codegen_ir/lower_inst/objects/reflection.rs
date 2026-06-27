@@ -4603,34 +4603,92 @@ fn reflection_binary_constant_value(
 ) -> Result<ReflectionConstantValue> {
     let left = reflection_constant_value(ctx, current_class, current_info, left, depth)?;
     let right = reflection_constant_value(ctx, current_class, current_info, right, depth)?;
-    match (left, op, right) {
-        (ReflectionConstantValue::Int(left), BinOp::Add, ReflectionConstantValue::Int(right)) => {
-            Ok(ReflectionConstantValue::Int(left + right))
+    match (&left, op, &right) {
+        (
+            ReflectionConstantValue::Int(left),
+            BinOp::Add,
+            ReflectionConstantValue::Int(right),
+        ) => {
+            Ok(ReflectionConstantValue::Int(*left + *right))
         }
-        (ReflectionConstantValue::Int(left), BinOp::Sub, ReflectionConstantValue::Int(right)) => {
-            Ok(ReflectionConstantValue::Int(left - right))
+        (
+            ReflectionConstantValue::Int(left),
+            BinOp::Sub,
+            ReflectionConstantValue::Int(right),
+        ) => {
+            Ok(ReflectionConstantValue::Int(*left - *right))
         }
-        (ReflectionConstantValue::Int(left), BinOp::Mul, ReflectionConstantValue::Int(right)) => {
-            Ok(ReflectionConstantValue::Int(left * right))
+        (
+            ReflectionConstantValue::Int(left),
+            BinOp::Mul,
+            ReflectionConstantValue::Int(right),
+        ) => {
+            Ok(ReflectionConstantValue::Int(*left * *right))
         }
-        (ReflectionConstantValue::Int(left), BinOp::Mod, ReflectionConstantValue::Int(right)) => {
-            Ok(ReflectionConstantValue::Int(left % right))
+        (
+            ReflectionConstantValue::Int(left),
+            BinOp::Mod,
+            ReflectionConstantValue::Int(right),
+        ) if *right != 0 => {
+            Ok(ReflectionConstantValue::Int(*left % *right))
         }
-        (ReflectionConstantValue::Int(left), BinOp::Pow, ReflectionConstantValue::Int(right))
-            if right >= 0 =>
+        (
+            ReflectionConstantValue::Int(left),
+            BinOp::Pow,
+            ReflectionConstantValue::Int(right),
+        ) if *right >= 0 =>
         {
-            Ok(ReflectionConstantValue::Int(left.pow(right as u32)))
+            Ok(ReflectionConstantValue::Int((*left).pow(*right as u32)))
         }
         (
             ReflectionConstantValue::Str(left),
             BinOp::Concat,
             ReflectionConstantValue::Str(right),
         ) => Ok(ReflectionConstantValue::Str(format!("{}{}", left, right))),
+        (
+            left,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow,
+            right,
+        ) => reflection_float_binary_constant_value(left, op, right).ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "ReflectionClass constant metadata binary value {:?} {:?}",
+                reflection_constant_value_kind(left),
+                reflection_constant_value_kind(right)
+            ))
+        }),
         (left, _, right) => Err(CodegenIrError::unsupported(format!(
             "ReflectionClass constant metadata binary value {:?} {:?}",
-            reflection_constant_value_kind(&left),
-            reflection_constant_value_kind(&right)
+            reflection_constant_value_kind(left),
+            reflection_constant_value_kind(right)
         ))),
+    }
+}
+
+/// Evaluates a numeric binary operator that must produce a float Reflection value.
+fn reflection_float_binary_constant_value(
+    left: &ReflectionConstantValue,
+    op: &BinOp,
+    right: &ReflectionConstantValue,
+) -> Option<ReflectionConstantValue> {
+    let left = reflection_constant_value_as_float(left)?;
+    let right = reflection_constant_value_as_float(right)?;
+    let value = match op {
+        BinOp::Add => left + right,
+        BinOp::Sub => left - right,
+        BinOp::Mul => left * right,
+        BinOp::Div if right != 0.0 => left / right,
+        BinOp::Pow => left.powf(right),
+        _ => return None,
+    };
+    Some(ReflectionConstantValue::Float(value))
+}
+
+/// Returns the float representation of numeric Reflection constant metadata.
+fn reflection_constant_value_as_float(value: &ReflectionConstantValue) -> Option<f64> {
+    match value {
+        ReflectionConstantValue::Int(value) => Some(*value as f64),
+        ReflectionConstantValue::Float(value) => Some(*value),
+        _ => None,
     }
 }
 
