@@ -481,6 +481,9 @@ impl Parser {
         let mut expr = self.parse_primary()?;
         loop {
             if matches!(self.current(), TokenKind::LParen) {
+                if self.consume_first_class_callable_marker() {
+                    continue;
+                }
                 let args = self.parse_call_args()?;
                 expr = EvalExpr::DynamicCall {
                     callee: Box::new(expr),

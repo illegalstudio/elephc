@@ -346,6 +346,8 @@ try {
 echo ":";
 echo (new EvalInvokableBox("new"))("E", "F"); echo ":";
 echo call_user_func($box, "G", "H"); echo ":";
+$first = $box(...);
+echo $first("K", "L"); echo ":";
 return call_user_func_array($box, ["right" => "J", "left" => "I"]);"#,
     )
     .expect("parse eval fragment");
@@ -356,7 +358,7 @@ return call_user_func_array($box, ["right" => "J", "left" => "I"]);"#,
 
     assert_eq!(
         values.output,
-        "Y:plain:box:CD:Error:Object of type EvalPlainCallableProbe is not callable:new:EF:box:GH:"
+        "Y:plain:box:CD:Error:Object of type EvalPlainCallableProbe is not callable:new:EF:box:GH:box:KL:"
     );
     assert_eq!(values.get(result), FakeValue::String("box:IJ".to_string()));
 }

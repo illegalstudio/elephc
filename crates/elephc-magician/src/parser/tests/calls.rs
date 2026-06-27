@@ -119,6 +119,17 @@ fn parse_fragment_accepts_dynamic_call_expression_source() {
         }))]
     );
 }
+
+/// Verifies first-class invokable object syntax leaves the object value as the eval callback.
+#[test]
+fn parse_fragment_accepts_first_class_invokable_object_callable_source() {
+    let program = parse_fragment(br#"return $box(...);"#).expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::LoadVar("box".to_string())))]
+    );
+}
+
 /// Verifies dynamic calls can be applied after another postfix expression.
 #[test]
 fn parse_fragment_accepts_postfix_dynamic_call_source() {
