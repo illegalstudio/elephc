@@ -12792,6 +12792,25 @@ class EvalFinalConstChild extends EvalFinalConstBase {
     );
 }
 
+/// Verifies eval-declared classes cannot redeclare final generated/AOT class constants.
+#[test]
+fn test_eval_declared_class_rejects_final_aot_parent_constant_override() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalAotFinalConstBase {
+    final public const SEED = 1;
+}
+eval('class EvalAotFinalConstChild extends EvalAotFinalConstBase {
+    public const SEED = 2;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval-declared class constants preserve PHP visibility redeclaration rules.
 #[test]
 fn test_eval_declared_class_constant_visibility_contracts() {
@@ -12860,6 +12879,63 @@ eval('interface EvalConstProtectedIface {
     assert!(
         err.contains("Fatal error: eval() fragment uses an unsupported construct"),
         "stderr did not contain eval unsupported-construct diagnostic: {err}"
+    );
+}
+
+/// Verifies eval-declared class constants honor generated/AOT visibility contracts.
+#[test]
+fn test_eval_declared_class_rejects_reduced_aot_parent_constant_visibility() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalAotConstPublicBase {
+    public const SEED = 1;
+}
+eval('class EvalAotConstProtectedChild extends EvalAotConstPublicBase {
+    protected const SEED = 2;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval-declared classes cannot redeclare final generated/AOT interface constants.
+#[test]
+fn test_eval_declared_class_rejects_final_aot_interface_constant_override() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+interface EvalAotFinalConstContract {
+    final public const TOKEN = 1;
+}
+eval('class EvalAotFinalConstImpl implements EvalAotFinalConstContract {
+    public const TOKEN = 2;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval-declared interfaces cannot redeclare final generated/AOT interface constants.
+#[test]
+fn test_eval_declared_interface_rejects_final_aot_parent_constant_override() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+interface EvalAotFinalParentContract {
+    final public const TOKEN = 1;
+}
+eval('interface EvalAotFinalChildContract extends EvalAotFinalParentContract {
+    public const TOKEN = 2;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
     );
 }
 

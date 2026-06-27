@@ -1862,7 +1862,7 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
     validate_eval_interface_override_attributes(interface, context, values)?;
     validate_eval_declared_constants(interface.constants())?;
     validate_eval_interface_constants(interface.constants())?;
-    validate_interface_constant_parent_redeclarations(interface, context)?;
+    validate_interface_constant_parent_redeclarations(interface, context, values)?;
     if context.define_interface(interface.clone()) {
         initialize_eval_declared_constants(
             interface.name(),
@@ -2577,7 +2577,7 @@ fn validate_eval_class_modifiers(
     }
     validate_eval_declared_constants(class.constants())?;
     for constant in class.constants() {
-        validate_constant_parent_redeclaration(class, constant, context)?;
+        validate_constant_parent_redeclaration(class, constant, context, values)?;
     }
     validate_eval_declared_properties(class, context)?;
     for property in class.properties() {
@@ -2610,23 +2610,23 @@ fn eval_class_has_allow_dynamic_properties_attribute(class: &EvalClass) -> bool 
     eval_attributes_have_global_builtin_attribute(class.attributes(), "AllowDynamicProperties")
 }
 
-/// Bridge ReflectionMethod flag for static generated/AOT methods.
-const EVAL_REFLECTION_METHOD_FLAG_STATIC: u64 = 1;
+/// Bridge reflection flag for static generated/AOT members.
+const EVAL_REFLECTION_MEMBER_FLAG_STATIC: u64 = 1;
 
-/// Bridge ReflectionMethod flag for public generated/AOT methods.
-const EVAL_REFLECTION_METHOD_FLAG_PUBLIC: u64 = 2;
+/// Bridge reflection flag for public generated/AOT members.
+const EVAL_REFLECTION_MEMBER_FLAG_PUBLIC: u64 = 2;
 
-/// Bridge ReflectionMethod flag for protected generated/AOT methods.
-const EVAL_REFLECTION_METHOD_FLAG_PROTECTED: u64 = 4;
+/// Bridge reflection flag for protected generated/AOT members.
+const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
 
-/// Bridge ReflectionMethod flag for private generated/AOT methods.
-const EVAL_REFLECTION_METHOD_FLAG_PRIVATE: u64 = 8;
+/// Bridge reflection flag for private generated/AOT members.
+const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE: u64 = 8;
 
-/// Bridge ReflectionMethod flag for final generated/AOT methods.
-const EVAL_REFLECTION_METHOD_FLAG_FINAL: u64 = 16;
+/// Bridge reflection flag for final generated/AOT members.
+const EVAL_REFLECTION_MEMBER_FLAG_FINAL: u64 = 16;
 
-/// Bridge ReflectionMethod flag for abstract generated/AOT methods.
-const EVAL_REFLECTION_METHOD_FLAG_ABSTRACT: u64 = 32;
+/// Bridge reflection flag for abstract generated/AOT members.
+const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
 
 /// Method requirement discovered from generated/AOT interface metadata.
 struct EvalAotInterfaceMethodRequirement {
@@ -2713,7 +2713,7 @@ fn eval_aot_interface_parent_method_matches(
         }
         let parent = parent.trim_start_matches('\\');
         if let Some(flags) = values.reflection_method_flags(parent, method.name())? {
-            let parent_method_is_static = flags & EVAL_REFLECTION_METHOD_FLAG_STATIC != 0;
+            let parent_method_is_static = flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0;
             return Ok(parent_method_is_static == method.is_static());
         }
     }
@@ -2866,8 +2866,8 @@ fn eval_method_overrides_aot_parent(
     let Some(flags) = values.reflection_method_flags(parent, method.name())? else {
         return Ok(false);
     };
-    let parent_method_is_static = flags & EVAL_REFLECTION_METHOD_FLAG_STATIC != 0;
-    let parent_method_is_private = flags & EVAL_REFLECTION_METHOD_FLAG_PRIVATE != 0;
+    let parent_method_is_static = flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0;
+    let parent_method_is_private = flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0;
     Ok(!parent_method_is_private && parent_method_is_static == method.is_static())
 }
 
@@ -3330,6 +3330,7 @@ fn validate_eval_interface_constants(constants: &[EvalClassConstant]) -> Result<
 fn validate_interface_constant_parent_redeclarations(
     interface: &EvalInterface,
     context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for constant in interface.constants() {
         for parent in interface.parents() {
@@ -3339,6 +3340,7 @@ fn validate_interface_constant_parent_redeclarations(
                     return Err(EvalStatus::RuntimeFatal);
                 }
             }
+            validate_aot_interface_constant_redeclaration(parent, constant, values)?;
         }
     }
     Ok(())
@@ -3349,6 +3351,7 @@ fn validate_constant_parent_redeclaration(
     class: &EvalClass,
     constant: &EvalClassConstant,
     context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if let Some(parent) = class.parent() {
         if let Some((_, parent_constant)) = context.class_constant(parent, constant.name()) {
@@ -3360,10 +3363,11 @@ fn validate_constant_parent_redeclaration(
                 return Err(EvalStatus::RuntimeFatal);
             }
         }
+        validate_aot_class_constant_redeclaration(parent, constant, values)?;
     }
-    for interface in class.interfaces() {
+    for interface in pending_class_interface_names(class, context) {
         if let Some((_, interface_constant)) =
-            context.interface_constant(interface, constant.name())
+            context.interface_constant(&interface, constant.name())
         {
             if interface_constant.is_final()
                 || constant_visibility_rank(constant.visibility())
@@ -3372,8 +3376,68 @@ fn validate_constant_parent_redeclaration(
                 return Err(EvalStatus::RuntimeFatal);
             }
         }
+        validate_aot_interface_constant_redeclaration(&interface, constant, values)?;
     }
     Ok(())
+}
+
+/// Validates a class constant redeclaration against a generated/AOT parent class constant.
+fn validate_aot_class_constant_redeclaration(
+    parent: &str,
+    constant: &EvalClassConstant,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !values.class_exists(parent)? {
+        return Ok(());
+    }
+    validate_aot_constant_redeclaration(parent, constant, false, values)
+}
+
+/// Validates a class/interface constant redeclaration against a generated/AOT interface constant.
+fn validate_aot_interface_constant_redeclaration(
+    interface: &str,
+    constant: &EvalClassConstant,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !values.interface_exists(interface)? {
+        return Ok(());
+    }
+    validate_aot_constant_redeclaration(interface, constant, true, values)
+}
+
+/// Applies PHP redeclaration rules to one generated/AOT constant metadata row.
+fn validate_aot_constant_redeclaration(
+    class_like: &str,
+    constant: &EvalClassConstant,
+    interface_context: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let class_like = class_like.trim_start_matches('\\');
+    let Some(flags) = values.reflection_constant_flags(class_like, constant.name())? else {
+        return Ok(());
+    };
+    let inherited_visibility = eval_aot_constant_visibility(flags);
+    if !interface_context && inherited_visibility == EvalVisibility::Private {
+        return Ok(());
+    }
+    if flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL != 0
+        || constant_visibility_rank(constant.visibility())
+            < constant_visibility_rank(inherited_visibility)
+    {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(())
+}
+
+/// Returns the eval visibility represented by generated/AOT constant reflection flags.
+fn eval_aot_constant_visibility(flags: u64) -> EvalVisibility {
+    if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
+        EvalVisibility::Private
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED != 0 {
+        EvalVisibility::Protected
+    } else {
+        EvalVisibility::Public
+    }
 }
 
 /// Returns a comparable rank where larger means less restrictive constant visibility.
@@ -3588,10 +3652,10 @@ fn validate_method_aot_parent_override(
     let Some(flags) = values.reflection_method_flags(parent, method.name())? else {
         return Ok(());
     };
-    if flags & EVAL_REFLECTION_METHOD_FLAG_PRIVATE != 0 {
+    if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
         return Ok(());
     }
-    let parent_is_static = flags & EVAL_REFLECTION_METHOD_FLAG_STATIC != 0;
+    let parent_is_static = flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0;
     if parent_is_static != method.is_static() {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -3599,10 +3663,10 @@ fn validate_method_aot_parent_override(
     if method_visibility_rank(method.visibility()) < method_visibility_rank(parent_visibility) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if flags & EVAL_REFLECTION_METHOD_FLAG_FINAL != 0 {
+    if flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL != 0 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if method.is_abstract() && flags & EVAL_REFLECTION_METHOD_FLAG_ABSTRACT == 0 {
+    if method.is_abstract() && flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT == 0 {
         return Err(EvalStatus::RuntimeFatal);
     }
     let Some(required) = eval_aot_method_signature_requirement(
@@ -3629,11 +3693,11 @@ fn validate_method_aot_parent_override(
 
 /// Returns the eval visibility represented by generated/AOT reflection flags.
 fn eval_aot_method_visibility(flags: u64) -> EvalVisibility {
-    if flags & EVAL_REFLECTION_METHOD_FLAG_PRIVATE != 0 {
+    if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
         EvalVisibility::Private
-    } else if flags & EVAL_REFLECTION_METHOD_FLAG_PROTECTED != 0 {
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED != 0 {
         EvalVisibility::Protected
-    } else if flags & EVAL_REFLECTION_METHOD_FLAG_PUBLIC != 0 {
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PUBLIC != 0 {
         EvalVisibility::Public
     } else {
         EvalVisibility::Public
@@ -4032,7 +4096,7 @@ fn eval_aot_interface_method_requirement(
     let Some(flags) = values.reflection_method_flags(interface, method_name)? else {
         return Ok(None);
     };
-    let is_static = flags & EVAL_REFLECTION_METHOD_FLAG_STATIC != 0;
+    let is_static = flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0;
     let owner = values
         .reflection_method_declaring_class(interface, method_name)?
         .unwrap_or_else(|| interface.to_string());

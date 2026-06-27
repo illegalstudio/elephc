@@ -201,7 +201,9 @@ state: reads before initialization or after `unset()` throw the same catchable
 `Error`, while untyped properties and explicit `= null` defaults are initialized
 to `null`.
 Eval validates inherited class/interface constant redeclarations with PHP-style
-visibility compatibility, and rejects non-public interface constants.
+visibility compatibility, including generated/AOT parent and interface constants
+when their reflection metadata is available, and rejects non-public interface
+constants.
 Eval-declared method calls also enforce declared return values at runtime, with
 weak scalar coercions and PHP-style handling for `void`, `never`, `self`,
 `parent`, and late-bound `static`.
