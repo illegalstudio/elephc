@@ -542,7 +542,10 @@ pub(crate) fn runtime_instance_method_case(
 
 /// Provides the Runtime builtin wrapper excluded helper used by the callable dispatch module.
 fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
-    matches!(name, "iterator_apply" | "preg_replace_callback")
+    matches!(
+        name,
+        "iterator_apply" | "method_exists" | "preg_replace_callback" | "property_exists"
+    )
 }
 
 /// Ensures runtime builtin wrapper is available before the caller continues.
