@@ -3876,7 +3876,7 @@ mod tests {
     // usort with a callable comparator (`__rt_usort_callable`).
     // The first test drives the runtime directly with a hand-stamped FCC descriptor
     // for the comparator `cmp_asc`; the second is the non-return GC balance loop; the
-    // third lowers a real EIR body through `lower_function` so the `lower_usort`
+    // third lowers a real EIR body through `lower_function` so the `lower_user_sort`
     // dispatch + the by-ref `value_source_slot` writeback into the caller's local are
     // tested end-to-end.
     // -------------------------------------------------------------------------
@@ -3986,17 +3986,18 @@ mod tests {
     }
 
     /// Builds the self-contained EIR `Function` `sort_local() -> array<int>` that exercises
-    /// the full `lower_usort` by-ref writeback path: it stores an `array<int>` `[3, 1, 2]`
+    /// the full `lower_user_sort` by-ref writeback path: it stores an `array<int>` `[3, 1, 2]`
     /// into a `PhpLocal` slot, `LoadLocal`s it as operand 0, creates a first-class callable
     /// of `cmp_asc` (`FirstClassCallableNew`, Owned kind-6 descriptor) as operand 1, calls
-    /// `usort($a, cmp_asc(...))` as an `Op::BuiltinCall` `[LoadLocal(arr), vf]` (no result),
-    /// releases the FCC temp, then RE-loads the SAME slot and returns it. Because usort
-    /// mutates by reference, `lower_usort` writes the sorted pointer back into the slot via
-    /// `value_source_slot`; returning a fresh `LoadLocal` of that slot proves the caller's
-    /// local was updated — the whole point of usort.
+    /// the user-comparator sort (`$a, cmp_asc(...)`) as an `Op::BuiltinCall`
+    /// `[LoadLocal(arr), vf]` (no result) — the builtin name is whichever the caller interned
+    /// (usort/uasort/uksort, all lowered identically) — releases the FCC temp, then RE-loads
+    /// the SAME slot and returns it. Because the sort mutates by reference, `lower_user_sort`
+    /// writes the sorted pointer back into the slot via `value_source_slot`; returning a fresh
+    /// `LoadLocal` of that slot proves the caller's local was updated — the whole point.
     fn sort_local_via_builtin_fn(
         cmp_data: crate::ir::DataId,
-        usort_data: crate::ir::DataId,
+        builtin_data: crate::ir::DataId,
     ) -> Function {
         let int_arr_ty = PhpType::Array(Box::new(PhpType::Int));
         let mut f = Function::new(
@@ -4056,7 +4057,7 @@ mod tests {
             let _ = b.emit(
                 Op::BuiltinCall,
                 vec![loaded, vf],
-                Some(Immediate::Data(usort_data)),
+                Some(Immediate::Data(builtin_data)),
                 IrType::Void,
                 PhpType::Void,
                 Ownership::NonHeap,
@@ -4080,13 +4081,14 @@ mod tests {
     }
 
     /// Builds a reactor module with the full runtime surface, the lowered self-contained
-    /// `sort_local` body (via `lower_function`, so the `lower_usort` builtin arm and its
-    /// by-ref `value_source_slot` writeback are under test together with the
-    /// `__rt_usort_callable` runtime), the hand-written `fn_cmp_asc` body, and the unified
-    /// closure/FCC dispatch ladder (single FCC entry `cmp_asc`). Validates with
+    /// `sort_local` body (via `lower_function`, so the `lower_user_sort` builtin arm —
+    /// selected by the interned `builtin` name, one of usort/uasort/uksort, all lowered
+    /// identically — and its by-ref `value_source_slot` writeback are under test together
+    /// with the `__rt_usort_callable` runtime), the hand-written `fn_cmp_asc` body, and the
+    /// unified closure/FCC dispatch ladder (single FCC entry `cmp_asc`). Validates with
     /// `wasmparser` and runs `export` under `wasmer`; `None` if wasmer is absent
     /// (validation always runs).
-    fn run_usort_lowered_driver(driver: &str, export: &str) -> Option<String> {
+    fn run_usort_lowered_driver(driver: &str, export: &str, builtin: &str) -> Option<String> {
         let mut wm = WatModule::new();
         wm.set_memory(3, Some("memory"));
         // The lowered body's prologue references the `$__concat_off` cursor global.
@@ -4106,9 +4108,9 @@ mod tests {
         wm.add_raw_func(cmp_asc_free_fn_body_wat());
         let mut module = Module::new(Target::wasm());
         let cmp_data = module.data.intern_string("cmp_asc");
-        let usort_data = module.data.intern_function_name("usort");
+        let builtin_data = module.data.intern_function_name(builtin);
         module.functions.push(cmp_asc_free_fn());
-        let body_fn = sort_local_via_builtin_fn(cmp_data, usort_data);
+        let body_fn = sort_local_via_builtin_fn(cmp_data, builtin_data);
         let fcc_entries = vec!["cmp_asc".to_string()];
         let body_fb =
             super::super::function::lower_function(&module, &body_fn, &[], &[], &fcc_entries)
@@ -4146,7 +4148,7 @@ mod tests {
     }
 
     /// `sort_local()` lowers `usort($a, cmp_asc(...))` over `$a = [3, 1, 2]` through the real
-    /// `Op::BuiltinCall` -> `lower_usort` dispatch (NOT a hand-written runtime call), then
+    /// `Op::BuiltinCall` -> `lower_user_sort` dispatch (NOT a hand-written runtime call), then
     /// RE-loads the SAME slot and returns it. The driver reads `res[0..2]` via
     /// `__rt_array_get_int` and folds them into `e0*100 + e1*10 + e2` = `123`. Proves the
     /// by-ref `value_source_slot` writeback updates the caller's local in place: a missing
@@ -4162,7 +4164,53 @@ mod tests {
   (local.set $e2 (call $__rt_array_get_int (local.get $res) (i64.const 2)))  ;; res[2] (expect 3)
   (i64.add (i64.add (i64.mul (local.get $e0) (i64.const 100)) (i64.mul (local.get $e1) (i64.const 10))) (local.get $e2)))  ;; 1*100 + 2*10 + 3 = 123
 "#;
-        if let Some(o) = run_usort_lowered_driver(driver, "t") {
+        if let Some(o) = run_usort_lowered_driver(driver, "t", "usort") {
+            assert_eq!(o, "123");
+        }
+    }
+
+    /// `uasort($a, cmp_asc(...))` over `$a = [3, 1, 2]` lowers through the real
+    /// `Op::BuiltinCall` -> `lower_user_sort` dispatch (the new `"uasort"` arm), so it does
+    /// NOT hit `Unsupported` and reuses `__rt_usort_callable` unchanged: the same by-value
+    /// stable sort + by-ref `value_source_slot` writeback as `usort`. The driver folds the
+    /// re-loaded slot's `res[0..2]` into `e0*100 + e1*10 + e2` = `123`, the sorted value
+    /// (a missing writeback would fold the UNSORTED `[3, 1, 2]` to `312`). Mirrors native:
+    /// native lowers uasort by value and re-indexes, so PHP's uasort key-preservation is a
+    /// pre-existing native divergence intentionally NOT modeled here.
+    #[test]
+    fn uasort_lowering_writes_back_to_local() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $res i32) (local $e0 i64) (local $e1 i64) (local $e2 i64)
+  (local.set $res (call $fn_sort_local))                             ;; res = uasort([3,1,2], cmp_asc(...)) (writeback -> local -> returned)
+  (local.set $e0 (call $__rt_array_get_int (local.get $res) (i64.const 0)))  ;; res[0] (expect 1)
+  (local.set $e1 (call $__rt_array_get_int (local.get $res) (i64.const 1)))  ;; res[1] (expect 2)
+  (local.set $e2 (call $__rt_array_get_int (local.get $res) (i64.const 2)))  ;; res[2] (expect 3)
+  (i64.add (i64.add (i64.mul (local.get $e0) (i64.const 100)) (i64.mul (local.get $e1) (i64.const 10))) (local.get $e2)))  ;; 1*100 + 2*10 + 3 = 123
+"#;
+        if let Some(o) = run_usort_lowered_driver(driver, "t", "uasort") {
+            assert_eq!(o, "123");
+        }
+    }
+
+    /// `uksort($a, cmp_asc(...))` over `$a = [3, 1, 2]` lowers through the real
+    /// `Op::BuiltinCall` -> `lower_user_sort` dispatch (the new `"uksort"` arm), so it does
+    /// NOT hit `Unsupported` and reuses `__rt_usort_callable` unchanged: the same by-value
+    /// stable sort + by-ref `value_source_slot` writeback as `usort`. The driver folds the
+    /// re-loaded slot's `res[0..2]` into `e0*100 + e1*10 + e2` = `123`, the sorted value
+    /// (a missing writeback would fold the UNSORTED `[3, 1, 2]` to `312`). Mirrors native:
+    /// native lowers uksort by element value and re-indexes, so PHP's uksort key-comparison
+    /// is a pre-existing native divergence intentionally NOT modeled here.
+    #[test]
+    fn uksort_lowering_writes_back_to_local() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $res i32) (local $e0 i64) (local $e1 i64) (local $e2 i64)
+  (local.set $res (call $fn_sort_local))                             ;; res = uksort([3,1,2], cmp_asc(...)) (writeback -> local -> returned)
+  (local.set $e0 (call $__rt_array_get_int (local.get $res) (i64.const 0)))  ;; res[0] (expect 1)
+  (local.set $e1 (call $__rt_array_get_int (local.get $res) (i64.const 1)))  ;; res[1] (expect 2)
+  (local.set $e2 (call $__rt_array_get_int (local.get $res) (i64.const 2)))  ;; res[2] (expect 3)
+  (i64.add (i64.add (i64.mul (local.get $e0) (i64.const 100)) (i64.mul (local.get $e1) (i64.const 10))) (local.get $e2)))  ;; 1*100 + 2*10 + 3 = 123
+"#;
+        if let Some(o) = run_usort_lowered_driver(driver, "t", "uksort") {
             assert_eq!(o, "123");
         }
     }

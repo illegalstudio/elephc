@@ -890,7 +890,9 @@ fn lower_builtin_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         "get_class" => super::classes::lower_get_class(ctx, inst),
         "array_map" => lower_array_map(ctx, inst),
         "array_filter" => lower_array_filter(ctx, inst),
-        "usort" => lower_usort(ctx, inst),
+        "usort" => lower_user_sort(ctx, inst, "usort"),
+        "uasort" => lower_user_sort(ctx, inst, "uasort"),
+        "uksort" => lower_user_sort(ctx, inst, "uksort"),
         "array_reduce" => lower_array_reduce(ctx, inst),
         "array_walk" => lower_array_walk(ctx, inst),
         other => Err(WasmError::Unsupported(format!("builtin {}", other))),
@@ -1049,13 +1051,19 @@ fn lower_array_filter(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
-/// Lowers `usort($array, $cmp)` where operand 0 `$array` is a BY-REFERENCE indexed
-/// `array<int>` (mutated IN PLACE and re-indexed) and operand 1 `$cmp` is a `Callable`
-/// descriptor (a closure or a free-function first-class callable) taking two ints and
-/// returning an int (`<0 / 0 / >0`). It lowers to a `__rt_usort_callable(desc, arr)`
-/// runtime call that copy-on-write-uniques the array, STABLE bubble-sorts its int slots
-/// in place via 2-arg `__rt_closure_call` comparisons, and returns the (possibly cloned)
-/// array pointer. The third higher-order consumer after `array_map`/`array_filter`.
+/// Lowers `usort` / `uasort` / `uksort` (`$array, $cmp`) where operand 0 `$array` is a
+/// BY-REFERENCE indexed `array<int>` (mutated IN PLACE and re-indexed) and operand 1
+/// `$cmp` is a `Callable` descriptor (a closure or a free-function first-class callable)
+/// taking two ints and returning an int (`<0 / 0 / >0`). All three lower to the SAME
+/// `__rt_usort_callable(desc, arr)` runtime call that copy-on-write-uniques the array,
+/// STABLE bubble-sorts its int slots in place via 2-arg `__rt_closure_call` comparisons
+/// on the element VALUES, and returns the (possibly cloned) array pointer. The `name`
+/// argument only feeds the `Unsupported` diagnostics; it does not change the lowering.
+///
+/// MIRROR-NATIVE: native lowers all three identically (it sorts the indexed slots by
+/// value and re-indexes), so uasort's PHP key-preservation and uksort's PHP key-
+/// comparison are pre-existing native divergences that are intentionally NOT modeled
+/// here — there is no key tracking or assoc/hash machinery on this path.
 ///
 /// BY-REF WRITEBACK: usort mutates its first argument, so the returned pointer is stored
 /// back into the array operand value's local AND mirrored to the operand's source slot
@@ -1076,12 +1084,12 @@ fn lower_array_filter(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 /// `Heap(Array)` with an `Int` element type). The runtime reads 8-byte int slots, so a
 /// 16-byte string/mixed source would be misread — the int-element guard is load-bearing
 /// for correctness.
-fn lower_usort(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+fn lower_user_sort(ctx: &mut FnCtx, inst: &Instruction, name: &str) -> Result<()> {
     // Single ($array, $callable) form only. usort has no sort-flags / multi-array
     // overloads; any other arity is a different builtin shape and is deferred.
     if inst.operands.len() != 2 {
         return Err(WasmError::Unsupported(format!(
-            "usort with {} operands on wasm32-wasi (only ($array, $callable) supported; \
+            "{name} with {} operands on wasm32-wasi (only ($array, $callable) supported; \
              the optional sort-flags / multi-array forms are not usort)",
             inst.operands.len()
         )));
@@ -1095,7 +1103,7 @@ fn lower_usort(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let callable_php = ctx.value_php_type(callable)?.codegen_repr();
     if !matches!(callable_php, PhpType::Callable) {
         return Err(WasmError::Unsupported(format!(
-            "usort with a {:?} comparator on wasm32-wasi (only Callable descriptors \
+            "{name} with a {:?} comparator on wasm32-wasi (only Callable descriptors \
              supported; string/array/object callbacks deferred)",
             callable_php
         )));
@@ -1110,7 +1118,7 @@ fn lower_usort(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         && matches!(&array_php, PhpType::Array(elem) if elem.codegen_repr() == PhpType::Int);
     if !is_int_array {
         return Err(WasmError::Unsupported(format!(
-            "usort over a {:?} source on wasm32-wasi (only indexed array<int> supported; \
+            "{name} over a {:?} source on wasm32-wasi (only indexed array<int> supported; \
              string/mixed/object element sorts deferred)",
             array_php
         )));
@@ -1148,9 +1156,10 @@ fn lower_usort(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
     }
 
-    // usort returns bool true; materialize it only when the call site uses the result.
+    // The user-comparator sort returns bool true; materialize it only when the call
+    // site uses the result.
     if inst.result.is_some() {
-        ctx.fb.ins("i64.const 1", "usort returns bool true");
+        ctx.fb.ins("i64.const 1", "user-comparator sort returns bool true");
         store_result(ctx, inst)?;
     }
     Ok(())
@@ -1309,7 +1318,7 @@ fn lower_array_reduce(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 ///
 /// RESULT: `array_walk` lowers to `Void` in EIR (native `store_void_builtin_result`), so
 /// `inst.result` is normally `None` and the runtime returns nothing — the stack is
-/// balanced after the call with no value to store or drop. DEFENSIVE (mirror `lower_usort`
+/// balanced after the call with no value to store or drop. DEFENSIVE (mirror `lower_user_sort`
 /// bool handling): should a call site attach a result slot, the PHP `true`
 /// (`WasmRepr::I64` 1) is materialized only when that result repr is a simple i64 slot;
 /// any other result repr is rejected rather than miscompiled.
@@ -1381,7 +1390,7 @@ fn lower_array_walk(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     );
 
     // array_walk lowers to Void in EIR (store_void_builtin_result), so inst.result is
-    // normally None and there is nothing to store. DEFENSIVE (mirror lower_usort's bool
+    // normally None and there is nothing to store. DEFENSIVE (mirror lower_user_sort's bool
     // handling): materialize PHP `true` only when a result slot is attached AND it is a
     // simple i64; any other result repr is rejected rather than miscompiled.
     if let Some(result) = inst.result {
