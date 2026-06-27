@@ -6504,6 +6504,46 @@ return "";');
     assert_eq!(out, "OBIz:10:s:4:8:1:s:1:OWN:10:F:EvalAotReflectConstChild:s:case:7");
 }
 
+/// Verifies eval ReflectionClass materializes generated/AOT float constant arithmetic.
+#[test]
+fn test_eval_reflection_aot_float_constant_arithmetic() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectFloatConstTarget {
+    public const BASE = 1.5;
+    public const SUM = self::BASE + 2;
+    public const DIFF = 5 - self::BASE;
+    public const PRODUCT = self::BASE * 4;
+    public const QUOTIENT = 7 / 2;
+    public const POWER = self::BASE ** 2;
+    public const NEG_POWER = 2 ** -1;
+}
+
+echo eval('try {
+$ref = new ReflectionClass("EvalAotReflectFloatConstTarget");
+$all = $ref->getConstants();
+$power = $ref->getReflectionConstant("POWER");
+$negativePower = new ReflectionClassConstant("EvalAotReflectFloatConstTarget", "NEG_POWER");
+echo $ref->getConstant("SUM") . ":";
+echo $ref->getConstant("DIFF") . ":";
+echo $all["PRODUCT"] . ":";
+echo $ref->getConstant("QUOTIENT") . ":";
+echo $power->getValue() . ":";
+echo $negativePower->getValue();
+} catch (Throwable $e) {
+    echo "ERR:" . get_class($e) . ":" . $e->getMessage();
+}
+return "";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "3.5:3.5:6:3.5:2.25:0.5");
+}
+
 /// Verifies eval fragments can unpack numeric arrays into public AOT method calls.
 #[test]
 fn test_eval_fragment_can_call_this_public_method_with_spread_args() {

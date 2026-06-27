@@ -470,30 +470,82 @@ fn eval_binary_class_constant_value(
 ) -> Option<EvalClassConstantValue> {
     let left = eval_class_constant_value(module, current_class, current_info, left, depth)?;
     let right = eval_class_constant_value(module, current_class, current_info, right, depth)?;
-    match (left, op, right) {
-        (EvalClassConstantValue::Int(left), BinOp::Add, EvalClassConstantValue::Int(right)) => {
-            left.checked_add(right).map(EvalClassConstantValue::Int)
+    match (&left, op, &right) {
+        (
+            EvalClassConstantValue::Int(left),
+            BinOp::Add,
+            EvalClassConstantValue::Int(right),
+        ) => {
+            (*left).checked_add(*right).map(EvalClassConstantValue::Int)
         }
-        (EvalClassConstantValue::Int(left), BinOp::Sub, EvalClassConstantValue::Int(right)) => {
-            left.checked_sub(right).map(EvalClassConstantValue::Int)
+        (
+            EvalClassConstantValue::Int(left),
+            BinOp::Sub,
+            EvalClassConstantValue::Int(right),
+        ) => {
+            (*left).checked_sub(*right).map(EvalClassConstantValue::Int)
         }
-        (EvalClassConstantValue::Int(left), BinOp::Mul, EvalClassConstantValue::Int(right)) => {
-            left.checked_mul(right).map(EvalClassConstantValue::Int)
+        (
+            EvalClassConstantValue::Int(left),
+            BinOp::Mul,
+            EvalClassConstantValue::Int(right),
+        ) => {
+            (*left).checked_mul(*right).map(EvalClassConstantValue::Int)
         }
-        (EvalClassConstantValue::Int(left), BinOp::Mod, EvalClassConstantValue::Int(right)) => {
-            left.checked_rem(right).map(EvalClassConstantValue::Int)
+        (
+            EvalClassConstantValue::Int(left),
+            BinOp::Mod,
+            EvalClassConstantValue::Int(right),
+        ) => {
+            (*left).checked_rem(*right).map(EvalClassConstantValue::Int)
         }
-        (EvalClassConstantValue::Int(left), BinOp::Pow, EvalClassConstantValue::Int(right))
-            if right >= 0 =>
+        (
+            EvalClassConstantValue::Int(left),
+            BinOp::Pow,
+            EvalClassConstantValue::Int(right),
+        ) if *right >= 0 =>
         {
-            let exponent = u32::try_from(right).ok()?;
-            left.checked_pow(exponent).map(EvalClassConstantValue::Int)
+            let exponent = u32::try_from(*right).ok()?;
+            (*left).checked_pow(exponent).map(EvalClassConstantValue::Int)
         }
         (
             EvalClassConstantValue::Str(left),
             BinOp::Concat,
             EvalClassConstantValue::Str(right),
         ) => Some(EvalClassConstantValue::Str(format!("{}{}", left, right))),
+        (
+            left,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow,
+            right,
+        ) => eval_float_binary_class_constant_value(left, op, right),
+        _ => None,
+    }
+}
+
+/// Evaluates a numeric class-constant expression that must produce a float.
+fn eval_float_binary_class_constant_value(
+    left: &EvalClassConstantValue,
+    op: &BinOp,
+    right: &EvalClassConstantValue,
+) -> Option<EvalClassConstantValue> {
+    let left = eval_class_constant_value_as_float(left)?;
+    let right = eval_class_constant_value_as_float(right)?;
+    let value = match op {
+        BinOp::Add => left + right,
+        BinOp::Sub => left - right,
+        BinOp::Mul => left * right,
+        BinOp::Div if right != 0.0 => left / right,
+        BinOp::Pow => left.powf(right),
+        _ => return None,
+    };
+    Some(EvalClassConstantValue::Float(value))
+}
+
+/// Returns the float representation of numeric eval class-constant metadata.
+fn eval_class_constant_value_as_float(value: &EvalClassConstantValue) -> Option<f64> {
+    match value {
+        EvalClassConstantValue::Int(value) => Some(*value as f64),
+        EvalClassConstantValue::Float(value) => Some(*value),
         _ => None,
     }
 }
