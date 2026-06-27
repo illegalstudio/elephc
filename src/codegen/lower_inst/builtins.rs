@@ -105,6 +105,29 @@ pub(super) fn lower_eval_function_call_array(
     eval::lower_eval_function_call_array(ctx, inst)
 }
 
+/// Lowers post-eval object construction for classes declared by eval fragments.
+pub(super) fn lower_eval_object_new(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_object_new(ctx, inst)
+}
+
+/// Lowers a post-eval method call that may target an eval-created object.
+pub(super) fn lower_eval_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    method_name: &str,
+) -> Result<()> {
+    eval::lower_eval_method_call(ctx, inst, object, method_name)
+}
+
+/// Returns true when this lowered function has a persistent eval context local.
+pub(super) fn has_eval_context(ctx: &FunctionContext<'_>) -> bool {
+    eval::has_eval_context(ctx)
+}
+
 /// Lowers post-eval dynamic function existence probes to the optional eval bridge.
 pub(super) fn lower_eval_function_exists(
     ctx: &mut FunctionContext<'_>,

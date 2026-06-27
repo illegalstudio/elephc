@@ -9250,6 +9250,21 @@ fn lower_new_object(
             );
         }
     }
+    if ctx.has_eval_barrier()
+        && !ctx.classes.contains_key(class_name.as_str())
+        && plain_positional_call_args(args)
+    {
+        let operands = lower_args_with_signature(ctx, None, args);
+        let data = ctx.intern_class_name(class_name.as_str());
+        return ctx.emit_value(
+            Op::EvalObjectNew,
+            operands,
+            Some(Immediate::Data(data)),
+            PhpType::Mixed,
+            Op::EvalObjectNew.default_effects(),
+            Some(expr.span),
+        );
+    }
     let sig = constructor_signature(ctx, class_name).cloned();
     let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
     let php_type = PhpType::Object(class_name.as_str().to_string());

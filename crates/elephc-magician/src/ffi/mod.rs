@@ -17,6 +17,8 @@ pub mod execute;
 pub mod function_calls;
 pub mod native_functions;
 pub mod native_methods;
+#[cfg(not(test))]
+pub mod object_construction;
 pub mod scope;
 pub mod symbols;
 pub(crate) mod util;
@@ -28,6 +30,8 @@ pub use execute::*;
 pub use function_calls::*;
 pub use native_functions::*;
 pub use native_methods::*;
+#[cfg(not(test))]
+pub use object_construction::*;
 pub use scope::*;
 pub use symbols::*;
 
