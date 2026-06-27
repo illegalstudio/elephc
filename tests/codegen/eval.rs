@@ -6597,6 +6597,40 @@ $box->run();
     assert_eq!(out, "41a:42b:43c");
 }
 
+/// Verifies eval callable arrays bind named arguments for generated/AOT methods.
+#[test]
+fn test_eval_fragment_callable_array_dispatches_aot_method_with_named_args() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotCallableArrayNamedBox {
+    public function join(string $left, string $right): string {
+        return $left . $right;
+    }
+
+    public static function joinStatic(string $left, string $right): string {
+        return $left . $right;
+    }
+
+    public function run() {
+        return eval('$instance = [$this, "join"];
+$static = [EvalAotCallableArrayNamedBox::class, "joinStatic"];
+return $instance(right: "B", left: "A") . ":" .
+    call_user_func_array($instance, ["right" => "D", "left" => "C"]) . ":" .
+    call_user_func_array($static, ["right" => "F", "left" => "E"]);');
+    }
+}
+
+echo (new EvalAotCallableArrayNamedBox())->run();
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "AB:CD:EF");
+}
+
 /// Verifies eval static calls and static callables dispatch public AOT static methods.
 #[test]
 fn test_eval_fragment_dispatches_aot_static_methods() {
