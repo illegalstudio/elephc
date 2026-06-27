@@ -374,6 +374,25 @@ pub fn execute_context_static_property_get(
     }
 }
 
+/// Writes a static property through eval dynamic metadata and runtime fallback hooks.
+pub fn execute_context_static_property_set(
+    context: &mut ElephcEvalContext,
+    class_name: &str,
+    property_name: &str,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    match eval_static_property_set_result(class_name, property_name, value, context, values) {
+        Ok(()) => Ok(None),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .map(Some)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
 /// Tests an object relation against eval dynamic-object metadata before AOT metadata.
 pub fn execute_context_object_is_a(
     context: &mut ElephcEvalContext,

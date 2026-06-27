@@ -88,6 +88,15 @@ pub(super) fn lower_store_static_property(
     inst: &Instruction,
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    if let Some((class_name, property)) = eval_dynamic_static_property_target(ctx, inst)? {
+        return builtins::lower_eval_static_property_set(
+            ctx,
+            inst,
+            value,
+            &class_name,
+            &property,
+        );
+    }
     let slot = resolve_static_property_slot(ctx, inst, true)?;
     ensure_static_property_type_supported(&slot.php_type, inst)?;
     let value_ty = ctx.value_php_type(value)?;

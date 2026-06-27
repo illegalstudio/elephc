@@ -231,6 +231,18 @@ fn resolve_static_property_assignment_target(
         }
     };
 
+    if checker.eval_barrier_active
+        && matches!(receiver, StaticReceiver::Named(_))
+        && !checker.classes.contains_key(&class_name)
+    {
+        return Ok(StaticPropertyAssignmentTarget {
+            class_name: class_name.clone(),
+            declaring_class: class_name,
+            property_has_declared_type: false,
+            prop_ty: PhpType::Mixed,
+        });
+    }
+
     let class_info = checker
         .classes
         .get(&class_name)

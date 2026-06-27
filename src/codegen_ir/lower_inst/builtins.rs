@@ -663,6 +663,17 @@ pub(super) fn lower_eval_static_property_get(
     eval::lower_eval_static_property_get(ctx, inst, class_name, property_name)
 }
 
+/// Lowers post-eval static-property writes to the optional eval bridge.
+pub(super) fn lower_eval_static_property_set(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+    class_name: &str,
+    property_name: &str,
+) -> Result<()> {
+    eval::lower_eval_static_property_set(ctx, inst, value, class_name, property_name)
+}
+
 /// Lowers `define("NAME", value)` with the legacy duplicate-name runtime guard.
 fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "define", 2)?;

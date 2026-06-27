@@ -1,11 +1,12 @@
 //! Purpose:
-//! Exports post-barrier static member reads for classes declared by eval
+//! Exports post-barrier static member operations for classes declared by eval
 //! fragments. Generated code uses this ABI when native scoped-constant or
-//! static-property reads target dynamic eval metadata.
+//! static-property access targets dynamic eval metadata.
 //!
 //! Called from:
 //! - Generated EIR backend assembly through `__elephc_eval_class_constant_fetch`.
 //! - Generated EIR backend assembly through `__elephc_eval_static_property_get`.
+//! - Generated EIR backend assembly through `__elephc_eval_static_property_set`.
 //!
 //! Key details:
 //! - Returned value cells are retained before crossing back to generated code.
@@ -16,6 +17,7 @@ use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
 use crate::errors::EvalStatus;
 use crate::interpreter::{self, EvalOutcome, RuntimeValueOps};
 use crate::runtime_hooks::ElephcRuntimeOps;
+use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 /// Fetches a class-like constant through eval dynamic metadata.
 ///
@@ -55,6 +57,26 @@ pub unsafe extern "C" fn __elephc_eval_static_property_get(
 ) -> i32 {
     std::panic::catch_unwind(|| unsafe {
         eval_static_property_get_inner(ctx, class_ptr, class_len, property_ptr, property_len, out)
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Writes a static property through eval dynamic metadata.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. The target byte range must be a
+/// readable `Class::property` name when non-empty, `value` must be a valid
+/// runtime cell, and `out` may be null.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_static_property_set(
+    ctx: *mut ElephcEvalContext,
+    target_ptr: *const u8,
+    target_len: u64,
+    value: *mut RuntimeCell,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_static_property_set_inner(ctx, target_ptr, target_len, value, out)
     })
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
@@ -137,6 +159,60 @@ unsafe fn eval_static_property_get_inner(
         Ok(outcome) => write_outcome(outcome, out).code(),
         Err(status) => status.code(),
     }
+}
+
+/// Runs the static-property set ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_static_property_set`; callers must provide a valid
+/// context, readable `Class::property` target bytes, a valid value cell, and
+/// optional result storage for thrown PHP objects.
+unsafe fn eval_static_property_set_inner(
+    ctx: *mut ElephcEvalContext,
+    target_ptr: *const u8,
+    target_len: u64,
+    value: *mut RuntimeCell,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    if value.is_null() {
+        return EvalStatus::RuntimeFatal.code();
+    }
+    let Ok(target_name) = abi_name_to_string(target_ptr, target_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let Ok((class_name, property_name)) = split_static_property_target(&target_name) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    clear_result(out);
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    match interpreter::execute_context_static_property_set(
+        context,
+        class_name,
+        property_name,
+        RuntimeCellHandle::from_raw(value),
+        &mut values,
+    ) {
+        Ok(Some(outcome)) => write_outcome(outcome, out).code(),
+        Ok(None) => EvalStatus::Ok.code(),
+        Err(status) => status.code(),
+    }
+}
+
+/// Splits the packed static-property target used by the compact setter ABI.
+fn split_static_property_target(target: &str) -> Result<(&str, &str), EvalStatus> {
+    let Some((class_name, property_name)) = target.rsplit_once("::") else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    if class_name.is_empty() || property_name.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok((class_name, property_name))
 }
 
 /// Retains value outcomes so generated code receives an owned boxed cell.
