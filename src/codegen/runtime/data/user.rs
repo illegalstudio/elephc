@@ -454,7 +454,7 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".p2align 3\n");
     emit_eval_reflection_property_lookup_data(&mut out, &sorted_classes);
     out.push_str(".p2align 3\n");
-    emit_eval_reflection_class_lookup_data(&mut out, &sorted_classes);
+    emit_eval_reflection_class_lookup_data(&mut out, &sorted_classes, &sorted_interfaces);
     out.push_str(".p2align 3\n");
     emit_eval_reflection_class_interface_lookup_data(&mut out, &sorted_classes, interfaces);
     out.push_str(".p2align 3\n");
@@ -1215,6 +1215,7 @@ fn eval_reflection_static_property_declaring_class<'a>(
 fn emit_eval_reflection_class_lookup_data(
     out: &mut String,
     sorted_classes: &[(&String, &ClassInfo)],
+    sorted_interfaces: &[(&String, &InterfaceInfo)],
 ) {
     let mut entries = Vec::new();
     let mut index = 0usize;
@@ -1230,6 +1231,20 @@ fn emit_eval_reflection_class_lookup_data(
             escaped_ascii(class_name)
         ));
         entries.push((class_label, class_name.len(), flags));
+        index += 1;
+    }
+    for (interface_name, interface_info) in sorted_interfaces {
+        let flags = eval_reflection_interface_flags(interface_info);
+        if flags == 0 {
+            continue;
+        }
+        let class_label = format!("_eval_reflection_class_name_{}", index);
+        out.push_str(&format!(
+            ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+            class_label,
+            escaped_ascii(interface_name)
+        ));
+        entries.push((class_label, interface_name.len(), flags));
         index += 1;
     }
 
@@ -1256,15 +1271,25 @@ fn eval_reflection_class_flags(class_info: &ClassInfo) -> u64 {
     if class_info.is_readonly_class {
         flags |= EVAL_REFLECTION_CLASS_FLAG_READONLY;
     }
-    let Ok(start_line) = u64::try_from(class_info.declaration_span.line) else {
-        return flags;
+    flags |= eval_reflection_source_line_flags(class_info.declaration_span.line);
+    flags
+}
+
+/// Returns eval ReflectionClass source-location bits retained for one generated/AOT interface.
+fn eval_reflection_interface_flags(interface_info: &InterfaceInfo) -> u64 {
+    eval_reflection_source_line_flags(interface_info.declaration_span.line)
+}
+
+/// Encodes declaration line metadata into high ReflectionClass flag bits.
+fn eval_reflection_source_line_flags(line: usize) -> u64 {
+    let Ok(start_line) = u64::try_from(line) else {
+        return 0;
     };
     if start_line == 0 || start_line > EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK {
-        return flags;
+        return 0;
     }
-    flags |= (start_line << EVAL_REFLECTION_CLASS_SOURCE_START_SHIFT)
-        | (start_line << EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT);
-    flags
+    (start_line << EVAL_REFLECTION_CLASS_SOURCE_START_SHIFT)
+        | (start_line << EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT)
 }
 
 /// Emits class-like/interface-name rows consumed by eval ReflectionClass metadata probes.
