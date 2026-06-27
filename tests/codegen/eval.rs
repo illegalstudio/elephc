@@ -8207,6 +8207,47 @@ echo $box->parentView();');
     );
 }
 
+/// Verifies eval-declared class-like symbols remain visible in generated eval contexts.
+#[test]
+fn test_eval_declared_class_likes_are_visible_in_aot_nested_eval_context() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalClassLikeAotView {
+    public function view() {
+        return eval('return (class_exists("EvalGlobalContextClass") ? "C" : "c") .
+    (class_exists("EvalGlobalContextClassAlias") ? "A" : "a") . ":" .
+    (interface_exists("EvalGlobalContextIface") ? "I" : "i") .
+    (interface_exists("EvalGlobalContextIfaceAlias") ? "A" : "a") . ":" .
+    (trait_exists("EvalGlobalContextTrait") ? "T" : "t") .
+    (trait_exists("EvalGlobalContextTraitAlias") ? "A" : "a") . ":" .
+    (enum_exists("EvalGlobalContextEnum") ? "E" : "e") .
+    (enum_exists("EvalGlobalContextEnumAlias") ? "A" : "a") .
+    (class_exists("EvalGlobalContextEnum") ? "C" : "c") .
+    (class_exists("EvalGlobalContextEnumAlias") ? "A" : "a") . ":" .
+    (is_a("EvalGlobalContextClass", "EvalGlobalContextIface", true) ? "R" : "r");');
+    }
+}
+
+eval('interface EvalGlobalContextIface {}
+trait EvalGlobalContextTrait {}
+enum EvalGlobalContextEnum { case Ready; }
+class EvalGlobalContextClass implements EvalGlobalContextIface { use EvalGlobalContextTrait; }
+class_alias("EvalGlobalContextClass", "EvalGlobalContextClassAlias");
+class_alias("EvalGlobalContextIface", "EvalGlobalContextIfaceAlias");
+class_alias("EvalGlobalContextTrait", "EvalGlobalContextTraitAlias");
+class_alias("EvalGlobalContextEnum", "EvalGlobalContextEnumAlias");');
+$view = new EvalClassLikeAotView();
+echo $view->view();
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "CA:IA:TA:EACA:R");
+}
+
 /// Verifies eval-declared class inheritance uses dynamic methods and metadata.
 #[test]
 fn test_eval_declared_class_inherits_methods_and_metadata() {

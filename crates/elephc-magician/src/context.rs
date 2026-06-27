@@ -33,7 +33,14 @@ static GLOBAL_EVAL_CLASSES: OnceLock<Mutex<GlobalEvalClassRegistry>> = OnceLock:
 #[derive(Default)]
 struct GlobalEvalClassRegistry {
     classes: HashMap<String, EvalClass>,
-    declared_names: Vec<String>,
+    declared_class_names: Vec<String>,
+    interfaces: HashMap<String, EvalInterface>,
+    declared_interface_names: Vec<String>,
+    traits: HashMap<String, EvalTrait>,
+    declared_trait_names: Vec<String>,
+    enums: HashMap<String, EvalEnum>,
+    declared_enum_names: Vec<String>,
+    aliases: HashMap<String, EvalClassAlias>,
 }
 
 /// Returns the process-local eval class registry for generated-code eval contexts.
@@ -48,9 +55,60 @@ fn register_global_eval_class(class: &EvalClass) {
     let key = normalize_class_name(class.name());
     if let Ok(mut registry) = global_eval_classes().lock() {
         if !registry.classes.contains_key(&key) {
-            registry.declared_names.push(class.name().to_string());
+            registry.declared_class_names.push(class.name().to_string());
         }
         registry.classes.insert(key, class.clone());
+    }
+}
+
+/// Records one eval-declared interface so later eval contexts can see PHP-global metadata.
+#[cfg(not(test))]
+fn register_global_eval_interface(interface: &EvalInterface) {
+    let key = normalize_class_name(interface.name());
+    if let Ok(mut registry) = global_eval_classes().lock() {
+        if !registry.interfaces.contains_key(&key) {
+            registry
+                .declared_interface_names
+                .push(interface.name().to_string());
+        }
+        registry.interfaces.insert(key, interface.clone());
+    }
+}
+
+/// Records one eval-declared trait so later eval contexts can see PHP-global metadata.
+#[cfg(not(test))]
+fn register_global_eval_trait(trait_decl: &EvalTrait) {
+    let key = normalize_class_name(trait_decl.name());
+    if let Ok(mut registry) = global_eval_classes().lock() {
+        if !registry.traits.contains_key(&key) {
+            registry
+                .declared_trait_names
+                .push(trait_decl.name().to_string());
+        }
+        registry.traits.insert(key, trait_decl.clone());
+    }
+}
+
+/// Records one eval-declared enum so later eval contexts can see PHP-global metadata.
+#[cfg(not(test))]
+fn register_global_eval_enum(enum_decl: &EvalEnum) {
+    let key = normalize_class_name(enum_decl.name());
+    if let Ok(mut registry) = global_eval_classes().lock() {
+        if !registry.enums.contains_key(&key) {
+            registry
+                .declared_enum_names
+                .push(enum_decl.name().trim_start_matches('\\').to_string());
+        }
+        registry.enums.insert(key, enum_decl.clone());
+    }
+}
+
+/// Records one eval-defined class-like alias for later generated eval contexts.
+#[cfg(not(test))]
+fn register_global_eval_alias(alias_name: &str, alias: &EvalClassAlias) {
+    let key = normalize_class_name(alias_name);
+    if let Ok(mut registry) = global_eval_classes().lock() {
+        registry.aliases.insert(key, alias.clone());
     }
 }
 
@@ -775,13 +833,13 @@ impl ElephcEvalContext {
         true
     }
 
-    /// Imports eval-declared process-global classes not yet known by this context.
+    /// Imports eval-declared process-global class-like metadata not yet known by this context.
     #[cfg(not(test))]
     pub fn sync_global_eval_classes(&mut self) {
         let Ok(registry) = global_eval_classes().lock() else {
             return;
         };
-        for name in &registry.declared_names {
+        for name in &registry.declared_class_names {
             let key = normalize_class_name(name);
             if self.classes.contains_key(&key)
                 || self.interfaces.contains_key(&key)
@@ -796,6 +854,72 @@ impl ElephcEvalContext {
             };
             self.declared_class_names.push(class.name().to_string());
             self.classes.insert(key, class);
+        }
+        for name in &registry.declared_interface_names {
+            let key = normalize_class_name(name);
+            if self.interfaces.contains_key(&key)
+                || self.classes.contains_key(&key)
+                || self.traits.contains_key(&key)
+                || self.enums.contains_key(&key)
+                || self.class_aliases.contains_key(&key)
+            {
+                continue;
+            }
+            let Some(interface) = registry.interfaces.get(&key).cloned() else {
+                continue;
+            };
+            self.declared_interface_names
+                .push(interface.name().to_string());
+            self.interfaces.insert(key, interface);
+        }
+        for name in &registry.declared_trait_names {
+            let key = normalize_class_name(name);
+            if self.traits.contains_key(&key)
+                || self.classes.contains_key(&key)
+                || self.interfaces.contains_key(&key)
+                || self.enums.contains_key(&key)
+                || self.class_aliases.contains_key(&key)
+            {
+                continue;
+            }
+            let Some(trait_decl) = registry.traits.get(&key).cloned() else {
+                continue;
+            };
+            self.declared_trait_names
+                .push(trait_decl.name().to_string());
+            self.traits.insert(key, trait_decl);
+        }
+        for name in &registry.declared_enum_names {
+            let key = normalize_class_name(name);
+            if self.enums.contains_key(&key)
+                || self.classes.contains_key(&key)
+                || self.interfaces.contains_key(&key)
+                || self.traits.contains_key(&key)
+                || self.class_aliases.contains_key(&key)
+            {
+                continue;
+            }
+            let Some(enum_decl) = registry.enums.get(&key).cloned() else {
+                continue;
+            };
+            self.declared_enum_names
+                .push(enum_decl.name().trim_start_matches('\\').to_string());
+            self.declared_class_names
+                .push(enum_decl.name().trim_start_matches('\\').to_string());
+            self.classes
+                .insert(key.clone(), enum_decl.as_class_metadata());
+            self.enums.insert(key, enum_decl);
+        }
+        for (key, alias) in &registry.aliases {
+            if self.classes.contains_key(key)
+                || self.interfaces.contains_key(key)
+                || self.traits.contains_key(key)
+                || self.enums.contains_key(key)
+                || self.class_aliases.contains_key(key)
+            {
+                continue;
+            }
+            self.class_aliases.insert(key.clone(), alias.clone());
         }
     }
 
@@ -962,13 +1086,13 @@ impl ElephcEvalContext {
         {
             return false;
         }
-        self.class_aliases.insert(
-            alias_key,
-            EvalClassAlias {
-                target: original.trim_start_matches('\\').to_string(),
-                kind,
-            },
-        );
+        let alias_record = EvalClassAlias {
+            target: original.trim_start_matches('\\').to_string(),
+            kind,
+        };
+        #[cfg(not(test))]
+        register_global_eval_alias(alias, &alias_record);
+        self.class_aliases.insert(alias_key, alias_record);
         true
     }
 
@@ -995,6 +1119,8 @@ impl ElephcEvalContext {
         }
         self.declared_interface_names
             .push(interface.name().to_string());
+        #[cfg(not(test))]
+        register_global_eval_interface(&interface);
         self.interfaces.insert(key, interface);
         true
     }
@@ -1044,6 +1170,8 @@ impl ElephcEvalContext {
         }
         self.declared_trait_names
             .push(trait_decl.name().to_string());
+        #[cfg(not(test))]
+        register_global_eval_trait(&trait_decl);
         self.traits.insert(key, trait_decl);
         true
     }
@@ -1095,6 +1223,8 @@ impl ElephcEvalContext {
             .push(enum_decl.name().trim_start_matches('\\').to_string());
         self.declared_class_names
             .push(enum_decl.name().trim_start_matches('\\').to_string());
+        #[cfg(not(test))]
+        register_global_eval_enum(&enum_decl);
         self.classes
             .insert(key.clone(), enum_decl.as_class_metadata());
         self.enums.insert(key, enum_decl);

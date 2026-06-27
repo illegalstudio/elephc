@@ -210,9 +210,10 @@ parameter bans, and relevant declared parameter/return-type contracts for
 `__unserialize()`, `__debugInfo()`, `__set_state()`, `__invoke()`,
 `__clone()`, `__destruct()`, and `__construct()` when dynamic classes or traits
 are declared.
-Eval-declared class metadata is synchronized across generated eval contexts, so
-later eval fragments inside AOT methods can introspect classes declared by an
-earlier eval call in the same process.
+Eval-declared class-like metadata and aliases are synchronized across generated
+eval contexts, so later eval fragments inside AOT methods can introspect
+classes, interfaces, traits, enums, and aliases declared by an earlier eval call
+in the same process.
 Member
 visibility is checked at runtime for eval-declared objects and
 static/class-constant accesses. Class-level attributes declared on eval classes,
