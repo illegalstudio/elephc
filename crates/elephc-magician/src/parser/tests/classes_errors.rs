@@ -144,6 +144,56 @@ fn parse_fragment_rejects_reserved_class_constant_name() {
     }
 }
 
+/// Verifies eval rejects PHP-reserved class-like declaration names.
+#[test]
+fn parse_fragment_rejects_reserved_class_like_declaration_names() {
+    for source in [
+        b"class match {}" as &[u8],
+        b"class string {}",
+        b"class CLASS {}",
+        b"interface interface {}",
+        b"trait readonly {}",
+        b"enum bool { case Ready; }",
+    ] {
+        assert_eq!(
+            parse_fragment(source),
+            Err(EvalParseError::UnsupportedConstruct)
+        );
+    }
+}
+
+/// Verifies eval accepts PHP semi-reserved class-like declaration names.
+#[test]
+fn parse_fragment_accepts_semi_reserved_class_like_declaration_names() {
+    let program = parse_fragment(
+        br#"class enum {}
+interface from {}
+trait resource {}
+enum integer { case Ready; }"#,
+    )
+    .expect("fragment should parse");
+    let statements = program.statements();
+    let EvalStmt::ClassDecl(class) = &statements[0] else {
+        panic!("expected class declaration");
+    };
+    assert_eq!(class.name(), "enum");
+
+    let EvalStmt::InterfaceDecl(interface) = &statements[1] else {
+        panic!("expected interface declaration");
+    };
+    assert_eq!(interface.name(), "from");
+
+    let EvalStmt::TraitDecl(trait_decl) = &statements[2] else {
+        panic!("expected trait declaration");
+    };
+    assert_eq!(trait_decl.name(), "resource");
+
+    let EvalStmt::EnumDecl(enum_decl) = &statements[3] else {
+        panic!("expected enum declaration");
+    };
+    assert_eq!(enum_decl.name(), "integer");
+}
+
 /// Verifies comma-separated class-like constants lower to individual eval constants.
 #[test]
 fn parse_fragment_accepts_comma_separated_class_like_constants() {
