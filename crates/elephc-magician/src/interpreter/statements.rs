@@ -2639,10 +2639,10 @@ fn validate_eval_interface_override_attributes(
         if !eval_interface_method_has_global_builtin_attribute(method, "Override") {
             continue;
         }
-        if !parent_requirements.iter().any(|(_, requirement)| {
-            requirement.name().eq_ignore_ascii_case(method.name())
-                && requirement.is_static() == method.is_static()
-        }) {
+        if !parent_requirements
+            .iter()
+            .any(|(_, requirement)| eval_interface_method_matches_requirement(method, requirement))
+        {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -2662,6 +2662,15 @@ fn eval_interface_parent_method_requirements(
         requirements.extend(builtin_interface_method_requirements(parent));
     }
     requirements
+}
+
+/// Returns whether an interface method matches one inherited requirement signature kind.
+fn eval_interface_method_matches_requirement(
+    method: &EvalInterfaceMethod,
+    requirement: &EvalInterfaceMethod,
+) -> bool {
+    requirement.name().eq_ignore_ascii_case(method.name())
+        && requirement.is_static() == method.is_static()
 }
 
 /// Rejects builtin attributes that cannot target eval-declared traits.

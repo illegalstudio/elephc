@@ -966,6 +966,25 @@ echo $box->label();"#,
 
     assert_eq!(values.output, "child");
 
+    let builtin_parent = parse_fragment(
+        br#"interface EvalIfaceOverrideStringable extends Stringable {
+    #[\Override]
+    public function __toString(): string;
+}
+class EvalIfaceOverrideStringableImpl implements EvalIfaceOverrideStringable {
+    public function __toString(): string { return "stringable"; }
+}
+$box = new EvalIfaceOverrideStringableImpl();
+echo $box;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&builtin_parent, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "stringable");
+
     let invalid = parse_fragment(
         br#"interface EvalIfaceOverrideMissing {
     #[\Override]
