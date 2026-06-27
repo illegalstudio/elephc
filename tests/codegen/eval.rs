@@ -6635,7 +6635,7 @@ echo (new EvalAotCallableArrayNamedBox())->run();
 #[test]
 fn test_eval_fragment_passes_callable_args_to_aot_methods() {
     let out = compile_and_run_capture(
-        r#"<?php
+        r##"<?php
 function eval_aot_callable_arg_suffix(string $value): string {
     return $value . "!";
 }
@@ -6643,6 +6643,14 @@ function eval_aot_callable_arg_suffix(string $value): string {
 class EvalAotCallableArgTarget {
     public static function suffix(string $value): string {
         return $value . "?";
+    }
+
+    public function instanceSuffix(string $value): string {
+        return $value . "~";
+    }
+
+    public function __invoke(string $value): string {
+        return $value . "#";
     }
 }
 
@@ -6672,14 +6680,27 @@ $box = new EvalAotCallableArgBox($static);
 return $box->value . ":" .
     $box->apply("EvalAotCallableArgTarget::suffix") . ":" .
     EvalAotCallableArgBox::applyStatic($static);');
-"#,
+echo ":";
+echo eval('$target = new EvalAotCallableArgTarget();
+$instance = [$target, "instanceSuffix"];
+$box = new EvalAotCallableArgBox($instance);
+return $box->value . ":" .
+    $box->apply($instance) . ":" .
+    EvalAotCallableArgBox::applyStatic($instance);');
+echo ":";
+echo eval('$invokable = new EvalAotCallableArgTarget();
+$box = new EvalAotCallableArgBox($invokable);
+return $box->value . ":" .
+    $box->apply($invokable) . ":" .
+    EvalAotCallableArgBox::applyStatic($invokable);');
+"##,
     );
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "C!:M!:S!:C?:M?:S?");
+    assert_eq!(out.stdout, "C!:M!:S!:C?:M?:S?:C~:M~:S~:C#:M#:S#");
 }
 
 /// Verifies eval static calls and static callables dispatch public AOT static methods.
