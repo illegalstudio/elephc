@@ -9,6 +9,8 @@
 //! - Every exported function installs a panic boundary before touching bridge state.
 //! - Helper routines stay private to the FFI layer unless shared across families.
 
+#[cfg(not(test))]
+pub mod callables;
 pub mod context;
 pub mod declared_symbols;
 pub(crate) mod dynamic_destructors;
@@ -25,6 +27,8 @@ pub mod scope;
 pub mod symbols;
 pub(crate) mod util;
 
+#[cfg(not(test))]
+pub use callables::*;
 pub use context::*;
 pub use declared_symbols::*;
 pub use execute::*;

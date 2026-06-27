@@ -214,6 +214,23 @@ pub fn execute_context_function_call_array_outcome(
     }
 }
 
+/// Executes a callback value with a prepared argument array in the shared eval context.
+pub fn execute_context_callable_call_array_outcome(
+    context: &mut ElephcEvalContext,
+    callback: RuntimeCellHandle,
+    arg_array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    match eval_call_user_func_array_with_values(callback, arg_array, context, values) {
+        Ok(result) => Ok(EvalOutcome::Value(result)),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
 /// Constructs a class declared in the shared eval context with prepared positional arguments.
 pub fn execute_context_new_object_outcome(
     context: &mut ElephcEvalContext,

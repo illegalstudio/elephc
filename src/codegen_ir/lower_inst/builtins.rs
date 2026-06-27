@@ -534,6 +534,16 @@ pub(super) fn lower_eval_method_call(
     eval::lower_eval_method_call(ctx, inst, object, method_name)
 }
 
+/// Lowers post-eval callable-array dispatch against eval dynamic callables.
+pub(super) fn lower_eval_callable_call_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callback: ValueId,
+    arg_array: ValueId,
+) -> Result<()> {
+    eval::lower_eval_callable_call_array(ctx, inst, callback, arg_array)
+}
+
 /// Lowers post-eval object class-name introspection against eval dynamic metadata.
 pub(super) fn lower_eval_object_class_name(
     ctx: &mut FunctionContext<'_>,
