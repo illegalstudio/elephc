@@ -451,7 +451,7 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".p2align 3\n");
     emit_classes_by_name_table(&mut out, &sorted_classes);
     out.push_str(".p2align 3\n");
-    emit_eval_reflection_method_lookup_data(&mut out, &sorted_classes);
+    emit_eval_reflection_method_lookup_data(&mut out, &sorted_classes, &sorted_interfaces);
     out.push_str(".p2align 3\n");
     emit_eval_reflection_property_lookup_data(&mut out, &sorted_classes);
     out.push_str(".p2align 3\n");
@@ -884,6 +884,7 @@ fn emit_eval_reflection_source_file_data(out: &mut String, source_path: Option<&
 fn emit_eval_reflection_method_lookup_data(
     out: &mut String,
     sorted_classes: &[(&String, &ClassInfo)],
+    sorted_interfaces: &[(&String, &InterfaceInfo)],
 ) {
     let mut entries = Vec::new();
     let class_infos = sorted_classes
@@ -907,34 +908,15 @@ fn emit_eval_reflection_method_lookup_data(
                 method_name,
                 false,
             );
-            let class_label = format!("_eval_reflection_method_class_{}", index);
-            let method_label = format!("_eval_reflection_method_name_{}", index);
-            let declaring_label = format!("_eval_reflection_method_declaring_class_{}", index);
-            out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
-                class_label,
-                escaped_ascii(class_name)
-            ));
-            out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
-                method_label,
-                escaped_ascii(method_name)
-            ));
-            out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
-                declaring_label,
-                escaped_ascii(declaring_class)
-            ));
-            entries.push((
-                class_label,
-                class_name.len(),
-                method_label,
-                method_name.len(),
+            push_eval_reflection_method_lookup_row(
+                out,
+                &mut entries,
+                &mut index,
+                class_name,
+                method_name,
                 flags,
-                declaring_label,
-                declaring_class.len(),
-            ));
-            index += 1;
+                declaring_class,
+            );
         }
 
         let mut static_methods = class_info.static_methods.keys().collect::<Vec<_>>();
@@ -949,34 +931,55 @@ fn emit_eval_reflection_method_lookup_data(
                 method_name,
                 true,
             );
-            let class_label = format!("_eval_reflection_method_class_{}", index);
-            let method_label = format!("_eval_reflection_method_name_{}", index);
-            let declaring_label = format!("_eval_reflection_method_declaring_class_{}", index);
-            out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
-                class_label,
-                escaped_ascii(class_name)
-            ));
-            out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
-                method_label,
-                escaped_ascii(method_name)
-            ));
-            out.push_str(&format!(
-                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
-                declaring_label,
-                escaped_ascii(declaring_class)
-            ));
-            entries.push((
-                class_label,
-                class_name.len(),
-                method_label,
-                method_name.len(),
+            push_eval_reflection_method_lookup_row(
+                out,
+                &mut entries,
+                &mut index,
+                class_name,
+                method_name,
                 flags,
-                declaring_label,
-                declaring_class.len(),
-            ));
-            index += 1;
+                declaring_class,
+            );
+        }
+    }
+
+    for (interface_name, interface_info) in sorted_interfaces {
+        let mut methods = interface_info.methods.keys().collect::<Vec<_>>();
+        methods.sort();
+        for method_name in methods {
+            let declaring_interface = eval_reflection_interface_method_declaring_interface(
+                interface_name,
+                interface_info,
+                method_name,
+            );
+            push_eval_reflection_method_lookup_row(
+                out,
+                &mut entries,
+                &mut index,
+                interface_name,
+                method_name,
+                eval_reflection_interface_method_flags(false),
+                declaring_interface,
+            );
+        }
+
+        let mut static_methods = interface_info.static_methods.keys().collect::<Vec<_>>();
+        static_methods.sort();
+        for method_name in static_methods {
+            let declaring_interface = eval_reflection_interface_static_method_declaring_interface(
+                interface_name,
+                interface_info,
+                method_name,
+            );
+            push_eval_reflection_method_lookup_row(
+                out,
+                &mut entries,
+                &mut index,
+                interface_name,
+                method_name,
+                eval_reflection_interface_method_flags(true),
+                declaring_interface,
+            );
         }
     }
 
@@ -995,6 +998,46 @@ fn emit_eval_reflection_method_lookup_data(
         out.push_str(&format!("    .quad {}\n", declaring_label));
         out.push_str(&format!("    .quad {}\n", declaring_len));
     }
+}
+
+/// Adds one eval ReflectionMethod lookup row and its backing string labels.
+fn push_eval_reflection_method_lookup_row(
+    out: &mut String,
+    entries: &mut Vec<(String, usize, String, usize, u64, String, usize)>,
+    index: &mut usize,
+    class_name: &str,
+    method_name: &str,
+    flags: u64,
+    declaring_class: &str,
+) {
+    let class_label = format!("_eval_reflection_method_class_{}", *index);
+    let method_label = format!("_eval_reflection_method_name_{}", *index);
+    let declaring_label = format!("_eval_reflection_method_declaring_class_{}", *index);
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        class_label,
+        escaped_ascii(class_name)
+    ));
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        method_label,
+        escaped_ascii(method_name)
+    ));
+    out.push_str(&format!(
+        ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+        declaring_label,
+        escaped_ascii(declaring_class)
+    ));
+    entries.push((
+        class_label,
+        class_name.len(),
+        method_label,
+        method_name.len(),
+        flags,
+        declaring_label,
+        declaring_class.len(),
+    ));
+    *index += 1;
 }
 
 /// Adds source start/end line bits to an AOT ReflectionMethod flag word when available.
@@ -1050,6 +1093,32 @@ fn eval_reflection_static_method_declaring_class<'a>(
         .unwrap_or(reflected_class)
 }
 
+/// Returns the interface name that declares one visible instance method.
+fn eval_reflection_interface_method_declaring_interface<'a>(
+    reflected_interface: &'a str,
+    interface_info: &'a InterfaceInfo,
+    method_name: &str,
+) -> &'a str {
+    interface_info
+        .method_declaring_interfaces
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(reflected_interface)
+}
+
+/// Returns the interface name that declares one visible static method.
+fn eval_reflection_interface_static_method_declaring_interface<'a>(
+    reflected_interface: &'a str,
+    interface_info: &'a InterfaceInfo,
+    method_name: &str,
+) -> &'a str {
+    interface_info
+        .static_method_declaring_interfaces
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(reflected_interface)
+}
+
 /// Returns eval ReflectionMethod bitflags for one instance method entry.
 fn eval_reflection_instance_method_flags(class_info: &ClassInfo, method_name: &str) -> u64 {
     let visibility = class_info
@@ -1079,6 +1148,15 @@ fn eval_reflection_static_method_flags(class_info: &ClassInfo, method_name: &str
     }
     if !class_info.static_method_impl_classes.contains_key(method_name) {
         flags |= EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
+    }
+    flags
+}
+
+/// Returns eval ReflectionMethod bitflags for one interface method entry.
+fn eval_reflection_interface_method_flags(is_static: bool) -> u64 {
+    let mut flags = EVAL_REFLECTION_METHOD_FLAG_PUBLIC | EVAL_REFLECTION_METHOD_FLAG_ABSTRACT;
+    if is_static {
+        flags |= EVAL_REFLECTION_METHOD_FLAG_STATIC;
     }
     flags
 }
