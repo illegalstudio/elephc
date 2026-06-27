@@ -6640,6 +6640,12 @@ function eval_aot_callable_arg_suffix(string $value): string {
     return $value . "!";
 }
 
+class EvalAotCallableArgTarget {
+    public static function suffix(string $value): string {
+        return $value . "?";
+    }
+}
+
 class EvalAotCallableArgBox {
     public $value = "";
 
@@ -6660,6 +6666,12 @@ echo eval('$box = new EvalAotCallableArgBox("eval_aot_callable_arg_suffix");
 return $box->value . ":" .
     $box->apply("eval_aot_callable_arg_suffix") . ":" .
     EvalAotCallableArgBox::applyStatic("eval_aot_callable_arg_suffix");');
+echo ":";
+echo eval('$static = [EvalAotCallableArgTarget::class, "suffix"];
+$box = new EvalAotCallableArgBox($static);
+return $box->value . ":" .
+    $box->apply("EvalAotCallableArgTarget::suffix") . ":" .
+    EvalAotCallableArgBox::applyStatic($static);');
 "#,
     );
     assert!(
@@ -6667,7 +6679,7 @@ return $box->value . ":" .
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "C!:M!:S!");
+    assert_eq!(out.stdout, "C!:M!:S!:C?:M?:S?");
 }
 
 /// Verifies eval static calls and static callables dispatch public AOT static methods.
