@@ -11,7 +11,7 @@
 use super::*;
 use crate::context::{
     NativeCallableArrayDefaultElement, NativeCallableArrayDefaultKey,
-    NativeCallableObjectDefaultArg,
+    NativeCallableObjectDefaultArg, NativeCallableSignature,
 };
 
 /// Executes statements in source order and propagates the first eval `return`.
@@ -1356,7 +1356,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     }
     let class = expand_eval_class_traits(class, context)?.with_readonly_properties();
     let class = &class;
-    validate_eval_class_modifiers(class, context)?;
+    validate_eval_class_modifiers(class, context, values)?;
     let native_parent = validate_eval_class_parent(class, context, values)?;
     for interface in class.interfaces() {
         if !context.has_interface(interface) && !eval_runtime_interface_exists(interface, values)? {
@@ -1367,9 +1367,11 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     validate_eval_class_does_not_implement_enum_interfaces(class, context)?;
     validate_declared_class_interface_members(class, context)?;
     validate_declared_class_builtin_interface_members(class, context)?;
+    validate_declared_class_aot_interface_members(class, context, values)?;
     if !class.is_abstract() {
         validate_concrete_class_requirements(class, context)?;
         validate_concrete_class_builtin_interface_requirements(class, context)?;
+        validate_concrete_class_aot_interface_requirements(class, context, values)?;
     }
     if context.define_class(class.clone()) {
         if let Some(parent) = native_parent.as_deref() {
@@ -1569,10 +1571,12 @@ fn validate_eval_enum_decl(
     validate_eval_enum_case_declarations(enum_decl)?;
     validate_eval_enum_forbidden_magic_methods(enum_decl)?;
     let enum_class = enum_decl.as_class_metadata();
-    validate_eval_class_modifiers(&enum_class, context)?;
+    validate_eval_class_modifiers(&enum_class, context, values)?;
     validate_eval_enum_interfaces(enum_decl, &enum_class, context, values)?;
     validate_declared_class_builtin_interface_members(&enum_class, context)?;
+    validate_declared_class_aot_interface_members(&enum_class, context, values)?;
     validate_concrete_class_builtin_interface_requirements(&enum_class, context)?;
+    validate_concrete_class_aot_interface_requirements(&enum_class, context, values)?;
     validate_concrete_class_requirements(&enum_class, context)
 }
 
@@ -2562,6 +2566,7 @@ fn validate_eval_class_does_not_implement_throwable_interfaces(
 fn validate_eval_class_modifiers(
     class: &EvalClass,
     context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if class.is_abstract() && class.is_final() {
         return Err(EvalStatus::RuntimeFatal);
@@ -2594,7 +2599,7 @@ fn validate_eval_class_modifiers(
             return Err(EvalStatus::RuntimeFatal);
         }
         validate_method_parent_override(class, method, context)?;
-        validate_eval_override_attribute(class, method, context)?;
+        validate_eval_override_attribute(class, method, context, values)?;
     }
     Ok(())
 }
@@ -2606,6 +2611,17 @@ fn eval_class_has_allow_dynamic_properties_attribute(class: &EvalClass) -> bool 
 
 /// Bridge ReflectionMethod flag for static generated/AOT methods.
 const EVAL_REFLECTION_METHOD_FLAG_STATIC: u64 = 1;
+
+/// Bridge ReflectionMethod flag for private generated/AOT methods.
+const EVAL_REFLECTION_METHOD_FLAG_PRIVATE: u64 = 8;
+
+/// Method requirement discovered from generated/AOT interface metadata.
+struct EvalAotInterfaceMethodRequirement {
+    owner: String,
+    name: String,
+    is_static: bool,
+    signature: Option<EvalInterfaceMethod>,
+}
 
 /// Rejects builtin attributes that cannot target an eval-declared class.
 fn validate_eval_class_attribute_targets(
@@ -2777,12 +2793,14 @@ fn validate_eval_override_attribute(
     class: &EvalClass,
     method: &EvalClassMethod,
     context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if !eval_method_has_global_builtin_attribute(method, "Override") {
         return Ok(());
     }
     if eval_method_overrides_parent(class, method, context)
-        || eval_method_implements_interface(class, method, context)
+        || eval_method_overrides_aot_parent(class, method, context, values)?
+        || eval_method_implements_interface(class, method, context, values)?
     {
         Ok(())
     } else {
@@ -2818,13 +2836,36 @@ fn eval_method_overrides_parent(
         })
 }
 
+/// Returns whether one method overrides a visible generated/AOT parent method.
+fn eval_method_overrides_aot_parent(
+    class: &EvalClass,
+    method: &EvalClassMethod,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some(parent) = class.parent() else {
+        return Ok(false);
+    };
+    if context.has_class(parent) || !values.class_exists(parent)? {
+        return Ok(false);
+    }
+    let parent = parent.trim_start_matches('\\');
+    let Some(flags) = values.reflection_method_flags(parent, method.name())? else {
+        return Ok(false);
+    };
+    let parent_method_is_static = flags & EVAL_REFLECTION_METHOD_FLAG_STATIC != 0;
+    let parent_method_is_private = flags & EVAL_REFLECTION_METHOD_FLAG_PRIVATE != 0;
+    Ok(!parent_method_is_private && parent_method_is_static == method.is_static())
+}
+
 /// Returns whether one method implements a direct or inherited interface method.
 fn eval_method_implements_interface(
     class: &EvalClass,
     method: &EvalClassMethod,
     context: &ElephcEvalContext,
-) -> bool {
-    pending_class_interface_names(class, context)
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if pending_class_interface_names(class, context)
         .iter()
         .filter(|interface| context.has_interface(interface))
         .any(|interface| {
@@ -2836,6 +2877,15 @@ fn eval_method_implements_interface(
                         && requirement.is_static() == method.is_static()
                 })
         })
+    {
+        return Ok(true);
+    }
+    Ok(pending_class_aot_interface_method_requirements(class, context, values)?
+        .iter()
+        .any(|requirement| {
+            requirement.name.eq_ignore_ascii_case(method.name())
+                && requirement.is_static == method.is_static()
+        }))
 }
 
 /// Validates PHP magic-method contracts for one eval class-like method list.
@@ -3367,6 +3417,31 @@ fn validate_declared_class_builtin_interface_members(
     Ok(())
 }
 
+/// Validates declared class methods against generated/AOT interface contracts.
+fn validate_declared_class_aot_interface_members(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for requirement in pending_class_aot_interface_method_requirements(class, context, values)? {
+        let Some((declaring_class, method)) = pending_class_method(class, &requirement.name, context)
+        else {
+            continue;
+        };
+        if !class_method_satisfies_aot_interface_requirement(
+            &method,
+            &declaring_class,
+            &requirement,
+            Some(class),
+            context,
+            false,
+        ) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
+}
+
 /// Validates class methods present for an eval interface, even on abstract classes.
 fn validate_declared_class_interface_methods(
     class: &EvalClass,
@@ -3558,6 +3633,20 @@ fn validate_concrete_class_builtin_interface_requirements(
         pending_class_builtin_interface_method_requirements(class, context)
     {
         if !class_has_builtin_interface_method(class, &requirement_owner, &requirement, context) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
+}
+
+/// Validates concrete class methods required by generated/AOT runtime interfaces.
+fn validate_concrete_class_aot_interface_requirements(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for requirement in pending_class_aot_interface_method_requirements(class, context, values)? {
+        if !class_has_aot_interface_method(class, &requirement, context) {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -3773,6 +3862,155 @@ fn pending_class_builtin_interface_method_requirements(
     requirements
 }
 
+/// Returns generated/AOT interface method requirements inherited by a pending class.
+fn pending_class_aot_interface_method_requirements(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvalAotInterfaceMethodRequirement>, EvalStatus> {
+    let mut requirements = Vec::new();
+    for interface in pending_class_interface_names(class, context) {
+        if context.has_interface(&interface) || !values.interface_exists(&interface)? {
+            continue;
+        }
+        requirements.extend(eval_aot_interface_method_requirements(
+            &interface, context, values,
+        )?);
+    }
+    Ok(requirements)
+}
+
+/// Returns generated/AOT method requirements for one runtime interface.
+fn eval_aot_interface_method_requirements(
+    interface: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvalAotInterfaceMethodRequirement>, EvalStatus> {
+    let interface = interface.trim_start_matches('\\');
+    let method_names = eval_aot_interface_method_names(interface, values)?;
+    let mut requirements = Vec::new();
+    for method_name in method_names {
+        if let Some(requirement) =
+            eval_aot_interface_method_requirement(interface, &method_name, context, values)?
+        {
+            requirements.push(requirement);
+        }
+    }
+    Ok(requirements)
+}
+
+/// Returns generated/AOT method names for one runtime interface.
+fn eval_aot_interface_method_names(
+    interface: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let method_names = values.reflection_method_names(interface)?;
+    let names = eval_runtime_string_array_to_vec(method_names, values)?;
+    values.release(method_names)?;
+    Ok(names)
+}
+
+/// Builds one generated/AOT interface method requirement from reflection and signature metadata.
+fn eval_aot_interface_method_requirement(
+    interface: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalAotInterfaceMethodRequirement>, EvalStatus> {
+    let Some(flags) = values.reflection_method_flags(interface, method_name)? else {
+        return Ok(None);
+    };
+    let is_static = flags & EVAL_REFLECTION_METHOD_FLAG_STATIC != 0;
+    let owner = values
+        .reflection_method_declaring_class(interface, method_name)?
+        .unwrap_or_else(|| interface.to_string());
+    let signature = if is_static {
+        context.native_static_method_signature(&owner, method_name)
+    } else {
+        context.native_method_signature(&owner, method_name)
+    };
+    Ok(Some(EvalAotInterfaceMethodRequirement {
+        owner: owner.clone(),
+        name: method_name.to_string(),
+        is_static,
+        signature: signature.map(|signature| {
+            eval_native_signature_interface_method(method_name, is_static, &signature)
+        }),
+    }))
+}
+
+/// Converts generated/AOT callable metadata into an eval interface method requirement.
+fn eval_native_signature_interface_method(
+    method_name: &str,
+    is_static: bool,
+    signature: &NativeCallableSignature,
+) -> EvalInterfaceMethod {
+    let param_count = signature.param_count();
+    EvalInterfaceMethod::new(
+        method_name,
+        (0..param_count)
+            .map(|index| {
+                signature
+                    .param_names()
+                    .get(index)
+                    .filter(|name| !name.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| format!("arg{index}"))
+            })
+            .collect(),
+    )
+    .with_static(is_static)
+    .with_parameter_types(
+        (0..param_count)
+            .map(|index| signature.param_type(index).cloned())
+            .collect(),
+    )
+    .with_parameter_defaults(
+        (0..param_count)
+            .map(|index| {
+                signature
+                    .param_default(index)
+                    .map(|_| EvalExpr::Const(EvalConst::Null))
+            })
+            .collect(),
+    )
+    .with_parameter_by_ref_flags(
+        (0..param_count)
+            .map(|index| signature.param_by_ref(index))
+            .collect(),
+    )
+    .with_parameter_variadic_flags(
+        (0..param_count)
+            .map(|index| signature.param_variadic(index))
+            .collect(),
+    )
+    .with_return_type(signature.return_type().cloned())
+}
+
+/// Copies a runtime string array into Rust-owned strings for declaration validation.
+fn eval_runtime_string_array_to_vec(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut result = Vec::with_capacity(len);
+    for position in 0..len {
+        let key = values.int(position as i64)?;
+        let value = values.array_get(array, key)?;
+        result.push(eval_runtime_string_value(value, values)?);
+    }
+    Ok(result)
+}
+
+/// Reads one runtime string cell as UTF-8 metadata.
+fn eval_runtime_string_value(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let bytes = values.string_bytes(value)?;
+    String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)
+}
+
 /// Validates that one eval class provides methods required by one eval interface.
 fn validate_class_implements_eval_interface(
     class: &EvalClass,
@@ -3834,6 +4072,26 @@ fn class_has_builtin_interface_method(
         })
 }
 
+/// Returns whether a class or its eval parents satisfy one generated/AOT interface method.
+fn class_has_aot_interface_method(
+    class: &EvalClass,
+    requirement: &EvalAotInterfaceMethodRequirement,
+    context: &ElephcEvalContext,
+) -> bool {
+    if let Some((declaring_class, method)) = pending_class_method(class, &requirement.name, context)
+    {
+        return class_method_satisfies_aot_interface_requirement(
+            &method,
+            &declaring_class,
+            requirement,
+            Some(class),
+            context,
+            true,
+        );
+    }
+    false
+}
+
 /// Returns whether a class or its eval parents satisfy one interface method signature.
 fn class_has_interface_method(
     class: &EvalClass,
@@ -3870,6 +4128,33 @@ fn class_has_interface_method(
                     context,
                 )
         })
+}
+
+/// Returns whether one method satisfies a generated/AOT interface requirement.
+fn class_method_satisfies_aot_interface_requirement(
+    method: &EvalClassMethod,
+    method_owner: &str,
+    requirement: &EvalAotInterfaceMethodRequirement,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+    require_concrete: bool,
+) -> bool {
+    if method.visibility() != EvalVisibility::Public
+        || method.is_static() != requirement.is_static
+        || (require_concrete && method.is_abstract())
+    {
+        return false;
+    }
+    requirement.signature.as_ref().is_none_or(|signature| {
+        class_method_satisfies_interface_signature(
+            method,
+            method_owner,
+            signature,
+            &requirement.owner,
+            pending_class,
+            context,
+        )
+    })
 }
 
 /// Returns whether one class method can accept every call required by an interface method.

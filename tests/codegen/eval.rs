@@ -12456,6 +12456,82 @@ echo $box->aotLabel();');
     assert_eq!(out, "aot");
 }
 
+/// Verifies eval classes can implement generated/AOT interface method contracts.
+#[test]
+fn test_eval_declared_class_implements_aot_interface_methods() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalAotImplementedContract {
+    public function label(string $name): string;
+    public static function staticLabel(string $name): string;
+}
+eval('class EvalAotImplementedBox implements EvalAotImplementedContract {
+    #[\Override]
+    public function label(string $name): string { return "I:" . $name; }
+    #[\Override]
+    public static function staticLabel(string $name): string { return "S:" . $name; }
+}
+$box = new EvalAotImplementedBox();
+echo $box->label("Ada") . ":" . EvalAotImplementedBox::staticLabel("Bob");');
+"#,
+    );
+    assert_eq!(out, "I:Ada:S:Bob");
+}
+
+/// Verifies eval rejects concrete classes missing generated/AOT interface methods.
+#[test]
+fn test_eval_declared_class_rejects_missing_aot_interface_methods() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+interface EvalAotMissingContract {
+    public function required(): string;
+}
+eval('class EvalAotMissingBox implements EvalAotMissingContract {}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval validates generated/AOT interface method signatures.
+#[test]
+fn test_eval_declared_class_rejects_incompatible_aot_interface_method_signature() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+interface EvalAotSignatureContract {
+    public function required(string $name): string;
+}
+eval('class EvalAotSignatureBox implements EvalAotSignatureContract {
+    public function required(int $name): string { return "bad"; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval `#[Override]` can target generated/AOT parent class methods.
+#[test]
+fn test_eval_declared_class_override_attribute_accepts_aot_parent_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotOverrideParent {
+    public function label(): string { return "parent"; }
+}
+eval('class EvalAotOverrideChild extends EvalAotOverrideParent {
+    #[\Override]
+    public function label(): string { return "child"; }
+}
+echo (new EvalAotOverrideChild())->label();');
+"#,
+    );
+    assert_eq!(out, "child");
+}
+
 /// Verifies eval rejects global builtin attributes on unsupported OOP targets.
 #[test]
 fn test_eval_declared_builtin_attribute_target_validation() {
