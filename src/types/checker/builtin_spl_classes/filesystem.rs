@@ -42,6 +42,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "SplFileInfo".to_string(),
         FlattenedClass {
             name: "SplFileInfo".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec!["Stringable".to_string()],
             is_abstract: false,
@@ -60,6 +61,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "SplFileObject".to_string(),
         FlattenedClass {
             name: "SplFileObject".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("SplFileInfo".to_string()),
             implements: vec!["RecursiveIterator".to_string(), "SeekableIterator".to_string()],
             is_abstract: false,
@@ -78,6 +80,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "SplTempFileObject".to_string(),
         FlattenedClass {
             name: "SplTempFileObject".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("SplFileObject".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -96,6 +99,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "DirectoryIterator".to_string(),
         FlattenedClass {
             name: "DirectoryIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("SplFileInfo".to_string()),
             implements: vec!["Iterator".to_string(), "SeekableIterator".to_string()],
             is_abstract: false,
@@ -114,6 +118,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "FilesystemIterator".to_string(),
         FlattenedClass {
             name: "FilesystemIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("DirectoryIterator".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -132,6 +137,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "GlobIterator".to_string(),
         FlattenedClass {
             name: "GlobIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("FilesystemIterator".to_string()),
             implements: vec!["Countable".to_string()],
             is_abstract: false,
@@ -150,6 +156,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "RecursiveDirectoryIterator".to_string(),
         FlattenedClass {
             name: "RecursiveDirectoryIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("FilesystemIterator".to_string()),
             implements: vec!["RecursiveIterator".to_string()],
             is_abstract: false,
@@ -168,6 +175,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "RecursiveCachingIterator".to_string(),
         FlattenedClass {
             name: "RecursiveCachingIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("CachingIterator".to_string()),
             implements: vec!["RecursiveIterator".to_string()],
             is_abstract: false,

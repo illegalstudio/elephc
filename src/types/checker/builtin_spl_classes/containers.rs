@@ -24,6 +24,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "SplDoublyLinkedList".to_string(),
         FlattenedClass {
             name: "SplDoublyLinkedList".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec![
                 "Iterator".to_string(),
@@ -46,6 +47,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "SplStack".to_string(),
         FlattenedClass {
             name: "SplStack".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("SplDoublyLinkedList".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -64,6 +66,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "SplQueue".to_string(),
         FlattenedClass {
             name: "SplQueue".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("SplDoublyLinkedList".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -85,6 +88,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "SplFixedArray".to_string(),
         FlattenedClass {
             name: "SplFixedArray".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec![
                 "IteratorAggregate".to_string(),
@@ -108,6 +112,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "InternalIterator".to_string(),
         FlattenedClass {
             name: "InternalIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec!["Iterator".to_string()],
             is_abstract: false,

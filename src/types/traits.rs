@@ -27,6 +27,7 @@ mod validation;
 /// schema building, type checking, and codegen.
 pub struct FlattenedClass {
     pub name: String,
+    pub span: Span,
     pub extends: Option<String>,
     pub implements: Vec<String>,
     pub is_abstract: bool,
@@ -203,6 +204,7 @@ pub fn flatten_classes(
                     );
                 flattened.push(FlattenedClass {
                     name: name.clone(),
+                    span: stmt.span,
                     extends: extends.as_ref().map(|name| name.as_str().to_string()),
                     implements: implements.iter().map(|name| name.as_str().to_string()).collect(),
                     is_abstract: *is_abstract,
@@ -273,6 +275,7 @@ pub fn flatten_classes(
                     name.clone(),
                     FlattenedClass {
                         name: name.clone(),
+                        span: stmt.span,
                         extends: None,
                         implements: implements
                             .iter()

@@ -22,6 +22,7 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
         "SplObjectStorage".to_string(),
         FlattenedClass {
             name: "SplObjectStorage".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec![
                 "Iterator".to_string(),

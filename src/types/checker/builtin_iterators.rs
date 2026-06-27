@@ -53,6 +53,7 @@ pub(crate) fn inject_builtin_iterators(
         "Generator".to_string(),
         FlattenedClass {
             name: "Generator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec!["Iterator".to_string()],
             is_abstract: false,

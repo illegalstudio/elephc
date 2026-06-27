@@ -109,6 +109,7 @@ pub(crate) fn inject_builtin_throwables(
         "Error".to_string(),
         FlattenedClass {
             name: "Error".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec!["Throwable".to_string()],
             is_abstract: false,
@@ -139,6 +140,7 @@ pub(crate) fn inject_builtin_throwables(
         "Exception".to_string(),
         FlattenedClass {
             name: "Exception".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec!["Throwable".to_string()],
             is_abstract: false,
@@ -172,6 +174,7 @@ pub(crate) fn inject_builtin_throwables(
         "RuntimeException".to_string(),
         FlattenedClass {
             name: "RuntimeException".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("Exception".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -189,6 +192,7 @@ pub(crate) fn inject_builtin_throwables(
         "ReflectionException".to_string(),
         FlattenedClass {
             name: "ReflectionException".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("Exception".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -206,6 +210,7 @@ pub(crate) fn inject_builtin_throwables(
         "JsonException".to_string(),
         FlattenedClass {
             name: "JsonException".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("RuntimeException".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -224,6 +229,7 @@ pub(crate) fn inject_builtin_throwables(
         "TypeError".to_string(),
         FlattenedClass {
             name: "TypeError".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("Error".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -241,6 +247,7 @@ pub(crate) fn inject_builtin_throwables(
         "ValueError".to_string(),
         FlattenedClass {
             name: "ValueError".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("Error".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -280,6 +287,7 @@ pub(crate) fn inject_builtin_throwables(
         "Fiber".to_string(),
         FlattenedClass {
             name: "Fiber".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: Vec::new(),
             is_abstract: false,
@@ -299,6 +307,7 @@ pub(crate) fn inject_builtin_throwables(
         "FiberError".to_string(),
         FlattenedClass {
             name: "FiberError".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("Error".to_string()),
             implements: Vec::new(),
             is_abstract: false,

@@ -75,6 +75,7 @@ pub(crate) fn inject_builtin_spl_exceptions(
             (*name).to_string(),
             FlattenedClass {
                 name: (*name).to_string(),
+                span: crate::span::Span::dummy(),
                 extends: Some((*parent).to_string()),
                 implements: Vec::new(),
                 is_abstract: false,

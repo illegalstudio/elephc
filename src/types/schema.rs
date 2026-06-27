@@ -240,6 +240,8 @@ pub struct InterfaceInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassInfo {
     pub class_id: u64,
+    /// Source span of the class-like declaration, or `Span::dummy()` for compiler-injected classes.
+    pub declaration_span: crate::span::Span,
     pub parent: Option<String>,
     pub is_abstract: bool,
     pub is_final: bool,
