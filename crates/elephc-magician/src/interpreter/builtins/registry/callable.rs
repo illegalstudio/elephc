@@ -135,6 +135,11 @@ pub(in crate::interpreter) fn eval_object_callable(
         return Ok(EvaluatedCallable::InvokableObject { object: callback });
     };
     let Some((_, method)) = context.class_method(class.name(), "__invoke") else {
+        if eval_dynamic_class_native_invokable_method_class(class.name(), context, values)?
+            .is_some()
+        {
+            return Ok(EvaluatedCallable::InvokableObject { object: callback });
+        }
         return Err(EvalStatus::UnsupportedConstruct);
     };
     if method.is_static() || method.is_abstract() {

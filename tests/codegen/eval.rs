@@ -8115,6 +8115,44 @@ echo $parent ? $parent->getName() : "missing";');
     );
 }
 
+/// Verifies eval-declared classes inherit AOT callable object and method behavior.
+#[test]
+fn test_eval_declared_class_inherits_aot_invokable_parent_callables() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotCallableParent {
+    public string $prefix;
+    public function __construct(string $prefix = "box") { $this->prefix = $prefix; }
+    public function read(string $value = "R"): string { return $this->prefix . ":" . $value; }
+    public function __invoke(string $left = "A", string $right = "B"): string {
+        return $this->prefix . ":" . $left . $right;
+    }
+}
+
+eval('class EvalRuntimeCallableChild extends EvalAotCallableParent {}
+$box = new EvalRuntimeCallableChild("box");
+echo is_callable($box) ? "I:" : "bad:";
+echo $box(right: "D", left: "C") . ":";
+$first = $box(...);
+echo $first("E", "F") . ":";
+echo call_user_func($box, "G", "H") . ":";
+echo call_user_func_array($box, ["right" => "J", "left" => "I"]) . ":";
+echo is_callable([$box, "read"]) ? "M:" : "bad:";
+echo call_user_func([$box, "read"], "K") . ":";
+echo call_user_func_array([$box, "read"], ["value" => "L"]);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "I:box:CD:box:EF:box:GH:box:IJ:M:box:K:box:L"
+    );
+}
+
 /// Verifies eval-declared class inheritance uses dynamic methods and metadata.
 #[test]
 fn test_eval_declared_class_inherits_methods_and_metadata() {

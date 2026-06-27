@@ -134,7 +134,9 @@ through `$object(...)`, `call_user_func($object, ...)`, and
 as callable. Generated/AOT objects with bridge-supported `__invoke()` metadata
 use the same direct and callback call paths, including named/defaulted argument
 binding, and non-invokable generated/AOT objects report PHP-compatible
-direct-call or callback errors. Static method callables can use
+direct-call or callback errors. Eval-declared classes that extend generated/AOT
+parents inherit bridge-supported parent instance-method callable probes and
+`__invoke()` object-call dispatch. Static method callables can use
 `["ClassName", "method"]` or
 `"ClassName::method"` through `$cb(...)`, `call_user_func()`, and
 `call_user_func_array()`. Eval-declared static methods also support string-keyed

@@ -7057,6 +7057,18 @@ pub(in crate::interpreter) fn eval_invokable_object_call_result(
     let called_class_name = class.name().to_string();
     let Some((declaring_class, method)) = context.class_method(&called_class_name, "__invoke")
     else {
+        if let Some(native_class_name) =
+            eval_dynamic_class_native_invokable_method_class(&called_class_name, context, values)?
+        {
+            return eval_native_method_with_evaluated_args_unchecked(
+                object,
+                &native_class_name,
+                "__invoke",
+                evaluated_args,
+                context,
+                values,
+            );
+        }
         return eval_throw_object_not_callable_error(&called_class_name, context, values);
     };
     if method.is_static() || method.is_abstract() {
@@ -7101,12 +7113,47 @@ pub(in crate::interpreter) fn eval_invokable_object_precheck(
     };
     let called_class_name = class.name().to_string();
     let Some((_, method)) = context.class_method(&called_class_name, "__invoke") else {
+        if eval_dynamic_class_native_invokable_method_class(&called_class_name, context, values)?
+            .is_some()
+        {
+            return Ok(());
+        }
         return eval_throw_object_not_callable_error(&called_class_name, context, values);
     };
     if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(())
+}
+
+/// Returns the generated/AOT class that can dispatch an inherited `__invoke()` hook.
+pub(in crate::interpreter) fn eval_dynamic_class_native_invokable_method_class(
+    called_class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let Some((declaring_class, _, is_static, is_abstract)) =
+        eval_dynamic_class_native_method_metadata(called_class_name, "__invoke", context, values)?
+    else {
+        return Ok(None);
+    };
+    if is_static || is_abstract {
+        return Ok(None);
+    }
+    Ok(Some(declaring_class))
+}
+
+/// Returns generated/AOT method metadata inherited by an eval-declared class.
+pub(in crate::interpreter) fn eval_dynamic_class_native_method_metadata(
+    called_class_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, EvalVisibility, bool, bool)>, EvalStatus> {
+    let Some(parent) = context.class_native_parent_name(called_class_name) else {
+        return Ok(None);
+    };
+    eval_aot_method_dispatch_metadata_in_hierarchy(&parent, method_name, context, values)
 }
 
 /// Dispatches a missing or inaccessible eval instance method through `__call()`.

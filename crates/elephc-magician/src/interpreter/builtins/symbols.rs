@@ -922,6 +922,14 @@ fn eval_object_method_callable_probe(
     let Some((declaring_class, method)) =
         eval_dynamic_method_for_call(class.name(), method_name, context)
     else {
+        if eval_dynamic_class_native_method_callable_probe(
+            class.name(),
+            method_name,
+            context,
+            values,
+        )? {
+            return Ok(true);
+        }
         return Ok(eval_instance_magic_method_callable_probe(
             class.name(),
             context,
@@ -974,6 +982,29 @@ fn eval_aot_object_method_callable_probe(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let class_name = runtime_object_class_name(object, values)?;
+    eval_aot_class_method_callable_probe(&class_name, method_name, context, values)
+}
+
+/// Returns whether an eval class can call a generated/AOT parent instance method.
+fn eval_dynamic_class_native_method_callable_probe(
+    class_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some(parent) = context.class_native_parent_name(class_name) else {
+        return Ok(false);
+    };
+    eval_aot_class_method_callable_probe(&parent, method_name, context, values)
+}
+
+/// Returns whether one generated/AOT class instance method can be called from eval.
+fn eval_aot_class_method_callable_probe(
+    class_name: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
     let Some((declaring_class, visibility, _, is_abstract)) =
         eval_aot_method_dispatch_metadata_in_hierarchy(&class_name, method_name, context, values)?
     else {

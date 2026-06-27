@@ -67,6 +67,35 @@ fn eval_validate_call_user_func_object_method(
     let Some((declaring_class, method)) =
         eval_dynamic_method_for_call(&called_class_name, method_name, context)
     else {
+        if let Some(parent) = context.class_native_parent_name(&called_class_name) {
+            let has_native_metadata = eval_dynamic_class_native_method_metadata(
+                &called_class_name,
+                method_name,
+                context,
+                values,
+            )?
+            .is_some();
+            let has_native_magic =
+                eval_call_user_func_native_instance_magic_callable(&parent, context, values)?;
+            let has_native_signature = context
+                .native_method_signature(&parent, method_name)
+                .is_some();
+            let missing_native_class = !values.class_exists(&parent)?;
+            let has_native_target = has_native_metadata
+                || has_native_magic
+                || has_native_signature
+                || missing_native_class;
+            if has_native_target {
+                return eval_validate_call_user_func_native_object_method_for_class(
+                    &parent,
+                    &called_class_name,
+                    method_name,
+                    function_name,
+                    context,
+                    values,
+                );
+            }
+        }
         if eval_call_user_func_instance_magic_callable(&called_class_name, context) {
             return Ok(());
         }
@@ -105,6 +134,25 @@ fn eval_validate_call_user_func_native_object_method(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let class_name = runtime_object_class_name(object, values)?;
+    eval_validate_call_user_func_native_object_method_for_class(
+        &class_name,
+        &class_name,
+        method_name,
+        function_name,
+        context,
+        values,
+    )
+}
+
+/// Validates generated/AOT object-method callbacks by class metadata.
+fn eval_validate_call_user_func_native_object_method_for_class(
+    class_name: &str,
+    error_class_name: &str,
+    method_name: &str,
+    function_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     let Some((declaring_class, visibility, _, is_abstract)) =
         eval_aot_method_dispatch_metadata_in_hierarchy(&class_name, method_name, context, values)?
     else {
@@ -112,13 +160,13 @@ fn eval_validate_call_user_func_native_object_method(
             || context
                 .native_method_signature(&class_name, method_name)
                 .is_some()
-            || !values.class_exists(&class_name)?
+            || !values.class_exists(class_name)?
         {
             return Ok(());
         }
         return eval_call_user_func_missing_method_type_error(
             function_name,
-            &class_name,
+            error_class_name,
             method_name,
             context,
             values,
