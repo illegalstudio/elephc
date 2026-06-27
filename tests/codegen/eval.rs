@@ -8712,8 +8712,8 @@ echo $box->hidden();');
 "#,
     );
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        err.contains("Fatal error: uncaught exception"),
+        "stderr did not contain uncaught throwable diagnostic: {err}"
     );
 }
 
