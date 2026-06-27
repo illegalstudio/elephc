@@ -10443,6 +10443,8 @@ pub(in crate::interpreter) fn eval_native_constructor_with_evaluated_args(
     if let Some(message) = eval_native_constructor_access_error(class_name, context, values)? {
         return eval_throw_error(&message, context, values);
     }
+    let bridge_scope =
+        eval_native_constructor_bridge_scope(class_name, context, values)?;
     let signature = context.native_constructor_signature(class_name);
     let bound_args = bind_native_callable_bound_args(
         signature,
@@ -10450,11 +10452,35 @@ pub(in crate::interpreter) fn eval_native_constructor_with_evaluated_args(
         context,
         values,
     )?;
-    let result = values.construct_object(object, native_bound_arg_values(&bound_args));
+    let result = if let Some(scope) = bridge_scope.as_deref() {
+        eval_with_native_bridge_scope(scope, context, || {
+            values.construct_object(object, native_bound_arg_values(&bound_args))
+        })
+    } else {
+        values.construct_object(object, native_bound_arg_values(&bound_args))
+    };
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
     match (result, writeback) {
         (Err(status), _) | (_, Err(status)) => Err(status),
         (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+/// Returns the generated/AOT constructor scope that the runtime bridge can recognize.
+fn eval_native_constructor_bridge_scope(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    let Some((declaring_class, visibility)) =
+        eval_reflection_aot_non_public_constructor(class_name, values)?
+    else {
+        return Ok(None);
+    };
+    if eval_native_constructor_access_allowed(&declaring_class, visibility, context) {
+        Ok(Some(declaring_class))
+    } else {
+        Ok(None)
     }
 }
 

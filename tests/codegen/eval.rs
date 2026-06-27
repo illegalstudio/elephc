@@ -8311,6 +8311,35 @@ $box->run();');
     assert_eq!(out.stdout, "9");
 }
 
+/// Verifies eval-declared children can run inherited protected AOT constructors.
+#[test]
+fn test_eval_declared_child_runs_inherited_protected_aot_constructor() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalRuntimeProtectedConstructorParent {
+    public int $x = 0;
+    protected function __construct(int $x) {
+        $this->x = $x + 2;
+    }
+}
+
+eval('class EvalRuntimeProtectedConstructorChild extends EvalRuntimeProtectedConstructorParent {
+    public static function make() {
+        return new self(3);
+    }
+}
+$box = EvalRuntimeProtectedConstructorChild::make();
+echo $box->x;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "5");
+}
+
 /// Verifies eval-declared classes inherit AOT callable object and method behavior.
 #[test]
 fn test_eval_declared_class_inherits_aot_invokable_parent_callables() {
