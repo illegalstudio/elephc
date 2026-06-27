@@ -1234,9 +1234,45 @@ impl ElephcEvalContext {
 
     /// Returns the dynamic eval class metadata associated with one object identity.
     pub fn dynamic_object_class(&self, identity: u64) -> Option<&EvalClass> {
-        self.dynamic_objects
-            .get(&identity)
-            .and_then(|class_key| self.classes.get(class_key))
+        if let Some(class_key) = self.dynamic_objects.get(&identity) {
+            return self.classes.get(class_key);
+        }
+        #[cfg(not(test))]
+        {
+            let owner = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)?;
+            let owner = unsafe { owner.as_ref()? };
+            if owner.abi_version() != ABI_VERSION {
+                return None;
+            }
+            let class_key = owner.dynamic_objects.get(&identity)?;
+            self.classes.get(class_key)
+        }
+        #[cfg(test)]
+        {
+            None
+        }
+    }
+
+    /// Returns the PHP-visible eval class name associated with one dynamic object identity.
+    pub fn dynamic_object_class_name(&self, identity: u64) -> Option<String> {
+        if let Some(class) = self.dynamic_object_class(identity) {
+            return Some(class.name().trim_start_matches('\\').to_string());
+        }
+        #[cfg(not(test))]
+        {
+            let owner = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)?;
+            let owner = unsafe { owner.as_ref()? };
+            if owner.abi_version() != ABI_VERSION {
+                return None;
+            }
+            owner
+                .dynamic_object_class(identity)
+                .map(|class| class.name().trim_start_matches('\\').to_string())
+        }
+        #[cfg(test)]
+        {
+            None
+        }
     }
 
     /// Marks one dynamic object's destructor as active if it has not already run.
@@ -1258,9 +1294,36 @@ impl ElephcEvalContext {
 
     /// Returns whether one dynamic object identity was registered with a class-like name.
     pub fn dynamic_object_is_class(&self, identity: u64, class_name: &str) -> bool {
-        self.dynamic_objects
+        let class_name = normalize_class_name(class_name);
+        if self
+            .dynamic_objects
             .get(&identity)
-            .is_some_and(|class_key| class_key == &normalize_class_name(class_name))
+            .is_some_and(|class_key| class_key == &class_name)
+        {
+            return true;
+        }
+        #[cfg(not(test))]
+        {
+            let Some(owner) =
+                crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+            else {
+                return false;
+            };
+            let Some(owner) = (unsafe { owner.as_ref() }) else {
+                return false;
+            };
+            if owner.abi_version() != ABI_VERSION {
+                return false;
+            }
+            owner
+                .dynamic_objects
+                .get(&identity)
+                .is_some_and(|class_key| class_key == &class_name)
+        }
+        #[cfg(test)]
+        {
+            false
+        }
     }
 
     /// Binds one eval object property slot to a persistent PHP reference target.

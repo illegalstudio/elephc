@@ -136,8 +136,8 @@ pub(in crate::interpreter) fn eval_get_class_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if let Ok(identity) = values.object_identity(object) {
-        if let Some(class) = context.dynamic_object_class(identity) {
-            return values.string(class.name().trim_start_matches('\\'));
+        if let Some(class_name) = context.dynamic_object_class_name(identity) {
+            return values.string(&class_name);
         }
     }
     values.object_class_name(object)
@@ -211,8 +211,8 @@ pub(in crate::interpreter) fn eval_get_parent_class_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if let Ok(identity) = values.object_identity(object_or_class) {
-        if let Some(class) = context.dynamic_object_class(identity) {
-            if let Some(parent) = context.class_parent_names(class.name()).into_iter().next() {
+        if let Some(class_name) = context.dynamic_object_class_name(identity) {
+            if let Some(parent) = context.class_parent_names(&class_name).into_iter().next() {
                 return values.string(&parent);
             }
             return values.string("");

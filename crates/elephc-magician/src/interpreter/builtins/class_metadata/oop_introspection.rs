@@ -473,8 +473,8 @@ fn eval_object_class_metadata_name(
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
     let identity = values.object_identity(object)?;
-    if let Some(class) = context.dynamic_object_class(identity) {
-        return Ok(class.name().trim_start_matches('\\').to_string());
+    if let Some(class_name) = context.dynamic_object_class_name(identity) {
+        return Ok(class_name);
     }
     let class_name = values.object_class_name(object)?;
     let class_name_bytes = values.string_bytes(class_name);
