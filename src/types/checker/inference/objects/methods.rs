@@ -37,7 +37,10 @@ impl Checker {
                 return self
                     .infer_method_call_on_interface_type(class_name, method, args, expr, env);
             }
-            return self.infer_method_call_on_class_type(class_name, method, args, expr, env);
+            let return_ty = self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
+            return Ok(self
+                .tracked_reflection_class_method_return_type(object, method)
+                .unwrap_or(return_ty));
         }
         // Method calls on a union object type are allowed when the union has a
         // single object class. `?Foo` / `Foo|null` faults on a null receiver as in
@@ -61,13 +64,35 @@ impl Checker {
                         env,
                     );
                 }
-                return self.infer_method_call_on_class_type(&class_name, method, args, expr, env);
+                let return_ty =
+                    self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?;
+                return Ok(self
+                    .tracked_reflection_class_method_return_type(object, method)
+                    .unwrap_or(return_ty));
             }
             // No single object class: re-run the strict check to surface its
             // diagnostic (e.g. a union of two distinct object classes).
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?;
         }
         Ok(PhpType::Int)
+    }
+
+    /// Returns a concrete reflected object type for tracked `ReflectionClass` construction helpers.
+    fn tracked_reflection_class_method_return_type(
+        &self,
+        object: &Expr,
+        method: &str,
+    ) -> Option<PhpType> {
+        let ExprKind::Variable(name) = &object.kind else {
+            return None;
+        };
+        let reflected_class = self.reflection_class_targets.get(name)?;
+        match php_symbol_key(method).as_str() {
+            "newinstance" | "newinstanceargs" | "newinstancewithoutconstructor" => {
+                Some(PhpType::Object(reflected_class.clone()))
+            }
+            _ => None,
+        }
     }
 
     /// Infers the type of a nullsafe method call expression (`$obj?->method(...)`).

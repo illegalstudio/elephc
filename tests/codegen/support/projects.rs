@@ -16,6 +16,14 @@ fn required_libraries_for_codegen(
 ) -> Vec<String> {
     let runtime_features =
         elephc::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
+    required_libraries_for_features(check_result, runtime_features)
+}
+
+/// Combines checker-required libraries with libraries for an already computed runtime feature set.
+fn required_libraries_for_features(
+    check_result: &elephc::types::CheckResult,
+    runtime_features: elephc::codegen::RuntimeFeatures,
+) -> Vec<String> {
     let mut required_libraries = check_result.required_libraries.clone();
     for lib in elephc::codegen::required_libraries_for_runtime_features(runtime_features) {
         if !required_libraries.contains(&lib) {
@@ -326,28 +334,59 @@ pub(crate) fn compile_and_run_files_with_defines(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let (user_asm, runtime_asm) = elephc::codegen::generate(
-        &optimized,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.callable_param_sigs,
-        &check_result.callable_return_sigs,
-        &check_result.callable_array_return_sigs,
-        &check_result.interfaces,
-        &check_result.classes,
-        &check_result.enums,
-        &check_result.packed_classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
-        8_388_608,
-        false,
-        false,
-        target(),
-        requires_elephc_tls,
-        default_null_repr(),
-    );
-    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
+    let (user_asm, runtime_asm, required_libraries) = if codegen_fixture_uses_ir_backend() {
+        let ir_module = elephc::ir_lower::lower_program_with_source_path(
+            &optimized,
+            &check_result,
+            target(),
+            &php_path,
+        )
+        .expect("AST-to-EIR lowering failed for multi-file codegen fixture");
+        elephc::ir::validate_module(&ir_module)
+            .expect("EIR validation failed for multi-file codegen fixture");
+        let exported_functions = HashMap::new();
+        let regalloc_linear =
+            !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
+        let user_asm = elephc::codegen_ir::generate_user_asm_from_ir_with_options(
+            &ir_module,
+            false,
+            false,
+            requires_elephc_tls,
+            elephc::codegen::Emit::Executable,
+            &exported_functions,
+            regalloc_linear,
+        )
+        .expect("EIR backend codegen failed for multi-file codegen fixture");
+        let runtime_features = ir_module.required_runtime_features;
+        let runtime_asm =
+            elephc::codegen::generate_runtime_with_features(8_388_608, target(), runtime_features);
+        let required_libraries = required_libraries_for_features(&check_result, runtime_features);
+        (user_asm, runtime_asm, required_libraries)
+    } else {
+        let (user_asm, runtime_asm) = elephc::codegen::generate(
+            &optimized,
+            &check_result.global_env,
+            &check_result.functions,
+            &check_result.callable_param_sigs,
+            &check_result.callable_return_sigs,
+            &check_result.callable_array_return_sigs,
+            &check_result.interfaces,
+            &check_result.classes,
+            &check_result.enums,
+            &check_result.packed_classes,
+            &check_result.extern_functions,
+            &check_result.extern_classes,
+            &check_result.extern_globals,
+            8_388_608,
+            false,
+            false,
+            target(),
+            requires_elephc_tls,
+            default_null_repr(),
+        );
+        let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
+        (user_asm, runtime_asm, required_libraries)
+    };
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let elephc_out = assemble_and_run(

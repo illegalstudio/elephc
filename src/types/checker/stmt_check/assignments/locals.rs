@@ -112,6 +112,7 @@ pub(super) fn check_assign(
     } else {
         value
     };
+    let reflection_class_target = reflection_class_assignment_target(checker, callable_source, env);
     let ty_result: Result<PhpType, CompileError> = (|| {
         if let Some(default) = null_coalesce_default {
             if let Some(existing) = env.get(name).cloned() {
@@ -146,6 +147,7 @@ pub(super) fn check_assign(
     }
     let ty = ty_result?;
     metadata_result?;
+    update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
     merge_local_assignment_type(checker, name, &ty, span, env)
 }
 
@@ -174,6 +176,7 @@ pub(super) fn check_ref_assign(
     } else {
         clear_callable_metadata(checker, target);
     }
+    copy_reflection_class_metadata(checker, target, source);
     Ok(())
 }
 
@@ -351,6 +354,82 @@ pub(super) fn update_callable_assignment_metadata(
         checker.first_class_callable_targets.remove(name);
     }
     Ok(())
+}
+
+/// Updates static `ReflectionClass` metadata for one assigned local.
+fn update_reflection_class_assignment_metadata(
+    checker: &mut Checker,
+    name: &str,
+    reflected_class: Option<String>,
+) {
+    if let Some(reflected_class) = reflected_class {
+        checker
+            .reflection_class_targets
+            .insert(name.to_string(), reflected_class);
+    } else {
+        checker.reflection_class_targets.remove(name);
+    }
+}
+
+/// Mirrors static `ReflectionClass` metadata across a reference alias assignment.
+fn copy_reflection_class_metadata(checker: &mut Checker, target: &str, source: &str) {
+    if let Some(reflected_class) = checker.reflection_class_targets.get(source).cloned() {
+        checker
+            .reflection_class_targets
+            .insert(target.to_string(), reflected_class);
+    } else {
+        checker.reflection_class_targets.remove(target);
+    }
+}
+
+/// Resolves the statically-known class reflected by a `new ReflectionClass(...)` expression.
+fn reflection_class_assignment_target(
+    checker: &Checker,
+    source: &Expr,
+    env: &TypeEnv,
+) -> Option<String> {
+    let ExprKind::NewObject { class_name, args } = &source.kind else {
+        return None;
+    };
+    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) != "reflectionclass" {
+        return None;
+    }
+    let class_arg = reflection_class_constructor_arg(args)?;
+    match &class_arg.kind {
+        ExprKind::StringLiteral(class_name) => {
+            resolve_class_name(checker, class_name).map(str::to_string)
+        }
+        ExprKind::ClassConstant { receiver } => {
+            resolve_static_receiver_class(checker, receiver, class_arg.span).ok()
+        }
+        _ => match env
+            .get(variable_name(class_arg).unwrap_or_default())
+            .cloned()
+            .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(class_arg))
+            .codegen_repr()
+        {
+            PhpType::Object(class_name) if !class_name.is_empty() => Some(class_name),
+            _ => None,
+        },
+    }
+}
+
+/// Returns the ReflectionClass constructor class argument after simple named-argument matching.
+fn reflection_class_constructor_arg(args: &[Expr]) -> Option<&Expr> {
+    if let Some(positional) = args.iter().find(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. })) {
+        return Some(positional);
+    }
+    args.iter().find_map(|arg| {
+        let ExprKind::NamedArg { name, value } = &arg.kind else {
+            return None;
+        };
+        match php_symbol_key(name).as_str() {
+            "class" | "classname" | "class_name" | "objectorclass" | "object_or_class" => {
+                Some(value.as_ref())
+            }
+            _ => None,
+        }
+    })
 }
 
 /// Returns true when a local assignment stores an array whose elements are callable descriptors.
@@ -594,6 +673,8 @@ pub(super) fn check_typed_assign(
         ));
     }
     env.insert(name.to_string(), declared_ty);
+    let reflected_class = reflection_class_assignment_target(checker, value, env);
+    update_reflection_class_assignment_metadata(checker, name, reflected_class);
     Ok(())
 }
 
@@ -632,6 +713,7 @@ pub(super) fn check_list_unpack(
                 let unpack_ty = *elem_ty.clone();
                 env.insert(var.clone(), unpack_ty.clone());
                 update_list_unpack_callable_metadata(checker, var, value, &unpack_ty);
+                checker.reflection_class_targets.remove(var);
             }
         }
         _ => {

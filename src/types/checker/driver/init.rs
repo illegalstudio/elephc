@@ -81,6 +81,7 @@ impl Checker {
             callable_captures: HashMap::new(),
             callable_array_targets: HashMap::new(),
             first_class_callable_targets: HashMap::new(),
+            reflection_class_targets: HashMap::new(),
             interfaces: HashMap::new(),
             classes: HashMap::new(),
             declared_classes: HashSet::new(),

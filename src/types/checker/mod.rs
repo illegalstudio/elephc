@@ -89,6 +89,8 @@ pub(crate) struct Checker {
     pub callable_array_targets: HashMap<String, CallableTarget>,
     /// Tracks first-class callable targets assigned to variables, keyed by variable name.
     pub first_class_callable_targets: HashMap<String, CallableTarget>,
+    /// Tracks `ReflectionClass` locals whose reflected class is statically known.
+    pub reflection_class_targets: HashMap<String, String>,
     /// Interface definitions collected during the first pass, keyed by canonical name.
     pub interfaces: HashMap<String, InterfaceInfo>,
     /// Class definitions collected during the first pass, keyed by canonical name.
