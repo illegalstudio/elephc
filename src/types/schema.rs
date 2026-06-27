@@ -19,8 +19,8 @@ use super::{FunctionSig, PhpType};
 /// Compile-time attribute argument literal. Captures the subset of PHP
 /// attribute argument expressions that reflection helpers can currently
 /// materialize: strings, ints, floats, bools, null, negative numeric literals,
-/// `ClassName::class` strings, positional array literals containing the same
-/// subset, and named wrappers around those same literal values.
+/// `ClassName::class` strings, positional or string-keyed array literals
+/// containing the same subset, and named wrappers around those same literal values.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AttrArgValue {
     Null,
@@ -116,6 +116,7 @@ fn collect_attribute_arg_value(expr: &Expr) -> Option<AttrArgValue> {
             .map(collect_attribute_arg_value)
             .collect::<Option<Vec<_>>>()
             .map(AttrArgValue::Array),
+        ExprKind::ArrayLiteralAssoc(items) => collect_attribute_assoc_array_arg_value(items),
         ExprKind::NamedArg { name, value } => {
             collect_attribute_arg_value(value).map(|value| AttrArgValue::Named {
                 name: name.clone(),
@@ -124,6 +125,26 @@ fn collect_attribute_arg_value(expr: &Expr) -> Option<AttrArgValue> {
         }
         _ => None,
     }
+}
+
+/// Converts a supported string-keyed attribute array literal into retained metadata.
+fn collect_attribute_assoc_array_arg_value(items: &[(Expr, Expr)]) -> Option<AttrArgValue> {
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, (key, value))| {
+            let value = collect_attribute_arg_value(value)?;
+            match &key.kind {
+                ExprKind::StringLiteral(name) => Some(AttrArgValue::Named {
+                    name: name.clone(),
+                    value: Box::new(value),
+                }),
+                ExprKind::IntLiteral(key) if *key == index as i64 => Some(value),
+                _ => None,
+            }
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(AttrArgValue::Array)
 }
 
 /// Property hook contract for `get`/`set` hook declarations in classes and interfaces.

@@ -14188,35 +14188,35 @@ fn test_eval_reflection_class_exposes_aot_attributes() {
 class EvalAotClassAttr {
     public string $name = "";
     public int $value = 0;
-    public array $items = [];
+    public string $summary = "";
 
-    public function __construct(string $name, int $value = 0, array $items = []) {
+    public function __construct(string $name, int $value = 0, $items = []) {
         $this->name = $name;
         $this->value = $value;
-        $this->items = $items;
+        $this->summary = "ok";
     }
 
     public function label(): string {
         return $this->name . ":" . $this->value;
     }
 }
-#[EvalAotClassAttr("class", 1, ["nested", 3]), EvalAotClassAttr("again", 2, ["later"])]
+#[EvalAotClassAttr("class", 1, ["nested", "kind" => "class", "meta" => ["inner" => "value"]]), EvalAotClassAttr("again", 2, ["later", "kind" => "again"])]
 class EvalAotClassAttrTarget {}
 echo eval('$names = class_attribute_names("EvalAotClassAttrTarget");
 echo count($names) . ":" . $names[0] . ":" . $names[1] . ":";
 $args = class_attribute_args("evalaotclassattrtarget", "EvalAotClassAttr");
 echo count($args) . ":" . $args[0] . ":" . $args[1] . ":";
-echo count($args[2]) . ":" . $args[2][0] . ":" . $args[2][1] . ":";
+echo count($args[2]) . ":" . $args[2][0] . ":" . $args[2]["kind"] . ":" . $args[2]["meta"]["inner"] . ":";
 $attrs = class_get_attributes("EvalAotClassAttrTarget");
 echo count($attrs) . ":" . $attrs[0]->getName() . ":";
 echo ($attrs[0]->isRepeated() ? "R" : "r") . ":";
 echo $attrs[0]->getArguments()[0] . ":" . $attrs[0]->getArguments()[1] . ":";
-echo count($attrs[0]->getArguments()[2]) . ":" . $attrs[0]->getArguments()[2][0] . ":";
+echo count($attrs[0]->getArguments()[2]) . ":" . $attrs[0]->getArguments()[2][0] . ":" . $attrs[0]->getArguments()[2]["kind"] . ":";
 $firstInstance = $attrs[0]->newInstance();
-echo $attrs[0]->getTarget() . ":" . $firstInstance->label() . ":" . count($firstInstance->items) . ":" . $firstInstance->items[0] . ":";
+echo $attrs[0]->getTarget() . ":" . $firstInstance->label() . ":" . $firstInstance->summary . ":";
 $refAttrs = (new ReflectionClass("EvalAotClassAttrTarget"))->getAttributes();
 echo count($refAttrs) . ":" . $refAttrs[1]->getArguments()[0] . ":";
-echo count($refAttrs[1]->getArguments()[2]) . ":" . $refAttrs[1]->getArguments()[2][0] . ":";
+echo count($refAttrs[1]->getArguments()[2]) . ":" . $refAttrs[1]->getArguments()[2][0] . ":" . $refAttrs[1]->getArguments()[2]["kind"] . ":";
 echo $refAttrs[1]->newInstance()->label();');
 "#,
     );
@@ -14227,7 +14227,7 @@ echo $refAttrs[1]->newInstance()->label();');
     );
     assert_eq!(
         out.stdout,
-        "2:EvalAotClassAttr:EvalAotClassAttr:3:class:1:2:nested:3:2:EvalAotClassAttr:R:class:1:2:nested:1:class:1:2:nested:2:again:1:later:again:2"
+        "2:EvalAotClassAttr:EvalAotClassAttr:3:class:1:3:nested:class:value:2:EvalAotClassAttr:R:class:1:3:nested:class:1:class:1:ok:2:again:2:later:again:again:2"
     );
 }
 
