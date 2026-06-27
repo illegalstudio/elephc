@@ -105,6 +105,7 @@ unsafe fn execute_parsed_eval(
         fallback_scope = ElephcEvalScope::new();
         &mut fallback_scope
     };
+    context.sync_global_eval_classes();
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_program_outcome_with_context(context, program, scope, &mut values) {
         Ok(outcome) => write_outcome(outcome, out).code(),

@@ -8163,6 +8163,10 @@ class EvalAotIntrospectionParent {
     protected int $prot = 2;
     protected function guarded() {}
     public function read() {}
+    public function parentView() {
+        return eval('$methods = get_class_methods("EvalRuntimeIntrospectionChild");
+return in_array("guarded", $methods) ? "parentProtected" : "bad";');
+    }
 }
 
 eval('class EvalRuntimeIntrospectionChild extends EvalAotIntrospectionParent {
@@ -8181,7 +8185,9 @@ $outside = get_class_methods("EvalRuntimeIntrospectionChild");
 echo in_array("read", $outside) ? "outsideParent:" : "bad:";
 echo in_array("guarded", $outside) ? "bad:" : "outsideNoProtected:";
 echo in_array("childRead", $outside) ? "outsideChild:" : "bad:";
-$box->childView();');
+$box->childView();
+echo ":";
+echo $box->parentView();');
 "#,
     );
     assert!(
@@ -8191,7 +8197,7 @@ $box->childView();');
     );
     assert_eq!(
         out.stdout,
-        "classProtected:objectProtected:objectPublicProp:classProtectedProp:outsideParent:outsideNoProtected:outsideChild:P"
+        "classProtected:objectProtected:objectPublicProp:classProtectedProp:outsideParent:outsideNoProtected:outsideChild:P:parentProtected"
     );
 }
 

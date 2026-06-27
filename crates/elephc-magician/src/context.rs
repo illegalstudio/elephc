@@ -13,6 +13,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
+#[cfg(not(test))]
+use std::sync::{Mutex, OnceLock};
 
 use crate::abi::ABI_VERSION;
 use crate::eval_ir::{
@@ -23,6 +25,34 @@ use crate::eval_ir::{
 use crate::scope::ElephcEvalScope;
 use crate::stream_resources::EvalStreamResources;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
+
+#[cfg(not(test))]
+static GLOBAL_EVAL_CLASSES: OnceLock<Mutex<GlobalEvalClassRegistry>> = OnceLock::new();
+
+#[cfg(not(test))]
+#[derive(Default)]
+struct GlobalEvalClassRegistry {
+    classes: HashMap<String, EvalClass>,
+    declared_names: Vec<String>,
+}
+
+/// Returns the process-local eval class registry for generated-code eval contexts.
+#[cfg(not(test))]
+fn global_eval_classes() -> &'static Mutex<GlobalEvalClassRegistry> {
+    GLOBAL_EVAL_CLASSES.get_or_init(|| Mutex::new(GlobalEvalClassRegistry::default()))
+}
+
+/// Records one eval-declared class so later eval contexts can see PHP-global metadata.
+#[cfg(not(test))]
+fn register_global_eval_class(class: &EvalClass) {
+    let key = normalize_class_name(class.name());
+    if let Ok(mut registry) = global_eval_classes().lock() {
+        if !registry.classes.contains_key(&key) {
+            registry.declared_names.push(class.name().to_string());
+        }
+        registry.classes.insert(key, class.clone());
+    }
+}
 
 /// Native descriptor-invoker ABI registered by generated code for AOT functions.
 pub type NativeFunctionInvoker =
@@ -739,8 +769,34 @@ impl ElephcEvalContext {
             return false;
         }
         self.declared_class_names.push(class.name().to_string());
+        #[cfg(not(test))]
+        register_global_eval_class(&class);
         self.classes.insert(key, class);
         true
+    }
+
+    /// Imports eval-declared process-global classes not yet known by this context.
+    #[cfg(not(test))]
+    pub fn sync_global_eval_classes(&mut self) {
+        let Ok(registry) = global_eval_classes().lock() else {
+            return;
+        };
+        for name in &registry.declared_names {
+            let key = normalize_class_name(name);
+            if self.classes.contains_key(&key)
+                || self.interfaces.contains_key(&key)
+                || self.traits.contains_key(&key)
+                || self.enums.contains_key(&key)
+                || self.class_aliases.contains_key(&key)
+            {
+                continue;
+            }
+            let Some(class) = registry.classes.get(&key).cloned() else {
+                continue;
+            };
+            self.declared_class_names.push(class.name().to_string());
+            self.classes.insert(key, class);
+        }
     }
 
     /// Returns true when this eval context has a dynamic class or alias with the requested name.
