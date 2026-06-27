@@ -202,6 +202,7 @@ fn finalize_user_asm(
         &runtime_classes,
         &module.enum_infos,
         Some(&allowed_class_names),
+        module.source_path.as_deref(),
     );
 
     let mut user_asm = emitter.output();

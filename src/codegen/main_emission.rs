@@ -485,6 +485,7 @@ fn finish_user_asm(
         classes,
         enums,
         emitted_class_names,
+        None,
     );
 
     let mut user_asm = emitter.output();
