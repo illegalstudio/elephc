@@ -761,6 +761,98 @@ pub(super) fn lower_eval_constant_fetch(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a post-eval dynamic class-like constant fetch to the eval bridge ABI.
+pub(super) fn lower_eval_class_constant_fetch(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    constant_name: &str,
+) -> Result<()> {
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_context(ctx)?;
+    load_eval_context_to_arg(ctx, 0);
+    let (class_label, class_len) = ctx.data.add_string(class_name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &class_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        class_len as i64,
+    );
+    let (constant_label, constant_len) = ctx.data.add_string(constant_name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        &constant_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        constant_len as i64,
+    );
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_class_constant_fetch");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a post-eval dynamic static-property read to the eval bridge ABI.
+pub(super) fn lower_eval_static_property_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    property_name: &str,
+) -> Result<()> {
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_context(ctx)?;
+    load_eval_context_to_arg(ctx, 0);
+    let (class_label, class_len) = ctx.data.add_string(class_name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &class_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        class_len as i64,
+    );
+    let (property_label, property_len) = ctx.data.add_string(property_name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        &property_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        property_len as i64,
+    );
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_static_property_get");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
 /// Returns the aligned scratch size for an eval-declared function call.
 fn eval_function_call_stack_bytes(arg_count: usize) -> usize {
     let bytes = EVAL_STACK_BYTES + arg_count * 8;

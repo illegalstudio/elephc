@@ -314,6 +314,40 @@ pub fn execute_context_class_relation(
     eval_class_relation_result(name, &[target], context, values)
 }
 
+/// Fetches a class-like constant through eval dynamic metadata and runtime fallback hooks.
+pub fn execute_context_class_constant_fetch(
+    context: &mut ElephcEvalContext,
+    class_name: &str,
+    constant_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    match eval_class_constant_fetch_result(class_name, constant_name, context, values) {
+        Ok(result) => Ok(EvalOutcome::Value(result)),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
+/// Reads a static property through eval dynamic metadata and runtime fallback hooks.
+pub fn execute_context_static_property_get(
+    context: &mut ElephcEvalContext,
+    class_name: &str,
+    property_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    match eval_static_property_get_result(class_name, property_name, context, values) {
+        Ok(result) => Ok(EvalOutcome::Value(result)),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
 /// Tests an object relation against eval dynamic-object metadata before AOT metadata.
 pub fn execute_context_object_is_a(
     context: &mut ElephcEvalContext,

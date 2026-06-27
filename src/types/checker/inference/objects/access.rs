@@ -421,9 +421,15 @@ impl Checker {
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
         let class_name = self.resolve_static_property_receiver(receiver, expr)?;
-        let class_info = self.classes.get(&class_name).ok_or_else(|| {
-            CompileError::new(expr.span, &format!("Undefined class: {}", class_name))
-        })?;
+        let Some(class_info) = self.classes.get(&class_name) else {
+            if self.eval_barrier_active && matches!(receiver, StaticReceiver::Named(_)) {
+                return Ok(PhpType::Mixed);
+            }
+            return Err(CompileError::new(
+                expr.span,
+                &format!("Undefined class: {}", class_name),
+            ));
+        };
         if let Some(visibility) = class_info.static_property_visibilities.get(property) {
             let declaring_class = class_info
                 .static_property_declaring_classes

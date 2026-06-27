@@ -72,6 +72,9 @@ impl Checker {
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
         let class_name = self.resolve_static_receiver_class(receiver, expr.span)?;
+        if !self.scoped_constant_receiver_is_known(&class_name) && self.eval_barrier_active {
+            return Ok(PhpType::Mixed);
+        }
         // First: enum case access (`Color::Red`). Enums shadow classes for
         // this syntax in PHP since 8.1. A name that is not a declared case is an enum *constant*
         // (`Scale::FACTOR`), which is resolved through the class-constant table below.
@@ -114,6 +117,14 @@ impl Checker {
             expr.span,
             &format!("Undefined class constant: {}::{}", class_name, name),
         ))
+    }
+
+    /// Returns whether a scoped-constant receiver is known in static class-like metadata.
+    fn scoped_constant_receiver_is_known(&self, class_name: &str) -> bool {
+        self.classes.contains_key(class_name)
+            || self.interfaces.contains_key(class_name)
+            || self.declared_traits.contains(class_name)
+            || self.enums.contains_key(class_name)
     }
 
     /// Looks up a constant by name on an interface, traversing parent interfaces breadth-first

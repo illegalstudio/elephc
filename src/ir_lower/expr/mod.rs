@@ -10016,20 +10016,20 @@ fn static_property_result_type(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     property: &str,
-    expr: &Expr,
+    _expr: &Expr,
 ) -> PhpType {
     let Some(class_name) = static_receiver_class_name(ctx, receiver) else {
-        return fallback_expr_type(expr);
+        return PhpType::Mixed;
     };
     let Some(class_info) = ctx.classes.get(class_name.as_str()) else {
-        return fallback_expr_type(expr);
+        return PhpType::Mixed;
     };
     let Some((_, property_ty)) = class_info
         .static_properties
         .iter()
         .find(|(name, _)| name == property)
     else {
-        return fallback_expr_type(expr);
+        return PhpType::Mixed;
     };
     normalize_value_php_type(property_ty.codegen_repr())
 }
@@ -13339,7 +13339,7 @@ fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticRec
         Op::ScopedConstantGet,
         Vec::new(),
         Some(Immediate::Data(data)),
-        fallback_expr_type(expr),
+        PhpType::Mixed,
         Op::ScopedConstantGet.default_effects(),
         Some(expr.span),
     )

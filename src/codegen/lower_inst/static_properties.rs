@@ -21,7 +21,7 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::context::FunctionContext;
-use super::{expect_data, expect_operand, store_if_result};
+use super::{builtins, expect_data, expect_operand, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
 const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
@@ -45,7 +45,13 @@ struct StaticPropertyBranch {
 }
 
 /// Lowers a direct static property read into the current result register(s).
-pub(super) fn lower_load_static_property(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(super) fn lower_load_static_property(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if let Some((class_name, property)) = eval_dynamic_static_property_target(ctx, inst)? {
+        return builtins::lower_eval_static_property_get(ctx, inst, &class_name, &property);
+    }
     let slot = resolve_static_property_slot(ctx, inst, true)?;
     ensure_static_property_type_supported(&slot.php_type, inst)?;
     if slot.late_bound && !slot.branches.is_empty() {
@@ -59,8 +65,28 @@ pub(super) fn lower_load_static_property(ctx: &mut FunctionContext<'_>, inst: &I
     store_if_result(ctx, inst)
 }
 
+/// Returns an eval dynamic static-property target when no AOT class owns the receiver.
+fn eval_dynamic_static_property_target(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<Option<(String, String)>> {
+    if !builtins::has_eval_context(ctx) {
+        return Ok(None);
+    }
+    let label = static_property_label(ctx, inst)?;
+    let (receiver, property) = parse_static_property_label(label)?;
+    let receiver = resolve_static_property_receiver(ctx, receiver, inst)?;
+    if ctx.module.class_infos.contains_key(receiver.as_str()) {
+        return Ok(None);
+    }
+    Ok(Some((receiver, property.to_string())))
+}
+
 /// Lowers a direct static property write from one SSA operand into symbol-backed storage.
-pub(super) fn lower_store_static_property(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(super) fn lower_store_static_property(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let slot = resolve_static_property_slot(ctx, inst, true)?;
     ensure_static_property_type_supported(&slot.php_type, inst)?;

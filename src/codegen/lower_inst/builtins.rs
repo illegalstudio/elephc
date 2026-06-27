@@ -224,6 +224,26 @@ pub(super) fn lower_eval_constant_fetch(
     eval::lower_eval_constant_fetch(ctx, inst)
 }
 
+/// Lowers post-eval class-like constant fetches to the optional eval bridge.
+pub(super) fn lower_eval_class_constant_fetch(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    constant_name: &str,
+) -> Result<()> {
+    eval::lower_eval_class_constant_fetch(ctx, inst, class_name, constant_name)
+}
+
+/// Lowers post-eval static-property reads to the optional eval bridge.
+pub(super) fn lower_eval_static_property_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    property_name: &str,
+) -> Result<()> {
+    eval::lower_eval_static_property_get(ctx, inst, class_name, property_name)
+}
+
 /// Lowers `define("NAME", value)` with the duplicate-name runtime guard.
 pub(crate) fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "define", 2)?;
