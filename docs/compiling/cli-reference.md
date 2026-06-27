@@ -24,7 +24,7 @@ binary is written next to it, named after the source without its extension.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `<source.php>` | path | — | Required. The PHP file to compile. |
-| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library. |
+| `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`), `npm` (`npm-package`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library. `npm` packages the compiled WebAssembly module as an NPM package and requires `--target wasm32-wasi`. |
 | `--emit-asm` | — | off | Write generated assembly instead of a binary. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run front-end checks only; write nothing. |
@@ -32,7 +32,8 @@ binary is written next to it, named after the source without its extension.
 | `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
-be combined with `--check`, `--emit cdylib`, `--emit-asm`, or `--emit-ir`. See
+be combined with `--check`, `--emit cdylib`, `--emit-asm`, or `--emit-ir`.
+`--emit npm` requires `--target wasm32-wasi`. See
 [Output formats and diagnostics](output-and-diagnostics.md).
 
 ## Web server binary runtime arguments
@@ -68,10 +69,14 @@ status and headers with `http_response_code()` and `header()`. See
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `linux-aarch64`, `linux-x86_64` (plus alias spellings) | host platform | Select the compilation target. |
+| `--target TARGET` / `--target=TARGET` | `macos-aarch64`, `linux-aarch64`, `linux-x86_64`, `wasm32-wasi` (plus alias spellings, including `wasm32-wasip1` and `wasm` for WebAssembly) | host platform | Select the compilation target. |
 
 See [Targets and cross-compilation](targets.md) for the full list of accepted
 spellings.
+
+The `wasm32-wasi` target compiles to a WebAssembly module instead of native
+machine code; it requires the EIR backend and is therefore incompatible with
+`--ast-backend`. `--emit npm` is only valid together with `--target wasm32-wasi`.
 
 ## Optimization and code generation
 
@@ -84,7 +89,8 @@ spellings.
 | `--ir-backend` | — | on | — | Force the EIR backend (already the default). |
 | `--ast-backend` | — | off | — | **Deprecated.** Legacy direct AST backend; removal planned for v0.26.0. |
 
-`--ir-backend` and `--ast-backend` cannot be combined. See
+`--ir-backend` and `--ast-backend` cannot be combined. The `wasm32-wasi` target
+also requires the EIR backend and rejects `--ast-backend`. See
 [Optimization and codegen controls](optimization.md).
 
 ## Linking and FFI

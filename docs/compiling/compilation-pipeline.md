@@ -100,6 +100,11 @@ The generated assembly is written out, assembled into an object file, and linked
 together with the cached runtime object (and any
 [extra libraries](linking-and-conditional-compilation.md)) into the final binary.
 
+The `wasm32-wasi` target ([Targets](targets.md#webassembly-partial-parity))
+bypasses this native `as`/`ld` tail entirely. Instead of emitting native
+assembly, the `src/codegen_wasm` backend emits a WebAssembly module
+(`.wat`/`.wasm`) from the same EIR, so no system assembler or linker runs.
+
 ## Inspecting intermediate stages
 
 You do not have to run the whole pipeline. Several flags stop early or dump an
