@@ -135,16 +135,16 @@ fn parse_fragment_accepts_method_call_source() {
         }))]
     );
 }
-/// Verifies first-class object method syntax lowers to a PHP callable array.
+/// Verifies first-class object method syntax keeps callable-capture semantics in EvalIR.
 #[test]
 fn parse_fragment_accepts_first_class_method_callable_source() {
     let program = parse_fragment(br#"return $this->Answer(...);"#).expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::Return(Some(EvalExpr::Array(vec![
-            EvalArrayElement::Value(EvalExpr::LoadVar("this".to_string())),
-            EvalArrayElement::Value(EvalExpr::Const(EvalConst::String("Answer".to_string()))),
-        ])))]
+        &[EvalStmt::Return(Some(EvalExpr::MethodCallable {
+            object: Box::new(EvalExpr::LoadVar("this".to_string())),
+            method: Box::new(EvalExpr::Const(EvalConst::String("Answer".to_string()))),
+        }))]
     );
 }
 /// Verifies braced dynamic object property reads parse as runtime-name EvalIR expressions.

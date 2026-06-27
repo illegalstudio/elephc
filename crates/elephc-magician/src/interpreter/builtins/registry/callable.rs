@@ -164,10 +164,22 @@ pub(in crate::interpreter) fn eval_array_callable(
     let method =
         String::from_utf8(values.string_bytes(method)?).map_err(|_| EvalStatus::RuntimeFatal)?;
     match values.type_tag(receiver)? {
-        EVAL_TAG_OBJECT => Ok(EvaluatedCallable::ObjectMethod {
-            object: receiver,
-            method,
-        }),
+        EVAL_TAG_OBJECT => {
+            let native_dispatch = context
+                .eval_object_callable_native_dispatch(callback, receiver, &method)
+                .map(|(native_class, bridge_scope)| {
+                    (native_class.to_string(), bridge_scope.to_string())
+                });
+            let (native_class, bridge_scope) = native_dispatch
+                .map(|(native_class, bridge_scope)| (Some(native_class), Some(bridge_scope)))
+                .unwrap_or((None, None));
+            Ok(EvaluatedCallable::ObjectMethod {
+                object: receiver,
+                method,
+                native_class,
+                bridge_scope,
+            })
+        }
         EVAL_TAG_STRING => {
             let class_name = String::from_utf8(values.string_bytes(receiver)?)
                 .map_err(|_| EvalStatus::RuntimeFatal)?;
@@ -239,9 +251,23 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
                 values,
             )
         }
-        EvaluatedCallable::ObjectMethod { object, method } => {
-            eval_method_call_result(*object, method, evaluated_args, context, values)
-        }
+        EvaluatedCallable::ObjectMethod {
+            object,
+            method,
+            native_class,
+            bridge_scope,
+        } => match native_class {
+            Some(native_class) => eval_native_method_with_evaluated_args_unchecked_bridge_scope(
+                *object,
+                native_class,
+                method,
+                positional_args(evaluated_args),
+                bridge_scope.as_deref(),
+                context,
+                values,
+            ),
+            None => eval_method_call_result(*object, method, evaluated_args, context, values),
+        },
         EvaluatedCallable::StaticMethod {
             class_name,
             method,
@@ -280,15 +306,29 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
         EvaluatedCallable::InvokableObject { object } => {
             eval_invokable_object_call_result(*object, evaluated_args, context, values)
         }
-        EvaluatedCallable::ObjectMethod { object, method } => {
-            eval_method_call_result_with_evaluated_args(
+        EvaluatedCallable::ObjectMethod {
+            object,
+            method,
+            native_class,
+            bridge_scope,
+        } => match native_class {
+            Some(native_class) => eval_native_method_with_evaluated_args_unchecked_bridge_scope(
+                *object,
+                native_class,
+                method,
+                evaluated_args,
+                bridge_scope.as_deref(),
+                context,
+                values,
+            ),
+            None => eval_method_call_result_with_evaluated_args(
                 *object,
                 method,
                 evaluated_args,
                 context,
                 values,
-            )
-        }
+            ),
+        },
         EvaluatedCallable::StaticMethod {
             class_name,
             method,

@@ -996,8 +996,17 @@ fn eval_callable_probe_exists(
         EvaluatedCallable::InvokableObject { object } => {
             eval_object_method_callable_probe(*object, "__invoke", context, values)
         }
-        EvaluatedCallable::ObjectMethod { object, method } => {
-            eval_object_method_callable_probe(*object, method, context, values)
+        EvaluatedCallable::ObjectMethod {
+            object,
+            method,
+            native_class,
+            ..
+        } => {
+            if native_class.is_some() {
+                Ok(true)
+            } else {
+                eval_object_method_callable_probe(*object, method, context, values)
+            }
         }
         EvaluatedCallable::StaticMethod {
             class_name, method, ..

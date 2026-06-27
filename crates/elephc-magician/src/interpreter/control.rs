@@ -52,6 +52,8 @@ pub(super) enum EvaluatedCallable {
     ObjectMethod {
         object: RuntimeCellHandle,
         method: String,
+        native_class: Option<String>,
+        bridge_scope: Option<String>,
     },
     StaticMethod {
         class_name: String,
