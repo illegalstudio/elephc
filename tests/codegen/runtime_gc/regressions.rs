@@ -1083,3 +1083,89 @@ echo "done";
         "promoting an indexed array literal to hash storage must free the source array (issue #408)"
     );
 }
+
+/// Regression test: reading an `#[AllowDynamicProperties]` dynamic property must
+/// hand the caller an OWNED Mixed cell. The native `lower_allow_dynamic_prop_get`
+/// hit path used to return the hash cell as a borrow (no `__rt_incref`), while the
+/// shared owning-temporary classification treats `DynamicPropGet` as owned; the
+/// consumer's release then dropped the only reference and the object's hash kept a
+/// dangling pointer — a hard double-free under heap-debug ("bad refcount"). This
+/// reads the dynamic property 50 times in a loop (each `echo` releases the result)
+/// and once more in a top-level `return` (Void main discards it), so without the
+/// hit-path incref the cell is freed while still referenced. Asserts the program
+/// runs cleanly with the expected output and no heap-debug refcount fault.
+#[test]
+fn test_regression_allow_dynamic_properties_read_does_not_double_free() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+#[AllowDynamicProperties]
+class C {}
+$c = new C();
+$c->v = 7;
+for ($i = 0; $i < 50; $i++) {
+    echo $c->v;
+}
+return $c->v;
+"#,
+    );
+    assert!(out.success, "program failed (double free?): {}", out.stderr);
+    assert_eq!(out.stdout, "7".repeat(50));
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: a top-level `return $c->v;` runs the Void-return path, which
+/// evaluates the owning Mixed property-read result but used to discard it without
+/// releasing it (unlike `echo`, which already releases). The boxed dynamic-property
+/// cell read from the stdClass hash is retained by `__rt_stdclass_get`, so the
+/// dropped reference leaked 40 bytes. Mirrors `lower_echo`'s release of the owning
+/// temporary; asserts a clean heap at exit.
+#[test]
+fn test_regression_void_return_dynamic_property_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$c = new stdClass();
+$c->v = 3;
+echo "ok";
+return $c->v;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: `$s = $s + $c->v` in a loop reads an owning Mixed property
+/// operand into `Op::MixedNumericBinop`. The binop lowering consumed the operands
+/// without releasing the owning property-read temporary (unlike `lower_concat`,
+/// which releases both operands), so each iteration leaked the retained dynamic
+/// property cell. Mirrors the concat operand release; asserts the loop computes the
+/// correct sum and leaves a clean heap.
+#[test]
+fn test_regression_mixed_numeric_binop_releases_property_operand() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$c = new stdClass();
+$c->v = 3;
+$s = 0;
+for ($i = 0; $i < 50; $i++) {
+    $s = $s + $c->v;
+}
+echo $s;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "150");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

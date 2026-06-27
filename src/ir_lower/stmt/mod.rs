@@ -1752,7 +1752,10 @@ fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, sp
     }
     if ctx.return_type == IrType::Void {
         if let Some(value_expr) = value_expr {
-            lower_expr(ctx, value_expr);
+            let value = lower_expr(ctx, value_expr);
+            if ctx.value_is_owning_temporary(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
         }
         terminate_return(ctx, None);
         return;

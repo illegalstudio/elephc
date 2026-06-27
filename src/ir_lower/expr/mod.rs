@@ -522,14 +522,19 @@ fn lower_mixed_numeric_binary(
     op: MixedNumericOp,
     expr: &Expr,
 ) -> LoweredValue {
-    ctx.emit_value(
+    let result = ctx.emit_value(
         Op::MixedNumericBinop,
         vec![lhs.value, rhs.value],
         Some(Immediate::MixedNumericOp(op)),
         PhpType::Mixed,
         Op::MixedNumericBinop.default_effects(),
         Some(expr.span),
-    )
+    );
+    release_binary_operand_temporary(ctx, lhs, expr.span);
+    if rhs.value != lhs.value {
+        release_binary_operand_temporary(ctx, rhs, expr.span);
+    }
+    result
 }
 
 /// Maps AST arithmetic to the mixed-numeric runtime helper set currently available.
