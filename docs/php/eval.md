@@ -358,6 +358,10 @@ method lookup is case-insensitive, while property lookup is case-sensitive.
 For generated/AOT classes, `ReflectionClass::hasMethod()` and `hasProperty()`
 can also probe emitted method/property metadata without requiring the full
 member lists to be materialized on the `ReflectionClass` object.
+Eval-declared classes that extend generated/AOT parents expose inherited
+bridge-supported public/protected parent members to `method_exists()`,
+`property_exists()`, and `get_class_methods()` with PHP-compatible scope
+filtering.
 `ReflectionClass::hasConstant()`, `getConstant()`, `getConstants()`,
 `getDefaultProperties()`, `getStaticProperties()`,
 `getStaticPropertyValue()`, `setStaticPropertyValue()`,
