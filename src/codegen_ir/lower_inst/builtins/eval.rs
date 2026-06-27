@@ -625,6 +625,118 @@ pub(super) fn lower_eval_native_frame_static_method_call(
     Ok(())
 }
 
+/// Lowers a late-static AOT-frame static-property read through an active eval override.
+pub(super) fn lower_eval_native_frame_static_property_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    frame_class: &str,
+    property_name: &str,
+    no_override_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    let miss_stack_label = ctx.next_label("eval_native_frame_static_prop_get_miss");
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    emit_eval_native_frame_override_probe(ctx, frame_class, &miss_stack_label);
+    let (frame_label, frame_len) = ctx.data.add_string(frame_class.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &frame_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        frame_len as i64,
+    );
+    let (property_label, property_len) = ctx.data.add_string(property_name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        &property_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        property_len as i64,
+    );
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_native_frame_static_property_get");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_branch_if_eval_c_int_negative(ctx, &miss_stack_label);
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    emit_eval_result_as_type(ctx, &inst.result_php_type)?;
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, done_label);
+
+    ctx.emitter.label(&miss_stack_label);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_jump(ctx.emitter, no_override_label);
+    Ok(())
+}
+
+/// Lowers a late-static AOT-frame static-property write through an active eval override.
+pub(super) fn lower_eval_native_frame_static_property_set(
+    ctx: &mut FunctionContext<'_>,
+    _inst: &Instruction,
+    value: ValueId,
+    frame_class: &str,
+    property_name: &str,
+    no_override_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    let miss_stack_label = ctx.next_label("eval_native_frame_static_prop_set_miss");
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    emit_eval_native_frame_override_probe(ctx, frame_class, &miss_stack_label);
+    store_eval_mixed_operand_at(ctx, value, EVAL_TEMP_CELL_OFFSET)?;
+    let (frame_label, frame_len) = ctx.data.add_string(frame_class.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &frame_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        frame_len as i64,
+    );
+    let (property_label, property_len) = ctx.data.add_string(property_name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        &property_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        property_len as i64,
+    );
+    let value_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, value_arg, EVAL_TEMP_CELL_OFFSET);
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_native_frame_static_property_set");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_branch_if_eval_c_int_negative(ctx, &miss_stack_label);
+    emit_eval_status_check(ctx);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_jump(ctx.emitter, done_label);
+
+    ctx.emitter.label(&miss_stack_label);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_jump(ctx.emitter, no_override_label);
+    Ok(())
+}
+
 /// Lowers a callable-array dispatch through the eval bridge.
 pub(super) fn lower_eval_callable_call_array(
     ctx: &mut FunctionContext<'_>,

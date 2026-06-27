@@ -573,6 +573,46 @@ pub(super) fn lower_eval_native_frame_static_method_call(
     )
 }
 
+/// Lowers a late-static AOT-frame static-property read through an active eval override.
+pub(super) fn lower_eval_native_frame_static_property_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    frame_class: &str,
+    property_name: &str,
+    no_override_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    eval::lower_eval_native_frame_static_property_get(
+        ctx,
+        inst,
+        frame_class,
+        property_name,
+        no_override_label,
+        done_label,
+    )
+}
+
+/// Lowers a late-static AOT-frame static-property write through an active eval override.
+pub(super) fn lower_eval_native_frame_static_property_set(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+    frame_class: &str,
+    property_name: &str,
+    no_override_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    eval::lower_eval_native_frame_static_property_set(
+        ctx,
+        inst,
+        value,
+        frame_class,
+        property_name,
+        no_override_label,
+        done_label,
+    )
+}
+
 /// Lowers post-eval callable-array dispatch against eval dynamic callables.
 pub(super) fn lower_eval_callable_call_array(
     ctx: &mut FunctionContext<'_>,
