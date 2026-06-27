@@ -44,6 +44,7 @@ pub(crate) fn publish_elephc_crypto_function_pointers(emitter: &mut Emitter) {
         ("elephc_crypto_update", "_elephc_crypto_update_fn"),
         ("elephc_crypto_final", "_elephc_crypto_final_fn"),
         ("elephc_crypto_clone", "_elephc_crypto_clone_fn"),
+        ("elephc_crypto_free", "_elephc_crypto_free_fn"),
     ];
     match emitter.target.arch {
         Arch::AArch64 => {

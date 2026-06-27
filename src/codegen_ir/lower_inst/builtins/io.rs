@@ -7853,7 +7853,7 @@ fn box_stream_fd_or_false_result(ctx: &mut FunctionContext<'_>, label_prefix: &s
             ctx.emitter.instruction("cmp x0, #0");                              // test whether the stream helper returned a negative descriptor
             ctx.emitter.instruction(&format!("b.lt {}", false_label));          // box PHP false when stream creation failed
             ctx.emitter.instruction("mov x1, x0");                              // pass the native stream fd as the Mixed low payload word
-            ctx.emitter.instruction("mov x2, #0");                              // resource Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x2, #1");                              // resource kind 1 = native stream fd (synthetics filtered at cleanup)
             ctx.emitter.instruction("mov x0, #9");                              // select runtime tag 9 for a stream resource
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after building the resource result
@@ -7868,7 +7868,7 @@ fn box_stream_fd_or_false_result(ctx: &mut FunctionContext<'_>, label_prefix: &s
             ctx.emitter.instruction("test rax, rax");                           // test whether the stream helper returned a negative descriptor
             ctx.emitter.instruction(&format!("js {}", false_label));            // box PHP false when stream creation failed
             ctx.emitter.instruction("mov rdi, rax");                            // pass the native stream fd as the Mixed low payload word
-            ctx.emitter.instruction("xor esi, esi");                            // resource Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov esi, 1");                              // resource kind 1 = native stream fd (synthetics filtered at cleanup)
             ctx.emitter.instruction("mov eax, 9");                              // select runtime tag 9 for a stream resource
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the resource result

@@ -184,6 +184,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_hash` | Hash with algorithm | algo + data | `x1`/`x2` |
 | `__rt_hash_init` / `__rt_hash_update` / `__rt_hash_final` | Incremental hash-context API backing `hash_init()` and friends | context + data | context / `x1`/`x2` |
 | `__rt_hash_copy` | Clone an incremental hash context | context | context |
+| `__rt_hash_ctx_free` | Free an unfinalized HashContext via `elephc_crypto_free`; called by `__rt_mixed_free_deep` when a Mixed(tag=9, kind=2) cell is released at scope exit | context | — |
 | `__rt_hash_hmac` | Keyed HMAC over a message | algo + key + data | `x1`/`x2` |
 | `__rt_hash_equals` | Constant-time string comparison | two strings | `x0` (0 or 1) |
 | `__rt_hash_algos_list` | Build the `hash_algos()` array of supported algorithm names | — | `x0` (array ptr) |

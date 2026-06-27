@@ -337,6 +337,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _elephc_crypto_update_fn, 8, 3\n");
     out.push_str(".comm _elephc_crypto_final_fn, 8, 3\n");
     out.push_str(".comm _elephc_crypto_clone_fn, 8, 3\n");
+    // _elephc_crypto_free_fn: indirect pointer to elephc_crypto_free, published
+    // at hash_init/hash_copy call sites and used by __rt_hash_ctx_free so the
+    // shared runtime can release unfinalized HashContext handles without naming
+    // elephc-crypto directly.
+    out.push_str(".comm _elephc_crypto_free_fn, 8, 3\n");
     // _elephc_phar_extract_url_fn: indirect pointer to the elephc-phar bridge
     // reader. Dynamic phar:// paths publish it before calling the runtime
     // reader; literal phar:// paths are still decoded at compile time.

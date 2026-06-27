@@ -617,7 +617,8 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 7. **String buffer reset** — the concat buffer resets at each statement, with strings that need to survive copied to heap via `__rt_str_persist`
 8. **Stack memory** — automatically reclaimed when functions return
 9. **Generator frame release** — Generator frames participate in object refcounting, with a custom deep-free branch for their frame slots and delegated iterator
-10. **Process exit** — all memory reclaimed by the OS
+10. **Resource scope-cleanup** — Mixed-boxed resources (tag 9) carry a resource-kind subtype in the high payload word: kind 1 = native stream fd (auto-closed via `close()` when the Mixed box is released), kind 2 = HashContext handle (auto-freed via `elephc_crypto_free` through `__rt_hash_ctx_free`). Kind 0 resources (synthetic user-wrapper handles, generic resources) are skipped. Alias safety comes from the Mixed box refcount — `$b = $a` increfs the box, so only the last release triggers the destructor
+11. **Process exit** — all memory reclaimed by the OS
 
 ### What is NOT freed
 
@@ -628,6 +629,8 @@ elephc uses a **free-list allocator with reference counting plus a targeted cycl
 - **Container-copying builtins** no longer blindly duplicate borrowed heap handles for common nested payload paths: refcounted runtime variants now retain values before new arrays/hash tables take ownership (`array` literals with spreads, `array_merge`, `array_chunk`, `array_slice`, `array_reverse`, `array_pad`, `array_unique`, `array_splice`, `array_diff`, `array_intersect`, `array_filter`, `array_fill`, `array_combine`, `array_fill_keys`)
 - **Regression coverage now explicitly exercises** local aliases, borrowed nested-container returns, `Owned`/`Borrowed` control-flow merges, and scope-exit paths so future ownership work has focused tripwires instead of relying only on large end-to-end suites
 - **Raw/off-heap ownership cycles** are still outside the collector. `ptr` values, extern-managed buffers, and raw helper allocations (`kind=0`) are not traversed just because an address exists somewhere
+- **Kind-0 resources** (generic/unknown resource kind, including synthetic user-wrapper handles `>= 0x40000000`) are not auto-freed by the Mixed deep-free path — their lifecycle remains managed by the wrapper layer or the user's explicit `close()` call. Only kind-1 (native stream fd) and kind-2 (HashContext) resources are auto-released at scope exit
+- **HashContext handles after explicit `hash_final()`** are freed on the C side, but the Mixed cell still holds the dangling pointer. `__rt_hash_ctx_free` skips null handles but cannot detect an already-freed non-null handle; calling `hash_final()` twice remains undefined behavior (documented in `src/codegen/runtime/strings/hash_context.rs`)
 
 ### Targeted cycle collection
 
