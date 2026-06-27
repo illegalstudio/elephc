@@ -7562,6 +7562,15 @@ pub(in crate::interpreter) fn eval_object_clone_result(
             );
         }
     }
+    let should_call_dynamic_native_clone_hook = if clone_method.is_none() {
+        if let Some(class_name) = dynamic_class_name.as_deref() {
+            eval_dynamic_native_clone_hook_is_callable(class_name, context, values)?
+        } else {
+            false
+        }
+    } else {
+        false
+    };
     let should_call_aot_clone_hook = if dynamic_class_name.is_none() {
         eval_aot_clone_hook_is_callable(object, context, values)?
     } else {
@@ -7584,12 +7593,35 @@ pub(in crate::interpreter) fn eval_object_clone_result(
                 values,
             )?;
             eval_release_value(context, values, result)?;
+        } else if should_call_dynamic_native_clone_hook {
+            let result = values.method_call(clone, "__clone", Vec::new())?;
+            values.release(result)?;
         }
     } else if should_call_aot_clone_hook {
         let result = values.method_call(clone, "__clone", Vec::new())?;
         values.release(result)?;
     }
     Ok(clone)
+}
+
+/// Returns whether an inherited generated/AOT `__clone()` hook can run for a dynamic eval class.
+fn eval_dynamic_native_clone_hook_is_callable(
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some((declaring_class, visibility, is_static, is_abstract)) =
+        eval_dynamic_class_native_method_metadata(class_name, "__clone", context, values)?
+    else {
+        return Ok(false);
+    };
+    if is_static || is_abstract {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+        return eval_throw_clone_access_error(&declaring_class, visibility, context, values);
+    }
+    Ok(true)
 }
 
 /// Returns whether an accessible instance AOT `__clone()` hook should run.

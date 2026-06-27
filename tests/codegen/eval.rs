@@ -19191,6 +19191,36 @@ echo $copy->name;');
     assert_eq!(out, "A:A:hook");
 }
 
+/// Verifies eval `clone` invokes inherited AOT `__clone()` hooks for dynamic subclasses.
+#[test]
+fn test_eval_clone_dynamic_subclass_runs_inherited_aot_clone_hook() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalCloneAotInheritedHookParent {
+    public string $name;
+
+    public function __construct(string $name) {
+        $this->name = $name;
+    }
+
+    public function __clone(): void {
+        $this->name = $this->name . ":aot";
+    }
+}
+eval('class EvalCloneAotInheritedHookChild extends EvalCloneAotInheritedHookParent {}
+$child = new EvalCloneAotInheritedHookChild("A");
+$childCopy = clone $child;
+echo $child->name . ":" . $childCopy->name;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "A:A:aot");
+}
+
 /// Verifies eval `clone` invokes private AOT `__clone()` hooks from the declaring scope.
 #[test]
 fn test_eval_clone_aot_object_runs_private_clone_hook_in_scope() {
@@ -19218,6 +19248,50 @@ echo $copy->name;');
 "#,
     );
     assert_eq!(out, "A:A:private");
+}
+
+/// Verifies eval `clone` applies inherited private AOT clone visibility.
+#[test]
+fn test_eval_clone_dynamic_subclass_respects_private_aot_clone_hook() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalCloneAotInheritedPrivateParent {
+    public string $name;
+
+    public function __construct(string $name) {
+        $this->name = $name;
+    }
+
+    private function __clone(): void {
+        $this->name = $this->name . ":private";
+    }
+
+    public function copyInParent(): void {
+        eval('$copy = clone $this;
+echo $copy->name;');
+    }
+}
+eval('class EvalCloneAotInheritedPrivateChild extends EvalCloneAotInheritedPrivateParent {}
+$child = new EvalCloneAotInheritedPrivateChild("A");
+try {
+    $copy = clone $child;
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}
+echo ":";
+$child->copyInParent();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Error:Call to private EvalCloneAotInheritedPrivateParent::__clone() from global scope:A:private"
+    );
 }
 
 /// Verifies eval `clone` invokes protected AOT `__clone()` hooks from child scopes.
