@@ -429,8 +429,9 @@ constants, properties, and methods.
 `ReflectionProperty::getDeclaringClass()` return a materialized
 `ReflectionClass` for the symbol that declares the reflected
 member. `ReflectionMethod::hasPrototype()` and `getPrototype()` expose
-eval parent-class overrides and interface implementation prototypes; inherited
-methods that are not overridden report no prototype, matching PHP reflection.
+eval and generated/AOT parent-class overrides and interface implementation
+prototypes, including static method prototypes; inherited methods that are not
+overridden report no prototype, matching PHP reflection.
 `ReflectionClass::getConstructor()` returns a materialized
 `ReflectionMethod` for direct, inherited, interface, trait, and generated/AOT
 constructors, including registered generated/AOT constructor parameter names,
