@@ -78,7 +78,7 @@ pub(crate) fn unregister_dynamic_objects_for_context(context: *mut ElephcEvalCon
 
 /// Looks up the eval context that owns one dynamic object identity.
 #[cfg(not(test))]
-fn dynamic_destructor_context(identity: u64) -> Option<*mut ElephcEvalContext> {
+pub(crate) fn dynamic_object_owner_context(identity: u64) -> Option<*mut ElephcEvalContext> {
     let contexts = dynamic_destructor_contexts().lock().ok()?;
     let context = *contexts.get(&identity)?;
     Some(context as *mut ElephcEvalContext)
@@ -109,7 +109,7 @@ unsafe fn dynamic_object_destruct_inner(object: *mut RuntimeCell) -> u64 {
         return 0;
     }
     let identity = object as u64;
-    let Some(context) = dynamic_destructor_context(identity) else {
+    let Some(context) = dynamic_object_owner_context(identity) else {
         return 0;
     };
     let Some(context) = (unsafe { context.as_mut() }) else {

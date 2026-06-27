@@ -8165,7 +8165,13 @@ class EvalAotIntrospectionParent {
     public function read() {}
     public function parentView() {
         return eval('$methods = get_class_methods("EvalRuntimeIntrospectionChild");
-return in_array("guarded", $methods) ? "parentProtected" : "bad";');
+$objectMethods = get_class_methods($this);
+$objectRef = new ReflectionObject($this);
+return (in_array("guarded", $methods) ? "parentProtected" : "bad") . ":" .
+    get_class($this) . ":" .
+    get_parent_class($this) . ":" .
+    $objectRef->getName() . ":" .
+    (in_array("childRead", $objectMethods) ? "objectChild" : "bad");');
     }
 }
 
@@ -8197,7 +8203,7 @@ echo $box->parentView();');
     );
     assert_eq!(
         out.stdout,
-        "classProtected:objectProtected:objectPublicProp:classProtectedProp:outsideParent:outsideNoProtected:outsideChild:P:parentProtected"
+        "classProtected:objectProtected:objectPublicProp:classProtectedProp:outsideParent:outsideNoProtected:outsideChild:P:parentProtected:EvalRuntimeIntrospectionChild:EvalAotIntrospectionParent:EvalRuntimeIntrospectionChild:objectChild"
     );
 }
 
