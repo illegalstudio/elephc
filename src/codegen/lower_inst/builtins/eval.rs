@@ -22,7 +22,9 @@ use crate::codegen::{
 use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Op};
 use crate::names::{function_symbol, ir_global_symbol, php_symbol_key};
 use crate::parser::ast::{Expr, ExprKind, TypeExpr, Visibility};
-use crate::types::{is_php_integer_array_key, AttrArgValue, ClassInfo, FunctionSig, PhpType};
+use crate::types::{
+    is_php_integer_array_key, AttrArgValue, ClassInfo, FunctionSig, InterfaceInfo, PhpType,
+};
 
 use super::super::super::context::FunctionContext;
 use super::super::{
@@ -634,6 +636,20 @@ fn eval_native_method_registrations(
         collect_eval_native_instance_methods(class_name, class_info, &mut registrations);
         collect_eval_native_static_methods(class_name, class_info, &mut registrations);
     }
+    let mut interfaces = ctx.module.interface_infos.iter().collect::<Vec<_>>();
+    interfaces.sort_by_key(|(_, interface_info)| interface_info.interface_id);
+    for (interface_name, interface_info) in interfaces {
+        collect_eval_native_interface_instance_methods(
+            interface_name,
+            interface_info,
+            &mut registrations,
+        );
+        collect_eval_native_interface_static_methods(
+            interface_name,
+            interface_info,
+            &mut registrations,
+        );
+    }
     registrations
 }
 
@@ -1080,6 +1096,80 @@ fn collect_eval_native_static_methods(
             bridge_supported,
         });
     }
+}
+
+/// Adds interface instance-method metadata to eval signature registration.
+fn collect_eval_native_interface_instance_methods(
+    interface_name: &str,
+    interface_info: &InterfaceInfo,
+    registrations: &mut Vec<EvalNativeMethodRegistration>,
+) {
+    let mut methods = interface_info.methods.iter().collect::<Vec<_>>();
+    methods.sort_by_key(|(method, _)| method.as_str());
+    for (method_name, signature) in methods {
+        registrations.push(EvalNativeMethodRegistration {
+            class_name: eval_native_interface_method_declaring_interface(
+                interface_name,
+                interface_info,
+                method_name,
+            )
+            .to_string(),
+            method_name: method_name.clone(),
+            is_static: false,
+            signature: signature.clone(),
+            bridge_supported: false,
+        });
+    }
+}
+
+/// Adds interface static-method metadata to eval signature registration.
+fn collect_eval_native_interface_static_methods(
+    interface_name: &str,
+    interface_info: &InterfaceInfo,
+    registrations: &mut Vec<EvalNativeMethodRegistration>,
+) {
+    let mut methods = interface_info.static_methods.iter().collect::<Vec<_>>();
+    methods.sort_by_key(|(method, _)| method.as_str());
+    for (method_name, signature) in methods {
+        registrations.push(EvalNativeMethodRegistration {
+            class_name: eval_native_interface_static_method_declaring_interface(
+                interface_name,
+                interface_info,
+                method_name,
+            )
+            .to_string(),
+            method_name: method_name.clone(),
+            is_static: true,
+            signature: signature.clone(),
+            bridge_supported: false,
+        });
+    }
+}
+
+/// Returns the interface name that declares one AOT interface instance method row.
+fn eval_native_interface_method_declaring_interface<'a>(
+    reflected_interface: &'a str,
+    interface_info: &'a InterfaceInfo,
+    method_name: &str,
+) -> &'a str {
+    interface_info
+        .method_declaring_interfaces
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(reflected_interface)
+}
+
+/// Returns the interface name that declares one AOT interface static method row.
+fn eval_native_interface_static_method_declaring_interface<'a>(
+    reflected_interface: &'a str,
+    interface_info: &'a InterfaceInfo,
+    method_name: &str,
+) -> &'a str {
+    interface_info
+        .static_method_declaring_interfaces
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(reflected_interface)
 }
 
 /// Returns true when a module function should expose metadata to eval fragments.

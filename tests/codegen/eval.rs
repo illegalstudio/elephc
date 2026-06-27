@@ -17329,6 +17329,69 @@ echo $inherited->hasPrototype() ? "Y" : "N";');
     );
 }
 
+/// Verifies eval ReflectionMethod hasPrototype/getPrototype expose generated/AOT prototypes.
+#[test]
+fn test_eval_reflection_method_reports_aot_prototypes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface EvalAotProtoParentIface {
+    public function parented();
+}
+interface EvalAotProtoChildIface extends EvalAotProtoParentIface {}
+interface EvalAotProtoIface {
+    public function iface();
+}
+class EvalAotProtoBase {
+    public function run() {}
+    public function inherited() {}
+}
+class EvalAotProtoChild extends EvalAotProtoBase implements EvalAotProtoIface, EvalAotProtoChildIface {
+    public function run() {}
+    public function iface() {}
+    public function parented() {}
+    public function own() {}
+}
+echo eval('try {
+$override = new ReflectionMethod("EvalAotProtoChild", "run");
+$overrideProto = $override->getPrototype();
+echo ($override->hasPrototype() ? "Y" : "N") . ":";
+echo $overrideProto->getDeclaringClass()->getName() . "::";
+echo $overrideProto->getName() . ":";
+$iface = new ReflectionMethod("EvalAotProtoChild", "iface");
+$ifaceProto = $iface->getPrototype();
+echo ($iface->hasPrototype() ? "Y" : "N") . ":";
+echo $ifaceProto->getDeclaringClass()->getName() . "::";
+echo $ifaceProto->getName() . ":";
+$parentIface = new ReflectionMethod("EvalAotProtoChild", "parented");
+$parentIfaceProto = $parentIface->getPrototype();
+echo $parentIfaceProto->getDeclaringClass()->getName() . "::";
+echo $parentIfaceProto->getName() . ":";
+$own = new ReflectionMethod("EvalAotProtoChild", "own");
+echo ($own->hasPrototype() ? "Y" : "N") . ":";
+try {
+    $own->getPrototype();
+} catch (ReflectionException $e) {
+    echo "E";
+}
+echo ":";
+$inherited = new ReflectionMethod("EvalAotProtoChild", "inherited");
+echo $inherited->hasPrototype() ? "Y" : "N";
+} catch (Throwable $e) {
+    echo "ERR:" . get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Y:EvalAotProtoBase::run:Y:EvalAotProtoIface::iface:EvalAotProtoParentIface::parented:N:E:N"
+    );
+}
+
 /// Verifies eval-declared functions share method-style named/default/ref/variadic binding.
 #[test]
 fn test_eval_declared_function_rich_argument_binding() {

@@ -1712,8 +1712,12 @@ pub(in crate::interpreter) fn eval_reflection_method_prototype_result(
         return Ok(None);
     };
     eval_reflection_bind_no_args(evaluated_args)?;
-    let Some((prototype_class, prototype_method)) =
-        eval_reflection_method_prototype_target(&declaring_class, &reflected_method, context)
+    let Some((prototype_class, prototype_method)) = eval_reflection_method_prototype_target(
+        &declaring_class,
+        &reflected_method,
+        context,
+        values,
+    )?
     else {
         if is_has_prototype {
             return values.bool_value(false).map(Some);
@@ -1731,7 +1735,7 @@ pub(in crate::interpreter) fn eval_reflection_method_prototype_result(
         return values.bool_value(true).map(Some);
     }
     let Some(metadata) =
-        eval_reflection_method_metadata(&prototype_class, &prototype_method, context)
+        eval_reflection_prototype_method_metadata(&prototype_class, &prototype_method, context, values)?
     else {
         return Err(EvalStatus::RuntimeFatal);
     };
@@ -9467,18 +9471,129 @@ fn eval_reflection_namespace_name(name: &str) -> String {
         })
 }
 
-/// Finds the PHP ReflectionMethod prototype target for an eval-declared method.
+/// Builds ReflectionMethod metadata for a resolved eval or AOT prototype target.
+fn eval_reflection_prototype_method_metadata(
+    prototype_class: &str,
+    prototype_method: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalReflectionMemberMetadata>, EvalStatus> {
+    if let Some(metadata) =
+        eval_reflection_method_metadata(prototype_class, prototype_method, context)
+    {
+        return Ok(Some(metadata));
+    }
+    eval_reflection_aot_method_metadata_with_signature_if_exists(
+        prototype_class,
+        prototype_method,
+        context,
+        values,
+    )
+}
+
+/// Finds the PHP ReflectionMethod prototype target for an eval or AOT method.
 fn eval_reflection_method_prototype_target(
     declaring_class: &str,
     method_name: &str,
     context: &ElephcEvalContext,
-) -> Option<(String, String)> {
-    if !(context.has_class(declaring_class) || context.has_enum(declaring_class)) {
-        return None;
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, String)>, EvalStatus> {
+    if context.has_class(declaring_class) || context.has_enum(declaring_class) {
+        return Ok(eval_reflection_parent_method_prototype_target(
+            declaring_class,
+            method_name,
+            context,
+        )
+        .or_else(|| {
+            eval_reflection_interface_method_prototype_target(declaring_class, method_name, context)
+        }));
     }
-    eval_reflection_parent_method_prototype_target(declaring_class, method_name, context).or_else(
-        || eval_reflection_interface_method_prototype_target(declaring_class, method_name, context),
+    eval_reflection_aot_method_prototype_target(declaring_class, method_name, values)
+}
+
+/// Finds the PHP ReflectionMethod prototype target for a generated/AOT method.
+fn eval_reflection_aot_method_prototype_target(
+    declaring_class: &str,
+    method_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, String)>, EvalStatus> {
+    let Some(flags) = values.reflection_method_flags(declaring_class, method_name)? else {
+        return Ok(None);
+    };
+    if let Some(prototype) =
+        eval_reflection_aot_parent_method_prototype_target(declaring_class, method_name, flags, values)?
+    {
+        return Ok(Some(prototype));
+    }
+    eval_reflection_aot_interface_method_prototype_target(
+        declaring_class,
+        method_name,
+        flags,
+        values,
     )
+}
+
+/// Finds the nearest generated/AOT parent-class method that can act as prototype.
+fn eval_reflection_aot_parent_method_prototype_target(
+    declaring_class: &str,
+    method_name: &str,
+    method_flags: u64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, String)>, EvalStatus> {
+    let want_static = method_flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0;
+    let mut current = eval_reflection_aot_parent_class_name(declaring_class, values)?;
+    let mut seen = std::collections::HashSet::new();
+    while let Some(parent_class) = current {
+        if !seen.insert(parent_class.to_ascii_lowercase()) {
+            break;
+        }
+        if let Some(prototype) =
+            eval_reflection_aot_method_candidate(&parent_class, method_name, want_static, values)?
+        {
+            return Ok(Some(prototype));
+        }
+        current = eval_reflection_aot_parent_class_name(&parent_class, values)?;
+    }
+    Ok(None)
+}
+
+/// Finds the first generated/AOT interface method that can act as prototype.
+fn eval_reflection_aot_interface_method_prototype_target(
+    declaring_class: &str,
+    method_name: &str,
+    method_flags: u64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, String)>, EvalStatus> {
+    let want_static = method_flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0;
+    for interface_name in eval_reflection_aot_class_interface_names(declaring_class, values)? {
+        if let Some(prototype) =
+            eval_reflection_aot_method_candidate(&interface_name, method_name, want_static, values)?
+        {
+            return Ok(Some(prototype));
+        }
+    }
+    Ok(None)
+}
+
+/// Returns one generated/AOT method prototype candidate if staticness and visibility match.
+fn eval_reflection_aot_method_candidate(
+    class_name: &str,
+    method_name: &str,
+    want_static: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, String)>, EvalStatus> {
+    let Some(flags) = values.reflection_method_flags(class_name, method_name)? else {
+        return Ok(None);
+    };
+    let is_static = flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0;
+    let is_private = flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0;
+    if is_static != want_static || is_private {
+        return Ok(None);
+    }
+    let declaring_class = values
+        .reflection_method_declaring_class(class_name, method_name)?
+        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    Ok(Some((declaring_class, method_name.to_ascii_lowercase())))
 }
 
 /// Finds the nearest parent-class method prototype for an eval-declared override.
