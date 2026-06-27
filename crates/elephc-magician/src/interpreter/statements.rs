@@ -1564,6 +1564,7 @@ fn validate_eval_enum_decl(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    validate_eval_enum_attribute_targets(enum_decl)?;
     validate_eval_declared_constants(enum_decl.constants())?;
     validate_eval_enum_case_declarations(enum_decl)?;
     validate_eval_enum_forbidden_magic_methods(enum_decl)?;
@@ -1610,6 +1611,7 @@ fn validate_eval_enum_case_declarations(enum_decl: &EvalEnum) -> Result<(), Eval
         .map(|constant| constant.name().to_string())
         .collect::<std::collections::HashSet<_>>();
     for case in enum_decl.cases() {
+        validate_eval_non_method_attribute_targets(case.attributes())?;
         if !case_names.insert(case.name().to_string()) {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -1852,6 +1854,7 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
             return Err(EvalStatus::RuntimeFatal);
         }
     }
+    validate_eval_interface_attribute_targets(interface)?;
     validate_eval_declared_constants(interface.constants())?;
     validate_eval_interface_constants(interface.constants())?;
     validate_interface_constant_parent_redeclarations(interface, context)?;
@@ -1888,6 +1891,7 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
         return Err(EvalStatus::RuntimeFatal);
     }
     let trait_decl = expand_eval_trait_traits(trait_decl, context)?;
+    validate_eval_trait_attribute_targets(&trait_decl)?;
     validate_eval_declared_constants(trait_decl.constants())?;
     validate_eval_magic_methods(trait_decl.methods())?;
     if context.define_trait(trait_decl.clone()) {
@@ -2561,6 +2565,7 @@ fn validate_eval_class_modifiers(
     if class.is_abstract() && class.is_final() {
         return Err(EvalStatus::RuntimeFatal);
     }
+    validate_eval_class_attribute_targets(class.attributes())?;
     if class.is_readonly_class() && eval_class_has_allow_dynamic_properties_attribute(class) {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -2573,6 +2578,7 @@ fn validate_eval_class_modifiers(
         validate_property_parent_redeclaration(class, property, context)?;
     }
     for method in class.methods() {
+        validate_eval_method_attribute_targets(method.attributes())?;
         validate_eval_magic_method(method)?;
         if method.is_abstract() && method.is_final() {
             return Err(EvalStatus::RuntimeFatal);
@@ -2594,10 +2600,104 @@ fn validate_eval_class_modifiers(
 
 /// Returns whether a class carries PHP's global `#[AllowDynamicProperties]` attribute.
 fn eval_class_has_allow_dynamic_properties_attribute(class: &EvalClass) -> bool {
-    class
-        .attributes()
+    eval_attributes_have_global_builtin_attribute(class.attributes(), "AllowDynamicProperties")
+}
+
+/// Rejects builtin attributes that cannot target an eval-declared class.
+fn validate_eval_class_attribute_targets(
+    attributes: &[EvalAttribute],
+) -> Result<(), EvalStatus> {
+    if eval_attributes_have_global_builtin_attribute(attributes, "Override") {
+        Err(EvalStatus::RuntimeFatal)
+    } else {
+        Ok(())
+    }
+}
+
+/// Rejects builtin attributes that cannot target eval-declared interfaces.
+fn validate_eval_interface_attribute_targets(
+    interface: &EvalInterface,
+) -> Result<(), EvalStatus> {
+    validate_eval_non_class_attribute_targets(interface.attributes())?;
+    for property in interface.properties() {
+        validate_eval_non_method_attribute_targets(property.attributes())?;
+    }
+    for method in interface.methods() {
+        validate_eval_method_attribute_targets(method.attributes())?;
+    }
+    Ok(())
+}
+
+/// Rejects builtin attributes that cannot target eval-declared traits.
+fn validate_eval_trait_attribute_targets(trait_decl: &EvalTrait) -> Result<(), EvalStatus> {
+    validate_eval_non_class_attribute_targets(trait_decl.attributes())?;
+    for property in trait_decl.properties() {
+        validate_eval_non_method_attribute_targets(property.attributes())?;
+    }
+    for method in trait_decl.methods() {
+        validate_eval_method_attribute_targets(method.attributes())?;
+    }
+    Ok(())
+}
+
+/// Rejects builtin attributes that cannot target eval-declared enums.
+fn validate_eval_enum_attribute_targets(enum_decl: &EvalEnum) -> Result<(), EvalStatus> {
+    validate_eval_non_class_attribute_targets(enum_decl.attributes())
+}
+
+/// Rejects class-only or method-only builtin attributes on non-class declarations.
+fn validate_eval_non_class_attribute_targets(
+    attributes: &[EvalAttribute],
+) -> Result<(), EvalStatus> {
+    if eval_attributes_have_global_builtin_attribute(attributes, "AllowDynamicProperties")
+        || eval_attributes_have_global_builtin_attribute(attributes, "Override")
+    {
+        Err(EvalStatus::RuntimeFatal)
+    } else {
+        Ok(())
+    }
+}
+
+/// Rejects class-only or method-only builtin attributes on non-method members.
+fn validate_eval_non_method_attribute_targets(
+    attributes: &[EvalAttribute],
+) -> Result<(), EvalStatus> {
+    if eval_attributes_have_global_builtin_attribute(attributes, "AllowDynamicProperties")
+        || eval_attributes_have_global_builtin_attribute(attributes, "Override")
+    {
+        Err(EvalStatus::RuntimeFatal)
+    } else {
+        Ok(())
+    }
+}
+
+/// Rejects class-only builtin attributes on method declarations.
+fn validate_eval_method_attribute_targets(
+    attributes: &[EvalAttribute],
+) -> Result<(), EvalStatus> {
+    if eval_attributes_have_global_builtin_attribute(attributes, "AllowDynamicProperties") {
+        Err(EvalStatus::RuntimeFatal)
+    } else {
+        Ok(())
+    }
+}
+
+/// Returns whether the attribute list contains one global builtin attribute.
+fn eval_attributes_have_global_builtin_attribute(
+    attributes: &[EvalAttribute],
+    builtin: &str,
+) -> bool {
+    attributes
         .iter()
-        .any(|attribute| attribute.name().eq_ignore_ascii_case("AllowDynamicProperties"))
+        .any(|attribute| eval_attribute_is_global_builtin(attribute, builtin))
+}
+
+/// Returns whether one attribute names a global builtin attribute class.
+fn eval_attribute_is_global_builtin(attribute: &EvalAttribute, builtin: &str) -> bool {
+    attribute
+        .name()
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case(builtin)
 }
 
 /// Validates PHP's global `#[Override]` marker on one eval-declared method.
@@ -2618,12 +2718,9 @@ fn validate_eval_override_attribute(
     }
 }
 
-/// Returns whether a method has an unqualified global builtin marker attribute.
+/// Returns whether a method has a global builtin marker attribute.
 fn eval_method_has_global_builtin_attribute(method: &EvalClassMethod, builtin: &str) -> bool {
-    method
-        .attributes()
-        .iter()
-        .any(|attribute| attribute.name().eq_ignore_ascii_case(builtin))
+    eval_attributes_have_global_builtin_attribute(method.attributes(), builtin)
 }
 
 /// Returns whether one method overrides a non-private parent method.
@@ -2944,6 +3041,7 @@ fn validate_eval_declared_properties(
 ) -> Result<(), EvalStatus> {
     let mut names = std::collections::HashSet::new();
     for property in class.properties() {
+        validate_eval_non_method_attribute_targets(property.attributes())?;
         if !names.insert(property.name().to_string()) {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -3064,6 +3162,7 @@ fn validate_property_parent_redeclaration(
 fn validate_eval_declared_constants(constants: &[EvalClassConstant]) -> Result<(), EvalStatus> {
     let mut names = std::collections::HashSet::new();
     for constant in constants {
+        validate_eval_non_method_attribute_targets(constant.attributes())?;
         if !names.insert(constant.name().to_string()) {
             return Err(EvalStatus::RuntimeFatal);
         }
