@@ -197,6 +197,17 @@ pub(super) fn lower_eval_object_is_a(
     eval::lower_eval_object_is_a(ctx, inst, object, target_class, exclude_self)
 }
 
+/// Lowers post-eval object/class relation predicates with runtime target cells.
+pub(super) fn lower_eval_object_is_a_dynamic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    target: ValueId,
+    exclude_self: bool,
+) -> Result<()> {
+    eval::lower_eval_object_is_a_dynamic(ctx, inst, object, target, exclude_self)
+}
+
 /// Returns true when this lowered function has a persistent eval context local.
 pub(super) fn has_eval_context(ctx: &FunctionContext<'_>) -> bool {
     eval::has_eval_context(ctx)
