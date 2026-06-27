@@ -23,7 +23,7 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::context::FunctionContext;
-use super::{builtins, expect_data, expect_operand, store_if_result};
+use super::{builtins, expect_data, expect_operand, load_value_to_first_int_arg, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
 const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
@@ -708,6 +708,9 @@ fn ensure_static_property_value_supported(
     if is_empty_array_for_array_static_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if can_coerce_mixed_to_scalar_static_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     Err(CodegenIrError::unsupported(format!(
         "{} assigning PHP type {:?} to {}::${} with PHP type {:?}",
         inst.op.name(),
@@ -727,6 +730,15 @@ fn is_empty_array_for_array_static_property(value_ty: &PhpType, slot_ty: &PhpTyp
         return false;
     }
     matches!(value_elem.codegen_repr(), PhpType::Never | PhpType::Void)
+}
+
+/// Returns true when a boxed Mixed value can be coerced before a scalar static-property store.
+fn can_coerce_mixed_to_scalar_static_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && matches!(
+            slot_ty.codegen_repr(),
+            PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str
+        )
 }
 
 /// Returns true when a value can materialize the inline nullable-int static-property shape.
@@ -779,6 +791,20 @@ fn load_static_property_store_value_to_result(
                     other
                 )))
             }
+        }
+        return Ok(());
+    }
+    if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        load_value_to_first_int_arg(ctx, value)?;
+        match slot_ty.codegen_repr() {
+            PhpType::Str => {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+                abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            }
+            PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
+            PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
+            PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
+            _ => {}
         }
         return Ok(());
     }
