@@ -20805,6 +20805,27 @@ return $box->x;');
     assert_eq!(out, "DynEvalSupported:9:Y10:12:12");
 }
 
+/// Verifies eval-declared methods support PHP static syntax for `$this` instance calls.
+#[test]
+fn test_eval_declared_class_static_syntax_calls_instance_methods() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class DynEvalStaticSyntaxBase {
+    protected function label() { return "base"; }
+}
+class DynEvalStaticSyntaxChild extends DynEvalStaticSyntaxBase {
+    protected function own() { return "child"; }
+    public function run() {
+        return parent::label() . ":" . self::own();
+    }
+}
+$box = new DynEvalStaticSyntaxChild();
+return $box->run();');
+"#,
+    );
+    assert_eq!(out, "base:child");
+}
+
 /// Verifies native object construction can use eval-declared classes after the barrier.
 #[test]
 fn test_eval_declared_class_constructs_object_natively_after_barrier() {
