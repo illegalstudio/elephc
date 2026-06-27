@@ -11754,6 +11754,9 @@ fn method_signature(
         return class_method_signature(ctx, normalized, &key).cloned();
     }
     if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
+        if ctx.has_eval_barrier() {
+            return None;
+        }
         return common_dynamic_method_signature(ctx, &key);
     }
     None

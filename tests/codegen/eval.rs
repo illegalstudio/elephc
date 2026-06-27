@@ -18968,7 +18968,7 @@ fn test_eval_declared_class_dynamic_new_natively_after_barrier() {
 class DynEvalNativeDynamicNewAot {
     public int $label;
     public function __construct($label) { $this->label = $label; }
-    public function readAot() { return $this->label; }
+    public function read() { return $this->label; }
 }
 eval('class DynEvalNativeDynamicNew {
     public int $label;
@@ -18980,7 +18980,7 @@ $box = new $class(5);
 echo $box->read() . ":";
 $aotClass = "DynEvalNativeDynamicNewAot";
 $aotBox = new $aotClass(7);
-echo $aotBox->readAot();
+echo $aotBox->read();
 "#,
     );
     assert_eq!(out, "5:7");
