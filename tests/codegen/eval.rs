@@ -7450,6 +7450,36 @@ echo get_class($parent); echo ":"; echo $parent->label;');
     );
 }
 
+/// Verifies eval-declared methods resolve `new self/static/parent` inside namespaces.
+#[test]
+fn test_eval_declared_methods_construct_namespaced_relative_class_names() {
+    let out = compile_and_run(
+        r#"<?php
+eval('namespace EvalRelativeNs;
+class Base {
+    public string $label;
+    public function __construct($label = "base") { $this->label = $label; }
+    public function selfFactory() { return new self("self"); }
+    public function staticFactory() { return new static("static"); }
+}
+class Child extends Base {
+    public function parentFactory() { return new parent("parent"); }
+}
+$child = new Child("root");
+$self = $child->selfFactory();
+$static = $child->staticFactory();
+$parent = $child->parentFactory();
+echo get_class($self); echo ":"; echo $self->label; echo ":";
+echo get_class($static); echo ":"; echo $static->label; echo ":";
+echo get_class($parent); echo ":"; echo $parent->label;');
+"#,
+    );
+    assert_eq!(
+        out,
+        "EvalRelativeNs\\Base:self:EvalRelativeNs\\Child:static:EvalRelativeNs\\Base:parent"
+    );
+}
+
 /// Verifies eval supports PHP's legacy `var` public property marker through the bridge.
 #[test]
 fn test_eval_declared_legacy_var_properties() {

@@ -73,6 +73,46 @@ return $self instanceof EvalRelativeFactoryBase
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies `new self/static/parent` stay relative inside eval namespaces.
+#[test]
+fn execute_program_constructs_namespaced_relative_class_names_from_eval_methods() {
+    let program = parse_fragment(
+        br#"namespace EvalRelativeNs;
+class Base {
+    public string $label;
+    public function __construct($label = "base") { $this->label = $label; }
+    public function selfFactory() { return new self("self"); }
+    public function staticFactory() { return new static("static"); }
+}
+class Child extends Base {
+    public function parentFactory() { return new parent("parent"); }
+}
+$child = new Child("root");
+$self = $child->selfFactory();
+$static = $child->staticFactory();
+$parent = $child->parentFactory();
+echo get_class($self); echo ":"; echo $self->label; echo ":";
+echo get_class($static); echo ":"; echo $static->label; echo ":";
+echo get_class($parent); echo ":"; echo $parent->label;
+return $self instanceof Base
+    && !($self instanceof Child)
+    && $static instanceof Child
+    && $parent instanceof Base
+    && !($parent instanceof Child);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "EvalRelativeNs\\Base:self:EvalRelativeNs\\Child:static:EvalRelativeNs\\Base:parent"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies PHP legacy `var` properties behave as public eval properties.
 #[test]
 fn execute_program_supports_legacy_var_properties() {
