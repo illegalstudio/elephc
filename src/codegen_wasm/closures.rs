@@ -1057,6 +1057,14 @@ pub(super) fn emit_closure_dispatch(
     // references only `__rt_closure_call`, `__rt_array_new`, `__rt_array_push_mixed`,
     // `__rt_mixed_from_value`, and `__rt_decref_any`, all present in every module.
     wm.add_raw_func(RT_ARRAY_MAP_CALLABLE);
+    // `array_filter($arr, $f)` (`__rt_array_filter_callable`) is the second higher-order
+    // consumer of the `__rt_closure_call` ladder, emitted on the same gate for the same
+    // reason: a module with neither closures nor FCC entries can never produce a
+    // `Callable` source and so never reaches `array_filter`'s callable arm. The helper
+    // references only `__rt_closure_call`, `__rt_array_new`, `__rt_array_push_int`,
+    // `__rt_array_push_str`, `__rt_array_push_mixed`, `__rt_mixed_from_value`,
+    // `__rt_incref`, and `__rt_decref_any`, all present in every module that has a ladder.
+    wm.add_raw_func(RT_ARRAY_FILTER_CALLABLE);
     Ok(())
 }
 
@@ -1120,6 +1128,90 @@ const RT_ARRAY_MAP_CALLABLE: &str = r#"(func $__rt_array_map_callable (param $de
       (local.set $i (i64.add (local.get $i) (i64.const 1)))        ;; i++
       (br $L)))                                                    ;; loop back
   (local.get $result))                                              ;; return the mapped array<mixed>
+"#;
+
+/// `__rt_array_filter_callable(desc i32, src i32) -> i32`: the runtime behind
+/// `array_filter($arr, $f)` with an INDEXED source array `$arr` and a `Callable`
+/// descriptor `$f`. Allocates a fresh result with the SOURCE elem_size and capacity
+/// `len` (the maximum number of kept elements), then for each source element: boxes it
+/// into a 1-slot Mixed-cell arg buffer (the same per-vt boxing `__rt_array_map_callable`
+/// uses), dispatches `__rt_closure_call(desc, args)` (the unified closure/FCC ladder),
+/// and KEEPS the ORIGINAL element in the result iff the callback's boxed result is
+/// truthy. The result is RE-INDEXED to keys `0..kept-1` (the kept elements are appended
+/// in order); like the native `__rt_array_filter`, it does NOT preserve PHP keys.
+///
+/// TRUTHINESS: the callback always returns a boxed Mixed cell whose layout is
+/// `[tag@+0][lo@+8][hi@+16]` (see `__rt_mixed_from_value`). The kept test reads the lo
+/// PAYLOAD at `rcell+8` (`!= 0`) — the WASM analogue of native's `cbz x0` on the raw
+/// callback return: valid for the supported tag-0 int and tag-3 bool returns (a false
+/// bool / 0 int has lo 0; everything else is non-zero).
+///
+/// REFCOUNT DISCIPLINE: each iteration boxes the source element (`__rt_mixed_from_value`,
+/// persisting a string / increfing a nested cell), pushes that owned cell into a 1-slot
+/// arg array, and after the call deep-frees the arg array via `__rt_decref_any` — exactly
+/// balancing the box (for a nested-mixed element this also undoes `from_value`'s incref).
+/// When KEEPING an element the ORIGINAL is copied into the result by value_type: a string
+/// via `__rt_array_push_str` (which persists its own copy — the source is untouched), a
+/// nested Mixed cell via an explicit `__rt_incref` THEN `__rt_array_push_mixed` (which
+/// stores the cell BORROWED while the source still owns it, so the incref keeps both
+/// balanced), or a scalar int via `__rt_array_push_int` (a plain i64 copy). The callback's
+/// OWNED result cell is NOT stored, so it is released with `__rt_decref_any` every
+/// iteration (the load-bearing free `__rt_array_map_callable` does not need, because map
+/// transfers its result cell into the result array). Neither `desc` nor `src` is released
+/// here: the EIR owns operands 0 and 1 and releases them at the call site.
+///
+/// Source element typing matches `__rt_array_map_callable`: value_type (kind word bits
+/// 8..14) `1` = string (ptr@slot+0, len@slot+8), `7` = nested Mixed cell (cell ptr@slot+0),
+/// anything else = scalar int (i64@slot+0).
+const RT_ARRAY_FILTER_CALLABLE: &str = r#"(func $__rt_array_filter_callable (param $desc i32) (param $src i32) (result i32)
+  (local $len i64) (local $esz i64) (local $vt i32) (local $i i64)
+  (local $result i32) (local $slot i32) (local $argcell i32) (local $args1 i32) (local $rcell i32)
+  (local $tag i64) (local $lo i64) (local $hi i64)
+  (local.set $len (i64.load (local.get $src)))                       ;; source length @ src+0
+  (local.set $esz (i64.load (i32.add (local.get $src) (i32.const 16))))  ;; source elem_size @ src+16
+  (local.set $vt (i32.and (i32.wrap_i64 (i64.shr_u (i64.load (i32.sub (local.get $src) (i32.const 8))) (i64.const 8))) (i32.const 127)))  ;; source value_type = kind bits 8..14
+  (local.set $result (call $__rt_array_new (local.get $len) (local.get $esz)))  ;; fresh result (source elem_size; first kept push stamps value_type)
+  (local.set $i (i64.const 0))                                       ;; element index = 0
+  (block $end
+    (loop $L
+      (br_if $end (i64.ge_s (local.get $i) (local.get $len)))        ;; i >= len -> done
+      (local.set $slot (i32.add (i32.add (local.get $src) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $i) (local.get $esz)))))  ;; element slot = src+24+i*esz
+      (if (i32.eq (local.get $vt) (i32.const 1))                     ;; string element (value_type 1)
+        (then
+          (local.set $tag (i64.const 1))                            ;; Mixed tag: string (from_value persists a copy)
+          (local.set $lo (i64.load (local.get $slot)))             ;; zero-extended string ptr @ slot+0
+          (local.set $hi (i64.load (i32.add (local.get $slot) (i32.const 8)))))  ;; string length @ slot+8
+        (else
+          (if (i32.eq (local.get $vt) (i32.const 7))                ;; nested Mixed-cell element (value_type 7)
+            (then
+              (local.set $tag (i64.const 7))                       ;; Mixed tag: nested-mixed (from_value increfs the cell)
+              (local.set $lo (i64.load (local.get $slot)))         ;; zero-extended cell ptr @ slot+0
+              (local.set $hi (i64.const 0)))                       ;; hi unused
+            (else
+              (local.set $tag (i64.const 0))                       ;; Mixed tag: int (scalar element)
+              (local.set $lo (i64.load (local.get $slot)))         ;; raw i64 value @ slot+0
+              (local.set $hi (i64.const 0))))))                    ;; hi unused
+      (local.set $argcell (call $__rt_mixed_from_value (local.get $tag) (local.get $lo) (local.get $hi)))  ;; fresh owned Mixed cell for this element
+      (local.set $args1 (call $__rt_array_new (i64.const 1) (i64.const 16)))  ;; 1-slot Mixed-cell arg buffer
+      (local.set $args1 (call $__rt_array_push_mixed (local.get $args1) (local.get $argcell)))  ;; append the cell (stored borrowed; args1 owns it)
+      (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args1)))  ;; invoke the predicate -> owned result cell
+      (if (i64.ne (i64.load (i32.add (local.get $rcell) (i32.const 8))) (i64.const 0))  ;; truthiness: lo payload @ rcell+8 != 0 (tag-0 int / tag-3 bool)
+        (then
+          (if (i32.eq (local.get $vt) (i32.const 1))               ;; keep a string element
+            (then
+              (local.set $result (call $__rt_array_push_str (local.get $result) (i32.wrap_i64 (i64.load (local.get $slot))) (i64.load (i32.add (local.get $slot) (i32.const 8))))))  ;; push_str persists its own copy (source untouched)
+            (else
+              (if (i32.eq (local.get $vt) (i32.const 7))           ;; keep a nested Mixed-cell element
+                (then
+                  (call $__rt_incref (i32.wrap_i64 (i64.load (local.get $slot))))  ;; push_mixed stores borrowed; source still owns the cell -> incref first
+                  (local.set $result (call $__rt_array_push_mixed (local.get $result) (i32.wrap_i64 (i64.load (local.get $slot))))))  ;; append the source cell (result now co-owns it)
+                (else
+                  (local.set $result (call $__rt_array_push_int (local.get $result) (i64.load (local.get $slot))))))))))  ;; keep a scalar int element (copies the i64)
+      (call $__rt_decref_any (local.get $args1))                   ;; deep-free the arg buffer (releases argcell; for vt7 undoes from_value's incref)
+      (call $__rt_decref_any (local.get $rcell))                   ;; release the OWNED result cell (load-bearing: not stored, must be freed)
+      (local.set $i (i64.add (local.get $i) (i64.const 1)))        ;; i++
+      (br $L)))                                                    ;; loop back
+  (local.get $result))                                              ;; return the re-indexed filtered array
 "#;
 
 /// Derives the unified-ladder wrapper symbol for an FCC-of-free-function target
@@ -3323,6 +3415,294 @@ mod tests {
 "#;
         if let Some(o) = run_array_map_lowered_driver(driver, "t") {
             assert_eq!(o, "0");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // array_filter with a callable descriptor (`__rt_array_filter_callable`).
+    // The first test drives the runtime directly with a hand-stamped FCC descriptor
+    // for the predicate `keep_gt2`; the second is the non-return GC balance loop; the
+    // third lowers a real EIR body through `lower_function` so the `lower_array_filter`
+    // dispatch + the reversed op0=array/op1=callback consumption are tested end-to-end.
+    // -------------------------------------------------------------------------
+
+    /// Hand-written WAT body for the user predicate `keep_gt2(int) -> bool { x > 2 }`,
+    /// defined under its canonical wasm symbol `fn_keep_gt2` so the FCC wrapper's
+    /// `call $fn_keep_gt2` resolves. The wrapper unboxes the arg via `__rt_mixed_cast_int`,
+    /// calls this body, and boxes the i64 0/1 result as a tag-3 bool Mixed cell.
+    fn keep_gt2_free_fn_body_wat() -> &'static str {
+        r#"(func $fn_keep_gt2 (param $p1 i64) (result i64)
+  (i64.extend_i32_u (i64.gt_s (local.get $p1) (i64.const 2))))         ;; body: return (x > 2) as 0/1
+"#
+    }
+
+    /// Builds the user predicate `Function` (name `keep_gt2`, one int param, BOOL return)
+    /// that `emit_closure_dispatch` reads to generate the FCC wrapper. The Bool return
+    /// php-type makes `box_result_wat` tag the wrapper's result cell 3, so the runtime's
+    /// `rcell+8` lo-payload truthiness test reads the 0/1 predicate value.
+    fn keep_gt2_free_fn() -> Function {
+        let mut f = Function::new("keep_gt2".to_string(), IrType::I64, PhpType::Bool);
+        f.params.push(FunctionParam {
+            name: "x".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        f
+    }
+
+    /// `__rt_array_filter_callable` filters `keep_gt2(int)->bool` over a value_type-0
+    /// source `[1, 2, 3, 4, 5]` and returns a RE-INDEXED value_type-0 result `[3, 4, 5]`.
+    /// The driver folds `len*1000 + res[0]*100 + res[1]*10 + res[2]` = `3*1000 + 3*100 +
+    /// 4*10 + 5` = `3345`. The CORRECTNESS pin for the
+    /// filter loop: a "keep all" / passthrough bug (len 5, `[1,2,3,...]`) folds to `5123`,
+    /// a "keep none" bug (len 0) reads the null sentinel out of bounds and folds to a
+    /// wrapped garbage value, and reading the wrong truthiness offset (the cell tag instead
+    /// of its lo payload) flips the predicate — each is distinguished from `3345`.
+    #[test]
+    fn array_filter_callable_keeps_matching_elements() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $desc i32) (local $src i32) (local $res i32)
+  (local $len i64) (local $e0 i64) (local $e1 i64) (local $e2 i64)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))            ;; FCC descriptor (rc 1)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp kind 6 (callable)
+  (i64.store (local.get $desc) (i64.const 11))                        ;; descriptor kind = 11 (Function)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0 (FCC slot, no closures)
+  (i32.store offset=12 (local.get $desc) (i32.const 0))              ;; capture_count = 0
+  (i32.store offset=16 (local.get $desc) (i32.const 0))              ;; capture_tags_ptr = 0
+  (local.set $src (call $__rt_array_new (i64.const 5) (i64.const 8)))  ;; fresh scalar source array
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 1)))  ;; src[0] = 1
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 2)))  ;; src[1] = 2
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 3)))  ;; src[2] = 3
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 4)))  ;; src[3] = 4
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 5)))  ;; src[4] = 5
+  (local.set $res (call $__rt_array_filter_callable (local.get $desc) (local.get $src)))  ;; keep elements > 2
+  (local.set $len (i64.load (local.get $res)))                       ;; kept length (expect 3)
+  (local.set $e0 (call $__rt_array_get_int (local.get $res) (i64.const 0)))  ;; res[0] (expect 3)
+  (local.set $e1 (call $__rt_array_get_int (local.get $res) (i64.const 1)))  ;; res[1] (expect 4)
+  (local.set $e2 (call $__rt_array_get_int (local.get $res) (i64.const 2)))  ;; res[2] (expect 5)
+  (i64.add (i64.add (i64.add (i64.mul (local.get $len) (i64.const 1000)) (i64.mul (local.get $e0) (i64.const 100))) (i64.mul (local.get $e1) (i64.const 10))) (local.get $e2)))  ;; 3*1000 + 3*100 + 4*10 + 5 = 3345
+"#;
+        if let Some(o) = run_fcc_driver(keep_gt2_free_fn(), keep_gt2_free_fn_body_wat(), driver, "t") {
+            assert_eq!(o, "3345");
+        }
+    }
+
+    /// The filter run twice over a refcounted (value_type-7 nested-Mixed) source, for
+    /// refcount balance: each iteration releases the result (whose deep free releases the
+    /// kept source cells the keep-incref added), and after releasing the shared source and
+    /// the FCC descriptor `_gc_live` is "0". A non-return loop, so the per-element OWNED
+    /// predicate result cells are never stored anywhere: the runtime's `__rt_decref_any
+    /// (rcell)` is the only thing that frees them. Proven load-bearing: removing that free
+    /// leaves `_gc_live` non-zero (10 leaked bool cells = 400 live bytes across the two
+    /// 5-element passes), so this catches the leak the GC-blindspot rule warns a
+    /// return-case balance test would miss.
+    #[test]
+    fn array_filter_callable_balanced_gc() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $desc i32) (local $src i32) (local $res i32)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))            ;; FCC descriptor (rc 1)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp kind 6 (callable)
+  (i64.store (local.get $desc) (i64.const 11))                        ;; descriptor kind = 11 (Function)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0
+  (i32.store offset=12 (local.get $desc) (i32.const 0))              ;; capture_count = 0
+  (i32.store offset=16 (local.get $desc) (i32.const 0))              ;; capture_tags_ptr = 0
+  (local.set $src (call $__rt_array_new (i64.const 5) (i64.const 16)))  ;; fresh mixed-cell source array
+  (local.set $src (call $__rt_array_push_mixed (local.get $src) (call $__rt_mixed_from_value (i64.const 0) (i64.const 1) (i64.const 0))))  ;; src[0] = mixed(1)
+  (local.set $src (call $__rt_array_push_mixed (local.get $src) (call $__rt_mixed_from_value (i64.const 0) (i64.const 2) (i64.const 0))))  ;; src[1] = mixed(2)
+  (local.set $src (call $__rt_array_push_mixed (local.get $src) (call $__rt_mixed_from_value (i64.const 0) (i64.const 3) (i64.const 0))))  ;; src[2] = mixed(3)
+  (local.set $src (call $__rt_array_push_mixed (local.get $src) (call $__rt_mixed_from_value (i64.const 0) (i64.const 4) (i64.const 0))))  ;; src[3] = mixed(4)
+  (local.set $src (call $__rt_array_push_mixed (local.get $src) (call $__rt_mixed_from_value (i64.const 0) (i64.const 5) (i64.const 0))))  ;; src[4] = mixed(5)
+  (local.set $res (call $__rt_array_filter_callable (local.get $desc) (local.get $src)))  ;; iteration 1
+  (call $__rt_decref_any (local.get $res))                           ;; release iter-1 result (frees kept + balances boxes)
+  (local.set $res (call $__rt_array_filter_callable (local.get $desc) (local.get $src)))  ;; iteration 2 (same shared source)
+  (call $__rt_decref_any (local.get $res))                           ;; release iter-2 result
+  (call $__rt_decref_any (local.get $src))                           ;; release the shared source array
+  (call $__rt_decref_any (local.get $desc))                          ;; release the FCC descriptor
+  (global.get $_gc_live))                                             ;; expect 0 (balanced)
+"#;
+        if let Some(o) = run_fcc_driver(keep_gt2_free_fn(), keep_gt2_free_fn_body_wat(), driver, "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// Builds the self-contained EIR `Function` `filter_keep_gt2() -> array<int>` that
+    /// exercises the full `lower_array_filter` path: it builds an indexed `array<int>`
+    /// `[1, 2, 3, 4, 5]` (`ArrayNew` + `ArrayPush` of int constants), creates a first-class
+    /// callable of `keep_gt2` (`FirstClassCallableNew`, Owned kind-6 descriptor), then
+    /// filters with `array_filter($arr, $f)` as an `Op::BuiltinCall` whose operands are
+    /// `[arr, vf]` — op0 = ARRAY, op1 = CALLBACK, the REVERSED order `lower_array_filter`
+    /// must consume. It releases the source array and the FCC temp (mirroring `ir_lower`:
+    /// `array_filter` borrows the array and releases the FCC temp) and returns the Owned
+    /// result array.
+    fn filter_keep_gt2_via_builtin_fn(
+        keep_data: crate::ir::DataId,
+        array_filter_data: crate::ir::DataId,
+    ) -> Function {
+        let int_arr_ty = PhpType::Array(Box::new(PhpType::Int));
+        let mut f = Function::new(
+            "filter_keep_gt2".to_string(),
+            IrType::Heap(IrHeapKind::Array),
+            int_arr_ty.clone(),
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            // $arr = [1, 2, 3, 4, 5]  (array<int>, Owned, capacity 5; ArrayPush shapes it).
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(5)),
+                    IrType::Heap(IrHeapKind::Array),
+                    int_arr_ty.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            for v in [1i64, 2, 3, 4, 5] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![arr, c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            // $f = keep_gt2(...)  -> kind-6 Function descriptor (Owned).
+            let vf = b
+                .emit(
+                    Op::FirstClassCallableNew,
+                    Vec::new(),
+                    Some(Immediate::Data(keep_data)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            // $res = array_filter($arr, $f)  -> array<int> (Owned). REVERSED operand order
+            // vs array_map: op0 = array, op1 = callback. The new builtin arm under test.
+            let res = b
+                .emit(
+                    Op::BuiltinCall,
+                    vec![arr, vf],
+                    Some(Immediate::Data(array_filter_data)),
+                    IrType::Heap(IrHeapKind::Array),
+                    int_arr_ty.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            // array_filter borrows the source array, so release it after the call; then
+            // release the FCC descriptor temp (mirrors ir_lower's owned-arg releases).
+            let _ = b.emit(
+                Op::Release,
+                vec![arr],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let _ = b.emit(
+                Op::Release,
+                vec![vf],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: Some(res) });
+        }
+        f
+    }
+
+    /// Builds a reactor module with the full runtime surface, the lowered self-contained
+    /// `filter_keep_gt2` body (via `lower_function`, so the `lower_array_filter` builtin arm
+    /// and the `__rt_array_filter_callable` runtime are under test together), the
+    /// hand-written `fn_keep_gt2` body, and the unified closure/FCC dispatch ladder (single
+    /// FCC entry `keep_gt2`). Validates with `wasmparser` and runs `export` under `wasmer`;
+    /// `None` if wasmer is absent (validation always runs).
+    fn run_array_filter_lowered_driver(driver: &str, export: &str) -> Option<String> {
+        let mut wm = WatModule::new();
+        wm.set_memory(3, Some("memory"));
+        // The lowered body's prologue references the `$__concat_off` cursor global.
+        super::super::runtime::emit_common_runtime(&mut wm);
+        emit_heap_runtime(&mut wm, 1024, 3 * 65536);
+        emit_refcount_runtime(&mut wm);
+        emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
+        super::super::hashes::emit_hash_runtime(&mut wm);
+        emit_object_runtime(&mut wm);
+        emit_gc_desc_stub(&mut wm);
+        emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
+        emit_closure_runtime(&mut wm);
+        wm.add_raw_func(keep_gt2_free_fn_body_wat());
+        let mut module = Module::new(Target::wasm());
+        let keep_data = module.data.intern_string("keep_gt2");
+        let array_filter_data = module.data.intern_function_name("array_filter");
+        module.functions.push(keep_gt2_free_fn());
+        let body_fn = filter_keep_gt2_via_builtin_fn(keep_data, array_filter_data);
+        let fcc_entries = vec!["keep_gt2".to_string()];
+        let body_fb =
+            super::super::function::lower_function(&module, &body_fn, &[], &[], &fcc_entries)
+                .expect("lower array_filter body");
+        wm.add_func(body_fb);
+        super::emit_closure_dispatch(&mut wm, &module, &fcc_entries).expect("emit_closure_dispatch");
+        wm.add_raw_func(driver);
+        let wat = wm.render();
+        let bytes = ::wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("WAT did not assemble: {e}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|e| panic!("wasm did not validate: {e}\n{wat}"));
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = unique_tmp_dir();
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg(export)
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer --invoke {export} failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            wat
+        );
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// `filter_keep_gt2()` lowers `array_filter([1,2,3,4,5], keep_gt2(...))` through the real
+    /// `Op::BuiltinCall` -> `lower_array_filter` dispatch (NOT a hand-written runtime call),
+    /// returning a value_type-0 `array<int>` `[3, 4, 5]`. The driver folds `len*1000 +
+    /// res[0]*100 + res[1]*10 + res[2]` = `3345`, the same distinguishing number as the
+    /// direct-runtime test. Proves the EIR op0=array / op1=callback order is consumed
+    /// correctly end-to-end and the whole-module abort (catch-all -> `Unsupported`) is gone.
+    #[test]
+    fn array_filter_lowering_via_builtin_call() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $res i32) (local $len i64) (local $e0 i64) (local $e1 i64) (local $e2 i64)
+  (local.set $res (call $fn_filter_keep_gt2))                         ;; res = array_filter([1..5], keep_gt2(...))
+  (local.set $len (i64.load (local.get $res)))                       ;; kept length (expect 3)
+  (local.set $e0 (call $__rt_array_get_int (local.get $res) (i64.const 0)))  ;; res[0] (expect 3)
+  (local.set $e1 (call $__rt_array_get_int (local.get $res) (i64.const 1)))  ;; res[1] (expect 4)
+  (local.set $e2 (call $__rt_array_get_int (local.get $res) (i64.const 2)))  ;; res[2] (expect 5)
+  (i64.add (i64.add (i64.add (i64.mul (local.get $len) (i64.const 1000)) (i64.mul (local.get $e0) (i64.const 100))) (i64.mul (local.get $e1) (i64.const 10))) (local.get $e2)))  ;; 3*1000 + 3*100 + 4*10 + 5 = 3345
+"#;
+        if let Some(o) = run_array_filter_lowered_driver(driver, "t") {
+            assert_eq!(o, "3345");
         }
     }
 }

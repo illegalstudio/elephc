@@ -889,6 +889,7 @@ fn lower_builtin_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         "exit" | "die" => lower_exit(ctx, inst),
         "get_class" => super::classes::lower_get_class(ctx, inst),
         "array_map" => lower_array_map(ctx, inst),
+        "array_filter" => lower_array_filter(ctx, inst),
         other => Err(WasmError::Unsupported(format!("builtin {}", other))),
     }
 }
@@ -963,6 +964,84 @@ fn lower_array_map(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             desc, src
         ),
         "map each element through the callback into a fresh array<mixed>",
+    );
+    store_result(ctx, inst)
+}
+
+/// Lowers `array_filter($arr, $f)` where — note the REVERSED operand order vs
+/// `array_map` — operand 0 `$arr` is the INDEXED `array<int|str|mixed>` source and
+/// operand 1 `$f` is a `Callable` descriptor (a closure or a free-function first-class
+/// callable). It lowers to a `__rt_array_filter_callable(desc, src)` runtime call that
+/// returns a fresh array of the kept elements. The result is RE-INDEXED to keys
+/// `0..kept-1` (it does NOT preserve PHP keys), exactly mirroring the native
+/// `__rt_array_filter` divergence — key preservation is deliberately out of scope here.
+///
+/// Both operands are materialized BORROWED: neither is released here. The EIR owns
+/// operands 0 and 1 and releases them at the call site (the source array is borrowed
+/// by `array_filter`, the descriptor is released after). The runtime returns an Owned
+/// array pointer, stored via `store_result`.
+///
+/// Deferred (returns `Unsupported`, never miscompiled): the 3-operand
+/// `array_filter($arr, $cb, $mode)` and 1-operand falsy-filter `array_filter($arr)`
+/// shapes (operand count != 2); a string/array/object callback (operand 1 not
+/// `Callable`); and a hash/assoc or otherwise non-indexed source (operand 0 not
+/// `Heap(Array)`).
+fn lower_array_filter(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    // Single indexed array + single Callable callback only. The 3-arg `mode` form
+    // (ARRAY_FILTER_USE_KEY/BOTH) and the 1-arg no-callback falsy filter each need a
+    // different runtime contract and are deferred.
+    if inst.operands.len() != 2 {
+        return Err(WasmError::Unsupported(format!(
+            "array_filter with {} operands on wasm32-wasi (only a single indexed array + \
+             single Callable callback supported; 3-arg mode / no-callback deferred)",
+            inst.operands.len()
+        )));
+    }
+    // REVERSED vs array_map: operand 0 is the ARRAY, operand 1 is the CALLBACK.
+    let array = operand(inst, 0)?;
+    let callable = operand(inst, 1)?;
+
+    // GUARD: operand 1 must be a Callable descriptor (closure or free-fn FCC). A
+    // string/array/object callback would not be an i64 descriptor and needs its own
+    // runtime callback selection (deferred slice).
+    let callable_php = ctx.value_php_type(callable)?.codegen_repr();
+    if !matches!(callable_php, PhpType::Callable) {
+        return Err(WasmError::Unsupported(format!(
+            "array_filter with a {:?} callback on wasm32-wasi (only Callable descriptors \
+             supported; string/array/object callbacks deferred)",
+            callable_php
+        )));
+    }
+    // GUARD: operand 0 must be an INDEXED array (value_type 0/1/7 = int/string/mixed-cell).
+    // A HashNew assoc source has a different layout the runtime helper cannot read.
+    let array_ir = ctx.function.value(array).map(|v| v.ir_type);
+    if !matches!(array_ir, Some(IrType::Heap(IrHeapKind::Array))) {
+        return Err(WasmError::Unsupported(format!(
+            "array_filter over a {:?} source on wasm32-wasi (only indexed array<int|str|mixed> \
+             supported; hash/assoc sources deferred)",
+            array_ir
+        )));
+    }
+
+    // operand 1: callable descriptor (i64) -> i32 for __rt_array_filter_callable.
+    let desc = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(callable)?;
+    ctx.fb.ins("i32.wrap_i64", "callable descriptor i64 -> i32");
+    ctx.fb.ins(&format!("local.set {}", desc), "save descriptor pointer");
+
+    // operand 0: the indexed source array (a single i32 pointer).
+    let src = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(array)?;
+    ctx.fb.ins(&format!("local.set {}", src), "save source array pointer");
+
+    // __rt_array_filter_callable(desc, src) -> i32 result array pointer (Owned). Neither
+    // operand is released here: the EIR owns/releases operands 0 and 1 at the call site.
+    ctx.fb.ins(
+        &format!(
+            "(call $__rt_array_filter_callable (local.get {}) (local.get {}))",
+            desc, src
+        ),
+        "keep each element whose callback result is truthy, re-indexed into a fresh array",
     );
     store_result(ctx, inst)
 }
