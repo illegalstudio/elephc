@@ -19141,11 +19141,12 @@ class DynEvalNativeStaticWriteChild extends DynEvalNativeStaticWriteBase {
 }');
 DynEvalNativeStaticWriteChild::$label = "new";
 DynEvalNativeStaticWriteChild::$count = 7;
+DynEvalNativeStaticWriteChild::$count += 2;
 echo DynEvalNativeStaticWriteChild::$label . ":";
 echo DynEvalNativeStaticWriteChild::$count;
 "#,
     );
-    assert_eq!(out, "new:7");
+    assert_eq!(out, "new:9");
 }
 
 /// Verifies native static property array writes update eval-declared classes after the barrier.
