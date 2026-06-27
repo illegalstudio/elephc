@@ -10,7 +10,9 @@
 //! - EIR is the default user-facing backend.
 //! - Current lowering is still 1:1, with IR optimization and register allocation
 //!   planned as later passes.
-//! - The legacy `src/codegen/` AST backend remains available through `--ast-backend`.
+//! - EIR is the only user-facing codegen backend; the legacy `src/codegen/` AST
+//!   backend is no longer reachable as a pipeline entry point (the `--ast-backend`
+//!   flag was removed), though its shared ABI/runtime helpers remain in use.
 
 mod block_emit;
 mod context;

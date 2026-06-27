@@ -8,21 +8,62 @@
 //! - Creates isolated temporary projects, invokes the elephc binary, and supports include/require fixtures.
 
 use super::*;
+use super::compiler::ir_opt_enabled_for_codegen_fixture;
 
-/// Combines checker-required libraries with libraries required by feature-gated runtime helpers.
-fn required_libraries_for_codegen(
+/// Returns whether project codegen fixtures should use the linear-scan register
+/// allocator, honoring `ELEPHC_REGALLOC` like the CLI and codegen fixture helper.
+fn regalloc_linear_for_project_fixture() -> bool {
+    !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"))
+}
+
+/// Lowers an optimized AST + check result to EIR, runs the default-on IR optimizer,
+/// and returns the module ready for `generate_user_asm_from_ir_with_options`.
+fn lower_and_validate_ir_for_project_fixture(
     program: &elephc::parser::ast::Program,
     check_result: &elephc::types::CheckResult,
-) -> Vec<String> {
-    let runtime_features =
-        elephc::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
+) -> elephc::ir::Module {
+    let mut module = elephc::ir_lower::lower_program(program, check_result, target())
+        .expect("AST-to-EIR lowering failed for project fixture");
+    if ir_opt_enabled_for_codegen_fixture() {
+        elephc::ir_passes::optimize_module(&mut module);
+    }
+    module
+}
+
+/// Compiles an optimized AST through the EIR backend and returns (user_asm, runtime_asm, required_libraries).
+fn compile_via_eir(
+    optimized: &elephc::parser::ast::Program,
+    check_result: &elephc::types::CheckResult,
+    requires_elephc_tls: bool,
+) -> (String, String, Vec<String>) {
+    elephc::codegen::set_null_repr(default_null_repr());
+    let ir_module = lower_and_validate_ir_for_project_fixture(optimized, check_result);
+    let exported_functions = HashMap::new();
+    let regalloc_linear = regalloc_linear_for_project_fixture();
+    let user_asm = elephc::codegen_ir::generate_user_asm_from_ir_with_options(
+        &ir_module,
+        false,
+        false,
+        requires_elephc_tls,
+        elephc::codegen::Emit::Executable,
+        &exported_functions,
+        regalloc_linear,
+        false,
+    )
+    .expect("EIR backend codegen failed for project fixture");
+    let runtime_features = ir_module.required_runtime_features;
+    let runtime_asm = elephc::codegen::generate_runtime_with_features(
+        8_388_608,
+        target(),
+        runtime_features,
+    );
     let mut required_libraries = check_result.required_libraries.clone();
     for lib in elephc::codegen::required_libraries_for_runtime_features(runtime_features) {
         if !required_libraries.contains(&lib) {
             required_libraries.push(lib);
         }
     }
-    required_libraries
+    (user_asm, runtime_asm, required_libraries)
 }
 
 // Creates an isolated temporary directory for CLI tests using a unique prefix,
@@ -209,28 +250,8 @@ pub(crate) fn compile_and_run_files_expect_failure(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let (user_asm, runtime_asm) = elephc::codegen::generate(
-        &optimized,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.callable_param_sigs,
-        &check_result.callable_return_sigs,
-        &check_result.callable_array_return_sigs,
-        &check_result.interfaces,
-        &check_result.classes,
-        &check_result.enums,
-        &check_result.packed_classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
-        8_388_608,
-        false,
-        false,
-        target(),
-        requires_elephc_tls,
-        default_null_repr(),
-    );
-    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_via_eir(&optimized, &check_result, requires_elephc_tls);
 
     let elephc_err = assemble_and_run_expect_failure(
         &user_asm,
@@ -294,28 +315,8 @@ pub(crate) fn compile_and_run_files_with_defines(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let (user_asm, runtime_asm) = elephc::codegen::generate(
-        &optimized,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.callable_param_sigs,
-        &check_result.callable_return_sigs,
-        &check_result.callable_array_return_sigs,
-        &check_result.interfaces,
-        &check_result.classes,
-        &check_result.enums,
-        &check_result.packed_classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
-        8_388_608,
-        false,
-        false,
-        target(),
-        requires_elephc_tls,
-        default_null_repr(),
-    );
-    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_via_eir(&optimized, &check_result, requires_elephc_tls);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let elephc_out = assemble_and_run(
@@ -401,6 +402,12 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
+    elephc::codegen::set_autoload_rule_count(0);
+    let resolved = elephc::pdo_prelude::inject_if_used(resolved);
+    let resolved = elephc::tz_prelude::inject_if_used(resolved);
+    let resolved = elephc::list_id_prelude::inject_if_used(resolved);
+    let resolved = elephc::var_export_prelude::inject_if_used(resolved);
+    let resolved = elephc::image_prelude::inject_if_used(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result = elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -412,28 +419,8 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let (user_asm, runtime_asm) = elephc::codegen::generate(
-        &optimized,
-        &check_result.global_env,
-        &check_result.functions,
-        &check_result.callable_param_sigs,
-        &check_result.callable_return_sigs,
-        &check_result.callable_array_return_sigs,
-        &check_result.interfaces,
-        &check_result.classes,
-        &check_result.enums,
-        &check_result.packed_classes,
-        &check_result.extern_functions,
-        &check_result.extern_classes,
-        &check_result.extern_globals,
-        8_388_608,
-        false,
-        false,
-        target(),
-        requires_elephc_tls,
-        default_null_repr(),
-    );
-    let required_libraries = required_libraries_for_codegen(&optimized, &check_result);
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_via_eir(&optimized, &check_result, requires_elephc_tls);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let asm_path = dir.join("test.s");

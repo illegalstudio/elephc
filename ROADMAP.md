@@ -948,8 +948,8 @@ and 0.x validation rather than by speculative pass work.
 - [ ] Performance within 2x of C -O0 on compute benchmarks
 - [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before deleting the frozen legacy backend
 - [ ] Real-world CLI tools compiled as validation
-- [ ] Audit remaining references to `--ast-backend` and legacy AST emitters so docs, help text, and release notes present them as frozen diagnostic-only fallback before removal
-- [ ] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
+- [x] Audit remaining references to `--ast-backend` and legacy AST emitters so docs, help text, and release notes present them as frozen diagnostic-only fallback before removal
+- [x] Remove the deprecated `--ast-backend` CLI flag once diagnostic fallback is no longer needed; report it as unsupported
 - [ ] Delete frozen legacy AST → ASM emitter modules after shared ABI/runtime dependencies are disentangled
 - [ ] Rename `src/codegen_ir/` to `src/codegen/`
 - [ ] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline

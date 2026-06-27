@@ -302,10 +302,9 @@ elephc --null-repr=sentinel legacy.php
 use the default; `sentinel` exists as a legacy opt-out. See
 [Memory Model](../internals/memory-model.md).
 
-## The frozen legacy backend
+## The legacy backend
 
-`--ast-backend` selects the legacy direct AST→assembly backend. It is
-**deprecated**, frozen (no new language or runtime features), emits a warning,
-and is scheduled for removal in v0.26.0. Use it only to compare behavior with the
-old backend during the transition. The EIR backend is the default and the only
-active implementation target.
+The legacy direct AST→assembly backend (`--ast-backend`) was removed in
+v0.26.0. The EIR backend is the only active implementation target. The
+frozen emitter modules remain in `src/codegen/` pending Phase 2 cleanup
+but are no longer reachable from the CLI or the pipeline.
