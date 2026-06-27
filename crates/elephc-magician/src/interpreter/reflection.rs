@@ -9797,14 +9797,30 @@ fn eval_reflection_method_prototype_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<(String, String)>, EvalStatus> {
     if context.has_class(declaring_class) || context.has_enum(declaring_class) {
-        return Ok(eval_reflection_parent_method_prototype_target(
+        if let Some(prototype) =
+            eval_reflection_parent_method_prototype_target(declaring_class, method_name, context)
+        {
+            return Ok(Some(prototype));
+        }
+        if let Some(prototype) = eval_reflection_eval_aot_parent_method_prototype_target(
             declaring_class,
             method_name,
             context,
-        )
-        .or_else(|| {
+            values,
+        )? {
+            return Ok(Some(prototype));
+        }
+        if let Some(prototype) =
             eval_reflection_interface_method_prototype_target(declaring_class, method_name, context)
-        }));
+        {
+            return Ok(Some(prototype));
+        }
+        return eval_reflection_aot_interface_method_prototype_target_for_eval(
+            declaring_class,
+            method_name,
+            context,
+            values,
+        );
     }
     eval_reflection_aot_method_prototype_target(declaring_class, method_name, values)
 }
@@ -9910,6 +9926,19 @@ fn eval_reflection_parent_method_prototype_target(
     None
 }
 
+/// Finds the nearest generated/AOT parent-class method prototype for an eval method.
+fn eval_reflection_eval_aot_parent_method_prototype_target(
+    declaring_class: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, String)>, EvalStatus> {
+    let Some(parent_class) = context.class_native_parent_name(declaring_class) else {
+        return Ok(None);
+    };
+    eval_reflection_aot_method_candidate(&parent_class, method_name, false, values)
+}
+
 /// Finds the interface method prototype for an eval-declared class method.
 fn eval_reflection_interface_method_prototype_target(
     declaring_class: &str,
@@ -9928,6 +9957,30 @@ fn eval_reflection_interface_method_prototype_target(
         }
     }
     None
+}
+
+/// Finds an AOT interface method prototype for an eval-declared class method.
+fn eval_reflection_aot_interface_method_prototype_target_for_eval(
+    declaring_class: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, String)>, EvalStatus> {
+    for interface_name in eval_reflection_eval_class_interface_names(
+        declaring_class,
+        context,
+        values,
+    )? {
+        if context.has_interface(&interface_name) {
+            continue;
+        }
+        if let Some(prototype) =
+            eval_reflection_aot_method_candidate(&interface_name, method_name, false, values)?
+        {
+            return Ok(Some(prototype));
+        }
+    }
+    Ok(None)
 }
 
 /// Finds the interface that actually declares a method in an interface hierarchy.
