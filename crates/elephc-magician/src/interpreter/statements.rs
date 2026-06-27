@@ -2880,19 +2880,39 @@ fn eval_method_overrides_aot_parent(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let Some(parent) = class.parent() else {
+    let Some(parent) = pending_class_native_parent_name(class, context) else {
         return Ok(false);
     };
-    if context.has_class(parent) || !values.class_exists(parent)? {
+    if !values.class_exists(&parent)? {
         return Ok(false);
     }
-    let parent = parent.trim_start_matches('\\');
-    let Some(flags) = values.reflection_method_flags(parent, method.name())? else {
+    let Some(flags) = values.reflection_method_flags(&parent, method.name())? else {
         return Ok(false);
     };
     let parent_method_is_static = flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0;
     let parent_method_is_private = flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0;
     Ok(!parent_method_is_private && parent_method_is_static == method.is_static())
+}
+
+/// Returns the nearest generated/AOT parent for a class not yet registered in context.
+fn pending_class_native_parent_name(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Option<String> {
+    let mut current = class.parent()?.to_string();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        let resolved = context
+            .resolve_class_name(&current)
+            .unwrap_or_else(|| current.trim_start_matches('\\').to_string());
+        if !seen.insert(resolved.to_ascii_lowercase()) {
+            return None;
+        }
+        let Some(parent_class) = context.class(&resolved) else {
+            return Some(resolved.trim_start_matches('\\').to_string());
+        };
+        current = parent_class.parent()?.to_string();
+    }
 }
 
 /// Returns whether one method implements a direct or inherited interface method.
@@ -3774,14 +3794,13 @@ fn validate_method_aot_parent_override(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let Some(parent) = class.parent() else {
+    let Some(parent) = pending_class_native_parent_name(class, context) else {
         return Ok(());
     };
-    if context.has_class(parent) || !values.class_exists(parent)? {
+    if !values.class_exists(&parent)? {
         return Ok(());
     }
-    let parent = parent.trim_start_matches('\\');
-    let Some(flags) = values.reflection_method_flags(parent, method.name())? else {
+    let Some(flags) = values.reflection_method_flags(&parent, method.name())? else {
         return Ok(());
     };
     if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
@@ -3802,7 +3821,7 @@ fn validate_method_aot_parent_override(
         return Err(EvalStatus::RuntimeFatal);
     }
     let Some(required) = eval_aot_method_signature_requirement(
-        parent,
+        &parent,
         method.name(),
         parent_is_static,
         context,
@@ -3814,7 +3833,7 @@ fn validate_method_aot_parent_override(
         method,
         class.name(),
         &required,
-        &eval_aot_method_declaring_class(parent, method.name(), values)?,
+        &eval_aot_method_declaring_class(&parent, method.name(), values)?,
         Some(class),
         context,
     ) {

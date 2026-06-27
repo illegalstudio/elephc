@@ -12650,6 +12650,25 @@ echo (new EvalAotOverrideChild())->label();');
     assert_eq!(out, "child");
 }
 
+/// Verifies eval `#[Override]` can target AOT methods through eval parents.
+#[test]
+fn test_eval_declared_class_override_attribute_accepts_inherited_aot_parent_method() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotInheritedOverrideParent {
+    public function label(): string { return "parent"; }
+}
+eval('class EvalAotInheritedOverrideMiddle extends EvalAotInheritedOverrideParent {}
+class EvalAotInheritedOverrideChild extends EvalAotInheritedOverrideMiddle {
+    #[\Override]
+    public function label(): string { return "child"; }
+}
+echo (new EvalAotInheritedOverrideChild())->label();');
+"#,
+    );
+    assert_eq!(out, "child");
+}
+
 /// Verifies eval rejects overriding final generated/AOT parent methods.
 #[test]
 fn test_eval_declared_class_rejects_final_aot_parent_method_override() {
@@ -12659,6 +12678,26 @@ class EvalAotFinalOverrideParent {
     final public function label(): string { return "parent"; }
 }
 eval('class EvalAotFinalOverrideChild extends EvalAotFinalOverrideParent {
+    public function label(): string { return "child"; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval rejects final AOT method overrides through eval parents.
+#[test]
+fn test_eval_declared_class_rejects_final_inherited_aot_parent_method_override() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalAotFinalInheritedOverrideParent {
+    final public function label(): string { return "parent"; }
+}
+eval('class EvalAotFinalInheritedOverrideMiddle extends EvalAotFinalInheritedOverrideParent {}
+class EvalAotFinalInheritedOverrideChild extends EvalAotFinalInheritedOverrideMiddle {
     public function label(): string { return "child"; }
 }');
 "#,
