@@ -544,6 +544,15 @@ pub(super) fn lower_eval_callable_call_array(
     eval::lower_eval_callable_call_array(ctx, inst, callback, arg_array)
 }
 
+/// Lowers post-eval callable probes against eval dynamic callables.
+pub(super) fn lower_eval_is_callable(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callback: ValueId,
+) -> Result<()> {
+    eval::lower_eval_is_callable(ctx, inst, callback)
+}
+
 /// Lowers post-eval object class-name introspection against eval dynamic metadata.
 pub(super) fn lower_eval_object_class_name(
     ctx: &mut FunctionContext<'_>,
@@ -971,7 +980,11 @@ fn emit_dynamic_class_like_exists_compare(
 fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_callable", 1)?;
     let value = expect_operand(inst, 0)?;
-    match ctx.value_php_type(value)?.codegen_repr() {
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    if has_eval_context(ctx) && value_ty != PhpType::Callable {
+        return lower_eval_is_callable(ctx, inst, value);
+    }
+    match value_ty {
         PhpType::Callable => emit_static_bool(ctx, true),
         PhpType::Str => {
             if let Ok(function_name) = const_string_operand(ctx, value) {

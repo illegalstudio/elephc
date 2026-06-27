@@ -468,6 +468,24 @@ pub(super) fn lower_eval_callable_call_array(
     store_if_result(ctx, inst)
 }
 
+/// Lowers an `is_callable()` probe through eval dynamic callable metadata.
+pub(super) fn lower_eval_is_callable(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callback: ValueId,
+) -> Result<()> {
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_context(ctx)?;
+    store_eval_mixed_operand_at(ctx, callback, EVAL_TEMP_CELL_OFFSET)?;
+    load_eval_context_to_arg(ctx, 0);
+    let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, EVAL_TEMP_CELL_OFFSET);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_is_callable");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers object class-name introspection through the eval bridge.
 pub(super) fn lower_eval_object_class_name(
     ctx: &mut FunctionContext<'_>,

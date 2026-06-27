@@ -18982,6 +18982,32 @@ echo is_subclass_of($box, "DynEvalNativeIntrospectBase") ? "P" : "p";
     assert_eq!(out, "DynEvalNativeIntrospectChild:DynEvalNativeIntrospectBase:C:B:s:P");
 }
 
+/// Verifies native callable probes see eval-declared dynamic callable targets.
+#[test]
+fn test_eval_declared_class_native_callable_probe_after_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class DynEvalNativeCallableProbe {
+    public function bump($n) { return $n + 1; }
+    public static function up($n) { return $n + 2; }
+}
+function dyn_eval_native_callable_fn($n) { return $n + 3; }');
+$box = new DynEvalNativeCallableProbe();
+$call = [$box, "bump"];
+echo is_callable($call) ? "Y" : "N";
+echo ":";
+echo call_user_func($call, 4);
+echo ":";
+echo is_callable("dyn_eval_native_callable_fn") ? "F" : "f";
+echo ":";
+echo is_callable(["DynEvalNativeCallableProbe", "up"]) ? "S" : "s";
+echo ":";
+echo is_callable([$box, "missing"]) ? "M" : "m";
+"#,
+    );
+    assert_eq!(out, "Y:5:F:S:m");
+}
+
 /// Verifies eval class declarations from a namespace are registered globally.
 #[test]
 fn test_eval_declared_class_in_namespace_is_global() {

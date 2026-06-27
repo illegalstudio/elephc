@@ -231,6 +231,18 @@ pub fn execute_context_callable_call_array_outcome(
     }
 }
 
+/// Probes whether a callback value is callable in the shared eval context.
+pub fn execute_context_is_callable(
+    context: &ElephcEvalContext,
+    callback: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let result = eval_function_probe_result("is_callable", callback, context, values)?;
+    let callable = values.truthy(result)?;
+    values.release(result)?;
+    Ok(callable)
+}
+
 /// Constructs a class declared in the shared eval context with prepared positional arguments.
 pub fn execute_context_new_object_outcome(
     context: &mut ElephcEvalContext,
