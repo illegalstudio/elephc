@@ -143,6 +143,14 @@ pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
             1,
             vec![bool_lit(true)],
         )),
+        "method_exists" => Some(with_return(
+            fixed(&["object_or_class", "method"]),
+            PhpType::Bool,
+        )),
+        "property_exists" => Some(with_return(
+            fixed(&["object_or_class", "property"]),
+            PhpType::Bool,
+        )),
         "iterator_to_array" => Some(optional(
             &["iterator", "preserve_keys"],
             1,
@@ -699,6 +707,9 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
             &[PhpType::Str],
             PhpType::Bool,
         )),
+        "method_exists" | "property_exists" => {
+            return_typed_first_class_builtin_sig(name, PhpType::Bool)
+        }
         "gettype" => Some(typed_first_class_builtin_sig(
             name,
             &[PhpType::Mixed],
@@ -955,6 +966,13 @@ fn variadic(regular_params: &[&str], variadic_name: &str) -> FunctionSig {
     let mut defaults = vec![None; regular_params.len()];
     defaults.push(Some(Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy())));
     make_sig(&params, defaults, Some(variadic_name))
+}
+
+/// Sets the declared return type for a signature while preserving its parameter contract.
+fn with_return(mut sig: FunctionSig, return_type: PhpType) -> FunctionSig {
+    sig.return_type = return_type;
+    sig.declared_return = true;
+    sig
 }
 
 /// Marks the first parameter of a signature as by-reference.

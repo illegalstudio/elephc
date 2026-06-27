@@ -81,6 +81,17 @@ pub(super) fn check_builtin(
             checker.infer_type(&args[0], env)?;
             Ok(Some(PhpType::Bool))
         }
+        "method_exists" | "property_exists" => {
+            if args.len() != 2 {
+                return Err(CompileError::new(
+                    span,
+                    &format!("{}() takes exactly 2 arguments", name),
+                ));
+            }
+            checker.infer_type(&args[0], env)?;
+            checker.infer_type(&args[1], env)?;
+            Ok(Some(PhpType::Bool))
+        }
         "get_resource_type" => {
             if args.len() != 1 {
                 return Err(CompileError::new(

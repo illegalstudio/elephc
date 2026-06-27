@@ -6,6 +6,7 @@
 //! Called from:
 //! - Generated EIR backend assembly through `__elephc_eval_object_class_name`.
 //! - Generated EIR backend assembly through `__elephc_eval_object_is_a`.
+//! - Generated EIR backend assembly through `__elephc_eval_member_exists`.
 //!
 //! Key details:
 //! - Class-name lookups return boxed Mixed string cells through `ElephcEvalResult`.
@@ -20,6 +21,8 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 const CLASS_LOOKUP_GET_CLASS: u64 = 0;
 const CLASS_LOOKUP_GET_PARENT_CLASS: u64 = 1;
+const MEMBER_LOOKUP_METHOD_EXISTS: u64 = 0;
+const MEMBER_LOOKUP_PROPERTY_EXISTS: u64 = 1;
 
 /// Resolves `get_class()` or `get_parent_class()` against eval dynamic objects.
 ///
@@ -58,6 +61,25 @@ pub unsafe extern "C" fn __elephc_eval_object_is_a(
 ) -> i32 {
     std::panic::catch_unwind(|| unsafe {
         eval_object_is_a_inner(ctx, object, target_ptr, target_len, exclude_self)
+    })
+    .unwrap_or(0)
+}
+
+/// Tests whether a method or property exists in the eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `target` and `member` must point
+/// at boxed runtime cells. `lookup_kind` must be a supported discriminator.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_member_exists(
+    ctx: *mut ElephcEvalContext,
+    target: *mut RuntimeCell,
+    member: *mut RuntimeCell,
+    lookup_kind: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_member_exists_inner(ctx, target, member, lookup_kind)
     })
     .unwrap_or(0)
 }
@@ -129,6 +151,41 @@ unsafe fn eval_object_is_a_inner(
         RuntimeCellHandle::from_raw(object),
         &target,
         exclude_self != 0,
+        &mut values,
+    ) {
+        Ok(result) => i32::from(result),
+        Err(_) => 0,
+    }
+}
+
+/// Runs the eval member-exists ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_member_exists`; invalid handles fail closed as false.
+#[cfg(not(test))]
+unsafe fn eval_member_exists_inner(
+    ctx: *mut ElephcEvalContext,
+    target: *mut RuntimeCell,
+    member: *mut RuntimeCell,
+    lookup_kind: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION || target.is_null() || member.is_null() {
+        return 0;
+    }
+    let lookup = match lookup_kind {
+        MEMBER_LOOKUP_METHOD_EXISTS => "method_exists",
+        MEMBER_LOOKUP_PROPERTY_EXISTS => "property_exists",
+        _ => return 0,
+    };
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    match interpreter::execute_context_member_exists(
+        context,
+        lookup,
+        RuntimeCellHandle::from_raw(target),
+        RuntimeCellHandle::from_raw(member),
         &mut values,
     ) {
         Ok(result) => i32::from(result),

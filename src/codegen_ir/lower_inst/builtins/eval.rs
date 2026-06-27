@@ -53,6 +53,8 @@ const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 const EVAL_CLASS_LOOKUP_GET_CLASS: i64 = 0;
 const EVAL_CLASS_LOOKUP_GET_PARENT_CLASS: i64 = 1;
+const EVAL_MEMBER_LOOKUP_METHOD_EXISTS: i64 = 0;
+const EVAL_MEMBER_LOOKUP_PROPERTY_EXISTS: i64 = 1;
 const EVAL_CALLABLE_ARG_ARRAY_OFFSET: usize = EVAL_CODE_PTR_OFFSET;
 const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
 const NATIVE_DEFAULT_NULL: i64 = 0;
@@ -483,6 +485,37 @@ pub(super) fn lower_eval_is_callable(
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_is_callable");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    box_eval_bool_result_if_mixed(ctx, inst);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers member-existence introspection through eval dynamic metadata.
+pub(super) fn lower_eval_member_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: ValueId,
+    member: ValueId,
+    name: &str,
+) -> Result<()> {
+    let lookup_kind = eval_member_lookup_kind(name)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_context(ctx)?;
+    store_eval_mixed_operand_at(ctx, target, EVAL_TEMP_CELL_OFFSET)?;
+    store_eval_mixed_operand_at(ctx, member, EVAL_CODE_PTR_OFFSET)?;
+    load_eval_context_to_arg(ctx, 0);
+    let target_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, target_arg, EVAL_TEMP_CELL_OFFSET);
+    let member_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, member_arg, EVAL_CODE_PTR_OFFSET);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        lookup_kind,
+    );
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_member_exists");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    box_eval_bool_result_if_mixed(ctx, inst);
     store_if_result(ctx, inst)
 }
 
@@ -528,6 +561,7 @@ pub(super) fn lower_eval_object_class_name(
 
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    box_eval_bool_result_if_mixed(ctx, inst);
     store_if_result(ctx, inst)
 }
 
@@ -602,6 +636,7 @@ pub(super) fn lower_eval_function_exists(
         .extern_symbol("__elephc_eval_function_exists");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    box_eval_bool_result_if_mixed(ctx, inst);
     store_if_result(ctx, inst)
 }
 
@@ -627,6 +662,7 @@ pub(super) fn lower_eval_class_exists(
         .extern_symbol("__elephc_eval_dynamic_class_exists");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    box_eval_bool_result_if_mixed(ctx, inst);
     store_if_result(ctx, inst)
 }
 
@@ -653,6 +689,7 @@ pub(super) fn lower_eval_constant_exists(
         .extern_symbol("__elephc_eval_constant_exists");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    box_eval_bool_result_if_mixed(ctx, inst);
     store_if_result(ctx, inst)
 }
 
@@ -757,6 +794,13 @@ fn store_eval_mixed_operand_at(
     Ok(())
 }
 
+/// Boxes a raw eval predicate result when the enclosing IR value expects Mixed storage.
+fn box_eval_bool_result_if_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    if inst.result.is_some() && inst.result_php_type.codegen_repr() == PhpType::Mixed {
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    }
+}
+
 /// Returns the eval ABI discriminator for a class-name builtin.
 fn eval_class_lookup_kind(name: &str) -> Result<i64> {
     match name {
@@ -764,6 +808,18 @@ fn eval_class_lookup_kind(name: &str) -> Result<i64> {
         "get_parent_class" => Ok(EVAL_CLASS_LOOKUP_GET_PARENT_CLASS),
         _ => Err(CodegenIrError::unsupported(format!(
             "eval object class-name lookup {}",
+            name
+        ))),
+    }
+}
+
+/// Returns the eval ABI discriminator for member-existence builtins.
+fn eval_member_lookup_kind(name: &str) -> Result<i64> {
+    match name {
+        "method_exists" => Ok(EVAL_MEMBER_LOOKUP_METHOD_EXISTS),
+        "property_exists" => Ok(EVAL_MEMBER_LOOKUP_PROPERTY_EXISTS),
+        _ => Err(CodegenIrError::unsupported(format!(
+            "eval member-exists lookup {}",
             name
         ))),
     }

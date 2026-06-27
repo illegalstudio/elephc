@@ -510,6 +510,36 @@ echo $s->reveal();
     assert_eq!(out, "ok");
 }
 
+/// Verifies native `method_exists()` and `property_exists()` use AOT class metadata.
+#[test]
+fn test_class_member_exists_builtin_uses_native_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+class NativeMemberBase {
+    public $basePublic = 1;
+    private $baseSecret = 2;
+    private function baseHidden() { return 3; }
+    protected function inheritedProtected() { return 4; }
+}
+class NativeMemberChild extends NativeMemberBase {
+    public $childPublic = 5;
+    private $childSecret = 6;
+    public function run() { return 7; }
+    private function hidden() { return 8; }
+}
+$object = new NativeMemberChild();
+echo method_exists($object, "run") ? "M" : "m";
+echo method_exists($object, "baseHidden") ? "B" : "b";
+echo method_exists("NativeMemberChild", "baseHidden") ? "x" : "X";
+echo property_exists($object, "childPublic") ? "P" : "p";
+echo property_exists($object, "childSecret") ? "S" : "s";
+echo property_exists($object, "baseSecret") ? "y" : "Y";
+echo property_exists("NativeMemberChild", "basePublic") ? "A" : "a";
+"#,
+    );
+    assert_eq!(out, "MBXPSYA");
+}
+
 /// Verifies that a `readonly` property can be initialized in the constructor
 /// and read via a public accessor method, ensuring readonly semantics are respected.
 #[test]
