@@ -19292,6 +19292,27 @@ echo "after";');
     assert_eq!(out, "drop:A:after");
 }
 
+/// Verifies eval-declared subclasses inherit generated/AOT destructors.
+#[test]
+fn test_eval_dynamic_subclass_runs_inherited_aot_destructor() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalDestructAotParent {
+    public string $name;
+    public function __construct(string $name) { $this->name = $name; }
+    public function __destruct() { echo "drop:" . $this->name . ":"; }
+}
+
+eval('class EvalDestructAotChild extends EvalDestructAotParent {}
+$box = new EvalDestructAotChild("C");
+echo "body:";
+unset($box);
+echo "after";');
+"#,
+    );
+    assert_eq!(out, "body:drop:C:after");
+}
+
 /// Verifies eval `clone` shallow-copies ordinary emitted AOT objects.
 #[test]
 fn test_eval_clone_aot_object_expression() {

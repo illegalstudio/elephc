@@ -138,7 +138,8 @@ unsafe fn dynamic_object_destruct_inner(object: *mut RuntimeCell) -> u64 {
     let release_result = values.release(object_cell);
     context.forget_dynamic_object(identity);
     match (destruct_result, release_result) {
-        (Ok(true), Ok(())) | (Ok(false), Ok(())) => 1,
+        (Ok(true), Ok(())) => 1,
+        (Ok(false), Ok(())) => 0,
         (Err(EvalStatus::UnsupportedConstruct), _) => 1,
         (Err(_), _) | (_, Err(_)) => 1,
     }

@@ -694,7 +694,7 @@ pub(crate) fn eval_dynamic_destructor_for_object_cell(
         return Ok(false);
     };
     let Some((declaring_class, method)) = context.class_method(&class_name, "__destruct") else {
-        return Ok(true);
+        return Ok(false);
     };
     if !context.begin_dynamic_object_destructor(identity) {
         return Ok(true);
