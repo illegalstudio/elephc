@@ -3674,17 +3674,69 @@ fn eval_attribute_array_arg_from_elements(
             EvalArrayElement::Value(value) => eval_attribute_arg_from_expr(value),
             EvalArrayElement::KeyValue { key, value } => {
                 let value = eval_attribute_arg_from_expr(value)?;
-                match key {
-                    EvalExpr::Const(EvalConst::String(name)) => Some(EvalAttributeArg::Named {
-                        name: name.clone(),
-                        value: Box::new(value),
-                    }),
-                    _ => None,
-                }
+                eval_attribute_array_keyed_arg(key, value)
             }
         })
         .collect::<Option<Vec<_>>>()
         .map(EvalAttributeArg::Array)
+}
+
+/// Wraps an attribute array value with the PHP-normalized literal key metadata.
+fn eval_attribute_array_keyed_arg(
+    key: &EvalExpr,
+    value: EvalAttributeArg,
+) -> Option<EvalAttributeArg> {
+    match key {
+        EvalExpr::Const(EvalConst::String(name)) => Some(EvalAttributeArg::Named {
+            name: name.clone(),
+            value: Box::new(value),
+        }),
+        EvalExpr::Const(EvalConst::Int(key)) => Some(EvalAttributeArg::IntKeyed {
+            key: *key,
+            value: Box::new(value),
+        }),
+        EvalExpr::Const(EvalConst::Bool(key)) => Some(EvalAttributeArg::IntKeyed {
+            key: i64::from(*key),
+            value: Box::new(value),
+        }),
+        EvalExpr::Const(EvalConst::Null) => Some(EvalAttributeArg::Named {
+            name: String::new(),
+            value: Box::new(value),
+        }),
+        EvalExpr::Const(EvalConst::Float(key)) => Some(EvalAttributeArg::IntKeyed {
+            key: *key as i64,
+            value: Box::new(value),
+        }),
+        EvalExpr::Unary {
+            op: EvalUnaryOp::Negate,
+            expr,
+        } => eval_attribute_array_negated_keyed_arg(expr, value),
+        EvalExpr::ClassNameFetch { class_name } => {
+            eval_attribute_class_name_arg(class_name).map(|name| EvalAttributeArg::Named {
+                name,
+                value: Box::new(value),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Wraps an attribute array value with a normalized negative numeric literal key.
+fn eval_attribute_array_negated_keyed_arg(
+    key: &EvalExpr,
+    value: EvalAttributeArg,
+) -> Option<EvalAttributeArg> {
+    match key {
+        EvalExpr::Const(EvalConst::Int(key)) => Some(EvalAttributeArg::IntKeyed {
+            key: key.wrapping_neg(),
+            value: Box::new(value),
+        }),
+        EvalExpr::Const(EvalConst::Float(key)) => Some(EvalAttributeArg::IntKeyed {
+            key: (-*key) as i64,
+            value: Box::new(value),
+        }),
+        _ => None,
+    }
 }
 
 /// Returns a compile-time class-name string for named `ClassName::class` attribute args.

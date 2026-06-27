@@ -12578,6 +12578,40 @@ echo count($instanceItems) . ":" . $instanceItems[0] . ":" . $instanceItems["nam
     assert_eq!(out.stdout, "3:plain:Ada:value:3:plain:Ada:value:3:plain:Ada:value");
 }
 
+/// Verifies eval attribute array arguments preserve PHP-normalized scalar keys.
+#[test]
+fn test_eval_declared_class_attribute_scalar_keyed_array_args() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalScalarKeyAttribute {
+    public $items;
+    public function __construct($items) {
+        $this->items = $items;
+    }
+}
+#[EvalScalarKeyAttribute([2 => "two", true => "bool", null => "null", 1.8 => "float", "name" => "Ada"])]
+class EvalScalarKeyAttributeTarget {}
+$args = class_attribute_args("EvalScalarKeyAttributeTarget", "EvalScalarKeyAttribute");
+$items = $args[0];
+echo count($items) . ":" . $items[2] . ":" . $items[1] . ":" . $items[""] . ":" . $items["name"] . ":";
+$attr = class_get_attributes("EvalScalarKeyAttributeTarget")[0];
+$attrItems = $attr->getArguments()[0];
+echo count($attrItems) . ":" . $attrItems[2] . ":" . $attrItems[1] . ":" . $attrItems[""] . ":" . $attrItems["name"] . ":";
+$instanceItems = $attr->newInstance()->items;
+echo count($instanceItems) . ":" . $instanceItems[2] . ":" . $instanceItems[1] . ":" . $instanceItems[""] . ":" . $instanceItems["name"];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "4:two:float:null:Ada:4:two:float:null:Ada:4:two:float:null:Ada"
+    );
+}
+
 /// Verifies eval can read generated/AOT float attribute arguments.
 #[test]
 fn test_eval_reflection_class_exposes_aot_float_attribute_args() {

@@ -585,6 +585,10 @@ pub enum EvalAttributeArg {
         name: String,
         value: Box<EvalAttributeArg>,
     },
+    IntKeyed {
+        key: i64,
+        value: Box<EvalAttributeArg>,
+    },
 }
 
 impl EvalAttributeArg {
@@ -596,10 +600,20 @@ impl EvalAttributeArg {
         }
     }
 
-    /// Returns the scalar payload, unwrapping a named-argument wrapper.
+    /// Returns the PHP integer array key when this attribute arg is int-keyed.
+    pub fn int_key(&self) -> Option<i64> {
+        match self {
+            EvalAttributeArg::IntKeyed { key, .. } => Some(*key),
+            _ => None,
+        }
+    }
+
+    /// Returns the scalar payload, unwrapping a named or int-keyed wrapper.
     pub fn value(&self) -> &EvalAttributeArg {
         match self {
-            EvalAttributeArg::Named { value, .. } => value,
+            EvalAttributeArg::Named { value, .. } | EvalAttributeArg::IntKeyed { value, .. } => {
+                value
+            }
             _ => self,
         }
     }
