@@ -18793,6 +18793,43 @@ echo $childProto->getDeclaringClass()->getName() . "::" . $childProto->getName()
     );
 }
 
+/// Verifies eval ReflectionMethod prototypes preserve staticness for AOT targets.
+#[test]
+fn test_eval_reflection_method_reports_static_aot_prototypes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface EvalAotStaticProtoIface {
+    public static function staticIface(): string;
+}
+class EvalAotStaticProtoParent {
+    public static function staticRun(): string { return "parent"; }
+}
+eval('interface EvalStaticProtoLeafIface extends EvalAotStaticProtoIface {}
+class EvalStaticProtoImpl extends EvalAotStaticProtoParent implements EvalStaticProtoLeafIface {
+    public static function staticRun(): string { return "child"; }
+    public static function staticIface(): string { return "iface"; }
+}
+$parent = new ReflectionMethod("EvalStaticProtoImpl", "staticRun");
+$parentProto = $parent->getPrototype();
+echo ($parent->hasPrototype() ? "P" : "p") . ":";
+echo $parentProto->getDeclaringClass()->getName() . "::" . $parentProto->getName() . ":";
+$iface = new ReflectionMethod("EvalStaticProtoImpl", "staticIface");
+$ifaceProto = $iface->getPrototype();
+echo ($iface->hasPrototype() ? "I" : "i") . ":";
+echo $ifaceProto->getDeclaringClass()->getName() . "::" . $ifaceProto->getName();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "P:EvalAotStaticProtoParent::staticrun:I:EvalAotStaticProtoIface::staticiface"
+    );
+}
+
 /// Verifies eval-declared functions share method-style named/default/ref/variadic binding.
 #[test]
 fn test_eval_declared_function_rich_argument_binding() {
