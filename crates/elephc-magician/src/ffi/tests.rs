@@ -102,6 +102,9 @@ fn native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &EvalAttributeArg
             native_member_attribute_push_string(record, name);
             native_member_attribute_push_arg(record, value);
         }
+        EvalAttributeArg::IntKeyed { .. } => {
+            panic!("native attribute test ABI does not encode int-keyed array arguments")
+        }
         EvalAttributeArg::Array(elements) => {
             record.push(6);
             record.extend_from_slice(&(elements.len() as u32).to_le_bytes());

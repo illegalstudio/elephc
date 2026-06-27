@@ -7481,7 +7481,9 @@ fn eval_reflection_attribute_arg_value(
         EvalAttributeArg::Array(elements) => {
             eval_reflection_attribute_array_arg_value(elements, values)
         }
-        EvalAttributeArg::Named { value, .. } => eval_reflection_attribute_arg_value(value, values),
+        EvalAttributeArg::Named { value, .. } | EvalAttributeArg::IntKeyed { value, .. } => {
+            eval_reflection_attribute_arg_value(value, values)
+        }
     }
 }
 
@@ -7490,7 +7492,10 @@ fn eval_reflection_attribute_array_arg_value(
     elements: &[EvalAttributeArg],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = if elements.iter().any(|element| element.name().is_some()) {
+    let mut result = if elements
+        .iter()
+        .any(|element| element.name().is_some() || element.int_key().is_some())
+    {
         values.assoc_new(elements.len())?
     } else {
         values.array_new(elements.len())?
@@ -7498,7 +7503,7 @@ fn eval_reflection_attribute_array_arg_value(
     for (index, element) in elements.iter().enumerate() {
         let key = match element.name() {
             Some(name) => values.string(name)?,
-            None => values.int(index as i64)?,
+            None => values.int(element.int_key().unwrap_or(index as i64))?,
         };
         let value = eval_reflection_attribute_arg_value(element.value(), values)?;
         result = values.array_set(result, key, value)?;
