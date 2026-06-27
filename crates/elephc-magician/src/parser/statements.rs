@@ -498,11 +498,7 @@ impl Parser {
         }
         let source_start_line = self.current_line();
         self.advance();
-        let TokenKind::Ident(name) = self.current() else {
-            return Err(EvalParseError::UnexpectedToken);
-        };
-        let name = self.qualify_name_in_current_namespace(name);
-        self.advance();
+        let name = self.parse_class_like_decl_name()?;
         let parent = self.parse_class_parent_clause()?;
         let interfaces = self.parse_class_interface_clause()?;
         let body = self.parse_class_body_members(is_readonly_class)?;
@@ -563,6 +559,19 @@ impl Parser {
         .with_source_location(source_location)
         .with_anonymous();
         Ok(EvalExpr::NewAnonymousClass { class, args })
+    }
+
+    /// Parses and namespace-qualifies a declared class, interface, trait, or enum name.
+    fn parse_class_like_decl_name(&mut self) -> Result<String, EvalParseError> {
+        let TokenKind::Ident(name) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        if is_reserved_class_like_name(name) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        let qualified_name = self.qualify_name_in_current_namespace(name);
+        self.advance();
+        Ok(qualified_name)
     }
 
     /// Parses members inside a class body after relation clauses.
@@ -1425,11 +1434,7 @@ impl Parser {
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let source_start_line = self.current_line();
         self.advance();
-        let TokenKind::Ident(name) = self.current() else {
-            return Err(EvalParseError::UnexpectedToken);
-        };
-        let name = self.qualify_name_in_current_namespace(name);
-        self.advance();
+        let name = self.parse_class_like_decl_name()?;
         self.expect(TokenKind::LBrace)?;
         let mut traits = Vec::new();
         let mut trait_adaptations = Vec::new();
@@ -1570,11 +1575,7 @@ impl Parser {
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let source_start_line = self.current_line();
         self.advance();
-        let TokenKind::Ident(name) = self.current() else {
-            return Err(EvalParseError::UnexpectedToken);
-        };
-        let name = self.qualify_name_in_current_namespace(name);
-        self.advance();
+        let name = self.parse_class_like_decl_name()?;
         let backing_type = self.parse_enum_backing_type()?;
         let interfaces = self.parse_class_interface_clause()?;
         self.expect(TokenKind::LBrace)?;
@@ -1726,11 +1727,7 @@ impl Parser {
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let source_start_line = self.current_line();
         self.advance();
-        let TokenKind::Ident(name) = self.current() else {
-            return Err(EvalParseError::UnexpectedToken);
-        };
-        let name = self.qualify_name_in_current_namespace(name);
-        self.advance();
+        let name = self.parse_class_like_decl_name()?;
         let parents = self.parse_interface_parent_clause()?;
         self.expect(TokenKind::LBrace)?;
         let mut constants = Vec::new();

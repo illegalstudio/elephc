@@ -12433,6 +12433,34 @@ eval('enum EvalBadEnumConstName {
     }
 }
 
+/// Verifies eval rejects PHP-reserved class-like declaration names.
+#[test]
+fn test_eval_declared_reserved_class_like_name_fails() {
+    for source in [
+        r#"<?php
+eval('class match {}');
+"#,
+        r#"<?php
+eval('class string {}');
+"#,
+        r#"<?php
+eval('interface interface {}');
+"#,
+        r#"<?php
+eval('trait readonly {}');
+"#,
+        r#"<?php
+eval('enum bool { case Ready; }');
+"#,
+    ] {
+        let err = compile_and_run_expect_failure(source);
+        assert!(
+            err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+            "stderr did not contain eval unsupported-construct diagnostic: {err}"
+        );
+    }
+}
+
 /// Verifies eval-declared final class constants cannot be redeclared.
 #[test]
 fn test_eval_declared_final_class_constant_override_fails() {
