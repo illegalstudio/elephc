@@ -18951,10 +18951,13 @@ eval('class DynEvalNativeSupported {
 }');
 $box = new DynEvalNativeSupported(5);
 echo $box->bump(4) . ":";
+$call = [$box, "bump"];
+echo call_user_func($call, 1) . ":";
+echo call_user_func_array($call, [2]) . ":";
 echo $box->x;
 "#,
     );
-    assert_eq!(out, "9:9");
+    assert_eq!(out, "9:10:12:12");
 }
 
 /// Verifies native introspection sees eval-declared object metadata after the barrier.

@@ -54,6 +54,7 @@ const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 const EVAL_CLASS_LOOKUP_GET_CLASS: i64 = 0;
 const EVAL_CLASS_LOOKUP_GET_PARENT_CLASS: i64 = 1;
+const EVAL_CALLABLE_ARG_ARRAY_OFFSET: usize = EVAL_CODE_PTR_OFFSET;
 const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
 const NATIVE_DEFAULT_NULL: i64 = 0;
 const NATIVE_DEFAULT_BOOL: i64 = 1;
@@ -438,6 +439,36 @@ pub(super) fn lower_eval_method_call(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a callable-array dispatch through the eval bridge.
+pub(super) fn lower_eval_callable_call_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    callback: ValueId,
+    arg_array: ValueId,
+) -> Result<()> {
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_context(ctx)?;
+    store_eval_mixed_operand_at(ctx, callback, EVAL_TEMP_CELL_OFFSET)?;
+    store_eval_mixed_operand_at(ctx, arg_array, EVAL_CALLABLE_ARG_ARRAY_OFFSET)?;
+    load_eval_context_to_arg(ctx, 0);
+    let callback_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, callback_arg, EVAL_TEMP_CELL_OFFSET);
+    let arg_array_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg_array_arg, EVAL_CALLABLE_ARG_ARRAY_OFFSET);
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_callable_call_array");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers object class-name introspection through the eval bridge.
 pub(super) fn lower_eval_object_class_name(
     ctx: &mut FunctionContext<'_>,
@@ -691,12 +722,21 @@ fn store_eval_method_call_arg_pack(
 
 /// Stores an object operand as a boxed Mixed cell in eval scratch storage.
 fn store_eval_object_operand(ctx: &mut FunctionContext<'_>, object: ValueId) -> Result<()> {
-    let object_ty = ctx.load_value_to_result(object)?.codegen_repr();
-    if !matches!(object_ty, PhpType::Mixed | PhpType::Union(_)) {
-        emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+    store_eval_mixed_operand_at(ctx, object, EVAL_TEMP_CELL_OFFSET)
+}
+
+/// Stores one operand as a boxed Mixed cell at an eval scratch offset.
+fn store_eval_mixed_operand_at(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    offset: usize,
+) -> Result<()> {
+    let value_ty = ctx.load_value_to_result(value)?.codegen_repr();
+    if !matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
+        emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
     }
     let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, offset);
     Ok(())
 }
 

@@ -680,7 +680,12 @@ fn lower_runtime_mixed_callable_array_descriptor_invoke(
     abi::emit_jump(ctx.emitter, &miss_label);
 
     ctx.emitter.label(&miss_label);
-    emit_runtime_callable_array_no_match_abort(ctx);
+    if super::builtins::has_eval_context(ctx) {
+        super::builtins::lower_eval_callable_call_array(ctx, inst, callable, arg_mixed)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    } else {
+        emit_runtime_callable_array_no_match_abort(ctx);
+    }
 
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
