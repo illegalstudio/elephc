@@ -17340,14 +17340,18 @@ interface EvalAotProtoParentIface {
 interface EvalAotProtoChildIface extends EvalAotProtoParentIface {}
 interface EvalAotProtoIface {
     public function iface();
+    public static function staticIface();
 }
 class EvalAotProtoBase {
     public function run() {}
+    public static function staticRun() {}
     public function inherited() {}
 }
 class EvalAotProtoChild extends EvalAotProtoBase implements EvalAotProtoIface, EvalAotProtoChildIface {
     public function run() {}
+    public static function staticRun() {}
     public function iface() {}
+    public static function staticIface() {}
     public function parented() {}
     public function own() {}
 }
@@ -17366,6 +17370,16 @@ $parentIface = new ReflectionMethod("EvalAotProtoChild", "parented");
 $parentIfaceProto = $parentIface->getPrototype();
 echo $parentIfaceProto->getDeclaringClass()->getName() . "::";
 echo $parentIfaceProto->getName() . ":";
+$staticOverride = new ReflectionMethod("EvalAotProtoChild", "staticRun");
+$staticOverrideProto = $staticOverride->getPrototype();
+echo ($staticOverride->hasPrototype() ? "Y" : "N") . ":";
+echo $staticOverrideProto->getDeclaringClass()->getName() . "::";
+echo $staticOverrideProto->getName() . ":";
+$staticIface = new ReflectionMethod("EvalAotProtoChild", "staticIface");
+$staticIfaceProto = $staticIface->getPrototype();
+echo ($staticIface->hasPrototype() ? "Y" : "N") . ":";
+echo $staticIfaceProto->getDeclaringClass()->getName() . "::";
+echo $staticIfaceProto->getName() . ":";
 $own = new ReflectionMethod("EvalAotProtoChild", "own");
 echo ($own->hasPrototype() ? "Y" : "N") . ":";
 try {
@@ -17388,7 +17402,7 @@ echo $inherited->hasPrototype() ? "Y" : "N";
     );
     assert_eq!(
         out.stdout,
-        "Y:EvalAotProtoBase::run:Y:EvalAotProtoIface::iface:EvalAotProtoParentIface::parented:N:E:N"
+        "Y:EvalAotProtoBase::run:Y:EvalAotProtoIface::iface:EvalAotProtoParentIface::parented:Y:EvalAotProtoBase::staticrun:Y:EvalAotProtoIface::staticiface:N:E:N"
     );
 }
 
