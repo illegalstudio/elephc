@@ -170,6 +170,8 @@ struct EvalStaticCallableMetadata {
     class_name: String,
     method: String,
     called_class: String,
+    native_class: Option<String>,
+    bridge_scope: Option<String>,
 }
 
 /// Native instance-method dispatch metadata attached to eval-created method callables.
@@ -991,13 +993,24 @@ impl ElephcEvalContext {
         class_name: &str,
         method: &str,
         called_class: &str,
+        native_dispatch: Option<(&str, &str)>,
     ) {
+        let (native_class, bridge_scope) = native_dispatch
+            .map(|(native_class, bridge_scope)| {
+                (
+                    Some(native_class.trim_start_matches('\\').to_string()),
+                    Some(bridge_scope.trim_start_matches('\\').to_string()),
+                )
+            })
+            .unwrap_or((None, None));
         self.eval_static_callables.insert(
             callable.as_ptr() as usize,
             EvalStaticCallableMetadata {
                 class_name: class_name.trim_start_matches('\\').to_string(),
                 method: method.to_string(),
                 called_class: called_class.trim_start_matches('\\').to_string(),
+                native_class,
+                bridge_scope,
             },
         );
     }
@@ -1014,6 +1027,26 @@ impl ElephcEvalContext {
         (metadata.class_name.eq_ignore_ascii_case(class_name)
             && metadata.method.eq_ignore_ascii_case(method))
         .then_some(metadata.called_class.as_str())
+    }
+
+    /// Returns native method bridge metadata captured for one static callable array.
+    pub fn eval_static_callable_native_dispatch(
+        &self,
+        callable: RuntimeCellHandle,
+        class_name: &str,
+        method: &str,
+    ) -> Option<(&str, &str)> {
+        let metadata = self.eval_static_callables.get(&(callable.as_ptr() as usize))?;
+        let class_name = class_name.trim_start_matches('\\');
+        if !metadata.class_name.eq_ignore_ascii_case(class_name)
+            || !metadata.method.eq_ignore_ascii_case(method)
+        {
+            return None;
+        }
+        Some((
+            metadata.native_class.as_deref()?,
+            metadata.bridge_scope.as_deref()?,
+        ))
     }
 
     /// Registers one eval-created object method callable with native bridge metadata.

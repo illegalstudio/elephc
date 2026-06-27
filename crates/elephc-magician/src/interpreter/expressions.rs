@@ -870,13 +870,65 @@ fn eval_static_method_callable_expr(
     let method_value = values.string(&method)?;
     array = values.array_set(array, zero, class_value)?;
     array = values.array_set(array, one, method_value)?;
+    let native_dispatch = eval_static_method_callable_native_dispatch(
+        &receiver.dispatch_class,
+        &method,
+        context,
+        values,
+    )?;
     context.register_eval_static_callable(
         array,
         &receiver.dispatch_class,
         &method,
         &receiver.called_class,
+        native_dispatch
+            .as_ref()
+            .map(|(native_class, bridge_scope)| (native_class.as_str(), bridge_scope.as_str())),
     );
     Ok(array)
+}
+
+/// Finds inherited or direct AOT static dispatch metadata captured by a static callable.
+fn eval_static_method_callable_native_dispatch(
+    dispatch_class: &str,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, String)>, EvalStatus> {
+    if context.class_method(dispatch_class, method_name).is_some() {
+        return Ok(None);
+    }
+    let native_class = if context.has_class(dispatch_class) {
+        let Some(parent) = context.class_native_parent_name(dispatch_class) else {
+            return Ok(None);
+        };
+        parent
+    } else if context.has_interface(dispatch_class)
+        || context.has_trait(dispatch_class)
+        || context.has_enum(dispatch_class)
+    {
+        return Ok(None);
+    } else {
+        dispatch_class.trim_start_matches('\\').to_string()
+    };
+    let Some((declaring_class, visibility, is_static, is_abstract)) =
+        eval_aot_method_dispatch_metadata_in_hierarchy(
+            &native_class,
+            method_name,
+            context,
+            values,
+        )?
+    else {
+        return Ok(None);
+    };
+    if !is_static || is_abstract {
+        return Ok(None);
+    }
+    // First-class callables may outlive this scope, so capture only after access is valid now.
+    if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+        return Ok(None);
+    }
+    Ok(Some((native_class, declaring_class)))
 }
 
 /// Evaluates a variable or expression callable and dispatches it with source-order arguments.
