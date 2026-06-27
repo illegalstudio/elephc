@@ -2599,6 +2599,7 @@ fn validate_eval_class_modifiers(
             return Err(EvalStatus::RuntimeFatal);
         }
         validate_method_parent_override(class, method, context)?;
+        validate_method_aot_parent_override(class, method, context, values)?;
         validate_eval_override_attribute(class, method, context, values)?;
     }
     Ok(())
@@ -2612,8 +2613,20 @@ fn eval_class_has_allow_dynamic_properties_attribute(class: &EvalClass) -> bool 
 /// Bridge ReflectionMethod flag for static generated/AOT methods.
 const EVAL_REFLECTION_METHOD_FLAG_STATIC: u64 = 1;
 
+/// Bridge ReflectionMethod flag for public generated/AOT methods.
+const EVAL_REFLECTION_METHOD_FLAG_PUBLIC: u64 = 2;
+
+/// Bridge ReflectionMethod flag for protected generated/AOT methods.
+const EVAL_REFLECTION_METHOD_FLAG_PROTECTED: u64 = 4;
+
 /// Bridge ReflectionMethod flag for private generated/AOT methods.
 const EVAL_REFLECTION_METHOD_FLAG_PRIVATE: u64 = 8;
+
+/// Bridge ReflectionMethod flag for final generated/AOT methods.
+const EVAL_REFLECTION_METHOD_FLAG_FINAL: u64 = 16;
+
+/// Bridge ReflectionMethod flag for abstract generated/AOT methods.
+const EVAL_REFLECTION_METHOD_FLAG_ABSTRACT: u64 = 32;
 
 /// Method requirement discovered from generated/AOT interface metadata.
 struct EvalAotInterfaceMethodRequirement {
@@ -3556,6 +3569,105 @@ fn validate_method_parent_override(
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(())
+}
+
+/// Validates one method declaration against inherited generated/AOT method metadata.
+fn validate_method_aot_parent_override(
+    class: &EvalClass,
+    method: &EvalClassMethod,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(parent) = class.parent() else {
+        return Ok(());
+    };
+    if context.has_class(parent) || !values.class_exists(parent)? {
+        return Ok(());
+    }
+    let parent = parent.trim_start_matches('\\');
+    let Some(flags) = values.reflection_method_flags(parent, method.name())? else {
+        return Ok(());
+    };
+    if flags & EVAL_REFLECTION_METHOD_FLAG_PRIVATE != 0 {
+        return Ok(());
+    }
+    let parent_is_static = flags & EVAL_REFLECTION_METHOD_FLAG_STATIC != 0;
+    if parent_is_static != method.is_static() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let parent_visibility = eval_aot_method_visibility(flags);
+    if method_visibility_rank(method.visibility()) < method_visibility_rank(parent_visibility) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if flags & EVAL_REFLECTION_METHOD_FLAG_FINAL != 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if method.is_abstract() && flags & EVAL_REFLECTION_METHOD_FLAG_ABSTRACT == 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let Some(required) = eval_aot_method_signature_requirement(
+        parent,
+        method.name(),
+        parent_is_static,
+        context,
+        values,
+    )? else {
+        return Ok(());
+    };
+    if !class_method_satisfies_interface_signature(
+        method,
+        class.name(),
+        &required,
+        &eval_aot_method_declaring_class(parent, method.name(), values)?,
+        Some(class),
+        context,
+    ) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(())
+}
+
+/// Returns the eval visibility represented by generated/AOT reflection flags.
+fn eval_aot_method_visibility(flags: u64) -> EvalVisibility {
+    if flags & EVAL_REFLECTION_METHOD_FLAG_PRIVATE != 0 {
+        EvalVisibility::Private
+    } else if flags & EVAL_REFLECTION_METHOD_FLAG_PROTECTED != 0 {
+        EvalVisibility::Protected
+    } else if flags & EVAL_REFLECTION_METHOD_FLAG_PUBLIC != 0 {
+        EvalVisibility::Public
+    } else {
+        EvalVisibility::Public
+    }
+}
+
+/// Returns the generated/AOT declaring class for one reflected method.
+fn eval_aot_method_declaring_class(
+    class_name: &str,
+    method_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    values
+        .reflection_method_declaring_class(class_name, method_name)
+        .map(|declaring_class| declaring_class.unwrap_or_else(|| class_name.to_string()))
+}
+
+/// Returns a generated/AOT parent method signature as an eval method requirement.
+fn eval_aot_method_signature_requirement(
+    class_name: &str,
+    method_name: &str,
+    is_static: bool,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalInterfaceMethod>, EvalStatus> {
+    let declaring_class = eval_aot_method_declaring_class(class_name, method_name, values)?;
+    let signature = if is_static {
+        context.native_static_method_signature(&declaring_class, method_name)
+    } else {
+        context.native_method_signature(&declaring_class, method_name)
+    };
+    Ok(signature.map(|signature| {
+        eval_native_signature_interface_method(method_name, is_static, &signature)
+    }))
 }
 
 /// Returns whether one eval class method can accept every call accepted by its parent method.

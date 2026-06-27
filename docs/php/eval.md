@@ -187,7 +187,8 @@ generated/AOT parent interface.
 Eval validates method override and interface method parameter and return types
 with PHP-style parameter contravariance and return covariance for supported
 declared type metadata, including nullable, union, `mixed`, `self`, `parent`,
-`static`, class, and interface types.
+`static`, class, and interface types, including generated/AOT parent method
+metadata retained by the eval bridge.
 Abstract classes may defer missing interface methods and property contracts, but
 declared or inherited members that cover an interface contract are validated at
 declaration time.

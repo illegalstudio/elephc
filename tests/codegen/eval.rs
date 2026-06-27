@@ -12532,6 +12532,44 @@ echo (new EvalAotOverrideChild())->label();');
     assert_eq!(out, "child");
 }
 
+/// Verifies eval rejects overriding final generated/AOT parent methods.
+#[test]
+fn test_eval_declared_class_rejects_final_aot_parent_method_override() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalAotFinalOverrideParent {
+    final public function label(): string { return "parent"; }
+}
+eval('class EvalAotFinalOverrideChild extends EvalAotFinalOverrideParent {
+    public function label(): string { return "child"; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval rejects incompatible generated/AOT parent method signatures.
+#[test]
+fn test_eval_declared_class_rejects_incompatible_aot_parent_method_signature() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalAotParentSignatureBase {
+    public function label(string $name): string { return $name; }
+}
+eval('class EvalAotParentSignatureChild extends EvalAotParentSignatureBase {
+    public function label(int $name): string { return "bad"; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval rejects global builtin attributes on unsupported OOP targets.
 #[test]
 fn test_eval_declared_builtin_attribute_target_validation() {
