@@ -856,6 +856,12 @@ fn emit_reflection_owner_object(
     if class_name == "ReflectionProperty" {
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
         emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
+        emit_reflection_owner_type_property_by_name(
+            ctx,
+            class_name,
+            "__settable_type",
+            metadata.type_metadata.as_ref(),
+        )?;
         emit_reflection_owner_bool_property(
             ctx,
             class_name,
@@ -6288,6 +6294,12 @@ fn emit_reflection_member_object(
             member.modifiers,
         )?;
         emit_reflection_owner_type_property(ctx, member_class_name, member.type_metadata.as_ref())?;
+        emit_reflection_owner_type_property_by_name(
+            ctx,
+            member_class_name,
+            "__settable_type",
+            member.type_metadata.as_ref(),
+        )?;
         emit_reflection_owner_bool_property(
             ctx,
             member_class_name,

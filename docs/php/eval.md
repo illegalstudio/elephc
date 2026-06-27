@@ -558,9 +558,9 @@ dynamic properties on the inspected object.
 `ReflectionProperty::hasType()`, `getType()`, and `getSettableType()` expose
 retained property type metadata through `ReflectionNamedType`,
 `ReflectionUnionType`, and `ReflectionIntersectionType` where eval has retained
-a supported declared type. For the supported property surface,
-`getSettableType()` currently returns the same retained type metadata as
-`getType()`.
+a supported declared type. `getSettableType()` follows an explicit property
+`set(Type $value)` hook parameter when one is retained; otherwise it falls back
+to the declared property type.
 `ReflectionProperty::hasDefaultValue()` and `getDefaultValue()` expose
 materialized property default metadata, including PHP's implicit `null` default
 for untyped concrete properties without an explicit initializer.

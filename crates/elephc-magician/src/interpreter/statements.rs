@@ -2337,6 +2337,7 @@ fn eval_trait_concrete_properties_are_compatible(
         && existing.requires_set_hook() == incoming.requires_set_hook()
         && existing.is_virtual() == incoming.is_virtual()
         && existing.property_type() == incoming.property_type()
+        && existing.set_hook_type() == incoming.set_hook_type()
         && existing.default() == incoming.default()
 }
 
@@ -2351,6 +2352,7 @@ fn eval_trait_abstract_properties_are_compatible(
         && existing.is_final() == incoming.is_final()
         && existing.is_readonly() == incoming.is_readonly()
         && existing.property_type() == incoming.property_type()
+        && existing.set_hook_type() == incoming.set_hook_type()
         && existing.default() == incoming.default()
 }
 
@@ -3752,6 +3754,7 @@ fn class_property_can_cover_interface_contract(
     }
     if !class_property_type_satisfies_interface_contract(
         property.property_type(),
+        property.settable_type(),
         property_owner,
         requirement,
         requirement_owner,
@@ -3775,6 +3778,7 @@ fn class_property_can_cover_interface_contract(
 /// Returns whether one property type is compatible with interface get/set hook signatures.
 fn class_property_type_satisfies_interface_contract(
     property_type: Option<&EvalParameterType>,
+    settable_type: Option<&EvalParameterType>,
     property_owner: &str,
     requirement: &EvalInterfaceProperty,
     requirement_owner: &str,
@@ -3794,7 +3798,7 @@ fn class_property_type_satisfies_interface_contract(
         return false;
     }
     if requirement.requires_set() {
-        let property_types = vec![property_type.cloned()];
+        let property_types = vec![settable_type.cloned()];
         let requirement_types = vec![requirement.property_type().cloned()];
         return method_parameter_type_signature_accepts(
             &property_types,

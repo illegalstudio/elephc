@@ -106,6 +106,8 @@ struct ReflectionOwnerLayout {
     has_type_hi: Option<usize>,
     parameter_type_lo: Option<usize>,
     parameter_type_hi: Option<usize>,
+    settable_type_lo: Option<usize>,
+    settable_type_hi: Option<usize>,
     parameter_class_lo: Option<usize>,
     parameter_class_hi: Option<usize>,
     has_default_value_lo: Option<usize>,
@@ -277,6 +279,7 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
     let is_passed_by_reference_lo = reflection_property_offset(info, "__is_passed_by_reference");
     let has_type_lo = reflection_property_offset(info, "__has_type");
     let parameter_type_lo = reflection_property_offset(info, "__type");
+    let settable_type_lo = reflection_property_offset(info, "__settable_type");
     let parameter_class_lo = reflection_property_offset(info, "__class");
     let has_default_value_lo = reflection_property_offset(info, "__has_default_value");
     let is_default_value_constant_lo =
@@ -377,6 +380,8 @@ fn reflection_owner_layout(info: &ClassInfo, has_name: bool) -> Option<Reflectio
         has_type_hi: has_type_lo.map(|offset| offset + 8),
         parameter_type_lo,
         parameter_type_hi: parameter_type_lo.map(|offset| offset + 8),
+        settable_type_lo,
+        settable_type_hi: settable_type_lo.map(|offset| offset + 8),
         parameter_class_lo,
         parameter_class_hi: parameter_class_lo.map(|offset| offset + 8),
         has_default_value_lo,
@@ -852,6 +857,7 @@ fn emit_aarch64_owner_kind_body(
     emit_set_owner_class_flags_property_aarch64(emitter, layout);
     emit_set_owner_member_flags_property_aarch64(emitter, layout, is_method);
     emit_set_owner_constant_value_property_aarch64(emitter, layout, fail_label);
+    emit_set_owner_settable_type_property_aarch64(emitter, layout);
     emit_set_owner_backing_value_property_aarch64(emitter, layout, fail_label);
     emit_set_owner_required_parameter_count_property_aarch64(emitter, layout);
     emit_set_owner_named_type_flags_property_aarch64(emitter, layout);
@@ -887,6 +893,7 @@ fn emit_x86_64_owner_kind_body(
     emit_set_owner_class_flags_property_x86_64(emitter, layout);
     emit_set_owner_member_flags_property_x86_64(emitter, layout, is_method);
     emit_set_owner_constant_value_property_x86_64(emitter, layout, fail_label);
+    emit_set_owner_settable_type_property_x86_64(emitter, layout);
     emit_set_owner_backing_value_property_x86_64(emitter, layout, fail_label);
     emit_set_owner_required_parameter_count_property_x86_64(emitter, layout);
     emit_set_owner_named_type_flags_property_x86_64(emitter, layout);
@@ -2405,6 +2412,26 @@ fn emit_set_owner_constant_value_property_aarch64(
     abi::emit_store_zero_to_address(emitter, "x9", high);
 }
 
+/// Stores a retained ARM64 boxed ReflectionProperty settable-type cell.
+fn emit_set_owner_settable_type_property_aarch64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+) {
+    let (Some(low), Some(high)) = (layout.settable_type_lo, layout.settable_type_hi) else {
+        return;
+    };
+    let skip_label = "__elephc_eval_reflection_owner_new_skip_settable_type";
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the boxed ReflectionProperty settable type
+    emitter.instruction(&format!("cbz x0, {}", skip_label));                    // leave null when no settable type is retained
+    emitter.instruction("str x0, [sp, #40]");                                   // save the boxed settable type across incref
+    emitter.instruction("bl __rt_incref");                                      // retain the boxed settable type for ReflectionProperty storage
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the retained boxed settable type
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the ReflectionProperty object pointer
+    abi::emit_store_to_address(emitter, "x1", "x9", low);
+    abi::emit_store_zero_to_address(emitter, "x9", high);
+    emitter.label(skip_label);
+}
+
 /// Stores a retained x86_64 boxed ReflectionClassConstant value cell.
 fn emit_set_owner_constant_value_property_x86_64(
     emitter: &mut Emitter,
@@ -2423,6 +2450,27 @@ fn emit_set_owner_constant_value_property_x86_64(
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionClassConstant object pointer
     abi::emit_store_to_address(emitter, "rdi", "r10", low);
     abi::emit_store_zero_to_address(emitter, "r10", high);
+}
+
+/// Stores a retained x86_64 boxed ReflectionProperty settable-type cell.
+fn emit_set_owner_settable_type_property_x86_64(
+    emitter: &mut Emitter,
+    layout: &ReflectionOwnerLayout,
+) {
+    let (Some(low), Some(high)) = (layout.settable_type_lo, layout.settable_type_hi) else {
+        return;
+    };
+    let skip_label = "__elephc_eval_reflection_owner_new_skip_settable_type_x";
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the boxed ReflectionProperty settable type
+    emitter.instruction("test rax, rax");                                       // check whether a settable type was provided
+    emitter.instruction(&format!("jz {}", skip_label));                         // leave null when no settable type is retained
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed settable type across incref
+    emitter.instruction("call __rt_incref");                                    // retain the boxed settable type for ReflectionProperty storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // reload the retained boxed settable type
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the ReflectionProperty object pointer
+    abi::emit_store_to_address(emitter, "rdi", "r10", low);
+    abi::emit_store_zero_to_address(emitter, "r10", high);
+    emitter.label(skip_label);
 }
 
 /// Stores a retained ARM64 boxed ReflectionEnumBackedCase backing-value cell.

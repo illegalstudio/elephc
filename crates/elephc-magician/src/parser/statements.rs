@@ -1191,8 +1191,17 @@ impl Parser {
             return Ok((property, Vec::new()));
         }
         let default_is_some = default.is_some();
-        let (has_get_hook, has_set_hook, hook_methods) =
-            self.parse_property_hook_tail(&name, is_static, effective_readonly, default_is_some)?;
+        let (has_get_hook, has_set_hook, set_hook_type, hook_methods) = self
+            .parse_property_hook_tail(
+                &name,
+                property_type.as_ref(),
+                is_static,
+                effective_readonly,
+                default_is_some,
+            )?;
+        if set_hook_type.is_some() && property_type.is_none() {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
         let is_virtual = (has_get_hook || has_set_hook)
             && !property_hook_methods_use_backing_slot(&hook_methods, &name);
         let property = EvalClassProperty::with_visibility_static_final_and_readonly(
@@ -1204,6 +1213,7 @@ impl Parser {
             default,
         )
         .with_type(property_type)
+        .with_set_hook_type(set_hook_type)
         .with_set_visibility(set_visibility)
         .with_hooks(has_get_hook, has_set_hook)
         .with_virtual(is_virtual);
@@ -1214,12 +1224,13 @@ impl Parser {
     pub(super) fn parse_property_hook_tail(
         &mut self,
         property_name: &str,
+        property_type: Option<&EvalParameterType>,
         is_static: bool,
         is_readonly: bool,
         has_default: bool,
-    ) -> Result<(bool, bool, Vec<EvalClassMethod>), EvalParseError> {
+    ) -> Result<(bool, bool, Option<EvalParameterType>, Vec<EvalClassMethod>), EvalParseError> {
         if self.consume(TokenKind::Semicolon) {
-            return Ok((false, false, Vec::new()));
+            return Ok((false, false, None, Vec::new()));
         }
         if !matches!(self.current(), TokenKind::LBrace) {
             return Err(EvalParseError::UnexpectedToken);
@@ -1230,12 +1241,14 @@ impl Parser {
         self.advance();
         let mut has_get_hook = false;
         let mut has_set_hook = false;
+        let mut set_hook_type = None;
         let mut methods = Vec::new();
         while !self.consume(TokenKind::RBrace) {
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
-            let (is_get, method) = self.parse_property_hook_decl(property_name)?;
+            let (is_get, hook_set_type, method) =
+                self.parse_property_hook_decl(property_name, property_type)?;
             if is_get {
                 if has_get_hook {
                     return Err(EvalParseError::UnsupportedConstruct);
@@ -1246,20 +1259,22 @@ impl Parser {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
                 has_set_hook = true;
+                set_hook_type = hook_set_type;
             }
             methods.push(method);
         }
         if !has_get_hook && !has_set_hook {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        Ok((has_get_hook, has_set_hook, methods))
+        Ok((has_get_hook, has_set_hook, set_hook_type, methods))
     }
 
     /// Parses one concrete `get` or `set` property hook declaration.
     pub(super) fn parse_property_hook_decl(
         &mut self,
         property_name: &str,
-    ) -> Result<(bool, EvalClassMethod), EvalParseError> {
+        property_type: Option<&EvalParameterType>,
+    ) -> Result<(bool, Option<EvalParameterType>, EvalClassMethod), EvalParseError> {
         let returns_by_ref = self.consume(TokenKind::Ampersand);
         let TokenKind::Ident(hook_name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
@@ -1274,10 +1289,11 @@ impl Parser {
         }
         let source_start_line = self.current_line();
         self.advance();
-        let params = if is_set {
-            vec![self.parse_property_set_hook_param()?]
+        let (params, set_hook_type) = if is_set {
+            let (param, set_hook_type) = self.parse_property_set_hook_param()?;
+            (vec![param], set_hook_type)
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
         let (body, source_end_line) = match self.current() {
             TokenKind::Semicolon => return Err(EvalParseError::UnsupportedConstruct),
@@ -1305,34 +1321,39 @@ impl Parser {
         } else {
             property_hook_set_method(property_name)
         };
-        Ok((
-            is_get,
-            EvalClassMethod::with_visibility_and_modifiers(
-                method_name,
-                EvalVisibility::Public,
-                false,
-                false,
-                false,
-                params,
-                body,
-            )
-            .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line)),
-        ))
+        let mut method = EvalClassMethod::with_visibility_and_modifiers(
+            method_name,
+            EvalVisibility::Public,
+            false,
+            false,
+            false,
+            params,
+            body,
+        )
+        .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line));
+        if is_set {
+            method = method.with_parameter_types(vec![
+                set_hook_type.clone().or_else(|| property_type.cloned()),
+            ]);
+        }
+        Ok((is_get, set_hook_type, method))
     }
 
     /// Parses an optional set-hook parameter list and returns the hook value variable.
-    pub(super) fn parse_property_set_hook_param(&mut self) -> Result<String, EvalParseError> {
+    pub(super) fn parse_property_set_hook_param(
+        &mut self,
+    ) -> Result<(String, Option<EvalParameterType>), EvalParseError> {
         if !self.consume(TokenKind::LParen) {
-            return Ok("value".to_string());
+            return Ok(("value".to_string(), None));
         }
-        let _ = self.parse_optional_property_type()?;
+        let set_hook_type = self.parse_optional_property_type()?;
         let TokenKind::DollarIdent(name) = self.current() else {
             return Err(EvalParseError::ExpectedVariable);
         };
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::RParen)?;
-        Ok(name)
+        Ok((name, set_hook_type))
     }
 
     /// Parses `trait Name { ... }` declarations into dynamic trait metadata.

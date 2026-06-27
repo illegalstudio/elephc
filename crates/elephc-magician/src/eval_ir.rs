@@ -1944,6 +1944,7 @@ pub struct EvalClassProperty {
     trait_origin: Option<String>,
     attributes: Vec<EvalAttribute>,
     property_type: Option<EvalParameterType>,
+    set_hook_type: Option<EvalParameterType>,
     visibility: EvalVisibility,
     set_visibility: Option<EvalVisibility>,
     is_static: bool,
@@ -2016,6 +2017,7 @@ impl EvalClassProperty {
             trait_origin: None,
             attributes: Vec::new(),
             property_type: None,
+            set_hook_type: None,
             visibility,
             set_visibility: None,
             is_static,
@@ -2079,6 +2081,12 @@ impl EvalClassProperty {
         self
     }
 
+    /// Returns a copy of this property with retained explicit set-hook parameter type metadata.
+    pub fn with_set_hook_type(mut self, set_hook_type: Option<EvalParameterType>) -> Self {
+        self.set_hook_type = set_hook_type;
+        self
+    }
+
     /// Returns a copy of this property with PHP asymmetric write visibility metadata.
     pub const fn with_set_visibility(mut self, set_visibility: Option<EvalVisibility>) -> Self {
         self.set_visibility = set_visibility;
@@ -2109,6 +2117,16 @@ impl EvalClassProperty {
     /// Returns retained PHP type metadata for this property.
     pub fn property_type(&self) -> Option<&EvalParameterType> {
         self.property_type.as_ref()
+    }
+
+    /// Returns retained PHP type metadata for an explicit set-hook parameter.
+    pub fn set_hook_type(&self) -> Option<&EvalParameterType> {
+        self.set_hook_type.as_ref()
+    }
+
+    /// Returns the PHP-visible type accepted by property writes.
+    pub fn settable_type(&self) -> Option<&EvalParameterType> {
+        self.set_hook_type().or_else(|| self.property_type())
     }
 
     /// Returns the PHP visibility declared for this property.

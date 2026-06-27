@@ -16545,6 +16545,42 @@ echo ":unionSet:" . count($directUnion->getSettableType()->getTypes());');
     );
 }
 
+/// Verifies eval ReflectionProperty uses explicit set-hook parameter metadata for settable type.
+#[test]
+fn test_eval_reflection_property_get_settable_type_uses_set_hook_parameter() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalReflectSettableTypeTarget {
+    public string $value {
+        get => $this->value;
+        set(int|string $raw) => (string) $raw;
+    }
+}
+$property = new ReflectionProperty("EvalReflectSettableTypeTarget", "value");
+$type = $property->getType();
+$settable = $property->getSettableType();
+echo $type->getName() . ":";
+echo count($settable->getTypes());
+foreach ($settable->getTypes() as $memberType) {
+    echo ":" . $memberType->getName();
+    echo $memberType->isBuiltin() ? "B" : "C";
+}
+$setHook = $property->getHook(PropertyHookType::Set);
+$paramType = $setHook->getParameters()[0]->getType();
+echo ":" . count($paramType->getTypes());
+$box = new EvalReflectSettableTypeTarget();
+$box->value = 7;
+echo ":" . $box->value;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "string:2:intB:stringB:2:7");
+}
+
 /// Verifies eval ReflectionProperty materializes property default metadata through the bridge.
 #[test]
 fn test_eval_reflection_property_get_default_value_metadata() {

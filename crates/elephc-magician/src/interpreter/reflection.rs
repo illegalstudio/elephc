@@ -104,6 +104,7 @@ struct EvalReflectionMemberMetadata {
     is_dynamic: bool,
     modifiers: u64,
     type_metadata: Option<EvalReflectionParameterTypeMetadata>,
+    settable_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     return_type_metadata: Option<EvalReflectionParameterTypeMetadata>,
     default_value: Option<EvalExpr>,
     default_value_trait_origin: Option<String>,
@@ -2641,6 +2642,7 @@ fn eval_reflection_class_constant_object_result(
         None,
         None,
         None,
+        None,
         flags,
         modifiers,
         0,
@@ -2799,6 +2801,7 @@ fn eval_reflection_class_owner_object_result(
             None,
             None,
             None,
+            None,
             flags,
             modifiers,
             0,
@@ -2819,6 +2822,7 @@ fn eval_reflection_class_owner_object_result(
         &metadata.property_names,
         metadata.parent_class_name.as_deref(),
         &[],
+        None,
         None,
         None,
         None,
@@ -2890,6 +2894,7 @@ fn eval_reflection_enum_object_result(
         &metadata.property_names,
         metadata.parent_class_name.as_deref(),
         &[],
+        None,
         None,
         None,
         None,
@@ -3223,6 +3228,7 @@ fn eval_reflection_function_object_result(
         &[],
         None,
         parameters,
+        None,
         None,
         None,
         None,
@@ -3989,6 +3995,7 @@ fn eval_reflection_dynamic_property_metadata(class_name: &str) -> EvalReflection
             false,
         ),
         type_metadata: None,
+        settable_type_metadata: None,
         return_type_metadata: None,
         default_value: None,
         default_value_trait_origin: None,
@@ -4149,6 +4156,7 @@ fn eval_reflection_aot_method_metadata(
         is_dynamic: false,
         modifiers: eval_reflection_method_modifiers_from_flags(flags),
         type_metadata: None,
+        settable_type_metadata: None,
         return_type_metadata,
         default_value: None,
         default_value_trait_origin: None,
@@ -4510,6 +4518,7 @@ fn eval_reflection_aot_property_metadata(
     } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET != 0 {
         modifiers |= 2048;
     }
+    let settable_type_metadata = type_metadata.clone();
     EvalReflectionMemberMetadata {
         declaring_class_name: Some(class_name.trim_start_matches('\\').to_string()),
         source_file: None,
@@ -4524,6 +4533,7 @@ fn eval_reflection_aot_property_metadata(
         is_dynamic: false,
         modifiers,
         type_metadata,
+        settable_type_metadata,
         return_type_metadata: None,
         default_value,
         default_value_trait_origin: None,
@@ -4586,6 +4596,7 @@ fn eval_reflection_class_constant_object_result_or_throw(
         &[],
         Some(&declaring_class_name),
         &[],
+        None,
         None,
         None,
         None,
@@ -4762,6 +4773,7 @@ fn eval_reflection_enum_case_object_result(
         None,
         None,
         None,
+        None,
         flags,
         modifiers,
         0,
@@ -4812,6 +4824,7 @@ fn eval_reflection_owner_object(
     parent_class_name: Option<&str>,
     parameter_metadata: &[EvalReflectionParameterMetadata],
     type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
+    settable_type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
     default_value: Option<&EvalExpr>,
     default_value_trait_origin: Option<&str>,
     flags: u64,
@@ -4833,6 +4846,7 @@ fn eval_reflection_owner_object(
         parent_class_name,
         parameter_metadata,
         type_metadata,
+        settable_type_metadata,
         default_value,
         default_value_trait_origin,
         flags,
@@ -4858,6 +4872,7 @@ fn eval_reflection_owner_object_with_members(
     parent_class_name: Option<&str>,
     parameter_metadata: &[EvalReflectionParameterMetadata],
     type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
+    settable_type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
     default_value: Option<&EvalExpr>,
     default_value_trait_origin: Option<&str>,
     flags: u64,
@@ -4963,9 +4978,21 @@ fn eval_reflection_owner_object_with_members(
         context,
         values,
     )?;
-    let (constant_value_cell, release_constant_value) = match constant_value {
-        Some(value) => (value, false),
-        None => (values.null()?, true),
+    let (constant_value_cell, release_constant_value) = if owner_kind
+        == EVAL_REFLECTION_OWNER_PROPERTY
+    {
+        match settable_type_metadata {
+            Some(type_metadata) => (
+                eval_reflection_type_object_result(type_metadata, values)?,
+                true,
+            ),
+            None => (values.null()?, true),
+        }
+    } else {
+        match constant_value {
+            Some(value) => (value, false),
+            None => (values.null()?, true),
+        }
     };
     let (backing_value_cell, release_backing_value) = match backing_value {
         Some(value) => (value, false),
@@ -5121,6 +5148,7 @@ fn eval_reflection_full_class_object_result(
             None,
             None,
             None,
+            None,
             flags,
             modifiers,
             0,
@@ -5140,6 +5168,7 @@ fn eval_reflection_full_class_object_result(
         &metadata.property_names,
         metadata.parent_class_name.as_deref(),
         &[],
+        None,
         None,
         None,
         None,
@@ -5179,6 +5208,7 @@ fn eval_reflection_shallow_class_object_result(
             None,
             None,
             None,
+            None,
             flags,
             modifiers,
             0,
@@ -5199,6 +5229,7 @@ fn eval_reflection_shallow_class_object_result(
         &[],
         None,
         &[],
+        None,
         None,
         None,
         None,
@@ -5521,6 +5552,7 @@ fn eval_reflection_declaring_function_object_result(
         None,
         None,
         None,
+        None,
         metadata.flags,
         metadata.required_parameter_count as u64,
         method_modifiers,
@@ -5801,6 +5833,7 @@ fn eval_reflection_member_object_result(
         member.declaring_class_name.as_deref(),
         &member.parameters,
         member.type_metadata.as_ref(),
+        member.settable_type_metadata.as_ref(),
         member.default_value.as_ref(),
         member.default_value_trait_origin.as_deref(),
         flags,
@@ -7195,6 +7228,7 @@ fn eval_reflection_method_metadata(
                     method.is_abstract(),
                 ),
                 type_metadata: None,
+                settable_type_metadata: None,
                 return_type_metadata,
                 default_value: None,
                 default_value_trait_origin: None,
@@ -7269,6 +7303,7 @@ fn eval_reflection_method_metadata(
                         true,
                     ),
                     type_metadata: None,
+                    settable_type_metadata: None,
                     return_type_metadata,
                     default_value: None,
                     default_value_trait_origin: None,
@@ -7343,6 +7378,7 @@ fn eval_reflection_method_metadata(
                         method.is_abstract(),
                     ),
                     type_metadata: None,
+                    settable_type_metadata: None,
                     return_type_metadata,
                     default_value: None,
                     default_value_trait_origin: None,
@@ -7433,6 +7469,7 @@ fn eval_reflection_enum_synthetic_method_metadata(
         is_dynamic: false,
         modifiers: eval_reflection_method_modifiers(EvalVisibility::Public, true, false, false),
         type_metadata: None,
+        settable_type_metadata: None,
         return_type_metadata,
         default_value: None,
         default_value_trait_origin: None,
@@ -7475,6 +7512,9 @@ fn eval_reflection_property_metadata(
                     type_metadata: property
                         .property_type()
                         .and_then(eval_reflection_parameter_type_metadata),
+                    settable_type_metadata: property
+                        .settable_type()
+                        .and_then(eval_reflection_parameter_type_metadata),
                     return_type_metadata: None,
                     default_value,
                     default_value_trait_origin: property.trait_origin().map(str::to_string),
@@ -7511,6 +7551,9 @@ fn eval_reflection_property_metadata(
                     true,
                 ),
                 type_metadata: property
+                    .property_type()
+                    .and_then(eval_reflection_parameter_type_metadata),
+                settable_type_metadata: property
                     .property_type()
                     .and_then(eval_reflection_parameter_type_metadata),
                 return_type_metadata: None,
@@ -7550,6 +7593,9 @@ fn eval_reflection_property_metadata(
                     ),
                     type_metadata: property
                         .property_type()
+                        .and_then(eval_reflection_parameter_type_metadata),
+                    settable_type_metadata: property
+                        .settable_type()
                         .and_then(eval_reflection_parameter_type_metadata),
                     return_type_metadata: None,
                     default_value,
@@ -7958,6 +8004,7 @@ fn eval_reflection_property_hook_method_metadata(
             property.is_abstract(),
         ),
         type_metadata: None,
+        settable_type_metadata: None,
         return_type_metadata: eval_reflection_property_hook_return_type(property, hook),
         default_value: None,
         default_value_trait_origin: None,
@@ -7976,7 +8023,7 @@ fn eval_reflection_property_hook_parameters(
         return Vec::new();
     }
     let type_metadata = property
-        .property_type()
+        .settable_type()
         .and_then(eval_reflection_parameter_type_metadata);
     let has_type = type_metadata.is_some();
     let is_array_type = eval_reflection_parameter_has_named_type(type_metadata.as_ref(), "array");

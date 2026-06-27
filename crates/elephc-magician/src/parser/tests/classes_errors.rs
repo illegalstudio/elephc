@@ -885,10 +885,58 @@ fn parse_fragment_accepts_concrete_class_property_hooks() {
                         }
                     }]
                 )
+                .with_parameter_types(vec![Some(EvalParameterType::new(
+                    vec![EvalParameterTypeVariant::Int],
+                    false
+                ))])
                 .with_source_location(EvalSourceLocation::new(4, 4))
             ]
         )
         .with_source_location(EvalSourceLocation::new(1, 6)))]
+    );
+}
+
+/// Verifies typed set-hook parameters are retained separately from the property type.
+#[test]
+fn parse_fragment_retains_property_set_hook_parameter_type() {
+    let program = parse_fragment(
+        br#"class DynEvalTypedSetHooked {
+    public string $value {
+        set(int|string $raw) => $raw;
+    }
+}"#,
+    )
+    .expect("fragment should parse");
+    let EvalStmt::ClassDecl(class) = &program.statements()[0] else {
+        panic!("expected class declaration");
+    };
+    let property = &class.properties()[0];
+    assert_eq!(
+        property.property_type(),
+        Some(&EvalParameterType::new(
+            vec![EvalParameterTypeVariant::String],
+            false
+        ))
+    );
+    assert_eq!(
+        property.set_hook_type(),
+        Some(&EvalParameterType::new(
+            vec![
+                EvalParameterTypeVariant::Int,
+                EvalParameterTypeVariant::String
+            ],
+            false
+        ))
+    );
+    assert_eq!(
+        class.methods()[0].parameter_types(),
+        &[Some(EvalParameterType::new(
+            vec![
+                EvalParameterTypeVariant::Int,
+                EvalParameterTypeVariant::String
+            ],
+            false
+        ))]
     );
 }
 

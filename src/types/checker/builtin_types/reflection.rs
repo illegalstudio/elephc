@@ -3500,6 +3500,12 @@ fn add_reflection_member_flag_methods(
             null_expr(),
         ));
         properties.push(builtin_property(
+            "__settable_type",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+        properties.push(builtin_property(
             "__has_default_value",
             Visibility::Private,
             Some(bool_type()),
@@ -3555,7 +3561,7 @@ fn add_reflection_member_flag_methods(
         methods.push(builtin_reflection_class_mixed_method("getType", "__type"));
         methods.push(builtin_reflection_class_mixed_method(
             "getSettableType",
-            "__type",
+            "__settable_type",
         ));
         methods.push(builtin_reflection_class_bool_method(
             "hasDefaultValue",

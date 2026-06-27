@@ -405,8 +405,12 @@ impl FakeOps {
             (FakeValue::Object(properties), "getposition") if args.is_empty() => {
                 Self::object_property(&properties, "__position").map_or_else(|| self.int(0), Ok)
             }
-            (FakeValue::Object(properties), "gettype" | "getsettabletype") if args.is_empty() => {
+            (FakeValue::Object(properties), "gettype") if args.is_empty() => {
                 Self::object_property(&properties, "__type").map_or_else(|| self.null(), Ok)
+            }
+            (FakeValue::Object(properties), "getsettabletype") if args.is_empty() => {
+                Self::object_property(&properties, "__settable_type")
+                    .map_or_else(|| self.null(), Ok)
             }
             (FakeValue::Object(properties), "getclass") if args.is_empty() => {
                 Self::object_property(&properties, "__class").map_or_else(|| self.null(), Ok)
@@ -742,6 +746,7 @@ impl FakeOps {
                 properties.push(("__is_readonly".to_string(), is_readonly));
                 properties.push(("__modifiers".to_string(), modifiers_cell));
                 properties.push(("__type".to_string(), method_objects));
+                properties.push(("__settable_type".to_string(), constant_value));
                 properties.push(("__has_default_value".to_string(), has_default_value));
                 properties.push(("__is_promoted".to_string(), is_promoted));
                 properties.push(("__is_virtual".to_string(), is_virtual));

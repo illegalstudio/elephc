@@ -2494,6 +2494,43 @@ return true;"##,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies ReflectionProperty retains explicit set-hook parameter metadata as the settable type.
+#[test]
+fn execute_program_reflection_property_get_settable_type_uses_set_hook_parameter() {
+    let program = parse_fragment(
+        br##"class EvalReflectSettableTypeTarget {
+    public string $value {
+        get => $this->value;
+        set(int|string $raw) => (string) $raw;
+    }
+}
+$property = new ReflectionProperty("EvalReflectSettableTypeTarget", "value");
+$type = $property->getType();
+$settable = $property->getSettableType();
+echo $type->getName(); echo ":";
+echo count($settable->getTypes());
+foreach ($settable->getTypes() as $memberType) {
+    echo ":"; echo $memberType->getName();
+    echo $memberType->isBuiltin() ? "B" : "C";
+}
+$setHook = $property->getHook(PropertyHookType::Set);
+$paramType = $setHook->getParameters()[0]->getType();
+echo ":"; echo count($paramType->getTypes());
+$box = new EvalReflectSettableTypeTarget();
+$box->value = 7;
+echo ":"; echo $box->value;
+return true;"##,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "string:2:intB:stringB:2:7");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies ReflectionProperty exposes eval property default metadata.
 #[test]
 fn execute_program_reflection_property_get_default_value_metadata() {
