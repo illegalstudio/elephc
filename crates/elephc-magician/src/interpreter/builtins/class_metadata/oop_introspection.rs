@@ -224,10 +224,20 @@ fn eval_method_exists_on_class(
 ) -> Result<bool, EvalStatus> {
     if context.has_class(class_name) || context.has_enum(class_name) {
         if target_is_object {
-            return Ok(context
+            if context
                 .class_method_names(class_name)
                 .iter()
-                .any(|name| name.eq_ignore_ascii_case(method_name)));
+                .any(|name| name.eq_ignore_ascii_case(method_name))
+            {
+                return Ok(true);
+            }
+            return eval_native_parent_method_exists_on_class(
+                class_name,
+                method_name,
+                target_is_object,
+                context,
+                values,
+            );
         }
         if context
             .class_method_names(class_name)
@@ -243,7 +253,13 @@ fn eval_method_exists_on_class(
                     .trim_start_matches('\\')
                     .eq_ignore_ascii_case(class_name.trim_start_matches('\\')));
         }
-        return Ok(false);
+        return eval_native_parent_method_exists_on_class(
+            class_name,
+            method_name,
+            target_is_object,
+            context,
+            values,
+        );
     }
     if context.has_interface(class_name) {
         return Ok(context
@@ -258,17 +274,71 @@ fn eval_method_exists_on_class(
             .any(|name| name.eq_ignore_ascii_case(method_name)));
     }
     if target_is_object {
-        return Ok(eval_aot_method_dispatch_metadata_in_hierarchy(
+        return eval_native_method_exists_on_class(
             class_name,
+            class_name,
+            method_name,
+            target_is_object,
+            context,
+            values,
+        );
+    }
+    eval_native_method_exists_on_class(
+        class_name,
+        class_name,
+        method_name,
+        target_is_object,
+        context,
+        values,
+    )
+}
+
+/// Checks generated/AOT parent method metadata inherited by one eval class.
+fn eval_native_parent_method_exists_on_class(
+    class_name: &str,
+    method_name: &str,
+    target_is_object: bool,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some(parent) = context.class_native_parent_name(class_name) else {
+        return Ok(false);
+    };
+    eval_native_method_exists_on_class(
+        class_name,
+        &parent,
+        method_name,
+        target_is_object,
+        context,
+        values,
+    )
+}
+
+/// Checks generated/AOT method metadata for method_exists() semantics.
+fn eval_native_method_exists_on_class(
+    reflected_class_name: &str,
+    lookup_class_name: &str,
+    method_name: &str,
+    target_is_object: bool,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some((declaring_class, visibility, _, _)) =
+        eval_aot_method_dispatch_metadata_in_hierarchy(
+            lookup_class_name,
             method_name,
             context,
             values,
         )?
-        .is_some());
+    else {
+        return Ok(false);
+    };
+    if target_is_object || visibility != EvalVisibility::Private {
+        return Ok(true);
     }
-    values
-        .reflection_method_flags(class_name, method_name)
-        .map(|flags| flags.is_some())
+    Ok(declaring_class
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case(reflected_class_name.trim_start_matches('\\')))
 }
 
 /// Checks property metadata for one resolved class-like name.
@@ -279,10 +349,19 @@ fn eval_property_exists_on_class(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     if context.has_class(class_name) || context.has_enum(class_name) {
-        return Ok(context
+        if context
             .class_property_names(class_name)
             .iter()
-            .any(|name| name == property_name));
+            .any(|name| name == property_name)
+        {
+            return Ok(true);
+        }
+        return eval_native_parent_property_exists_on_class(
+            class_name,
+            property_name,
+            context,
+            values,
+        );
     }
     if context.has_interface(class_name) {
         return Ok(context
@@ -296,21 +375,40 @@ fn eval_property_exists_on_class(
             .iter()
             .any(|name| name == property_name));
     }
-    let Some(flags) = values.reflection_property_flags(class_name, property_name)? else {
+    eval_native_property_exists_on_class(class_name, class_name, property_name, values)
+}
+
+/// Checks generated/AOT parent property metadata inherited by one eval class.
+fn eval_native_parent_property_exists_on_class(
+    class_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some(parent) = context.class_native_parent_name(class_name) else {
         return Ok(false);
     };
-    if flags & EVAL_CLASS_METADATA_FLAG_PRIVATE == 0 {
+    eval_native_property_exists_on_class(class_name, &parent, property_name, values)
+}
+
+/// Checks generated/AOT property metadata for property_exists() semantics.
+fn eval_native_property_exists_on_class(
+    reflected_class_name: &str,
+    lookup_class_name: &str,
+    property_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some((declaring_class, visibility, _)) =
+        eval_runtime_property_access_metadata(lookup_class_name, property_name, values)?
+    else {
+        return Ok(false);
+    };
+    if visibility != EvalVisibility::Private {
         return Ok(true);
     }
-    let Some(declaring_class) = values.reflection_property_declaring_class(
-        class_name,
-        property_name,
-    )? else {
-        return Ok(true);
-    };
     Ok(declaring_class
         .trim_start_matches('\\')
-        .eq_ignore_ascii_case(class_name.trim_start_matches('\\')))
+        .eq_ignore_ascii_case(reflected_class_name.trim_start_matches('\\')))
 }
 
 /// Checks private instance properties declared by the current scope for object targets.
@@ -416,6 +514,9 @@ fn eval_class_method_names_for_scope(
         eval_add_current_scope_private_method_names(
             &mut names, &mut seen, class_name, context, values,
         )?;
+        eval_add_native_parent_method_names(
+            &mut names, &mut seen, class_name, context, values,
+        )?;
         return Ok(names);
     }
     if context.has_interface(class_name) {
@@ -443,7 +544,7 @@ fn eval_class_method_names_for_scope(
 
 /// Filters generated runtime methods to the surface visible from the current eval scope.
 fn eval_visible_runtime_method_names(
-    class_name: &str,
+    lookup_class_name: &str,
     names: Vec<String>,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -451,7 +552,7 @@ fn eval_visible_runtime_method_names(
     let mut result = Vec::new();
     for name in names {
         let Some((declaring_class, visibility)) =
-            eval_runtime_method_access_metadata(class_name, &name, values)?
+            eval_runtime_method_access_metadata(lookup_class_name, &name, values)?
         else {
             continue;
         };
@@ -460,6 +561,28 @@ fn eval_visible_runtime_method_names(
         }
     }
     Ok(result)
+}
+
+/// Adds generated/AOT parent method names inherited by one eval class.
+fn eval_add_native_parent_method_names(
+    names: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(parent) = context.class_native_parent_name(class_name) else {
+        return Ok(());
+    };
+    let method_names = values.reflection_method_names(&parent)?;
+    let parent_names = eval_runtime_string_array_to_vec(method_names, values)?;
+    values.release(method_names)?;
+    let parent_names =
+        eval_visible_runtime_method_names(&parent, parent_names, context, values)?;
+    for name in parent_names {
+        eval_push_unique_method_name(names, seen, name);
+    }
+    Ok(())
 }
 
 /// Adds private methods declared by the current eval scope when PHP would expose them.

@@ -8153,6 +8153,48 @@ echo call_user_func_array([$box, "read"], ["value" => "L"]);');
     );
 }
 
+/// Verifies eval-declared classes expose inherited AOT members to OOP introspection.
+#[test]
+fn test_eval_declared_class_inherits_aot_parent_member_introspection() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotIntrospectionParent {
+    public int $pub = 1;
+    protected int $prot = 2;
+    protected function guarded() {}
+    public function read() {}
+}
+
+eval('class EvalRuntimeIntrospectionChild extends EvalAotIntrospectionParent {
+    public function childRead() {}
+    public function childView() {
+        $methods = get_class_methods($this);
+        echo in_array("guarded", $methods) ? "P" : "p";
+    }
+}
+$box = new EvalRuntimeIntrospectionChild();
+echo method_exists("EvalRuntimeIntrospectionChild", "guarded") ? "classProtected:" : "bad:";
+echo method_exists($box, "guarded") ? "objectProtected:" : "bad:";
+echo property_exists($box, "pub") ? "objectPublicProp:" : "bad:";
+echo property_exists("EvalRuntimeIntrospectionChild", "prot") ? "classProtectedProp:" : "bad:";
+$outside = get_class_methods("EvalRuntimeIntrospectionChild");
+echo in_array("read", $outside) ? "outsideParent:" : "bad:";
+echo in_array("guarded", $outside) ? "bad:" : "outsideNoProtected:";
+echo in_array("childRead", $outside) ? "outsideChild:" : "bad:";
+$box->childView();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "classProtected:objectProtected:objectPublicProp:classProtectedProp:outsideParent:outsideNoProtected:outsideChild:P"
+    );
+}
+
 /// Verifies eval-declared class inheritance uses dynamic methods and metadata.
 #[test]
 fn test_eval_declared_class_inherits_methods_and_metadata() {
