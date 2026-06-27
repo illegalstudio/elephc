@@ -18960,6 +18960,32 @@ echo $box->x;
     assert_eq!(out, "9:10:12:12");
 }
 
+/// Verifies native dynamic `new $class` can instantiate eval-declared classes after the barrier.
+#[test]
+fn test_eval_declared_class_dynamic_new_natively_after_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+class DynEvalNativeDynamicNewAot {
+    public int $label;
+    public function __construct($label) { $this->label = $label; }
+    public function readAot() { return $this->label; }
+}
+eval('class DynEvalNativeDynamicNew {
+    public int $label;
+    public function __construct($label) { $this->label = $label; }
+    public function read() { return $this->label; }
+}');
+$class = "DynEvalNativeDynamicNew";
+$box = new $class(5);
+echo $box->read() . ":";
+$aotClass = "DynEvalNativeDynamicNewAot";
+$aotBox = new $aotClass(7);
+echo $aotBox->readAot();
+"#,
+    );
+    assert_eq!(out, "5:7");
+}
+
 /// Verifies native property writes can update eval-created objects after the barrier.
 #[test]
 fn test_eval_declared_class_native_property_write_after_barrier() {

@@ -250,8 +250,19 @@ pub fn execute_context_new_object_outcome(
     args: Vec<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
+    execute_context_try_new_object_outcome(context, name, args, values)?
+        .ok_or(EvalStatus::UnsupportedConstruct)
+}
+
+/// Attempts to construct an eval-declared class, returning `None` when it is absent.
+pub fn execute_context_try_new_object_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    args: Vec<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
     let Some(class) = context.class(name).cloned() else {
-        return Err(EvalStatus::UnsupportedConstruct);
+        return Ok(None);
     };
     let evaluated_args = args
         .into_iter()
@@ -263,10 +274,11 @@ pub fn execute_context_new_object_outcome(
         .collect();
     let mut scope = ElephcEvalScope::new();
     match eval_dynamic_class_new_object(&class, evaluated_args, context, &mut scope, values) {
-        Ok(result) => Ok(EvalOutcome::Value(result)),
+        Ok(result) => Ok(Some(EvalOutcome::Value(result))),
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()
             .map(EvalOutcome::Throwable)
+            .map(Some)
             .ok_or(EvalStatus::UncaughtThrowable),
         Err(status) => Err(status),
     }
