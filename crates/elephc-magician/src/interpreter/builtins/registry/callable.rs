@@ -186,10 +186,20 @@ pub(in crate::interpreter) fn eval_array_callable(
             let called_class = context
                 .eval_static_callable_called_class(callback, &class_name, &method)
                 .map(str::to_string);
+            let native_dispatch = context
+                .eval_static_callable_native_dispatch(callback, &class_name, &method)
+                .map(|(native_class, bridge_scope)| {
+                    (native_class.to_string(), bridge_scope.to_string())
+                });
+            let (native_class, bridge_scope) = native_dispatch
+                .map(|(native_class, bridge_scope)| (Some(native_class), Some(bridge_scope)))
+                .unwrap_or((None, None));
             Ok(EvaluatedCallable::StaticMethod {
                 class_name,
                 method,
                 called_class,
+                native_class,
+                bridge_scope,
             })
         }
         _ => Err(EvalStatus::UnsupportedConstruct),
@@ -211,6 +221,8 @@ pub(in crate::interpreter) fn eval_string_callable(
             class_name: class_name.trim_start_matches('\\').to_string(),
             method: method.to_string(),
             called_class: None,
+            native_class: None,
+            bridge_scope: None,
         });
     }
     Ok(EvaluatedCallable::Named(
@@ -272,22 +284,36 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
             class_name,
             method,
             called_class,
-        } => match called_class {
-            Some(called_class) => eval_static_method_call_result_with_called_class(
-                class_name,
-                called_class,
-                method,
-                positional_args(evaluated_args),
-                context,
-                values,
-            ),
-            None => eval_static_method_call_result(
-                class_name,
-                method,
-                positional_args(evaluated_args),
-                context,
-                values,
-            ),
+            native_class,
+            bridge_scope,
+        } => match native_class {
+            Some(native_class) => {
+                eval_native_static_method_with_evaluated_args_unchecked_bridge_scope(
+                    native_class,
+                    method,
+                    positional_args(evaluated_args),
+                    bridge_scope.as_deref(),
+                    context,
+                    values,
+                )
+            }
+            None => match called_class {
+                Some(called_class) => eval_static_method_call_result_with_called_class(
+                    class_name,
+                    called_class,
+                    method,
+                    positional_args(evaluated_args),
+                    context,
+                    values,
+                ),
+                None => eval_static_method_call_result(
+                    class_name,
+                    method,
+                    positional_args(evaluated_args),
+                    context,
+                    values,
+                ),
+            },
         },
     }
 }
@@ -333,18 +359,36 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
             class_name,
             method,
             called_class,
-        } => match called_class {
-            Some(called_class) => eval_static_method_call_result_with_called_class(
-                class_name,
-                called_class,
-                method,
-                evaluated_args,
-                context,
-                values,
-            ),
-            None => {
-                eval_static_method_call_result(class_name, method, evaluated_args, context, values)
+            native_class,
+            bridge_scope,
+        } => match native_class {
+            Some(native_class) => {
+                eval_native_static_method_with_evaluated_args_unchecked_bridge_scope(
+                    native_class,
+                    method,
+                    evaluated_args,
+                    bridge_scope.as_deref(),
+                    context,
+                    values,
+                )
             }
+            None => match called_class {
+                Some(called_class) => eval_static_method_call_result_with_called_class(
+                    class_name,
+                    called_class,
+                    method,
+                    evaluated_args,
+                    context,
+                    values,
+                ),
+                None => eval_static_method_call_result(
+                    class_name,
+                    method,
+                    evaluated_args,
+                    context,
+                    values,
+                ),
+            },
         },
     }
 }

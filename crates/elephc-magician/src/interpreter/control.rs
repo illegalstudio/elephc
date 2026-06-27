@@ -59,6 +59,8 @@ pub(super) enum EvaluatedCallable {
         class_name: String,
         method: String,
         called_class: Option<String>,
+        native_class: Option<String>,
+        bridge_scope: Option<String>,
     },
 }
 

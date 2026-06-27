@@ -12576,6 +12576,97 @@ echo call_user_func_array($callback, ["D"]);');
     );
 }
 
+/// Verifies inherited native `__callStatic` does not mask inherited non-static AOT methods.
+#[test]
+fn test_eval_declared_child_aot_magic_call_static_does_not_mask_non_static_callbacks() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotStaticMagicNonStaticParent {
+    public function run(string $value): string {
+        return "I:" . $value;
+    }
+
+    public static function __callStatic($method, $args) {
+        return "S:" . $method . ":" . $args[0];
+    }
+}
+eval('class EvalAotStaticMagicNonStaticChild extends EvalAotStaticMagicNonStaticParent {}
+$callback = ["EvalAotStaticMagicNonStaticChild", "run"];
+echo is_callable($callback) ? "callable:" : "not:";
+try {
+    echo call_user_func($callback, "A");
+} catch (TypeError) {
+    echo "TypeError";
+}
+echo ":";
+echo EvalAotStaticMagicNonStaticChild::missing("B");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "not:TypeError:S:missing:B");
+}
+
+/// Verifies eval-declared subclasses expose inherited public AOT static methods to callbacks.
+#[test]
+fn test_eval_declared_child_inherits_aot_static_method_callbacks() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotStaticCallbackParent {
+    public static function read(string $value): string {
+        return "R:" . $value;
+    }
+}
+eval('class EvalAotStaticCallbackChild extends EvalAotStaticCallbackParent {}
+echo EvalAotStaticCallbackChild::read("A") . ":";
+$callback = ["EvalAotStaticCallbackChild", "read"];
+echo is_callable($callback) ? "C:" : "bad:";
+echo $callback("B") . ":";
+echo call_user_func($callback, "C") . ":";
+echo call_user_func_array($callback, ["D"]);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "R:A:C:R:B:R:C:R:D");
+}
+
+/// Verifies eval first-class static callables capture inherited protected AOT methods.
+#[test]
+fn test_eval_declared_child_first_class_callable_inherited_protected_aot_static_method() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotProtectedStaticCallableParent {
+    protected static function hidden(string $value): string {
+        return "H:" . $value;
+    }
+}
+eval('class EvalAotProtectedStaticCallableChild extends EvalAotProtectedStaticCallableParent {
+    public static function makeHidden() {
+        return self::hidden(...);
+    }
+}
+$callback = EvalAotProtectedStaticCallableChild::makeHidden();
+echo is_callable($callback) ? "C:" : "bad:";
+echo $callback("A") . ":";
+echo call_user_func($callback, "B") . ":";
+echo call_user_func_array($callback, ["C"]);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "C:H:A:H:B:H:C");
+}
+
 /// Verifies eval rejects invalid magic method contracts during dynamic class declaration.
 #[test]
 fn test_eval_rejects_invalid_magic_method_contracts() {

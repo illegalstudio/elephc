@@ -35,16 +35,20 @@ pub(in crate::interpreter) fn eval_validate_call_user_func_callback(
             ),
         },
         EvaluatedCallable::StaticMethod {
-            class_name, method, ..
-        } => {
-            eval_validate_call_user_func_static_method(
+            class_name,
+            method,
+            native_class,
+            ..
+        } => match native_class {
+            Some(_) => Ok(()),
+            None => eval_validate_call_user_func_static_method(
                 class_name,
                 method,
                 function_name,
                 context,
                 values,
-            )
-        }
+            ),
+        },
         EvaluatedCallable::Named(_) | EvaluatedCallable::InvokableObject { .. } => Ok(()),
     }
 }
@@ -244,9 +248,14 @@ fn eval_validate_call_user_func_static_method(
             return Ok(());
         }
         if let Some(parent) = context.class_native_parent_name(&class_name) {
-            if eval_call_user_func_native_static_magic_callable(&parent, context, values)? {
-                return Ok(());
-            }
+            return eval_validate_call_user_func_native_static_method_for_class(
+                &parent,
+                &class_name,
+                method_name,
+                function_name,
+                context,
+                values,
+            );
         }
         return eval_call_user_func_missing_method_type_error(
             function_name,
@@ -287,6 +296,61 @@ fn eval_validate_call_user_func_native_static_method(
         return eval_call_user_func_missing_method_type_error(
             function_name,
             class_name,
+            method_name,
+            context,
+            values,
+        );
+    };
+    if !is_static {
+        return eval_call_user_func_non_static_method_type_error(
+            function_name,
+            &declaring_class,
+            method_name,
+            context,
+            values,
+        );
+    }
+    if is_abstract {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if validate_eval_member_access(&declaring_class, visibility, context).is_ok()
+        || eval_call_user_func_native_static_magic_callable(class_name, context, values)?
+    {
+        return Ok(());
+    }
+    eval_call_user_func_method_access_type_error(
+        function_name,
+        &declaring_class,
+        method_name,
+        visibility,
+        context,
+        values,
+    )
+}
+
+/// Validates generated/AOT static-method callbacks while preserving eval-class error names.
+fn eval_validate_call_user_func_native_static_method_for_class(
+    class_name: &str,
+    error_class_name: &str,
+    method_name: &str,
+    function_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some((declaring_class, visibility, is_static, is_abstract)) =
+        eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?
+    else {
+        if eval_call_user_func_native_static_magic_callable(class_name, context, values)?
+            || context
+                .native_static_method_signature(class_name, method_name)
+                .is_some()
+            || !values.class_exists(class_name)?
+        {
+            return Ok(());
+        }
+        return eval_call_user_func_missing_method_type_error(
+            function_name,
+            error_class_name,
             method_name,
             context,
             values,

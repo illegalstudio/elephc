@@ -1009,9 +1009,16 @@ fn eval_callable_probe_exists(
             }
         }
         EvaluatedCallable::StaticMethod {
-            class_name, method, ..
+            class_name,
+            method,
+            native_class,
+            ..
         } => {
-            eval_static_method_callable_probe(class_name, method, context, values)
+            if native_class.is_some() {
+                Ok(true)
+            } else {
+                eval_static_method_callable_probe(class_name, method, context, values)
+            }
         }
     }
 }
@@ -1086,7 +1093,12 @@ fn eval_static_method_callable_probe(
             return Ok(true);
         }
         if let Some(parent) = context.class_native_parent_name(&class_name) {
-            return eval_aot_static_magic_method_callable_probe(&parent, context, values);
+            return eval_aot_static_method_callable_probe(
+                &parent,
+                method_name,
+                context,
+                values,
+            );
         }
         return Ok(false);
     }
