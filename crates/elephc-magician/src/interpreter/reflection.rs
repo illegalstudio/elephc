@@ -730,6 +730,12 @@ pub(in crate::interpreter) fn eval_reflection_class_has_property_result(
                 values,
             )?
             .is_some()
+                || eval_reflection_native_interface_property_requirement(
+                    &reflected_name,
+                    &property_name,
+                    context,
+                )
+                .is_some()
         };
     if !exists {
         if let Some(dynamic_object) =
@@ -2145,19 +2151,9 @@ pub(in crate::interpreter) fn eval_reflection_property_to_string_result(
         let text = eval_reflection_property_to_string(&property_name, &member);
         return values.string(&text).map(Some);
     }
-    let member = if let Some(member) =
-        eval_reflection_property_metadata(&declaring_class, &property_name, context)
-    {
-        member
-    } else {
-        eval_reflection_aot_property_metadata_if_exists(
-            &declaring_class,
-            &property_name,
-            context,
-            values,
-        )?
-        .ok_or(EvalStatus::RuntimeFatal)?
-    };
+    let member =
+        eval_reflection_reflected_property_metadata(&declaring_class, &property_name, context, values)?
+            .ok_or(EvalStatus::RuntimeFatal)?;
     let text = eval_reflection_property_to_string(&property_name, &member);
     values.string(&text).map(Some)
 }
@@ -2425,7 +2421,17 @@ pub(in crate::interpreter) fn eval_reflection_class_get_members_result(
         })
         .map(Some);
     }
-    let names = eval_reflection_aot_member_names(owner_kind, &reflected_name, values)?;
+    let native_interface_property_names =
+        if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
+            eval_reflection_native_interface_property_names(&reflected_name, context)
+        } else {
+            Vec::new()
+        };
+    let names = if native_interface_property_names.is_empty() {
+        eval_reflection_aot_member_names(owner_kind, &reflected_name, values)?
+    } else {
+        native_interface_property_names
+    };
     eval_reflection_aot_member_object_array_result(
         owner_kind,
         &reflected_name,
@@ -2498,6 +2504,23 @@ pub(in crate::interpreter) fn eval_reflection_class_get_member_result(
         if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY
             && !eval_reflection_class_like_exists(&reflected_name, context)
         {
+            if let Some((declaring_class, property)) =
+                eval_reflection_native_interface_property_requirement(
+                    &reflected_name,
+                    &requested_name,
+                    context,
+                )
+            {
+                let member = eval_reflection_interface_property_metadata(declaring_class, &property);
+                return eval_reflection_member_object_result(
+                    EVAL_REFLECTION_OWNER_PROPERTY,
+                    &requested_name,
+                    &member,
+                    context,
+                    values,
+                )
+                .map(Some);
+            }
             if let Some(member) = eval_reflection_aot_property_metadata_if_exists(
                 &reflected_name,
                 &requested_name,
@@ -3727,6 +3750,23 @@ fn eval_reflection_property_object_result_if_exists(
         .resolve_class_like_name(class_name)
         .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
     if !eval_reflection_class_like_exists(&reflected_name, context) {
+        if let Some((declaring_class, property)) =
+            eval_reflection_native_interface_property_requirement(
+                &reflected_name,
+                property_name,
+                context,
+            )
+        {
+            let property = eval_reflection_interface_property_metadata(declaring_class, &property);
+            return eval_reflection_member_object_result(
+                EVAL_REFLECTION_OWNER_PROPERTY,
+                property_name,
+                &property,
+                context,
+                values,
+            )
+            .map(Some);
+        }
         let Some(property) = eval_reflection_aot_property_metadata_if_exists(
             &reflected_name,
             property_name,
@@ -5891,7 +5931,13 @@ fn eval_reflection_aot_member_object_array_result(
                 class_name, name, context, values,
             )?
         } else {
-            eval_reflection_aot_property_metadata_if_exists(class_name, name, context, values)?
+            eval_reflection_native_interface_property_requirement(class_name, name, context)
+                .map(|(declaring_class, property)| {
+                    eval_reflection_interface_property_metadata(declaring_class, &property)
+                })
+                .or(eval_reflection_aot_property_metadata_if_exists(
+                    class_name, name, context, values,
+                )?)
         };
         let Some(member) = member else {
             continue;
@@ -6430,11 +6476,17 @@ fn eval_reflection_class_to_string_metadata(
         runtime_class_name,
         values,
     )?;
-    let property_names = eval_reflection_aot_member_names(
-        EVAL_REFLECTION_OWNER_PROPERTY,
-        runtime_class_name,
-        values,
-    )?;
+    let native_interface_property_names =
+        eval_reflection_native_interface_property_names(runtime_class_name, context);
+    let property_names = if native_interface_property_names.is_empty() {
+        eval_reflection_aot_member_names(
+            EVAL_REFLECTION_OWNER_PROPERTY,
+            runtime_class_name,
+            values,
+        )?
+    } else {
+        native_interface_property_names
+    };
     let interface_names = eval_reflection_aot_class_interface_names(runtime_class_name, values)?;
     let trait_names = eval_reflection_aot_class_trait_names(runtime_class_name, values)?;
     let parent_class_name = eval_reflection_aot_parent_class_name(runtime_class_name, values)?;
@@ -7529,39 +7581,17 @@ fn eval_reflection_property_metadata(
             .interface_property_requirements(class_name)
             .into_iter()
             .find(|property| property.name() == property_name)
-            .map(|property| EvalReflectionMemberMetadata {
-                declaring_class_name: Some(class_name.to_string()),
-                source_file: None,
-                source_location: None,
-                attributes: property.attributes().to_vec(),
-                visibility: EvalVisibility::Public,
-                is_static: false,
-                is_final: false,
-                is_abstract: true,
-                is_readonly: false,
-                is_promoted: false,
-                is_dynamic: false,
-                modifiers: eval_reflection_property_modifiers(
-                    EvalVisibility::Public,
-                    property.set_visibility(),
-                    false,
-                    false,
-                    true,
-                    false,
-                    true,
-                ),
-                type_metadata: property
-                    .property_type()
-                    .and_then(eval_reflection_parameter_type_metadata),
-                settable_type_metadata: property
-                    .property_type()
-                    .and_then(eval_reflection_parameter_type_metadata),
-                return_type_metadata: None,
-                default_value: None,
-                default_value_trait_origin: None,
-                required_parameter_count: 0,
-                parameters: Vec::new(),
+            .map(|property| {
+                eval_reflection_interface_property_metadata(class_name.to_string(), &property)
             });
+    }
+    if let Some((declaring_class, property)) =
+        eval_reflection_native_interface_property_requirement(class_name, property_name, context)
+    {
+        return Some(eval_reflection_interface_property_metadata(
+            declaring_class,
+            &property,
+        ));
     }
     context.trait_decl(class_name).and_then(|trait_decl| {
         trait_decl
@@ -7606,8 +7636,48 @@ fn eval_reflection_property_metadata(
                     required_parameter_count: 0,
                     parameters: Vec::new(),
                 }
-            })
+        })
     })
+}
+
+/// Returns property metadata for a property contract declared on an interface.
+fn eval_reflection_interface_property_metadata(
+    declaring_class: String,
+    property: &EvalInterfaceProperty,
+) -> EvalReflectionMemberMetadata {
+    EvalReflectionMemberMetadata {
+        declaring_class_name: Some(declaring_class),
+        source_file: None,
+        source_location: None,
+        attributes: property.attributes().to_vec(),
+        visibility: EvalVisibility::Public,
+        is_static: false,
+        is_final: false,
+        is_abstract: true,
+        is_readonly: false,
+        is_promoted: false,
+        is_dynamic: false,
+        modifiers: eval_reflection_property_modifiers(
+            EvalVisibility::Public,
+            property.set_visibility(),
+            false,
+            false,
+            true,
+            false,
+            true,
+        ),
+        type_metadata: property
+            .property_type()
+            .and_then(eval_reflection_parameter_type_metadata),
+        settable_type_metadata: property
+            .property_type()
+            .and_then(eval_reflection_parameter_type_metadata),
+        return_type_metadata: None,
+        default_value: None,
+        default_value_trait_origin: None,
+        required_parameter_count: 0,
+        parameters: Vec::new(),
+    }
 }
 
 /// Returns property names that can contribute to `ReflectionClass::getDefaultProperties()`.
@@ -7636,6 +7706,18 @@ fn eval_reflection_default_property_metadata(
     if let Some(member) = eval_reflection_property_metadata(reflected_name, property_name, context) {
         return Ok(Some(member));
     }
+    if let Some((declaring_class, property)) =
+        eval_reflection_native_interface_property_requirement(
+            reflected_name,
+            property_name,
+            context,
+        )
+    {
+        return Ok(Some(eval_reflection_interface_property_metadata(
+            declaring_class,
+            &property,
+        )));
+    }
     eval_reflection_aot_property_metadata_if_exists(reflected_name, property_name, context, values)
 }
 
@@ -7648,6 +7730,18 @@ fn eval_reflection_reflected_property_metadata(
 ) -> Result<Option<EvalReflectionMemberMetadata>, EvalStatus> {
     if let Some(member) = eval_reflection_property_metadata(declaring_class, property_name, context) {
         return Ok(Some(member));
+    }
+    if let Some((declaring_class, property)) =
+        eval_reflection_native_interface_property_requirement(
+            declaring_class,
+            property_name,
+            context,
+        )
+    {
+        return Ok(Some(eval_reflection_interface_property_metadata(
+            declaring_class,
+            &property,
+        )));
     }
     eval_reflection_aot_property_metadata_if_exists(declaring_class, property_name, context, values)
 }
@@ -7878,6 +7972,44 @@ fn eval_reflection_property_for_hooks(
                     (declaring_class.to_string(), property)
                 })
         })
+        .or_else(|| {
+            eval_reflection_native_interface_property_requirement(
+                declaring_class,
+                property_name,
+                context,
+            )
+            .map(|(owner, property)| {
+                let property = EvalClassProperty::new(property.name(), None)
+                    .with_type(property.property_type().cloned())
+                    .with_attributes(property.attributes().to_vec())
+                    .with_abstract_hook_contract(property.requires_get(), property.requires_set());
+                (owner, property)
+            })
+        })
+}
+
+/// Returns one generated/AOT interface property contract registered for eval reflection.
+fn eval_reflection_native_interface_property_requirement(
+    interface_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+) -> Option<(String, EvalInterfaceProperty)> {
+    context
+        .native_interface_property_requirements(interface_name)
+        .into_iter()
+        .find(|(_, property)| property.name() == property_name)
+}
+
+/// Returns generated/AOT interface property names registered for eval reflection.
+fn eval_reflection_native_interface_property_names(
+    interface_name: &str,
+    context: &ElephcEvalContext,
+) -> Vec<String> {
+    context
+        .native_interface_property_requirements(interface_name)
+        .into_iter()
+        .map(|(_, property)| property.name().to_string())
+        .collect()
 }
 
 /// Binds the `PropertyHookType $type` argument used by ReflectionProperty hook APIs.

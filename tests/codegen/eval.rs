@@ -12588,6 +12588,50 @@ eval('class EvalAotReadonlySetPropertyBox implements EvalAotSetPropertyContract 
     );
 }
 
+/// Verifies eval reflection exposes generated/AOT interface property-hook metadata.
+#[test]
+fn test_eval_reflection_exposes_aot_interface_property_hooks() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalAotReflectPropertyParent {
+    public string $parentName { get; }
+}
+interface EvalAotReflectPropertyContract extends EvalAotReflectPropertyParent {
+    public string $name { get; set; }
+}
+echo eval('$ref = new ReflectionClass("EvalAotReflectPropertyContract");
+echo $ref->hasProperty("name") ? "H:" : "h:";
+echo $ref->hasProperty("parentName") ? "P:" : "p:";
+$properties = $ref->getProperties();
+echo count($properties) . ":";
+$property = $ref->getProperty("name");
+$parent = $ref->getProperty("parentName");
+$direct = new ReflectionProperty("EvalAotReflectPropertyContract", "name");
+$getCase = PropertyHookType::Get;
+$setCase = PropertyHookType::Set;
+echo $property->getName() . ":";
+echo $property->getDeclaringClass()->getName() . ":";
+echo $property->getType()->getName() . ":";
+echo ($property->hasHooks() ? "hooks" : "plain") . ":";
+echo ($property->hasHook($getCase) ? "G" : "g") . ":";
+echo ($property->hasHook($setCase) ? "S" : "s") . ":";
+$hooks = $property->getHooks();
+echo count($hooks) . ":";
+echo $hooks["get"]->getName() . ":";
+echo $hooks["set"]->getName() . ":";
+echo ($property->getHook($getCase)->isAbstract() ? "A" : "a") . ":";
+echo ($direct->hasHook($setCase) ? "D" : "d") . ":";
+echo $parent->getDeclaringClass()->getName() . ":";
+echo ($parent->hasHook($getCase) ? "PG" : "pg") . ":";
+echo ($parent->hasHook($setCase) ? "bad" : "ps");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "H:P:2:name:EvalAotReflectPropertyContract:string:hooks:G:S:2:$name::get:$name::set:A:D:EvalAotReflectPropertyParent:PG:ps"
+    );
+}
+
 /// Verifies eval `#[Override]` can target generated/AOT parent class methods.
 #[test]
 fn test_eval_declared_class_override_attribute_accepts_aot_parent_method() {

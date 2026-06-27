@@ -1162,9 +1162,9 @@ fn register_native_property_type_records_metadata() {
 #[test]
 fn register_native_interface_property_records_metadata() {
     let mut ctx = ElephcEvalContext::new();
-    let property = b"KnownContract::name";
+    let property = b"KnownContract::KnownParentContract::name";
     let property_type = b"string";
-    let invalid_property = b"KnownContract::bad";
+    let invalid_property = b"KnownContract::KnownParentContract::bad";
     let invalid_type = b"void";
 
     let registered = unsafe {
@@ -1192,7 +1192,7 @@ fn register_native_interface_property_records_metadata() {
     let requirements = ctx.native_interface_property_requirements("knowncontract");
     assert_eq!(registered, 1);
     assert_eq!(requirements.len(), 1);
-    assert_eq!(requirements[0].0, "KnownContract");
+    assert_eq!(requirements[0].0, "KnownParentContract");
     assert_eq!(requirements[0].1.name(), "name");
     assert!(requirements[0].1.requires_get());
     assert!(requirements[0].1.requires_set());

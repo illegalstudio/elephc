@@ -2999,13 +2999,14 @@ impl ElephcEvalContext {
     pub fn define_native_interface_property_requirement(
         &mut self,
         interface_name: &str,
+        declaring_interface_name: &str,
         property: EvalInterfaceProperty,
     ) -> bool {
         let key = normalize_class_name(interface_name);
-        if key.is_empty() || property.name().is_empty() {
+        let owner = declaring_interface_name.trim_start_matches('\\').to_string();
+        if key.is_empty() || owner.is_empty() || property.name().is_empty() {
             return false;
         }
-        let owner = interface_name.trim_start_matches('\\').to_string();
         let requirements = self.native_interface_properties.entry(key).or_default();
         if requirements.iter().any(|(_, existing)| existing.name() == property.name()) {
             return false;

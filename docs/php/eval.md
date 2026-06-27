@@ -585,8 +585,9 @@ metadata as a PHP-style `Property [ ... ]` descriptor for the supported
 visibility, static, type, default, and virtual-property surface.
 `ReflectionProperty::hasHooks()`, `hasHook()`, `getHooks()`, and `getHook()`
 expose eval-declared concrete, abstract, and interface property get/set hook
-metadata and return hook `ReflectionMethod` objects using PHP's
-`$property::get` / `$property::set` names. Eval also exposes
+metadata plus registered generated/AOT interface property-hook metadata, and
+return hook `ReflectionMethod` objects using PHP's `$property::get` /
+`$property::set` names. Eval also exposes
 `PropertyHookType::Get` and `PropertyHookType::Set` inside evaluated fragments
 for those APIs, including `PropertyHookType::cases()`, `from()`, and
 `tryFrom()`.

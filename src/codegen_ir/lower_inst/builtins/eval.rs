@@ -146,6 +146,7 @@ struct EvalNativePropertyTypeRegistration {
 /// A module-local interface property contract that can be registered with the eval context.
 struct EvalNativeInterfacePropertyRegistration {
     interface_name: String,
+    declaring_interface_name: String,
     property_name: String,
     type_spec: String,
     requires_get: bool,
@@ -1534,6 +1535,7 @@ fn eval_native_interface_property_registration(
     let type_spec = eval_native_interface_property_type_spec(contract)?;
     Some(EvalNativeInterfacePropertyRegistration {
         interface_name: interface_name.to_string(),
+        declaring_interface_name: contract.declaring_type.clone(),
         property_name: property_name.to_string(),
         type_spec,
         requires_get,
@@ -3300,8 +3302,10 @@ fn register_eval_native_interface_property(
 ) {
     load_eval_context_local_to_arg(ctx, context_offset, 0);
     let property_key = format!(
-        "{}::{}",
-        registration.interface_name, registration.property_name
+        "{}::{}::{}",
+        registration.interface_name,
+        registration.declaring_interface_name,
+        registration.property_name
     );
     let (property_key_label, property_key_len) = ctx.data.add_string(property_key.as_bytes());
     abi::emit_symbol_address(

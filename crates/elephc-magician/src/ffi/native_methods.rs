@@ -98,8 +98,8 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method(
 ///
 /// # Safety
 /// `ctx` must be a valid eval context handle. `property_key_ptr` must point to a
-/// readable `InterfaceName::propertyName` byte string, and `type_spec_ptr` must
-/// point to a readable generated type-spec byte string.
+/// readable `InterfaceName::DeclaringInterface::propertyName` byte string, and
+/// `type_spec_ptr` must point to a readable generated type-spec byte string.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_register_native_interface_property(
     ctx: *mut ElephcEvalContext,
@@ -1044,7 +1044,9 @@ unsafe fn register_native_interface_property_inner(
     let Ok(property_key) = abi_name_to_string(property_key_ptr, property_key_len) else {
         return 0;
     };
-    let Some((interface_name, property_name)) = split_property_key(&property_key) else {
+    let Some((interface_name, declaring_interface_name, property_name)) =
+        split_interface_property_key(&property_key)
+    else {
         return 0;
     };
     let requires_get = flags & NATIVE_INTERFACE_PROPERTY_REQUIRES_GET != 0;
@@ -1063,6 +1065,7 @@ unsafe fn register_native_interface_property_inner(
         .with_type(Some(property_type));
     i32::from(context.define_native_interface_property_requirement(
         interface_name,
+        declaring_interface_name,
         property,
     ))
 }
@@ -2298,4 +2301,14 @@ fn split_method_key(method_key: &str) -> Option<(&str, &str)> {
 /// Splits one generated `ClassName::propertyName` metadata key into class and property pieces.
 fn split_property_key(property_key: &str) -> Option<(&str, &str)> {
     split_method_key(property_key)
+}
+
+/// Splits `InterfaceName::DeclaringInterface::propertyName` interface-property metadata keys.
+fn split_interface_property_key(property_key: &str) -> Option<(&str, &str, &str)> {
+    let (owner_key, property_name) = property_key.rsplit_once("::")?;
+    let (interface_name, declaring_interface_name) = owner_key.rsplit_once("::")?;
+    (!interface_name.is_empty()
+        && !declaring_interface_name.is_empty()
+        && !property_name.is_empty())
+    .then_some((interface_name, declaring_interface_name, property_name))
 }
