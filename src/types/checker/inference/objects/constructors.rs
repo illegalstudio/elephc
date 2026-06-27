@@ -62,6 +62,10 @@ impl Checker {
             ));
         }
         if !self.classes.contains_key(class_name.as_str()) {
+            if self.eval_barrier_active {
+                self.infer_eval_barrier_dynamic_constructor_args(args, expr, env)?;
+                return Ok(PhpType::Mixed);
+            }
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined class: {}", class_name),
@@ -178,6 +182,27 @@ impl Checker {
             }
         }
         Ok(PhpType::Object(class_name))
+    }
+
+    /// Infers constructor arguments for a class that may have been declared by a prior eval call.
+    fn infer_eval_barrier_dynamic_constructor_args(
+        &mut self,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        if crate::types::call_args::has_named_args(args)
+            || args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+        {
+            return Err(CompileError::new(
+                expr.span,
+                "Cannot use named or spread arguments for eval-declared class construction",
+            ));
+        }
+        for arg in args {
+            self.infer_type(arg, env)?;
+        }
+        Ok(())
     }
 
     /// Records the PHAR bridge and decompression libraries needed by PHAR archive helpers.

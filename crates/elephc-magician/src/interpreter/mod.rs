@@ -214,6 +214,53 @@ pub fn execute_context_function_call_array_outcome(
     }
 }
 
+/// Constructs a class declared in the shared eval context with prepared positional arguments.
+pub fn execute_context_new_object_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    args: Vec<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    let Some(class) = context.class(name).cloned() else {
+        return Err(EvalStatus::UnsupportedConstruct);
+    };
+    let evaluated_args = args
+        .into_iter()
+        .map(|value| EvaluatedCallArg {
+            name: None,
+            value,
+            ref_target: None,
+        })
+        .collect();
+    let mut scope = ElephcEvalScope::new();
+    match eval_dynamic_class_new_object(&class, evaluated_args, context, &mut scope, values) {
+        Ok(result) => Ok(EvalOutcome::Value(result)),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
+/// Calls a method on a value that may be an eval-created object.
+pub fn execute_context_method_call_outcome(
+    context: &mut ElephcEvalContext,
+    object: RuntimeCellHandle,
+    method: &str,
+    args: Vec<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    match eval_method_call_result(object, method, args, context, values) {
+        Ok(result) => Ok(EvalOutcome::Value(result)),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
 /// Returns the current interpreter availability status for the ABI stub.
 pub fn current_stub_status() -> EvalStatus {
     EvalStatus::UnsupportedConstruct

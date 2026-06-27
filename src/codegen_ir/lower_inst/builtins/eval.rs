@@ -18,7 +18,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen::{abi, callable_descriptor, emit_box_current_value_as_mixed};
 use crate::codegen_ir::eval_ref_arg_helpers::eval_signature_ref_params_supported;
 use crate::codegen_ir::{CodegenIrError, Result};
-use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Op};
+use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Op, ValueId};
 use crate::names::{function_symbol, ir_global_symbol, php_symbol_key};
 use crate::parser::ast::{Expr, ExprKind, TypeExpr, Visibility};
 use crate::types::{
@@ -351,6 +351,95 @@ pub(super) fn lower_eval_function_call_array(
     store_if_result(ctx, inst)
 }
 
+/// Lowers native construction of a class declared by a prior eval fragment.
+pub(super) fn lower_eval_object_new(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let (name_label, name_len) = ctx.intern_class_name_data(expect_data(inst)?)?;
+    let args_offset = EVAL_STACK_BYTES;
+    let stack_bytes = eval_function_call_stack_bytes(inst.operands.len());
+    abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
+    ensure_eval_context(ctx)?;
+    store_eval_function_call_args(ctx, inst, args_offset)?;
+    load_eval_context_to_arg(ctx, 0);
+    let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+    let args_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    if inst.operands.is_empty() {
+        abi::emit_load_int_immediate(ctx.emitter, args_arg, 0);
+    } else {
+        abi::emit_temporary_stack_address(ctx.emitter, args_arg, args_offset);
+    }
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        inst.operands.len() as i64,
+    );
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_new_object");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a method call that may dispatch to an eval-created dynamic object.
+pub(super) fn lower_eval_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    method_name: &str,
+) -> Result<()> {
+    let arg_count = inst.operands.len().saturating_sub(1);
+    let args_offset = EVAL_STACK_BYTES;
+    let stack_bytes = eval_method_call_stack_bytes(arg_count);
+    abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
+    ensure_eval_context(ctx)?;
+    let object_ty = ctx.load_value_to_result(object)?.codegen_repr();
+    if !matches!(object_ty, PhpType::Mixed | PhpType::Union(_)) {
+        emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    store_eval_method_call_arg_pack(ctx, inst, args_offset)?;
+    load_eval_context_to_arg(ctx, 0);
+    let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
+    let (method_label, method_len) = ctx.data.add_string(method_name.as_bytes());
+    let method_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_symbol_address(ctx.emitter, method_ptr_arg, &method_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        method_len as i64,
+    );
+    let pack_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_temporary_stack_address(ctx.emitter, pack_arg, args_offset);
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_method_call");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
+    store_if_result(ctx, inst)
+}
+
+/// Returns true when the current function owns an eval context local.
+pub(super) fn has_eval_context(ctx: &FunctionContext<'_>) -> bool {
+    eval_context_slot(ctx).is_ok()
+}
+
 /// Lowers a post-eval dynamic function existence probe to the eval bridge ABI.
 pub(super) fn lower_eval_function_exists(
     ctx: &mut FunctionContext<'_>,
@@ -465,6 +554,12 @@ fn eval_function_call_stack_bytes(arg_count: usize) -> usize {
     (bytes + 15) & !15
 }
 
+/// Returns the aligned scratch size for an eval dynamic method-call argument pack.
+fn eval_method_call_stack_bytes(arg_count: usize) -> usize {
+    let bytes = EVAL_STACK_BYTES + 8 + arg_count * 8;
+    (bytes + 15) & !15
+}
+
 /// Stores positional operands as boxed Mixed cells for the eval function-call ABI.
 fn store_eval_function_call_args(
     ctx: &mut FunctionContext<'_>,
@@ -478,6 +573,27 @@ fn store_eval_function_call_args(
         }
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset + index * 8);
+    }
+    Ok(())
+}
+
+/// Stores a count-prefixed positional argument pack for the eval method-call ABI.
+fn store_eval_method_call_arg_pack(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    args_offset: usize,
+) -> Result<()> {
+    let arg_count = inst.operands.len().saturating_sub(1);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, arg_count as i64);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset);
+    for (index, operand) in inst.operands.iter().skip(1).enumerate() {
+        let ty = ctx.load_value_to_result(*operand)?.codegen_repr();
+        if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+            emit_box_current_value_as_mixed(ctx.emitter, &ty);
+        }
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset + 8 + index * 8);
     }
     Ok(())
 }

@@ -18939,6 +18939,44 @@ return $box->x;');
     assert_eq!(out, "DynEvalSupported:9:Y10:12:12");
 }
 
+/// Verifies native object construction can use eval-declared classes after the barrier.
+#[test]
+fn test_eval_declared_class_constructs_object_natively_after_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class DynEvalNativeSupported {
+    public int $x = 1;
+    public function __construct($x) { $this->x = $x; }
+    public function bump($n) { $this->x = $this->x + $n; return $this->x; }
+}');
+$box = new DynEvalNativeSupported(5);
+echo $box->bump(4) . ":";
+echo $box->x;
+"#,
+    );
+    assert_eq!(out, "9:9");
+}
+
+/// Verifies eval class declarations from a namespace are registered globally.
+#[test]
+fn test_eval_declared_class_in_namespace_is_global() {
+    let out = compile_and_run(
+        r#"<?php
+namespace EvalNs;
+eval('class DynEvalNsGlobalClass {
+    public function label() { return "global"; }
+}');
+echo class_exists('EvalNs\\DynEvalNsGlobalClass') ? '1' : '0';
+echo ":";
+echo class_exists('DynEvalNsGlobalClass') ? '1' : '0';
+echo ":";
+$box = new \DynEvalNsGlobalClass();
+echo $box->label();
+"#,
+    );
+    assert_eq!(out, "0:1:global");
+}
+
 /// Verifies eval-declared by-reference promoted properties remain aliased after construction.
 #[test]
 fn test_eval_declared_class_aliases_by_reference_promoted_property() {

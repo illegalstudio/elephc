@@ -275,6 +275,7 @@ pub enum Op {
     IteratorMethodCall,
     SplRuntimeCall,
     ObjectNew,
+    EvalObjectNew,
     ObjectCloneShallow,
     DynamicObjectNew,
     DynamicObjectNewMixed,
@@ -433,7 +434,8 @@ impl Op {
             EvalConstantFetch => {
                 E::READS_GLOBAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL
             }
-            Call | FunctionVariantCall | BuiltinCall | EvalFunctionCall | EvalFunctionCallArray | RuntimeCall
+            Call | FunctionVariantCall | BuiltinCall | EvalFunctionCall | EvalFunctionCallArray
+            | EvalObjectNew | RuntimeCall
             | ClosureCall | ExprCall | CallableDescriptorInvoke | PipeCall | FiberRuntimeCall => {
                 E::all().difference(E::REFCOUNT_OP)
             }
@@ -458,6 +460,7 @@ impl Op {
                 | Op::BuiltinCall
                 | Op::EvalFunctionCall
                 | Op::EvalFunctionCallArray
+                | Op::EvalObjectNew
                 | Op::RuntimeCall
                 | Op::ExternCall
                 | Op::MethodCall
@@ -597,6 +600,7 @@ impl Op {
             IteratorMethodCall => "iterator_method_call",
             SplRuntimeCall => "spl_runtime_call",
             ObjectNew => "object_new",
+            EvalObjectNew => "eval_object_new",
             ObjectCloneShallow => "object_clone_shallow",
             DynamicObjectNew => "dynamic_object_new",
             DynamicObjectNewMixed => "dynamic_object_new_mixed",

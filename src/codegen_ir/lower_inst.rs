@@ -197,6 +197,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
         Op::EvalFunctionCall => builtins::lower_eval_function_call(ctx, &inst),
         Op::EvalFunctionCallArray => builtins::lower_eval_function_call_array(ctx, &inst),
+        Op::EvalObjectNew => builtins::lower_eval_object_new(ctx, &inst),
         Op::EvalFunctionExists => builtins::lower_eval_function_exists(ctx, &inst),
         Op::EvalClassExists => builtins::lower_eval_class_exists(ctx, &inst),
         Op::EvalConstantExists => builtins::lower_eval_constant_exists(ctx, &inst),
@@ -2554,11 +2555,15 @@ fn lower_mixed_method_call(
 ) -> Result<()> {
     let candidates = mixed_method_candidates(ctx, method_name, inst.operands.len())?;
     if candidates.is_empty() {
+        if builtins::has_eval_context(ctx) {
+            return builtins::lower_eval_method_call(ctx, inst, object, method_name);
+        }
         emit_method_call_on_null_fatal(ctx, method_name);
         return Ok(());
     }
 
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let non_object_label = ctx.next_label("mixed_method_non_object");
     let no_match_label = ctx.next_label("mixed_method_no_match");
     let done_label = ctx.next_label("mixed_method_done");
     let match_labels = candidates
@@ -2573,7 +2578,7 @@ fn lower_mixed_method_call(
 
     ctx.load_value_to_result(object)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &no_match_label);
+    emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &non_object_label);
     emit_mixed_method_class_dispatch(ctx, receiver_reg, &candidates, &match_labels, &no_match_label);
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
@@ -2583,6 +2588,14 @@ fn lower_mixed_method_call(
     }
 
     ctx.emitter.label(&no_match_label);
+    if builtins::has_eval_context(ctx) {
+        builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    } else {
+        emit_method_call_on_null_fatal(ctx, method_name);
+    }
+
+    ctx.emitter.label(&non_object_label);
     emit_method_call_on_null_fatal(ctx, method_name);
 
     ctx.emitter.label(&done_label);
