@@ -1196,7 +1196,10 @@ mod tests {
     use super::super::refcount::emit_refcount_runtime;
     use super::super::wat::WatModule;
     use crate::codegen::platform::Target;
-    use crate::ir::{Function, FunctionParam, IrHeapKind, IrType, Module};
+    use crate::ir::{
+        Builder, Function, FunctionParam, Immediate, IrHeapKind, IrType, LocalKind, Module, Op,
+        Ownership, Terminator,
+    };
     use crate::types::PhpType;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -1908,6 +1911,175 @@ mod tests {
             12,
             None,
         ) {
+            assert_eq!(o, "0");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // P7d0b: reassigned by-value capture release at function exit. Unlike the
+    // other capture GC tests (hand-written closure bodies), this lowers a real
+    // EIR body through `lower_function` so the generated `Return` epilogue
+    // (`emit_reassigned_capture_epilogue`) is exercised end-to-end under wasmer.
+    // -------------------------------------------------------------------------
+
+    /// Like `run_p7b_capture_driver`, but lowers the closure BODY through the real
+    /// WASM function lowerer (`lower_function`) instead of taking hand-written WAT, so
+    /// the generated `Return` epilogue is part of the module under test. The body and
+    /// the capture-aware wrapper are both derived from `closure_fn`; the driver stamps
+    /// the descriptor, calls it, releases its own refs, and reads `_gc_live`.
+    fn run_lowered_capture_driver(
+        closure_fn: Function,
+        driver: &str,
+        export: &str,
+        tag_byte: u8,
+    ) -> Option<String> {
+        use super::super::wat::DataSegment;
+        let mut wm = WatModule::new();
+        wm.set_memory(3, Some("memory"));
+        // The lowered body's prologue references the `$__concat_off` cursor global,
+        // which the hand-WAT capture drivers omit; emit the common runtime for it.
+        super::super::runtime::emit_common_runtime(&mut wm);
+        emit_heap_runtime(&mut wm, 1024, 3 * 65536);
+        emit_refcount_runtime(&mut wm);
+        emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
+        super::super::hashes::emit_hash_runtime(&mut wm);
+        emit_object_runtime(&mut wm);
+        emit_gc_desc_stub(&mut wm);
+        emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
+        emit_closure_runtime(&mut wm);
+        wm.add_data(DataSegment {
+            offset: 512,
+            bytes: vec![tag_byte],
+        });
+        let mut module = Module::new(Target::wasm());
+        module.closures.push(closure_fn);
+        let body_fb =
+            super::super::function::lower_function(&module, &module.closures[0], &[], &[])
+                .expect("lower closure body");
+        wm.add_func(body_fb);
+        super::emit_closure_dispatch(&mut wm, &module).expect("emit_closure_dispatch");
+        wm.add_raw_func(driver);
+        let wat = wm.render();
+        let bytes = ::wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("WAT did not assemble: {e}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|e| panic!("wasm did not validate: {e}\n{wat}"));
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = unique_tmp_dir();
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg(export)
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer --invoke {export} failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            wat
+        );
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// Builds the closure `Function` `__eir_closure_reassign_cap_0`: one by-value array
+    /// capture `$c` (declared `ClosureCapture`), whose body reassigns it to a fresh OWNED
+    /// array and returns the constant int 0 (the drop case — the reassigned slot is NOT
+    /// returned). `reassigned_capture_slots` records slot 0 so the `Return` epilogue
+    /// releases the body's new array. Models the FACET 1/FACET 2 shape that `ir_lower`
+    /// produces (capture borrow overwritten without release; new value released at exit).
+    fn reassign_capture_body_fn() -> Function {
+        let arr_ty = PhpType::Array(Box::new(PhpType::Int));
+        let mut f = Function::new(
+            "__eir_closure_reassign_cap_0".to_string(),
+            IrType::I64,
+            PhpType::Int,
+        );
+        f.flags.is_closure = true;
+        f.flags.closure_capture_count = 1;
+        f.params.push(FunctionParam {
+            name: "c".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Array),
+            php_type: arr_ty.clone(),
+            by_ref: false,
+            variadic: false,
+        });
+        let slot_c = f.add_local(
+            Some("c".to_string()),
+            IrType::Heap(IrHeapKind::Array),
+            arr_ty.clone(),
+            LocalKind::ClosureCapture,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            // $c = [] — overwrite the descriptor's borrow with a fresh OWNED array. No
+            // release of the prior occupant (it is the descriptor's borrow): FACET 1.
+            let new_arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::Heap(IrHeapKind::Array),
+                    arr_ty.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            b.emit_store_local(slot_c, new_arr);
+            let zero = b.emit_const_i64(0);
+            b.terminate(Terminator::Return { value: Some(zero) });
+        }
+        // FACET 2: the slot now owns the body's array; the exit epilogue must release it.
+        f.reassigned_capture_slots.insert(slot_c);
+        f
+    }
+
+    /// A by-value array capture that the closure body REASSIGNS and then drops leaves
+    /// `_gc_live` at "0". The driver allocates a real array (kind 2, rc = 1), increfs it
+    /// for the descriptor (rc = 2), calls the closure (the wrapper borrows the array; the
+    /// body ignores it, allocates a fresh array into the slot, returns 0; the `Return`
+    /// epilogue releases that fresh array), then releases the int result cell, the arg
+    /// buffer, the descriptor (whose tag-4 walk decrefs the captured array rc 2->1), and
+    /// finally the driver's own array ref (rc 1->0, freed). Proves FACET 2: the reassigned
+    /// capture's owned value is released at exit.
+    ///
+    /// NEGATIVE CONTROL: removing the `emit_reassigned_capture_epilogue` call in the
+    /// `Return` terminator (or clearing `reassigned_capture_slots`) leaves the body's fresh
+    /// array unreleased -> `_gc_live` is non-zero. Report: pass=0, epilogue-removed != 0.
+    #[test]
+    fn closure_reassigned_capture_drop_balanced_gc() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $arr i32) (local $desc i32) (local $args i32) (local $rcell i32)
+  (local.set $arr (call $__rt_array_new (i64.const 0) (i64.const 16)))  ;; captured array (kind 2), rc = 1 from alloc
+  (local.set $desc (call $__rt_heap_alloc (i32.const 48)))             ;; descriptor (32 + 1 capture slot), rc = 1
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6))  ;; stamp heap-header kind = 6 (callable)
+  (i64.store (local.get $desc) (i64.const 1))                         ;; descriptor kind = 1 (Closure)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))                ;; entry_index = 0 (only closure)
+  (i32.store offset=12 (local.get $desc) (i32.const 1))               ;; capture_count = 1
+  (i32.store offset=16 (local.get $desc) (i32.const 512))             ;; capture_tags_ptr = static tag array [4]
+  (call $__rt_incref (local.get $arr))                                ;; descriptor owns a ref (rc = 2)
+  (i64.store offset=32 (local.get $desc) (i64.extend_i32_u (local.get $arr))) ;; store captured array ptr in slot 0
+  (local.set $args (call $__rt_array_new (i64.const 0) (i64.const 16))) ;; empty arg buffer (no visible args)
+  (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args))) ;; dispatch -> int result cell (kind 5)
+  (call $__rt_decref_any (local.get $rcell))                          ;; release the int result cell
+  (call $__rt_decref_any (local.get $args))                           ;; release the empty arg buffer
+  (call $__rt_decref_any (local.get $desc))                           ;; release the descriptor (tag-4 walk frees captured array rc 2->1)
+  (call $__rt_decref_any (local.get $arr))                            ;; release the driver's own array ref (rc 1->0, freed)
+  (global.get $_gc_live))                                             ;; expect 0 (reassigned array freed at exit, no leak)
+"#;
+        if let Some(o) = run_lowered_capture_driver(reassign_capture_body_fn(), driver, "t", 4) {
             assert_eq!(o, "0");
         }
     }

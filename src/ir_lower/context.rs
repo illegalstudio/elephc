@@ -655,7 +655,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         {
             self.release_stored_local_value(name, slot, span);
         }
-        let value = if (uses_global || previous_kind == LocalKind::PhpLocal)
+        // A `ClosureCapture` first write retains the new value exactly like a `PhpLocal`
+        // store (acquire + release-source nets to "slot owns one ref"); only the spurious
+        // release of the previous occupant (the descriptor's borrow) is skipped above.
+        let value = if (uses_global
+            || previous_kind == LocalKind::PhpLocal
+            || previous_kind == LocalKind::ClosureCapture)
             && !transfer_callable_source_to_store
         {
             crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
@@ -687,6 +692,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         if release_source_after_store && !transfer_callable_source_to_store {
             crate::ir_lower::ownership::release_if_owned(self, source, span);
+        }
+        // This was the FIRST reassignment of a by-value closure capture: the slot's
+        // descriptor borrow was intentionally not released, and the slot now owns the
+        // value just stored. Demote it to `PhpLocal` so subsequent writes release the
+        // prior owned value, and record it so every function exit releases the final
+        // owned value (the epilogue otherwise excludes capture-param-named slots).
+        if previous_kind == LocalKind::ClosureCapture && !uses_global && !is_ref_bound {
+            self.local_kinds.insert(name.to_string(), LocalKind::PhpLocal);
+            self.builder.set_local_kind(slot, LocalKind::PhpLocal);
+            self.builder.mark_reassigned_capture_slot(slot);
         }
         value
     }

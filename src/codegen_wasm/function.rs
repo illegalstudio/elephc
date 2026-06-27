@@ -26,7 +26,9 @@ use super::inst::lower_instruction;
 use super::values::{declare_local, declare_param, WasmRepr};
 use super::wat::{FuncBuilder, ValType};
 use super::WasmError;
-use crate::ir::{Function, InstId, LocalSlotId, Module, Terminator};
+use crate::ir::{
+    Function, Immediate, InstId, LocalSlotId, Module, Op, Terminator, ValueDef, ValueId,
+};
 
 /// Lowers one EIR function to a WAT `FuncBuilder`.
 ///
@@ -368,6 +370,12 @@ fn lower_terminator(ctx: &mut FnCtx, term: &Terminator) -> Result<()> {
             // their owners, so the epilogue skips them. Mirrors the native
             // emit_ref_cell_owner_epilogue_cleanup at every exit.
             ctx.emit_ref_cell_owner_epilogue()?;
+            // Release by-value closure captures the body reassigned (now slot-owned),
+            // skipping the one this return moves out. Mirrors the native
+            // reassigned_capture_epilogue_locals. Runs before the return value is
+            // pushed so its local.get/local.set never strand the result.
+            let returned_slot = value.and_then(|v| returned_local_slot(ctx.function, v));
+            ctx.emit_reassigned_capture_epilogue(returned_slot)?;
             if ctx.function.flags.is_main {
                 ctx.fb.ins("i32.const 0", "exit status 0");
                 ctx.fb.ins("call $wasi_proc_exit", "WASI proc_exit(0)");
@@ -387,5 +395,30 @@ fn lower_terminator(ctx: &mut FnCtx, term: &Terminator) -> Result<()> {
         Terminator::GeneratorSuspend { .. } => Err(WasmError::Unsupported(
             "generator-suspend terminator".to_string(),
         )),
+    }
+}
+
+/// Returns the local slot whose `LoadLocal` directly provides a returned value.
+///
+/// Used by the `Return` epilogue to skip a reassigned closure-capture slot that is
+/// returned: the WASM return moves the slot's value out (no incref), so the capture
+/// release epilogue must not also release it. Recurses through the `ArrayToMixed` /
+/// `HashToMixed` in-place conversions, mirroring the native `direct_return_local_slot`.
+fn returned_local_slot(function: &Function, value: ValueId) -> Option<LocalSlotId> {
+    let value = function.value(value)?;
+    let ValueDef::Instruction { inst, .. } = value.def else {
+        return None;
+    };
+    let inst = function.instruction(inst)?;
+    match inst.op {
+        Op::LoadLocal => match inst.immediate {
+            Some(Immediate::LocalSlot(slot)) => Some(slot),
+            _ => None,
+        },
+        Op::ArrayToMixed | Op::HashToMixed => {
+            let source = *inst.operands.first()?;
+            returned_local_slot(function, source)
+        }
+        _ => None,
     }
 }

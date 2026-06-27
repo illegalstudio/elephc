@@ -10,8 +10,8 @@
 //! - Every lowered function leaves all blocks terminated before validation.
 
 use crate::ir::{
-    Builder, Function, FunctionFlags, FunctionParam, GeneratorSource, Immediate, IrType, Module,
-    Op, Ownership, Terminator,
+    Builder, Function, FunctionFlags, FunctionParam, GeneratorSource, Immediate, IrType, LocalKind,
+    Module, Op, Ownership, Terminator,
 };
 use crate::ir_lower::context::{
     return_ir_type, type_expr_to_php_type, value_ir_type, ClosureCapture, LoweringContext,
@@ -572,6 +572,11 @@ fn lower_body_into_function(
 ) -> Vec<Function> {
     let owner_name = function.name.clone();
     let function_by_ref_return = function.flags.by_ref_return;
+    // The trailing `closure_capture_count` params are by-value/by-ref closure
+    // captures appended after the visible params. By-value captures enter the body
+    // as a borrow the descriptor owns; declare their slots `ClosureCapture` so the
+    // first reassignment skips the spurious borrow release (see `store_local`).
+    let closure_capture_count = function.flags.closure_capture_count;
     let by_ref_params = function
         .params
         .iter()
@@ -603,10 +608,20 @@ fn lower_body_into_function(
         all_global_var_names,
     );
     ctx.by_ref_return = function_by_ref_return;
+    let capture_start = params.len().saturating_sub(closure_capture_count);
     for (index, (name, php_type)) in params.iter().enumerate() {
-        ctx.declare_local(name, php_type.clone());
+        let by_ref = by_ref_params.get(index).copied().unwrap_or(false);
+        // A by-value capture (trailing capture param that is not by-ref) is the
+        // descriptor's borrow on entry: declare it `ClosureCapture` so its first
+        // reassignment does not release that borrow. By-ref captures keep the normal
+        // ref-cell store path (they must stay `PhpLocal` for `is_ref_bound`).
+        if index >= capture_start && !by_ref {
+            ctx.declare_local_with_kind(name, php_type.clone(), LocalKind::ClosureCapture);
+        } else {
+            ctx.declare_local(name, php_type.clone());
+        }
         ctx.mark_local_initialized(name);
-        if by_ref_params.get(index).copied().unwrap_or(false) {
+        if by_ref {
             ctx.mark_ref_bound_local(name);
         }
     }

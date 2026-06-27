@@ -111,6 +111,23 @@ impl<'f> Builder<'f> {
         self.func.locals[slot.as_raw() as usize].kind
     }
 
+    /// Overwrites the semantic role of a local slot.
+    ///
+    /// Used when a by-value closure capture is reassigned: its slot transitions
+    /// `ClosureCapture` -> `PhpLocal` so subsequent stores release the prior owned
+    /// value and the backends treat it as an owned local (see `store_local`).
+    pub fn set_local_kind(&mut self, slot: LocalSlotId, kind: LocalKind) {
+        self.func.locals[slot.as_raw() as usize].kind = kind;
+    }
+
+    /// Records a by-value closure-capture slot as reassigned by the function body.
+    ///
+    /// The recorded slot now owns its stored value (no longer a descriptor borrow),
+    /// so the native and WASM exit epilogues release it unless it is returned.
+    pub fn mark_reassigned_capture_slot(&mut self, slot: LocalSlotId) {
+        self.func.reassigned_capture_slots.insert(slot);
+    }
+
     /// Returns the storage type for a value already emitted in this function.
     pub fn value_type(&self, value: ValueId) -> IrType {
         self.func.values[value.as_raw() as usize].ir_type

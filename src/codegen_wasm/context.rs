@@ -429,4 +429,76 @@ impl<'a> FnCtx<'a> {
         }
         Ok(())
     }
+
+    /// Emits the by-value closure-capture release epilogue at a function return.
+    ///
+    /// Each slot the body reassigned (recorded in `Function::reassigned_capture_slots`)
+    /// owns its stored value rather than borrowing the descriptor's, so it is released
+    /// here before the function returns — the WASM analogue of the native
+    /// `reassigned_capture_epilogue_locals`. `returned_slot` (the slot whose `LoadLocal`
+    /// provides this return's value, if any) is skipped: the return moves that value
+    /// out, so releasing it would double-free. Refcounted pointers go through the
+    /// null/bounds-guarded `__rt_decref_any`; a string is freed via `__rt_heap_free_safe`;
+    /// a callable narrows its i64 descriptor first. The slot local is zeroed after
+    /// release so a later read cannot observe a dangling pointer. No-op for non-closures
+    /// (the set is empty).
+    pub(super) fn emit_reassigned_capture_epilogue(
+        &mut self,
+        returned_slot: Option<LocalSlotId>,
+    ) -> Result<()> {
+        if self.function.reassigned_capture_slots.is_empty() {
+            return Ok(());
+        }
+        let returned_raw = returned_slot.map(|s| s.as_raw());
+        let mut slots: Vec<u32> = self
+            .function
+            .reassigned_capture_slots
+            .iter()
+            .map(|s| s.as_raw())
+            .collect();
+        slots.sort_unstable();
+        for raw in slots {
+            if Some(raw) == returned_raw {
+                continue;
+            }
+            let slot = LocalSlotId::from_raw(raw);
+            let php_type = self.function.locals[raw as usize].php_type.codegen_repr();
+            let repr = self.slot_repr(slot)?.clone();
+            match repr {
+                WasmRepr::Ptr(local) => {
+                    self.fb
+                        .ins(&format!("local.get {}", local), "reassigned capture pointer to release");
+                    self.fb
+                        .ins("call $__rt_decref_any", "release the owned reassigned capture by kind");
+                    self.fb.ins("i32.const 0", "clear the released capture slot");
+                    self.fb.ins(&format!("local.set {}", local), "");
+                }
+                WasmRepr::Str { ptr, .. } => {
+                    self.fb
+                        .ins(&format!("local.get {}", ptr), "reassigned capture string to free");
+                    self.fb
+                        .ins("call $__rt_heap_free_safe", "free the owned reassigned capture string");
+                    self.fb.ins("i32.const 0", "clear the released capture slot");
+                    self.fb.ins(&format!("local.set {}", ptr), "");
+                }
+                WasmRepr::I64(local) if php_type == PhpType::Callable => {
+                    self.fb
+                        .ins(&format!("local.get {}", local), "reassigned callable capture descriptor");
+                    self.fb
+                        .ins("i32.wrap_i64", "narrow the callable descriptor pointer to i32");
+                    self.fb
+                        .ins("call $__rt_decref_any", "release the callable descriptor (kind 6)");
+                    self.fb.ins("i64.const 0", "clear the released capture slot");
+                    self.fb.ins(&format!("local.set {}", local), "");
+                }
+                WasmRepr::I64(_) | WasmRepr::F64(_) | WasmRepr::Void => {}
+                WasmRepr::Tagged { .. } => {
+                    return Err(WasmError::Unsupported(
+                        "release of a reassigned Mixed closure capture on wasm32-wasi".to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
