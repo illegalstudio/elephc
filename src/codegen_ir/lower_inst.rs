@@ -193,6 +193,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::MethodCall => lower_method_call(ctx, &inst),
         Op::NullsafeMethodCall => lower_nullsafe_method_call(ctx, &inst),
         Op::StaticMethodCall => lower_static_method_call(ctx, &inst),
+        Op::EvalStaticMethodCall => lower_eval_static_method_call(ctx, &inst),
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::BuiltinCall => builtins::lower_builtin_call(ctx, &inst),
         Op::EvalFunctionCall => builtins::lower_eval_function_call(ctx, &inst),
@@ -4042,11 +4043,20 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         );
     }
     let late_bound_static = is_late_bound_static_receiver(receiver_label);
-    let receiver_info = ctx
-        .module
-        .class_infos
-        .get(receiver.as_str())
-        .ok_or_else(|| CodegenIrError::unsupported(format!("static method call on unknown class {}", receiver)))?;
+    let Some(receiver_info) = ctx.module.class_infos.get(receiver.as_str()) else {
+        if builtins::has_eval_context(ctx) {
+            return builtins::lower_eval_static_method_call(
+                ctx,
+                inst,
+                receiver.as_str(),
+                method_name,
+            );
+        }
+        return Err(CodegenIrError::unsupported(format!(
+            "static method call on unknown class {}",
+            receiver
+        )));
+    };
     let method_key = php_symbol_key(method_name);
     let impl_class = receiver_info
         .static_method_impl_classes
@@ -4114,6 +4124,14 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         ctx.store_result_value(result)?;
     }
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+}
+
+/// Lowers a direct static-method call against a class declared by a previous eval fragment.
+fn lower_eval_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let target = method_name_data(ctx, inst)?.to_string();
+    let (receiver_label, method_name) = parse_static_method_target(&target)?;
+    let receiver = resolve_static_method_receiver(ctx, receiver_label)?;
+    builtins::lower_eval_static_method_call(ctx, inst, receiver.as_str(), method_name)
 }
 
 /// Lowers `self::method()` or `parent::method()` when it targets an instance method.

@@ -6,6 +6,7 @@
 //! Called from:
 //! - Generated EIR backend assembly through `__elephc_eval_new_object`.
 //! - Generated EIR backend assembly through `__elephc_eval_method_call`.
+//! - Generated EIR backend assembly through `__elephc_eval_static_method_call`.
 //!
 //! Key details:
 //! - The ABI currently accepts positional arguments already boxed as Mixed cells.
@@ -65,6 +66,28 @@ pub unsafe extern "C" fn __elephc_eval_method_call(
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
+/// Calls a static method on a class previously declared through `eval()`.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `target_ptr` must be readable
+/// for `target_len` bytes and contain `ClassName::method`. `arg_pack` points at
+/// a native-word count followed by that many runtime-cell pointers, and `out`
+/// may be null.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_static_method_call(
+    ctx: *mut ElephcEvalContext,
+    target_ptr: *const u8,
+    target_len: u64,
+    arg_pack: *const usize,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_static_method_call_inner(ctx, target_ptr, target_len, arg_pack, out)
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
 /// Runs the dynamic object-construction ABI body after installing a panic boundary.
 ///
 /// # Safety
@@ -105,6 +128,54 @@ unsafe fn eval_new_object_inner(
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_new_object_outcome(context, &name, args, &mut values) {
+        Ok(outcome) => write_outcome(outcome, out).code(),
+        Err(status) => status.code(),
+    }
+}
+
+/// Runs the dynamic static-method call ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_static_method_call`; callers must provide a valid
+/// context, readable `ClassName::method` bytes, and a readable argument pack.
+#[cfg(not(test))]
+unsafe fn eval_static_method_call_inner(
+    ctx: *mut ElephcEvalContext,
+    target_ptr: *const u8,
+    target_len: u64,
+    arg_pack: *const usize,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    if arg_pack.is_null() {
+        return EvalStatus::RuntimeFatal.code();
+    }
+    let Ok(target) = abi_name_to_string(target_ptr, target_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let Some((class_name, method)) = target.rsplit_once("::") else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let arg_count = *arg_pack;
+    let arg_ptrs = arg_pack.add(1) as *const *mut RuntimeCell;
+    let args = if arg_count == 0 {
+        Vec::new()
+    } else {
+        slice::from_raw_parts(arg_ptrs, arg_count)
+            .iter()
+            .map(|arg| RuntimeCellHandle::from_raw(*arg))
+            .collect()
+    };
+    clear_result(out);
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    match interpreter::execute_context_static_method_call_outcome(
+        context, class_name, method, args, &mut values,
+    ) {
         Ok(outcome) => write_outcome(outcome, out).code(),
         Err(status) => status.code(),
     }

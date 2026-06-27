@@ -512,6 +512,7 @@ impl<'a> FunctionContext<'a> {
                 | Op::EvalFunctionCall
                 | Op::EvalFunctionCallArray
                 | Op::EvalConstantFetch
+                | Op::EvalStaticMethodCall
                 | Op::RuntimeCall
                 | Op::ExternCall
                 | Op::MethodCall

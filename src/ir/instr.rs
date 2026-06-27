@@ -290,6 +290,7 @@ pub enum Op {
     MethodLookup,
     MethodCall,
     StaticMethodCall,
+    EvalStaticMethodCall,
     ClassConstant,
     ScopedConstantGet,
     ClassAttrNames,
@@ -435,7 +436,7 @@ impl Op {
                 E::READS_GLOBAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL
             }
             Call | FunctionVariantCall | BuiltinCall | EvalFunctionCall | EvalFunctionCallArray
-            | EvalObjectNew | RuntimeCall
+            | EvalObjectNew | EvalStaticMethodCall | RuntimeCall
             | ClosureCall | ExprCall | CallableDescriptorInvoke | PipeCall | FiberRuntimeCall => {
                 E::all().difference(E::REFCOUNT_OP)
             }
@@ -461,6 +462,7 @@ impl Op {
                 | Op::EvalFunctionCall
                 | Op::EvalFunctionCallArray
                 | Op::EvalObjectNew
+                | Op::EvalStaticMethodCall
                 | Op::RuntimeCall
                 | Op::ExternCall
                 | Op::MethodCall
@@ -617,6 +619,7 @@ impl Op {
             MethodLookup => "method_lookup",
             MethodCall => "method_call",
             StaticMethodCall => "static_method_call",
+            EvalStaticMethodCall => "eval_static_method_call",
             ClassConstant => "class_constant",
             ScopedConstantGet => "scoped_constant_get",
             ClassAttrNames => "class_attr_names",

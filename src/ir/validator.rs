@@ -275,6 +275,7 @@ fn validate_instruction_immediate(inst_id: InstId, inst: &Instruction) -> Result
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
         | FunctionVariantMark
         | FunctionVariantDispatch
+        | EvalStaticMethodCall
         | EvalFunctionCallArray
         | EvalFunctionExists
         | EvalClassExists
@@ -374,6 +375,7 @@ fn validate_opcode_rules(function: &Function, inst_id: InstId, inst: &Instructio
         ClosureNew => Ok(()),
         FirstClassCallableNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         ObjectNew => Ok(()),
+        EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
         | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),

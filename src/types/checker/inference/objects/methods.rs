@@ -785,6 +785,11 @@ impl Checker {
                     &format!("Undefined method: {}::{}", class_name, method),
                 ));
             }
+        } else if self.eval_barrier_active && matches!(receiver, StaticReceiver::Named(_)) {
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+            return Ok(PhpType::Mixed);
         } else {
             return Err(CompileError::new(
                 expr.span,

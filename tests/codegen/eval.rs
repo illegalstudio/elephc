@@ -19091,6 +19091,24 @@ echo DynEvalNativeStaticChild::$count;
     assert_eq!(out, "4:3:6:5");
 }
 
+/// Verifies native static method calls can dispatch to eval-declared classes after the barrier.
+#[test]
+fn test_eval_declared_class_native_static_method_call_after_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class DynEvalNativeStaticCallBase {
+    public static function base($n) { return $n + 10; }
+}
+class DynEvalNativeStaticCallChild extends DynEvalNativeStaticCallBase {
+    public static function up($n) { return static::base($n) + 1; }
+}');
+echo DynEvalNativeStaticCallChild::up(3) . ":";
+echo DynEvalNativeStaticCallChild::base(4);
+"#,
+    );
+    assert_eq!(out, "14:14");
+}
+
 /// Verifies eval class declarations from a namespace are registered globally.
 #[test]
 fn test_eval_declared_class_in_namespace_is_global() {

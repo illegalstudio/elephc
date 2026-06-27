@@ -290,6 +290,32 @@ pub fn execute_context_method_call_outcome(
     }
 }
 
+/// Calls a static method on a class-like symbol known to the shared eval context.
+pub fn execute_context_static_method_call_outcome(
+    context: &mut ElephcEvalContext,
+    class_name: &str,
+    method: &str,
+    args: Vec<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    let evaluated_args = args
+        .into_iter()
+        .map(|value| EvaluatedCallArg {
+            name: None,
+            value,
+            ref_target: None,
+        })
+        .collect();
+    match eval_static_method_call_result(class_name, method, evaluated_args, context, values) {
+        Ok(result) => Ok(EvalOutcome::Value(result)),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
 /// Resolves object class-name builtins against eval dynamic-object metadata first.
 pub fn execute_context_object_class_name(
     context: &mut ElephcEvalContext,

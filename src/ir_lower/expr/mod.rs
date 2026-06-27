@@ -11857,6 +11857,26 @@ fn lower_static_method_call(
     } else {
         (method, args)
     };
+    if ctx.has_eval_barrier()
+        && matches!(receiver, StaticReceiver::Named(_))
+        && plain_positional_call_args(args)
+    {
+        if let Some(class_name) = static_receiver_class_name(ctx, receiver) {
+            if !ctx.classes.contains_key(class_name.as_str()) {
+                let operands = lower_args_with_signature(ctx, None, args);
+                let name = format!("{}::{}", class_name, dispatch_method);
+                let data = ctx.intern_string(&name);
+                return ctx.emit_value(
+                    Op::EvalStaticMethodCall,
+                    operands,
+                    Some(Immediate::Data(data)),
+                    PhpType::Mixed,
+                    Op::EvalStaticMethodCall.default_effects(),
+                    Some(expr.span),
+                );
+            }
+        }
+    }
     let sig = static_method_implementation_signature(ctx, receiver, dispatch_method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
         .cloned();
@@ -11866,7 +11886,13 @@ fn lower_static_method_call(
     let result_type = sig
         .as_ref()
         .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
-        .unwrap_or_else(|| fallback_expr_type(expr));
+        .unwrap_or_else(|| {
+            if ctx.has_eval_barrier() && matches!(receiver, StaticReceiver::Named(_)) {
+                PhpType::Mixed
+            } else {
+                fallback_expr_type(expr)
+            }
+        });
     ctx.emit_value(
         Op::StaticMethodCall,
         operands,

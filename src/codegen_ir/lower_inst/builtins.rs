@@ -535,6 +535,16 @@ pub(super) fn lower_eval_method_call(
     eval::lower_eval_method_call(ctx, inst, object, method_name)
 }
 
+/// Lowers a post-eval static method call to an eval-declared class.
+pub(super) fn lower_eval_static_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    method_name: &str,
+) -> Result<()> {
+    eval::lower_eval_static_method_call(ctx, inst, class_name, method_name)
+}
+
 /// Lowers post-eval callable-array dispatch against eval dynamic callables.
 pub(super) fn lower_eval_callable_call_array(
     ctx: &mut FunctionContext<'_>,

@@ -443,6 +443,44 @@ pub(super) fn lower_eval_method_call(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a native static-method call to an eval-declared dynamic class.
+pub(super) fn lower_eval_static_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    method_name: &str,
+) -> Result<()> {
+    let args_offset = EVAL_STACK_BYTES;
+    let stack_bytes = eval_static_method_call_stack_bytes(inst.operands.len());
+    abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
+    ensure_eval_context(ctx)?;
+    store_eval_static_method_call_arg_pack(ctx, inst, args_offset)?;
+    load_eval_context_to_arg(ctx, 0);
+    let target = format!("{}::{}", class_name, method_name);
+    let (target_label, target_len) = ctx.data.add_string(target.as_bytes());
+    let target_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_symbol_address(ctx.emitter, target_arg, &target_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        target_len as i64,
+    );
+    let pack_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_temporary_stack_address(ctx.emitter, pack_arg, args_offset);
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_static_method_call");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a callable-array dispatch through the eval bridge.
 pub(super) fn lower_eval_callable_call_array(
     ctx: &mut FunctionContext<'_>,
@@ -864,6 +902,12 @@ fn eval_method_call_stack_bytes(arg_count: usize) -> usize {
     (bytes + 15) & !15
 }
 
+/// Returns the aligned scratch size for an eval dynamic static-method call.
+fn eval_static_method_call_stack_bytes(arg_count: usize) -> usize {
+    let bytes = EVAL_STACK_BYTES + 8 + arg_count * 8;
+    (bytes + 15) & !15
+}
+
 /// Stores positional operands as boxed Mixed cells for the eval function-call ABI.
 fn store_eval_function_call_args(
     ctx: &mut FunctionContext<'_>,
@@ -892,6 +936,26 @@ fn store_eval_method_call_arg_pack(
     abi::emit_load_int_immediate(ctx.emitter, result_reg, arg_count as i64);
     abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset);
     for (index, operand) in inst.operands.iter().skip(1).enumerate() {
+        let ty = ctx.load_value_to_result(*operand)?.codegen_repr();
+        if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+            emit_box_current_value_as_mixed(ctx.emitter, &ty);
+        }
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset + 8 + index * 8);
+    }
+    Ok(())
+}
+
+/// Stores all positional operands as a count-prefixed static-method argument pack.
+fn store_eval_static_method_call_arg_pack(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    args_offset: usize,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, inst.operands.len() as i64);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset);
+    for (index, operand) in inst.operands.iter().enumerate() {
         let ty = ctx.load_value_to_result(*operand)?.codegen_repr();
         if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
             emit_box_current_value_as_mixed(ctx.emitter, &ty);
