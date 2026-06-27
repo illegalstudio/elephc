@@ -21,7 +21,7 @@ use crate::codegen_ir::{CodegenIrError, Result};
 use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Op};
 use crate::names::{function_symbol, ir_global_symbol, php_symbol_key};
 use crate::parser::ast::{Expr, ExprKind, TypeExpr, Visibility};
-use crate::types::{AttrArgValue, ClassInfo, FunctionSig, PhpType};
+use crate::types::{is_php_integer_array_key, AttrArgValue, ClassInfo, FunctionSig, PhpType};
 
 use super::super::super::context::FunctionContext;
 use super::super::{
@@ -1381,16 +1381,36 @@ fn eval_native_array_default(expr: &Expr) -> Option<EvalNativeCallableDefault> {
 fn eval_native_array_default_key(expr: &Expr) -> Option<EvalNativeCallableArrayDefaultKey> {
     match &expr.kind {
         ExprKind::IntLiteral(value) => Some(EvalNativeCallableArrayDefaultKey::Int(*value)),
-        ExprKind::StringLiteral(value) => {
-            Some(EvalNativeCallableArrayDefaultKey::String(value.clone()))
+        ExprKind::BoolLiteral(value) => {
+            Some(EvalNativeCallableArrayDefaultKey::Int(i64::from(*value)))
         }
+        ExprKind::FloatLiteral(value) => {
+            Some(EvalNativeCallableArrayDefaultKey::Int(*value as i64))
+        }
+        ExprKind::StringLiteral(value) => eval_native_string_array_default_key(value),
+        ExprKind::Null => Some(EvalNativeCallableArrayDefaultKey::String(String::new())),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value
                 .checked_neg()
                 .map(EvalNativeCallableArrayDefaultKey::Int),
+            ExprKind::FloatLiteral(value) => {
+                Some(EvalNativeCallableArrayDefaultKey::Int((-*value) as i64))
+            }
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// Normalizes one string default-array key to PHP's integer-key rules.
+fn eval_native_string_array_default_key(value: &str) -> Option<EvalNativeCallableArrayDefaultKey> {
+    if is_php_integer_array_key(value) {
+        value
+            .parse::<i64>()
+            .ok()
+            .map(EvalNativeCallableArrayDefaultKey::Int)
+    } else {
+        Some(EvalNativeCallableArrayDefaultKey::String(value.to_string()))
     }
 }
 

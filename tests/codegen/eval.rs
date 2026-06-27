@@ -14723,6 +14723,47 @@ return $obj->describe() . ":" . EvalAotArrayValueDefaultMethodTarget::describeSt
     assert_eq!(out.stdout, "4:5:6:7:8:9:456");
 }
 
+/// Verifies eval normalizes generated/AOT array-default keys with PHP rules.
+#[test]
+fn test_eval_aot_method_array_default_normalizes_keys() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotArrayKeyDefaultMethodTarget {
+    public function describe(array $items = [
+        true => "yes",
+        false => "no",
+        2.8 => "float",
+        "3" => "numeric",
+    ]): string {
+        return $items[1] . ":" . $items[0] . ":" . $items[2] . ":" . $items[3];
+    }
+
+    public function reflected(array $items = [
+        null => "nil",
+        "03" => "string",
+        -1.2 => "negative",
+    ]): void {
+    }
+}
+
+echo eval('$obj = new EvalAotArrayKeyDefaultMethodTarget();
+$method = new ReflectionMethod("EvalAotArrayKeyDefaultMethodTarget", "describe");
+$default = $method->getParameters()[0]->getDefaultValue();
+$reflected = (new ReflectionMethod("EvalAotArrayKeyDefaultMethodTarget", "reflected"))->getParameters()[0]->getDefaultValue();
+return $obj->describe() . "|" . $default[1] . ":" . $default[0] . ":" . $default[2] . ":" . $default[3] . "|" . $reflected[""] . ":" . $reflected["03"] . ":" . $reflected[-1];');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "yes:no:float:numeric|yes:no:float:numeric|nil:string:negative"
+    );
+}
+
 /// Verifies eval materializes generated/AOT object defaults during method dispatch.
 #[test]
 fn test_eval_aot_method_call_uses_object_default() {
