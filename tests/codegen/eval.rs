@@ -8173,6 +8173,62 @@ echo $parent ? $parent->getName() : "missing";');
     );
 }
 
+/// Verifies eval-declared children can call inherited protected AOT instance methods.
+#[test]
+fn test_eval_declared_child_calls_inherited_protected_aot_instance_method() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalRuntimeProtectedMethodParent {
+    protected function add(int $n): int {
+        return $n + 2;
+    }
+}
+
+eval('class EvalRuntimeProtectedMethodChild extends EvalRuntimeProtectedMethodParent {
+    public function run(): void {
+        echo $this->add(3);
+    }
+}
+$box = new EvalRuntimeProtectedMethodChild();
+$box->run();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "5");
+}
+
+/// Verifies eval-declared children can call inherited protected AOT static methods.
+#[test]
+fn test_eval_declared_child_calls_inherited_protected_aot_static_method() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalRuntimeProtectedStaticMethodParent {
+    protected static function add(int $n): int {
+        return $n + 2;
+    }
+}
+
+eval('class EvalRuntimeProtectedStaticMethodChild extends EvalRuntimeProtectedStaticMethodParent {
+    public function run(): void {
+        echo self::add(4);
+    }
+}
+$box = new EvalRuntimeProtectedStaticMethodChild();
+$box->run();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "6");
+}
+
 /// Verifies eval-declared classes inherit AOT callable object and method behavior.
 #[test]
 fn test_eval_declared_class_inherits_aot_invokable_parent_callables() {

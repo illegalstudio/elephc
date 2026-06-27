@@ -7022,11 +7022,19 @@ fn eval_static_method_call_result_resolved(
         );
     }
     if let Some(parent) = context.class_native_parent_name(&class_name) {
-        let has_native_method =
+        if let Some((declaring_class, _, _, _)) =
             eval_aot_method_dispatch_metadata_in_hierarchy(&parent, method_name, context, values)?
-                .is_some()
-                || eval_native_static_magic_method_available(&parent, context, values)?;
-        if has_native_method {
+        {
+            return eval_native_static_method_with_evaluated_args_bridge_scope(
+                &parent,
+                method_name,
+                evaluated_args,
+                Some(&declaring_class),
+                context,
+                values,
+            );
+        }
+        if eval_native_static_magic_method_available(&parent, context, values)? {
             return eval_native_static_method_with_evaluated_args(
                 &parent,
                 method_name,
@@ -7640,6 +7648,21 @@ fn eval_native_method_call_with_scope(
     result
 }
 
+/// Calls one generated/AOT static method while presenting an explicit PHP class scope.
+fn eval_native_static_method_call_with_scope(
+    scope: &str,
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    context.push_class_scope(scope.to_string());
+    let result = values.static_method_call(class_name, method_name, evaluated_args);
+    context.pop_class_scope();
+    result
+}
+
 /// Returns whether an accessible instance AOT `__clone()` hook should run.
 fn eval_aot_clone_hook_is_callable(
     object: RuntimeCellHandle,
@@ -8222,16 +8245,25 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     }
     if inaccessible_method.is_none() {
         if let Some(parent) = context.class_native_parent_name(&called_class_name) {
-            let has_native_method =
+            if let Some((declaring_class, _, _, _)) =
                 eval_aot_method_dispatch_metadata_in_hierarchy(
                     &parent,
                     method_name,
                     context,
                     values,
                 )?
-                .is_some()
-                    || eval_native_instance_magic_method_available(&parent, context, values)?;
-            if has_native_method {
+            {
+                return eval_native_method_with_evaluated_args_bridge_scope(
+                    object,
+                    &parent,
+                    method_name,
+                    evaluated_args,
+                    Some(&declaring_class),
+                    context,
+                    values,
+                );
+            }
+            if eval_native_instance_magic_method_available(&parent, context, values)? {
                 return eval_native_method_with_evaluated_args(
                     object,
                     &parent,
@@ -8306,11 +8338,12 @@ pub(in crate::interpreter) fn eval_invokable_object_call_result(
         if let Some(native_class_name) =
             eval_dynamic_class_native_invokable_method_class(&called_class_name, context, values)?
         {
-            return eval_native_method_with_evaluated_args_unchecked(
+            return eval_native_method_with_evaluated_args_unchecked_bridge_scope(
                 object,
                 &native_class_name,
                 "__invoke",
                 evaluated_args,
+                Some(&native_class_name),
                 context,
                 values,
             );
@@ -9709,6 +9742,27 @@ pub(in crate::interpreter) fn eval_native_method_with_evaluated_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_native_method_with_evaluated_args_bridge_scope(
+        object,
+        class_name,
+        method_name,
+        evaluated_args,
+        None,
+        context,
+        values,
+    )
+}
+
+/// Calls one generated/AOT instance method after validation with an optional bridge scope.
+fn eval_native_method_with_evaluated_args_bridge_scope(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    bridge_scope: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let metadata =
         eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?;
     if let Some((declaring_class, visibility, _, is_abstract)) = metadata {
@@ -9743,11 +9797,12 @@ pub(in crate::interpreter) fn eval_native_method_with_evaluated_args(
             values,
         );
     }
-    eval_native_method_with_evaluated_args_unchecked(
+    eval_native_method_with_evaluated_args_unchecked_bridge_scope(
         object,
         class_name,
         method_name,
         evaluated_args,
+        bridge_scope,
         context,
         values,
     )
@@ -9762,6 +9817,27 @@ fn eval_native_method_with_evaluated_args_unchecked(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_native_method_with_evaluated_args_unchecked_bridge_scope(
+        object,
+        class_name,
+        method_name,
+        evaluated_args,
+        None,
+        context,
+        values,
+    )
+}
+
+/// Calls one generated/AOT instance method without visibility checks using an optional bridge scope.
+fn eval_native_method_with_evaluated_args_unchecked_bridge_scope(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    bridge_scope: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let signature = context.native_method_signature(class_name, method_name);
     let bound_args = bind_native_callable_bound_args(
         signature,
@@ -9769,7 +9845,18 @@ fn eval_native_method_with_evaluated_args_unchecked(
         context,
         values,
     )?;
-    let result = values.method_call(object, method_name, native_bound_arg_values(&bound_args));
+    let result = if let Some(scope) = bridge_scope {
+        eval_native_method_call_with_scope(
+            scope,
+            object,
+            method_name,
+            native_bound_arg_values(&bound_args),
+            context,
+            values,
+        )
+    } else {
+        values.method_call(object, method_name, native_bound_arg_values(&bound_args))
+    };
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
     match (result, writeback) {
         (Err(status), _) | (_, Err(status)) => Err(status),
@@ -9782,6 +9869,25 @@ pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args(
     class_name: &str,
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_native_static_method_with_evaluated_args_bridge_scope(
+        class_name,
+        method_name,
+        evaluated_args,
+        None,
+        context,
+        values,
+    )
+}
+
+/// Calls one generated/AOT static method after validation with an optional bridge scope.
+fn eval_native_static_method_with_evaluated_args_bridge_scope(
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    bridge_scope: Option<&str>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -9818,10 +9924,11 @@ pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args(
             values,
         );
     }
-    eval_native_static_method_with_evaluated_args_unchecked(
+    eval_native_static_method_with_evaluated_args_unchecked_bridge_scope(
         class_name,
         method_name,
         evaluated_args,
+        bridge_scope,
         context,
         values,
     )
@@ -9835,6 +9942,25 @@ fn eval_native_static_method_with_evaluated_args_unchecked(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_native_static_method_with_evaluated_args_unchecked_bridge_scope(
+        class_name,
+        method_name,
+        evaluated_args,
+        None,
+        context,
+        values,
+    )
+}
+
+/// Calls one generated/AOT static method without visibility checks using an optional bridge scope.
+fn eval_native_static_method_with_evaluated_args_unchecked_bridge_scope(
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    bridge_scope: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let signature = context.native_static_method_signature(class_name, method_name);
     let bound_args = bind_native_callable_bound_args(
         signature,
@@ -9842,8 +9968,18 @@ fn eval_native_static_method_with_evaluated_args_unchecked(
         context,
         values,
     )?;
-    let result =
-        values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args));
+    let result = if let Some(scope) = bridge_scope {
+        eval_native_static_method_call_with_scope(
+            scope,
+            class_name,
+            method_name,
+            native_bound_arg_values(&bound_args),
+            context,
+            values,
+        )
+    } else {
+        values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args))
+    };
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
     match (result, writeback) {
         (Err(status), _) | (_, Err(status)) => Err(status),
