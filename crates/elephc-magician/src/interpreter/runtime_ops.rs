@@ -197,6 +197,11 @@ pub trait RuntimeValueOps {
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Returns the generated program source file used for AOT reflection metadata.
+    fn reflection_source_file(&mut self) -> Result<Option<String>, EvalStatus> {
+        Ok(None)
+    }
+
     /// Returns generated AOT ReflectionClass modifier flags for one class.
     fn reflection_class_flags(&mut self, class_name: &str) -> Result<Option<u64>, EvalStatus>;
 

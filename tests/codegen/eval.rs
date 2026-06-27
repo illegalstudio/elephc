@@ -12322,6 +12322,27 @@ echo $function->getStartLine(); echo ":"; echo $function->getEndLine();');
     assert_eq!(out, "F:1:5:2:4:6:8");
 }
 
+/// Verifies eval ReflectionMethod exposes generated/AOT source-location metadata.
+#[test]
+fn test_eval_reflection_aot_method_source_locations() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectSourceE2E {
+    public function run() { return 1; }
+}
+echo eval('$method = new ReflectionMethod("EvalAotReflectSourceE2E", "run");
+echo $method->getFileName() === false ? "f" : "F"; echo ":";
+echo $method->getStartLine(); echo ":"; echo $method->getEndLine();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "F:3:3");
+}
+
 /// Verifies eval ReflectionAttribute exposes owner target and repetition metadata.
 #[test]
 fn test_eval_reflection_attribute_target_and_repetition() {

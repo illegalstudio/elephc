@@ -39,6 +39,9 @@ const EVAL_REFLECTION_METHOD_FLAG_PROTECTED: u64 = 4;
 const EVAL_REFLECTION_METHOD_FLAG_PRIVATE: u64 = 8;
 const EVAL_REFLECTION_METHOD_FLAG_FINAL: u64 = 16;
 const EVAL_REFLECTION_METHOD_FLAG_ABSTRACT: u64 = 32;
+const EVAL_REFLECTION_METHOD_SOURCE_LINE_MASK: u64 = 0x00ff_ffff;
+const EVAL_REFLECTION_METHOD_SOURCE_START_SHIFT: u64 = 16;
+const EVAL_REFLECTION_METHOD_SOURCE_END_SHIFT: u64 = 40;
 
 /// Emit the user-dependent data section — globals, statics, class metadata.
 /// This changes per program and cannot be cached.
@@ -54,6 +57,7 @@ pub(crate) fn emit_runtime_data_user(
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
     allowed_class_names: Option<&HashSet<String>>,
+    source_path: Option<&str>,
 ) -> String {
     let mut out = String::new();
 
@@ -473,6 +477,8 @@ pub(crate) fn emit_runtime_data_user(
     }
     out.push_str(".p2align 3\n");
     emit_static_callable_method_data(&mut out, &sorted_classes);
+    out.push_str(".p2align 3\n");
+    emit_eval_reflection_source_file_data(&mut out, source_path);
     out.push_str(".p2align 3\n");
     emit_classes_by_name_table(&mut out, &sorted_classes);
     out.push_str(".p2align 3\n");
@@ -975,25 +981,45 @@ fn emit_name_lookup_data(
     }
 }
 
+/// Emits the source filename used by eval Reflection source-location hooks.
+fn emit_eval_reflection_source_file_data(out: &mut String, source_path: Option<&str>) {
+    let source_path = source_path.unwrap_or("");
+    out.push_str(".globl _eval_reflection_source_file\n_eval_reflection_source_file:\n");
+    out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(source_path)));
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _eval_reflection_source_file_len\n_eval_reflection_source_file_len:\n");
+    out.push_str(&format!("    .quad {}\n", source_path.len()));
+}
+
 /// Emits AOT method flag rows consumed by eval ReflectionMethod metadata probes.
 fn emit_eval_reflection_method_lookup_data(
     out: &mut String,
     sorted_classes: &[(&String, &ClassInfo)],
 ) {
     let mut entries = Vec::new();
+    let class_infos = sorted_classes
+        .iter()
+        .map(|(name, info)| (name.as_str(), *info))
+        .collect::<HashMap<_, _>>();
     let mut index = 0usize;
     for (class_name, class_info) in sorted_classes {
         let mut methods = class_info.methods.keys().collect::<Vec<_>>();
         methods.sort();
         for method_name in methods {
-            let flags = eval_reflection_instance_method_flags(class_info, method_name);
-            let class_label = format!("_eval_reflection_method_class_{}", index);
-            let method_label = format!("_eval_reflection_method_name_{}", index);
             let declaring_class = eval_reflection_instance_method_declaring_class(
                 class_name,
                 class_info,
                 method_name,
             );
+            let declaring_info = class_infos.get(declaring_class).copied().unwrap_or(class_info);
+            let flags = eval_reflection_method_flags_with_source_lines(
+                eval_reflection_instance_method_flags(class_info, method_name),
+                declaring_info,
+                method_name,
+                false,
+            );
+            let class_label = format!("_eval_reflection_method_class_{}", index);
+            let method_label = format!("_eval_reflection_method_name_{}", index);
             let declaring_label = format!("_eval_reflection_method_declaring_class_{}", index);
             out.push_str(&format!(
                 ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
@@ -1025,11 +1051,17 @@ fn emit_eval_reflection_method_lookup_data(
         let mut static_methods = class_info.static_methods.keys().collect::<Vec<_>>();
         static_methods.sort();
         for method_name in static_methods {
-            let flags = eval_reflection_static_method_flags(class_info, method_name);
-            let class_label = format!("_eval_reflection_method_class_{}", index);
-            let method_label = format!("_eval_reflection_method_name_{}", index);
             let declaring_class =
                 eval_reflection_static_method_declaring_class(class_name, class_info, method_name);
+            let declaring_info = class_infos.get(declaring_class).copied().unwrap_or(class_info);
+            let flags = eval_reflection_method_flags_with_source_lines(
+                eval_reflection_static_method_flags(class_info, method_name),
+                declaring_info,
+                method_name,
+                true,
+            );
+            let class_label = format!("_eval_reflection_method_class_{}", index);
+            let method_label = format!("_eval_reflection_method_name_{}", index);
             let declaring_label = format!("_eval_reflection_method_declaring_class_{}", index);
             out.push_str(&format!(
                 ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
@@ -1074,6 +1106,31 @@ fn emit_eval_reflection_method_lookup_data(
         out.push_str(&format!("    .quad {}\n", declaring_label));
         out.push_str(&format!("    .quad {}\n", declaring_len));
     }
+}
+
+/// Adds source start/end line bits to an AOT ReflectionMethod flag word when available.
+fn eval_reflection_method_flags_with_source_lines(
+    flags: u64,
+    class_info: &ClassInfo,
+    method_name: &str,
+    is_static: bool,
+) -> u64 {
+    let Some(method) = class_info
+        .method_decls
+        .iter()
+        .find(|method| method.is_static == is_static && php_symbol_key(&method.name) == method_name)
+    else {
+        return flags;
+    };
+    let Ok(start_line) = u64::try_from(method.span.line) else {
+        return flags;
+    };
+    if start_line == 0 || start_line > EVAL_REFLECTION_METHOD_SOURCE_LINE_MASK {
+        return flags;
+    }
+    flags
+        | (start_line << EVAL_REFLECTION_METHOD_SOURCE_START_SHIFT)
+        | (start_line << EVAL_REFLECTION_METHOD_SOURCE_END_SHIFT)
 }
 
 /// Returns the class name that declares one visible instance method.
@@ -2204,6 +2261,7 @@ mod tests {
             &classes,
             &HashMap::new(),
             Some(&allowed_class_names),
+            None,
         );
 
         assert!(asm.contains("_class_vtable_1"));
@@ -2231,6 +2289,7 @@ mod tests {
             &HashMap::new(),
             &classes,
             &HashMap::new(),
+            None,
             None,
         );
 

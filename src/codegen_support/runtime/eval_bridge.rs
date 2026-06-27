@@ -186,6 +186,7 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emit_aarch64_eval_reflection_class_trait_names(emitter);
     emit_aarch64_eval_reflection_class_trait_alias_names(emitter);
     emit_aarch64_eval_reflection_class_trait_alias_sources(emitter);
+    emit_aarch64_eval_reflection_source_file(emitter);
     emit_aarch64_eval_reflection_class_flags(emitter);
     emit_aarch64_eval_reflection_method_flags(emitter);
     emit_aarch64_eval_reflection_method_declaring_class(emitter);
@@ -1649,6 +1650,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emit_x86_64_eval_reflection_class_trait_names(emitter);
     emit_x86_64_eval_reflection_class_trait_alias_names(emitter);
     emit_x86_64_eval_reflection_class_trait_alias_sources(emitter);
+    emit_x86_64_eval_reflection_source_file(emitter);
     emit_x86_64_eval_reflection_class_flags(emitter);
     emit_x86_64_eval_reflection_method_flags(emitter);
     emit_x86_64_eval_reflection_method_declaring_class(emitter);
@@ -3186,6 +3188,20 @@ fn emit_aarch64_eval_reflection_class_trait_alias_sources(emitter: &mut Emitter)
     );
 }
 
+/// Emits the ARM64 eval hook that returns the AOT reflection source file.
+fn emit_aarch64_eval_reflection_source_file(emitter: &mut Emitter) {
+    let string_symbol = emitter.target.extern_symbol("__elephc_eval_value_string");
+    label_c_global(emitter, "__elephc_eval_reflection_source_file");
+    abi::emit_symbol_address(emitter, "x9", "_eval_reflection_source_file_len");
+    emitter.instruction("ldr x1, [x9]");                                        // load the generated source-file length
+    emitter.instruction("cbz x1, __elephc_eval_reflection_source_file_miss");   // report no source file when EIR metadata is absent
+    abi::emit_symbol_address(emitter, "x0", "_eval_reflection_source_file");
+    emitter.instruction(&format!("b {string_symbol}"));                         // box the generated source-file path for Rust
+    emitter.label("__elephc_eval_reflection_source_file_miss");
+    emitter.instruction("mov x0, xzr");                                         // return null when no source file is available
+    emitter.instruction("ret");                                                 // finish the source-file metadata lookup
+}
+
 /// Emits an ARM64 class-filtered AOT reflection member-name scanner.
 fn emit_aarch64_eval_reflection_member_names(
     emitter: &mut Emitter,
@@ -3613,6 +3629,21 @@ fn emit_x86_64_eval_reflection_class_trait_alias_sources(emitter: &mut Emitter) 
         "class trait alias source",
         32,
     );
+}
+
+/// Emits the x86_64 eval hook that returns the AOT reflection source file.
+fn emit_x86_64_eval_reflection_source_file(emitter: &mut Emitter) {
+    let string_symbol = emitter.target.extern_symbol("__elephc_eval_value_string");
+    label_c_global(emitter, "__elephc_eval_reflection_source_file");
+    abi::emit_symbol_address(emitter, "r10", "_eval_reflection_source_file_len");
+    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // load the generated source-file length
+    emitter.instruction("test rsi, rsi");                                       // is source-file metadata available?
+    emitter.instruction("jz __elephc_eval_reflection_source_file_miss_x86");    // report no source file when EIR metadata is absent
+    abi::emit_symbol_address(emitter, "rdi", "_eval_reflection_source_file");
+    emitter.instruction(&format!("jmp {string_symbol}"));                       // box the generated source-file path for Rust
+    emitter.label("__elephc_eval_reflection_source_file_miss_x86");
+    emitter.instruction("xor eax, eax");                                        // return null when no source file is available
+    emitter.instruction("ret");                                                 // finish the source-file metadata lookup
 }
 
 /// Emits an x86_64 class-filtered AOT reflection member-name scanner.
