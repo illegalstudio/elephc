@@ -246,8 +246,8 @@ report `false` / `null` for eval-declared user symbols.
 `getFileName()`, `getStartLine()`, and `getEndLine()` for parser-backed eval
 declarations. File names use PHP's synthetic eval file format from the current
 eval call site, and line numbers are one-based inside the evaluated fragment.
-Generated/AOT metadata for `ReflectionClass` over classes, interfaces, and
-enums, plus `ReflectionMethod`, exposes the original source file and
+Generated/AOT metadata for `ReflectionClass` over classes, interfaces, traits,
+and enums, plus `ReflectionMethod`, exposes the original source file and
 declaration line when EIR source metadata is available. AOT `getEndLine()`
 currently reports the declaration line because the bridge keeps declaration
 spans, not full body spans.
@@ -842,9 +842,7 @@ than a fixed parameter count. Generated/AOT free-function and method type metada
 return metadata, by-reference and variadic parameter flags, and generated/AOT
 class/method/property/class-constant attributes are exposed for registered
 metadata slices, while other unsupported bridge shapes remain metadata-only
-rather than invocable through eval. Generated/AOT trait source-location
-metadata is still unavailable because emitted trait metadata currently carries
-names and direct trait-use relations, not declaration spans.
+rather than invocable through eval.
 
 Because `eval()` is a dynamic barrier, the compiler must be conservative after
 an eval call. Values that cross the barrier may be widened to boxed `Mixed`

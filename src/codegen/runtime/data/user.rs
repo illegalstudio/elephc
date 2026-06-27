@@ -70,6 +70,7 @@ pub(crate) fn emit_runtime_data_user(
     interface_names: &[String],
     trait_names: &[String],
     declared_trait_uses: &HashMap<String, Vec<String>>,
+    declared_trait_source_lines: &HashMap<String, usize>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
     allowed_class_names: Option<&HashSet<String>>,
@@ -454,7 +455,12 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".p2align 3\n");
     emit_eval_reflection_property_lookup_data(&mut out, &sorted_classes);
     out.push_str(".p2align 3\n");
-    emit_eval_reflection_class_lookup_data(&mut out, &sorted_classes, &sorted_interfaces);
+    emit_eval_reflection_class_lookup_data(
+        &mut out,
+        &sorted_classes,
+        &sorted_interfaces,
+        declared_trait_source_lines,
+    );
     out.push_str(".p2align 3\n");
     emit_eval_reflection_class_interface_lookup_data(&mut out, &sorted_classes, interfaces);
     out.push_str(".p2align 3\n");
@@ -1216,6 +1222,7 @@ fn emit_eval_reflection_class_lookup_data(
     out: &mut String,
     sorted_classes: &[(&String, &ClassInfo)],
     sorted_interfaces: &[(&String, &InterfaceInfo)],
+    declared_trait_source_lines: &HashMap<String, usize>,
 ) {
     let mut entries = Vec::new();
     let mut index = 0usize;
@@ -1245,6 +1252,23 @@ fn emit_eval_reflection_class_lookup_data(
             escaped_ascii(interface_name)
         ));
         entries.push((class_label, interface_name.len(), flags));
+        index += 1;
+    }
+    let mut sorted_trait_lines = declared_trait_source_lines.iter().collect::<Vec<_>>();
+    sorted_trait_lines
+        .sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
+    for (trait_name, line) in sorted_trait_lines {
+        let flags = eval_reflection_trait_flags(*line);
+        if flags == 0 {
+            continue;
+        }
+        let class_label = format!("_eval_reflection_class_name_{}", index);
+        out.push_str(&format!(
+            ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
+            class_label,
+            escaped_ascii(trait_name)
+        ));
+        entries.push((class_label, trait_name.len(), flags));
         index += 1;
     }
 
@@ -1278,6 +1302,11 @@ fn eval_reflection_class_flags(class_info: &ClassInfo) -> u64 {
 /// Returns eval ReflectionClass source-location bits retained for one generated/AOT interface.
 fn eval_reflection_interface_flags(interface_info: &InterfaceInfo) -> u64 {
     eval_reflection_source_line_flags(interface_info.declaration_span.line)
+}
+
+/// Returns eval ReflectionClass source-location bits retained for one generated/AOT trait.
+fn eval_reflection_trait_flags(line: usize) -> u64 {
+    eval_reflection_source_line_flags(line)
 }
 
 /// Encodes declaration line metadata into high ReflectionClass flag bits.
@@ -2203,6 +2232,7 @@ mod tests {
             &[],
             &[],
             &HashMap::new(),
+            &HashMap::new(),
             &classes,
             &HashMap::new(),
             Some(&allowed_class_names),
@@ -2231,6 +2261,7 @@ mod tests {
             &HashMap::new(),
             &[],
             &[],
+            &HashMap::new(),
             &HashMap::new(),
             &classes,
             &HashMap::new(),

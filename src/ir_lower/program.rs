@@ -66,6 +66,7 @@ fn populate_metadata(module: &mut Module, program: &Program, check_result: &Chec
     module.declared_interface_names =
         collect_declared_interface_names(program, &check_result.interfaces);
     module.declared_trait_names = collect_declared_trait_names(program);
+    module.declared_trait_source_lines = collect_declared_trait_source_lines(program);
     module.declared_trait_uses = collect_declared_trait_uses(program);
     module.declared_trait_method_names = collect_declared_trait_method_names(program);
     module.declared_trait_methods = collect_declared_trait_methods(program);
@@ -557,6 +558,23 @@ fn collect_declared_trait_names(program: &Program) -> Vec<String> {
         }
     }
     names
+}
+
+/// Collects source line metadata for user-declared traits, keyed by trait name.
+fn collect_declared_trait_source_lines(program: &Program) -> HashMap<String, usize> {
+    let mut lines = HashMap::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::TraitDecl { name, .. } => {
+                lines.insert(name.clone(), stmt.span.line);
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                lines.extend(collect_declared_trait_source_lines(body));
+            }
+            _ => {}
+        }
+    }
+    lines
 }
 
 /// Collects direct trait-to-trait use declarations keyed by declaring trait name.

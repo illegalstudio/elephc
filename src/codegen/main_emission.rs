@@ -473,6 +473,7 @@ fn finish_user_asm(
         .iter()
         .map(|name| (name.clone(), crate::codegen::declared_trait_uses(name)))
         .collect::<HashMap<_, _>>();
+    let declared_trait_source_lines = HashMap::new();
     let user_data = runtime::emit_runtime_data_user(
         all_global_var_names,
         all_static_vars,
@@ -482,6 +483,7 @@ fn finish_user_asm(
         &interface_names,
         &trait_names,
         &declared_trait_uses,
+        &declared_trait_source_lines,
         classes,
         enums,
         emitted_class_names,

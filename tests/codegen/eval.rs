@@ -12331,6 +12331,7 @@ class EvalAotReflectClassSourceE2E {
     public function run() { return 1; }
 }
 interface EvalAotReflectInterfaceSourceE2E {}
+trait EvalAotReflectTraitSourceE2E {}
 enum EvalAotReflectEnumSourceE2E { case One; }
 echo eval('$class = new ReflectionClass("EvalAotReflectClassSourceE2E");
 echo $class->getFileName() === false ? "f" : "F"; echo ":";
@@ -12338,6 +12339,9 @@ echo $class->getStartLine(); echo ":"; echo $class->getEndLine(); echo ":";
 $interface = new ReflectionClass("EvalAotReflectInterfaceSourceE2E");
 echo $interface->getFileName() === false ? "f" : "F"; echo ":";
 echo $interface->getStartLine(); echo ":"; echo $interface->getEndLine(); echo ":";
+$trait = new ReflectionClass("EvalAotReflectTraitSourceE2E");
+echo $trait->getFileName() === false ? "f" : "F"; echo ":";
+echo $trait->getStartLine(); echo ":"; echo $trait->getEndLine(); echo ":";
 $enum = new ReflectionClass("EvalAotReflectEnumSourceE2E");
 echo $enum->getFileName() === false ? "f" : "F"; echo ":";
 echo $enum->getStartLine(); echo ":"; echo $enum->getEndLine();');
@@ -12348,7 +12352,7 @@ echo $enum->getStartLine(); echo ":"; echo $enum->getEndLine();');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "F:2:2:F:5:5:F:6:6");
+    assert_eq!(out.stdout, "F:2:2:F:5:5:F:6:6:F:7:7");
 }
 
 /// Verifies eval ReflectionMethod exposes generated/AOT source-location metadata.
