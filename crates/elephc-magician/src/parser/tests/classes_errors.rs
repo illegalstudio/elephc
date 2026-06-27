@@ -194,6 +194,41 @@ enum integer { case Ready; }"#,
     assert_eq!(enum_decl.name(), "integer");
 }
 
+/// Verifies eval rejects PHP-reserved bare class-like reference names.
+#[test]
+fn parse_fragment_rejects_reserved_unqualified_class_like_reference_names() {
+    for source in [
+        b"class DynEvalBadExtends extends match {}" as &[u8],
+        b"class DynEvalBadImplements implements match {}",
+        b"interface DynEvalBadIfaceExtends extends match {}",
+        b"class DynEvalBadTraitUse { use match; }",
+        b"class DynEvalBadTraitAdapt { use SomeTrait { match::run insteadof SomeTrait; } }",
+        b"$box = new match();",
+        b"$ok = $box instanceof match;",
+        b"try {} catch (match $e) {}",
+    ] {
+        assert_eq!(
+            parse_fragment(source),
+            Err(EvalParseError::UnsupportedConstruct)
+        );
+    }
+}
+
+/// Verifies eval accepts semi-reserved or qualified class-like reference names PHP parses.
+#[test]
+fn parse_fragment_accepts_semi_reserved_and_qualified_class_like_reference_names() {
+    parse_fragment(
+        br#"class enum {}
+class DynEvalExtendsSemiReserved extends enum {}
+class DynEvalExtendsQualifiedReserved extends \match {}
+class DynEvalNewSelf {
+    public function make() { return new self(); }
+}
+$ok = $box instanceof \match;"#,
+    )
+    .expect("fragment should parse");
+}
+
 /// Verifies comma-separated class-like constants lower to individual eval constants.
 #[test]
 fn parse_fragment_accepts_comma_separated_class_like_constants() {

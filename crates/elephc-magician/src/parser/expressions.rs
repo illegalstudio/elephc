@@ -402,7 +402,7 @@ impl Parser {
             let target = self.parse_instanceof_variable_target()?;
             return Ok(EvalInstanceOfTarget::Expr(Box::new(target)));
         }
-        let name = self.parse_qualified_name()?;
+        let name = self.parse_class_reference_name(true)?;
         let class_name = self.resolve_static_class_name(name);
         if self.consume(TokenKind::DoubleColon) {
             let TokenKind::DollarIdent(property) = self.current() else {
@@ -1050,8 +1050,8 @@ impl Parser {
                 args,
             });
         }
-        let class_name = self.parse_qualified_name()?;
-        let class_name = self.resolve_class_name(class_name);
+        let class_name = self.parse_class_reference_name(true)?;
+        let class_name = self.resolve_static_class_name(class_name);
         let args = self.parse_optional_constructor_args()?;
         Ok(EvalExpr::NewObject { class_name, args })
     }
@@ -1082,6 +1082,37 @@ impl Parser {
             self.advance();
         }
         Ok(ParsedQualifiedName { name, absolute })
+    }
+
+    /// Parses a class-like reference name while rejecting PHP-reserved unqualified names.
+    pub(super) fn parse_class_reference_name(
+        &mut self,
+        allow_relative_keywords: bool,
+    ) -> Result<ParsedQualifiedName, EvalParseError> {
+        let name = self.parse_qualified_name()?;
+        if self.class_reference_name_is_reserved(&name, allow_relative_keywords) {
+            return Err(EvalParseError::UnsupportedConstruct);
+        }
+        Ok(name)
+    }
+
+    /// Returns whether a parsed class-like reference uses a PHP-reserved bare name.
+    pub(super) fn class_reference_name_is_reserved(
+        &self,
+        name: &ParsedQualifiedName,
+        allow_relative_keywords: bool,
+    ) -> bool {
+        if name.absolute || name.name.contains('\\') {
+            return false;
+        }
+        if allow_relative_keywords
+            && ["self", "parent", "static"]
+                .iter()
+                .any(|keyword| ident_eq(&name.name, keyword))
+        {
+            return false;
+        }
+        is_reserved_class_like_name(&name.name)
     }
 
     /// Resolves a class name used before `::`, preserving PHP relative class keywords.

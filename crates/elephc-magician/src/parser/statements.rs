@@ -653,7 +653,7 @@ impl Parser {
             return Ok(None);
         }
         self.advance();
-        let parent = self.parse_qualified_name()?;
+        let parent = self.parse_class_reference_name(false)?;
         Ok(Some(self.resolve_class_name(parent)))
     }
 
@@ -665,7 +665,7 @@ impl Parser {
         self.advance();
         let mut interfaces = Vec::new();
         loop {
-            let interface = self.parse_qualified_name()?;
+            let interface = self.parse_class_reference_name(false)?;
             interfaces.push(self.resolve_class_name(interface));
             if !self.consume(TokenKind::Comma) {
                 break;
@@ -853,7 +853,7 @@ impl Parser {
     ) -> Result<(), EvalParseError> {
         self.advance();
         loop {
-            let trait_name = self.parse_qualified_name()?;
+            let trait_name = self.parse_class_reference_name(false)?;
             traits.push(self.resolve_class_name(trait_name));
             if !self.consume(TokenKind::Comma) {
                 break;
@@ -902,7 +902,7 @@ impl Parser {
                 self.advance();
                 let mut instead_of = Vec::new();
                 loop {
-                    let trait_name = self.parse_qualified_name()?;
+                    let trait_name = self.parse_class_reference_name(false)?;
                     instead_of.push(self.resolve_class_name(trait_name));
                     if !self.consume(TokenKind::Comma) {
                         break;
@@ -927,6 +927,9 @@ impl Parser {
     ) -> Result<(Option<String>, String), EvalParseError> {
         let first = self.parse_qualified_name()?;
         if self.consume(TokenKind::DoubleColon) {
+            if self.class_reference_name_is_reserved(&first, false) {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
             let TokenKind::Ident(method) = self.current() else {
                 return Err(EvalParseError::UnexpectedToken);
             };
@@ -1766,7 +1769,7 @@ impl Parser {
         self.advance();
         let mut parents = Vec::new();
         loop {
-            let parent = self.parse_qualified_name()?;
+            let parent = self.parse_class_reference_name(false)?;
             parents.push(self.resolve_class_name(parent));
             if !self.consume(TokenKind::Comma) {
                 break;
@@ -2322,10 +2325,10 @@ impl Parser {
 
     /// Parses one or more unioned catch types in source order.
     pub(super) fn parse_catch_types(&mut self) -> Result<Vec<String>, EvalParseError> {
-        let class_name = self.parse_qualified_name()?;
+        let class_name = self.parse_class_reference_name(false)?;
         let mut class_names = vec![self.resolve_class_name(class_name)];
         while self.consume(TokenKind::Pipe) {
-            let class_name = self.parse_qualified_name()?;
+            let class_name = self.parse_class_reference_name(false)?;
             class_names.push(self.resolve_class_name(class_name));
         }
         Ok(class_names)

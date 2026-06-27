@@ -12508,6 +12508,34 @@ eval('enum bool { case Ready; }');
     }
 }
 
+/// Verifies eval rejects PHP-reserved bare class-like reference names.
+#[test]
+fn test_eval_reserved_class_like_reference_name_fails() {
+    for source in [
+        r#"<?php
+eval('class EvalBadExtends extends match {}');
+"#,
+        r#"<?php
+eval('class EvalBadImplements implements match {}');
+"#,
+        r#"<?php
+eval('class EvalBadTraitUse { use match; }');
+"#,
+        r#"<?php
+eval('$box = new match();');
+"#,
+        r#"<?php
+eval('$ok = $box instanceof match;');
+"#,
+    ] {
+        let err = compile_and_run_expect_failure(source);
+        assert!(
+            err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+            "stderr did not contain eval unsupported-construct diagnostic: {err}"
+        );
+    }
+}
+
 /// Verifies eval-declared final class constants cannot be redeclared.
 #[test]
 fn test_eval_declared_final_class_constant_override_fails() {
