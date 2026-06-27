@@ -29,7 +29,8 @@ use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
 use super::super::context::FunctionContext;
 use super::{
-    callables, cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes, expect_data,
+    builtins, callables, cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes,
+    expect_data,
     coerce_loaded_value_to_tagged_scalar, emit_loaded_assoc_array_to_mixed,
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
     emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
@@ -4065,8 +4066,11 @@ pub(super) fn lower_instanceof(ctx: &mut FunctionContext<'_>, inst: &Instruction
         emit_false(ctx);
         return store_if_result(ctx, inst);
     }
-    let class_name = class_name_immediate(ctx, inst)?;
-    let Some((target_id, target_kind)) = classify_named_target(ctx, class_name) else {
+    let class_name = class_name_immediate(ctx, inst)?.to_string();
+    if builtins::has_eval_context(ctx) {
+        return builtins::lower_eval_object_is_a(ctx, inst, value, &class_name, false);
+    }
+    let Some((target_id, target_kind)) = classify_named_target(ctx, &class_name) else {
         emit_false(ctx);
         return store_if_result(ctx, inst);
     };

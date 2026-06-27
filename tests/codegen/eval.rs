@@ -19001,6 +19001,35 @@ echo is_subclass_of($box, "DynEvalNativeIntrospectBase") ? "P" : "p";
     assert_eq!(out, "DynEvalNativeIntrospectChild:DynEvalNativeIntrospectBase:C:B:s:P");
 }
 
+/// Verifies native `instanceof` sees eval-declared class metadata after the barrier.
+#[test]
+fn test_eval_declared_class_native_instanceof_after_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+interface DynEvalNativeInstanceAotIface {}
+class DynEvalNativeInstanceAotBase {}
+eval('interface DynEvalNativeInstanceIface {}
+class DynEvalNativeInstanceBase {}
+class DynEvalNativeInstanceChild extends DynEvalNativeInstanceBase implements DynEvalNativeInstanceIface {}
+class DynEvalNativeInstanceAotChild extends DynEvalNativeInstanceAotBase implements DynEvalNativeInstanceAotIface {}');
+$box = new DynEvalNativeInstanceChild();
+$aotBox = new DynEvalNativeInstanceAotChild();
+echo $box instanceof DynEvalNativeInstanceChild ? "C" : "c";
+echo ":";
+echo $box instanceof DynEvalNativeInstanceBase ? "B" : "b";
+echo ":";
+echo $box instanceof DynEvalNativeInstanceIface ? "I" : "i";
+echo ":";
+echo $aotBox instanceof DynEvalNativeInstanceAotBase ? "A" : "a";
+echo ":";
+echo $aotBox instanceof DynEvalNativeInstanceAotIface ? "F" : "f";
+echo ":";
+echo 7 instanceof DynEvalNativeInstanceChild ? "bad" : "S";
+"#,
+    );
+    assert_eq!(out, "C:B:I:A:F:S");
+}
+
 /// Verifies native callable probes see eval-declared dynamic callable targets.
 #[test]
 fn test_eval_declared_class_native_callable_probe_after_barrier() {
