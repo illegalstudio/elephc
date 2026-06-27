@@ -10101,6 +10101,53 @@ echo $label->text;');
     assert_eq!(out.stdout, "[Ada]:HI");
 }
 
+/// Verifies eval-declared set-hook parameter types stay compatible with property writes.
+#[test]
+fn test_eval_declared_property_set_hook_parameter_type_compatibility() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('class EvalWideSetHookParam {
+    public string $value {
+        get => $this->value;
+        set(mixed $raw) => $raw;
+    }
+}
+$box = new EvalWideSetHookParam();
+$box->value = "Ada";
+echo $box->value;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Ada");
+
+    for source in [
+        r#"<?php
+eval('class EvalUntypedExplicitSetHookParam {
+    public string $value {
+        set($raw) => $raw;
+    }
+}');
+"#,
+        r#"<?php
+eval('class EvalNarrowSetHookParam {
+    public mixed $value {
+        set(string $raw) => $raw;
+    }
+}');
+"#,
+    ] {
+        let err = compile_and_run_expect_failure(source);
+        assert!(
+            err.contains("Fatal error: eval()"),
+            "stderr did not contain eval fatal diagnostic: {err}"
+        );
+    }
+}
+
 /// Verifies eval-declared nullsafe and mixed-case property hook reads stay routed.
 #[test]
 fn test_eval_declared_nullsafe_and_mixed_case_property_hooks() {

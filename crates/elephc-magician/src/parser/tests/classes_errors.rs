@@ -1128,6 +1128,30 @@ fn parse_fragment_retains_property_set_hook_parameter_type() {
     );
 }
 
+/// Verifies eval rejects explicit untyped set-hook parameters for typed properties.
+#[test]
+fn parse_fragment_rejects_untyped_explicit_property_set_hook_parameter_for_typed_property() {
+    assert_eq!(
+        parse_fragment(
+            br#"class DynEvalUntypedSetParamHooked {
+    public string $value {
+        set($raw) => $raw;
+    }
+}"#
+        ),
+        Err(EvalParseError::UnsupportedConstruct)
+    );
+
+    parse_fragment(
+        br#"class DynEvalUntypedSetParamUntypedProperty {
+    public $value {
+        set($raw) => $raw;
+    }
+}"#,
+    )
+    .expect("untyped properties may use an untyped explicit set-hook parameter");
+}
+
 /// Verifies abstract property hook contracts lower without concrete accessors.
 #[test]
 fn parse_fragment_accepts_abstract_class_property_hook_contracts() {

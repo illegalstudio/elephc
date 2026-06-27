@@ -1356,7 +1356,11 @@ impl Parser {
         let source_start_line = self.current_line();
         self.advance();
         let (params, set_hook_type) = if is_set {
-            let (param, set_hook_type) = self.parse_property_set_hook_param()?;
+            let (param, set_hook_type, has_explicit_param) =
+                self.parse_property_set_hook_param()?;
+            if has_explicit_param && set_hook_type.is_none() && property_type.is_some() {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
             (vec![param], set_hook_type)
         } else {
             (Vec::new(), None)
@@ -1405,12 +1409,12 @@ impl Parser {
         Ok((is_get, set_hook_type, method))
     }
 
-    /// Parses an optional set-hook parameter list and returns the hook value variable.
+    /// Parses an optional set-hook parameter list and returns the value variable metadata.
     pub(super) fn parse_property_set_hook_param(
         &mut self,
-    ) -> Result<(String, Option<EvalParameterType>), EvalParseError> {
+    ) -> Result<(String, Option<EvalParameterType>, bool), EvalParseError> {
         if !self.consume(TokenKind::LParen) {
-            return Ok(("value".to_string(), None));
+            return Ok(("value".to_string(), None, false));
         }
         let set_hook_type = self.parse_optional_property_type()?;
         let TokenKind::DollarIdent(name) = self.current() else {
@@ -1419,7 +1423,7 @@ impl Parser {
         let name = name.clone();
         self.advance();
         self.expect(TokenKind::RParen)?;
-        Ok((name, set_hook_type))
+        Ok((name, set_hook_type, true))
     }
 
     /// Parses `trait Name { ... }` declarations into dynamic trait metadata.

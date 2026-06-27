@@ -2568,7 +2568,7 @@ fn validate_eval_class_modifiers(
     for constant in class.constants() {
         validate_constant_parent_redeclaration(class, constant, context)?;
     }
-    validate_eval_declared_properties(class)?;
+    validate_eval_declared_properties(class, context)?;
     for property in class.properties() {
         validate_property_parent_redeclaration(class, property, context)?;
     }
@@ -2938,7 +2938,10 @@ fn magic_return_type_matches(
 }
 
 /// Validates property declarations that can be checked before class registration.
-fn validate_eval_declared_properties(class: &EvalClass) -> Result<(), EvalStatus> {
+fn validate_eval_declared_properties(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
     let mut names = std::collections::HashSet::new();
     for property in class.properties() {
         if !names.insert(property.name().to_string()) {
@@ -2981,8 +2984,38 @@ fn validate_eval_declared_properties(class: &EvalClass) -> Result<(), EvalStatus
         {
             return Err(EvalStatus::RuntimeFatal);
         }
+        validate_eval_property_set_hook_parameter_type(class, property, context)?;
     }
     Ok(())
+}
+
+/// Validates that an explicit set-hook parameter type can accept every property value.
+fn validate_eval_property_set_hook_parameter_type(
+    class: &EvalClass,
+    property: &EvalClassProperty,
+    context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    let Some(set_hook_type) = property.set_hook_type() else {
+        return Ok(());
+    };
+    let Some(property_type) = property.property_type() else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let set_hook_types = vec![Some(set_hook_type.clone())];
+    let property_types = vec![Some(property_type.clone())];
+    method_parameter_type_signature_accepts(
+        &set_hook_types,
+        &[],
+        class.name(),
+        &property_types,
+        &[],
+        class.name(),
+        1,
+        Some(class),
+        context,
+    )
+    .then_some(())
+    .ok_or(EvalStatus::RuntimeFatal)
 }
 
 /// Validates one property declaration against inherited eval property metadata.

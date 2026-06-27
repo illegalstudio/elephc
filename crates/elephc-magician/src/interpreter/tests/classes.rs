@@ -1595,6 +1595,51 @@ return $label->text;"#,
     assert_eq!(values.get(result), FakeValue::String("HI".to_string()));
 }
 
+/// Verifies explicit set-hook parameter types are contravariant with the property type.
+#[test]
+fn execute_program_validates_eval_property_set_hook_parameter_types() {
+    let valid_program = parse_fragment(
+        br#"class EvalWideSetHookParam {
+    public string $value {
+        get => $this->value;
+        set(mixed $raw) => $raw;
+    }
+}
+$box = new EvalWideSetHookParam();
+$box->value = "Ada";
+return $box->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&valid_program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::String("Ada".to_string()));
+
+    for source in [
+        br#"class EvalNarrowSetHookParam {
+    public mixed $value {
+        set(string $raw) => $raw;
+    }
+}"#
+        .as_slice(),
+        br#"class EvalNullableSetHookParam {
+    public ?string $value {
+        set(string $raw) => $raw;
+    }
+}"#
+        .as_slice(),
+    ] {
+        let program = parse_fragment(source).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let err = execute_program(&program, &mut scope, &mut values)
+            .expect_err("incompatible set-hook parameter type should fail");
+        assert_eq!(err, EvalStatus::RuntimeFatal);
+    }
+}
+
 /// Verifies nullsafe reads and mixed-case names still route through eval property hooks.
 #[test]
 fn execute_program_routes_eval_nullsafe_and_mixed_case_property_hooks() {
