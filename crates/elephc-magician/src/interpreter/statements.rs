@@ -10356,7 +10356,7 @@ fn eval_native_method_with_evaluated_args_unchecked(
 }
 
 /// Calls one generated/AOT instance method without visibility checks using an optional bridge scope.
-fn eval_native_method_with_evaluated_args_unchecked_bridge_scope(
+pub(in crate::interpreter) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope(
     object: RuntimeCellHandle,
     class_name: &str,
     method_name: &str,

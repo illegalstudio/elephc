@@ -42,6 +42,9 @@ pub(in crate::interpreter) fn eval_expr(
             name,
             fallback_name,
         } => eval_function_callable_expr(name, fallback_name.as_deref(), context, values),
+        EvalExpr::MethodCallable { object, method } => {
+            eval_method_callable_expr(object, method, context, scope, values)
+        }
         EvalExpr::StaticMethodCallable { class_name, method } => {
             eval_static_method_callable_expr(class_name, method, context, scope, values)
         }
@@ -783,6 +786,71 @@ fn eval_function_callable_expr(
         context,
         values,
     )
+}
+
+/// Materializes an object method first-class callable and records captured AOT bridge scope.
+fn eval_method_callable_expr(
+    object: &EvalExpr,
+    method: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let object = eval_expr(object, context, scope, values)?;
+    let method = eval_dynamic_member_name(method, context, scope, values)?;
+    let mut array = values.array_new(2)?;
+    let zero = values.int(0)?;
+    let one = values.int(1)?;
+    let method_value = values.string(&method)?;
+    array = values.array_set(array, zero, object)?;
+    array = values.array_set(array, one, method_value)?;
+    if let Some((native_class, bridge_scope)) =
+        eval_method_callable_native_dispatch(object, &method, context, values)?
+    {
+        context.register_eval_object_callable(
+            array,
+            object,
+            &method,
+            &native_class,
+            &bridge_scope,
+        );
+    }
+    Ok(array)
+}
+
+/// Finds inherited AOT method dispatch metadata captured by an object method callable.
+fn eval_method_callable_native_dispatch(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, String)>, EvalStatus> {
+    let Ok(identity) = values.object_identity(object) else {
+        return Ok(None);
+    };
+    let Some(class) = context.dynamic_object_class(identity) else {
+        return Ok(None);
+    };
+    let called_class_name = class.name();
+    if eval_dynamic_method_for_call(called_class_name, method_name, context).is_some() {
+        return Ok(None);
+    }
+    let Some(parent) = context.class_native_parent_name(called_class_name) else {
+        return Ok(None);
+    };
+    let Some((declaring_class, visibility, is_static, is_abstract)) =
+        eval_aot_method_dispatch_metadata_in_hierarchy(&parent, method_name, context, values)?
+    else {
+        return Ok(None);
+    };
+    if is_static || is_abstract {
+        return Ok(None);
+    }
+    // First-class callables may outlive this scope, so capture only after access is valid now.
+    if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+        return Ok(None);
+    }
+    Ok(Some((parent, declaring_class)))
 }
 
 /// Materializes a first-class static method callable while retaining late-static metadata.

@@ -172,6 +172,15 @@ struct EvalStaticCallableMetadata {
     called_class: String,
 }
 
+/// Native instance-method dispatch metadata attached to eval-created method callables.
+#[derive(Clone)]
+struct EvalObjectCallableMetadata {
+    object: usize,
+    method: String,
+    native_class: String,
+    bridge_scope: String,
+}
+
 /// Native AOT function callback metadata visible to runtime eval fragments.
 #[derive(Clone)]
 pub struct NativeFunction {
@@ -668,6 +677,7 @@ pub struct ElephcEvalContext {
     eval_dynamic_reflection_properties: HashSet<u64>,
     eval_reflection_class_constants: HashMap<u64, (String, String, u64)>,
     eval_static_callables: HashMap<usize, EvalStaticCallableMetadata>,
+    eval_object_callables: HashMap<usize, EvalObjectCallableMetadata>,
     global_scope: Option<*mut ElephcEvalScope>,
     function_stack: Vec<String>,
     class_stack: Vec<String>,
@@ -733,6 +743,7 @@ impl ElephcEvalContext {
             eval_dynamic_reflection_properties: HashSet::new(),
             eval_reflection_class_constants: HashMap::new(),
             eval_static_callables: HashMap::new(),
+            eval_object_callables: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
             class_stack: Vec::new(),
@@ -799,6 +810,7 @@ impl ElephcEvalContext {
             eval_dynamic_reflection_properties: HashSet::new(),
             eval_reflection_class_constants: HashMap::new(),
             eval_static_callables: HashMap::new(),
+            eval_object_callables: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
             class_stack: Vec::new(),
@@ -1002,6 +1014,41 @@ impl ElephcEvalContext {
         (metadata.class_name.eq_ignore_ascii_case(class_name)
             && metadata.method.eq_ignore_ascii_case(method))
         .then_some(metadata.called_class.as_str())
+    }
+
+    /// Registers one eval-created object method callable with native bridge metadata.
+    pub fn register_eval_object_callable(
+        &mut self,
+        callable: RuntimeCellHandle,
+        object: RuntimeCellHandle,
+        method: &str,
+        native_class: &str,
+        bridge_scope: &str,
+    ) {
+        self.eval_object_callables.insert(
+            callable.as_ptr() as usize,
+            EvalObjectCallableMetadata {
+                object: object.as_ptr() as usize,
+                method: method.to_string(),
+                native_class: native_class.trim_start_matches('\\').to_string(),
+                bridge_scope: bridge_scope.trim_start_matches('\\').to_string(),
+            },
+        );
+    }
+
+    /// Returns native method bridge metadata captured for one object callable array.
+    pub fn eval_object_callable_native_dispatch(
+        &self,
+        callable: RuntimeCellHandle,
+        object: RuntimeCellHandle,
+        method: &str,
+    ) -> Option<(&str, &str)> {
+        let metadata = self
+            .eval_object_callables
+            .get(&(callable.as_ptr() as usize))?;
+        (metadata.object == object.as_ptr() as usize
+            && metadata.method.eq_ignore_ascii_case(method))
+        .then_some((metadata.native_class.as_str(), metadata.bridge_scope.as_str()))
     }
 
     /// Resolves a PHP class-like name to eval class, interface, trait, or alias spelling.

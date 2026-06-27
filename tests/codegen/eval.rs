@@ -8458,6 +8458,42 @@ echo call_user_func_array([$box, "read"], ["value" => "L"]);');
     );
 }
 
+/// Verifies eval first-class callables retain access to inherited protected AOT methods.
+#[test]
+fn test_eval_declared_child_first_class_callable_inherited_protected_aot_method() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalProtectedCallableParent {
+    public function read(string $value = "R"): string {
+        return "P:" . $value;
+    }
+    protected function hidden(string $value): string {
+        return "H:" . $value;
+    }
+}
+
+eval('class EvalProtectedCallableChild extends EvalProtectedCallableParent {
+    public function makeHidden() {
+        return $this->hidden(...);
+    }
+}
+$box = new EvalProtectedCallableChild();
+$public = $box->read(...);
+echo $public("A") . ":";
+$hidden = $box->makeHidden();
+echo is_callable($hidden) ? "callable:" : "bad:";
+echo call_user_func($hidden, "B") . ":";
+echo $hidden("C");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "P:A:callable:H:B:H:C");
+}
+
 /// Verifies eval-declared classes expose inherited AOT members to OOP introspection.
 #[test]
 fn test_eval_declared_class_inherits_aot_parent_member_introspection() {

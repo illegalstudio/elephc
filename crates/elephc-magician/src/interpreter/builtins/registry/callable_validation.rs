@@ -19,15 +19,21 @@ pub(in crate::interpreter) fn eval_validate_call_user_func_callback(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     match callback {
-        EvaluatedCallable::ObjectMethod { object, method } => {
-            eval_validate_call_user_func_object_method(
+        EvaluatedCallable::ObjectMethod {
+            object,
+            method,
+            native_class,
+            ..
+        } => match native_class {
+            Some(_) => Ok(()),
+            None => eval_validate_call_user_func_object_method(
                 *object,
                 method,
                 function_name,
                 context,
                 values,
-            )
-        }
+            ),
+        },
         EvaluatedCallable::StaticMethod {
             class_name, method, ..
         } => {

@@ -561,7 +561,7 @@ impl Parser {
                 if nullsafe {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
-                return Ok(Self::callable_array_expr(
+                return Ok(Self::method_callable_expr(
                     object,
                     EvalExpr::Const(EvalConst::String(member)),
                 ));
@@ -606,7 +606,7 @@ impl Parser {
                 if nullsafe {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
-                return Ok(Self::callable_array_expr(object, member));
+                return Ok(Self::method_callable_expr(object, member));
             }
             let args = self.parse_call_args()?;
             return Ok(if nullsafe {
@@ -1273,7 +1273,15 @@ impl Parser {
         }
     }
 
-    /// Builds the PHP callable-array value used for method first-class callables.
+    /// Builds the EvalIR node used for object method first-class callables.
+    fn method_callable_expr(object: EvalExpr, method: EvalExpr) -> EvalExpr {
+        EvalExpr::MethodCallable {
+            object: Box::new(object),
+            method: Box::new(method),
+        }
+    }
+
+    /// Builds a plain PHP callable-array value for dynamic static callable forms.
     fn callable_array_expr(receiver: EvalExpr, method: EvalExpr) -> EvalExpr {
         EvalExpr::Array(vec![
             EvalArrayElement::Value(receiver),
