@@ -189,6 +189,9 @@ with PHP-style parameter contravariance and return covariance for supported
 declared type metadata, including nullable, union, `mixed`, `self`, `parent`,
 `static`, class, and interface types, including generated/AOT parent method
 metadata retained by the eval bridge.
+Concrete eval classes also enforce inherited generated/AOT abstract parent
+method requirements when reflection/signature metadata is available, including
+requirements carried through intermediate eval abstract classes.
 Abstract classes may defer missing interface methods and property contracts, but
 declared or inherited members that cover an interface contract are validated at
 declaration time. Generated/AOT interface method and property-hook contracts are

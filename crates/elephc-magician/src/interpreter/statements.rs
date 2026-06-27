@@ -1371,6 +1371,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     if !class.is_abstract() {
         validate_concrete_class_requirements(class, context)?;
         validate_concrete_class_builtin_interface_requirements(class, context)?;
+        validate_concrete_class_aot_parent_requirements(class, context, values)?;
         validate_concrete_class_aot_interface_requirements(class, context, values)?;
     }
     if context.define_class(class.clone()) {
@@ -2642,6 +2643,14 @@ struct EvalAotInterfaceMethodRequirement {
     owner: String,
     name: String,
     is_static: bool,
+    signature: Option<EvalInterfaceMethod>,
+}
+
+/// Abstract method requirement discovered from generated/AOT parent metadata.
+struct EvalAotAbstractMethodRequirement {
+    owner: String,
+    is_static: bool,
+    visibility: EvalVisibility,
     signature: Option<EvalInterfaceMethod>,
 }
 
@@ -3932,6 +3941,18 @@ fn validate_concrete_class_builtin_interface_requirements(
     Ok(())
 }
 
+/// Validates concrete class methods required by generated/AOT abstract parents.
+fn validate_concrete_class_aot_parent_requirements(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !pending_class_aot_parent_abstract_method_requirements(class, context, values)?.is_empty() {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    Ok(())
+}
+
 /// Validates concrete class methods required by generated/AOT runtime interfaces.
 fn validate_concrete_class_aot_interface_requirements(
     class: &EvalClass,
@@ -3979,6 +4000,25 @@ fn pending_class_abstract_property_requirements(
     Ok(requirements.into_values().collect())
 }
 
+/// Returns generated/AOT abstract parent methods the pending class has not concretized.
+fn pending_class_aot_parent_abstract_method_requirements(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvalAotAbstractMethodRequirement>, EvalStatus> {
+    let mut requirements = std::collections::HashMap::new();
+    if let Some(parent) = class.parent() {
+        collect_aot_parent_abstract_method_requirements(
+            parent,
+            context,
+            values,
+            &mut requirements,
+        )?;
+    }
+    apply_class_aot_parent_abstract_method_requirements(class, context, &mut requirements)?;
+    Ok(requirements.into_values().collect())
+}
+
 /// Collects abstract method requirements from one declared eval class ancestry chain.
 fn collect_class_abstract_method_requirements(
     class_name: &str,
@@ -3992,6 +4032,63 @@ fn collect_class_abstract_method_requirements(
         collect_class_abstract_method_requirements(parent, context, requirements);
     }
     apply_class_abstract_method_requirements(class, requirements);
+}
+
+/// Collects generated/AOT abstract method requirements through eval and AOT parents.
+fn collect_aot_parent_abstract_method_requirements(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    requirements: &mut std::collections::HashMap<String, EvalAotAbstractMethodRequirement>,
+) -> Result<(), EvalStatus> {
+    let class_name = class_name.trim_start_matches('\\');
+    if let Some(class) = context.class(class_name) {
+        if let Some(parent) = class.parent() {
+            collect_aot_parent_abstract_method_requirements(
+                parent,
+                context,
+                values,
+                requirements,
+            )?;
+        }
+        apply_class_aot_parent_abstract_method_requirements(class, context, requirements)?;
+        return Ok(());
+    }
+    if values.class_exists(class_name)? {
+        collect_native_aot_abstract_method_requirements(
+            class_name,
+            context,
+            values,
+            requirements,
+        )?;
+    }
+    Ok(())
+}
+
+/// Collects abstract methods exposed by one generated/AOT class reflection row.
+fn collect_native_aot_abstract_method_requirements(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    requirements: &mut std::collections::HashMap<String, EvalAotAbstractMethodRequirement>,
+) -> Result<(), EvalStatus> {
+    for method_name in eval_aot_method_names(class_name, values)? {
+        let Some(flags) = values.reflection_method_flags(class_name, &method_name)? else {
+            continue;
+        };
+        let key = method_name.to_ascii_lowercase();
+        if flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT == 0 {
+            requirements.remove(&key);
+            continue;
+        }
+        if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
+            continue;
+        }
+        let requirement =
+            eval_aot_abstract_method_requirement(class_name, &method_name, flags, context, values)?;
+        requirements.insert(key, requirement);
+    }
+    Ok(())
 }
 
 /// Collects abstract property requirements from one declared eval class ancestry chain.
@@ -4022,6 +4119,34 @@ fn apply_class_abstract_method_requirements(
             requirements.remove(&key);
         }
     }
+}
+
+/// Applies one eval class's methods to the open AOT abstract-method requirement set.
+fn apply_class_aot_parent_abstract_method_requirements(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+    requirements: &mut std::collections::HashMap<String, EvalAotAbstractMethodRequirement>,
+) -> Result<(), EvalStatus> {
+    for method in class.methods() {
+        let key = method.name().to_ascii_lowercase();
+        let Some(requirement) = requirements.get(&key) else {
+            continue;
+        };
+        if !class_method_satisfies_aot_abstract_parent_requirement(
+            method,
+            class.name(),
+            requirement,
+            Some(class),
+            context,
+            false,
+        ) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if !method.is_abstract() {
+            requirements.remove(&key);
+        }
+    }
+    Ok(())
 }
 
 /// Applies one class's properties to the open abstract-property requirement set.
@@ -4220,10 +4345,43 @@ fn eval_aot_interface_method_names(
     interface: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<String>, EvalStatus> {
-    let method_names = values.reflection_method_names(interface)?;
+    eval_aot_method_names(interface, values)
+}
+
+/// Returns generated/AOT method names for one runtime class-like symbol.
+fn eval_aot_method_names(
+    class_like: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let method_names = values.reflection_method_names(class_like)?;
     let names = eval_runtime_string_array_to_vec(method_names, values)?;
     values.release(method_names)?;
     Ok(names)
+}
+
+/// Builds one generated/AOT abstract parent method requirement from metadata.
+fn eval_aot_abstract_method_requirement(
+    class_name: &str,
+    method_name: &str,
+    flags: u64,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalAotAbstractMethodRequirement, EvalStatus> {
+    let is_static = flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0;
+    let owner = eval_aot_method_declaring_class(class_name, method_name, values)?;
+    let signature = eval_aot_method_signature_requirement(
+        class_name,
+        method_name,
+        is_static,
+        context,
+        values,
+    )?;
+    Ok(EvalAotAbstractMethodRequirement {
+        owner,
+        is_static,
+        visibility: eval_aot_method_visibility(flags),
+        signature,
+    })
 }
 
 /// Builds one generated/AOT interface method requirement from reflection and signature metadata.
@@ -4457,6 +4615,34 @@ fn class_method_satisfies_aot_interface_requirement(
 ) -> bool {
     if method.visibility() != EvalVisibility::Public
         || method.is_static() != requirement.is_static
+        || (require_concrete && method.is_abstract())
+    {
+        return false;
+    }
+    requirement.signature.as_ref().is_none_or(|signature| {
+        class_method_satisfies_interface_signature(
+            method,
+            method_owner,
+            signature,
+            &requirement.owner,
+            pending_class,
+            context,
+        )
+    })
+}
+
+/// Returns whether one method satisfies a generated/AOT abstract parent requirement.
+fn class_method_satisfies_aot_abstract_parent_requirement(
+    method: &EvalClassMethod,
+    method_owner: &str,
+    requirement: &EvalAotAbstractMethodRequirement,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+    require_concrete: bool,
+) -> bool {
+    if method.is_static() != requirement.is_static
+        || method_visibility_rank(method.visibility())
+            < method_visibility_rank(requirement.visibility)
         || (require_concrete && method.is_abstract())
     {
         return false;

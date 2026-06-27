@@ -12688,6 +12688,78 @@ eval('class EvalAotParentSignatureChild extends EvalAotParentSignatureBase {
     );
 }
 
+/// Verifies eval concrete classes can implement generated/AOT abstract parent methods.
+#[test]
+fn test_eval_declared_class_implements_aot_abstract_parent_method() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class EvalAotAbstractMethodBaseOk {
+    abstract public function label(string $name): string;
+}
+eval('class EvalAotAbstractMethodChildOk extends EvalAotAbstractMethodBaseOk {
+    public function label(string $name): string { return $name; }
+}
+echo (new EvalAotAbstractMethodChildOk())->label("ok");');
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies eval concrete classes must implement generated/AOT abstract parent methods.
+#[test]
+fn test_eval_declared_class_rejects_missing_aot_abstract_parent_method() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+abstract class EvalAotAbstractMethodBaseMissing {
+    abstract public function label(string $name): string;
+}
+eval('class EvalAotAbstractMethodChildMissing extends EvalAotAbstractMethodBaseMissing {}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval carries generated/AOT abstract method requirements through eval parents.
+#[test]
+fn test_eval_declared_class_rejects_missing_aot_abstract_parent_method_via_eval_parent() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+abstract class EvalAotAbstractMethodBaseViaEval {
+    abstract public function label(): string;
+}
+eval('abstract class EvalAotAbstractMethodMiddle extends EvalAotAbstractMethodBaseViaEval {}');
+eval('class EvalAotAbstractMethodLeaf extends EvalAotAbstractMethodMiddle {}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval checks generated/AOT abstract signatures through eval parents.
+#[test]
+fn test_eval_declared_class_rejects_incompatible_aot_abstract_parent_method_via_eval_parent() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+abstract class EvalAotAbstractMethodBaseViaEvalSignature {
+    abstract public function label(string $name): string;
+}
+eval('abstract class EvalAotAbstractMethodMiddleSignature extends EvalAotAbstractMethodBaseViaEvalSignature {}');
+eval('class EvalAotAbstractMethodLeafSignature extends EvalAotAbstractMethodMiddleSignature {
+    public function label(int $name): string { return "bad"; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval rejects overriding final generated/AOT parent properties.
 #[test]
 fn test_eval_declared_class_rejects_final_aot_parent_property_override() {
