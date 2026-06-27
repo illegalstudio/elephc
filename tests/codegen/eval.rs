@@ -6388,6 +6388,73 @@ EvalAotEvalScopeParent:EvalAotEvalScopeChild:EvalAotEvalScopeChild"
     );
 }
 
+/// Verifies eval classes keep late-static `static::class` in inherited AOT methods.
+#[test]
+fn test_eval_declared_child_inherited_aot_method_static_class_preserves_late_static_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotDirectScopeParent {
+    public function instanceClass() {
+        return static::class;
+    }
+
+    public static function staticClass() {
+        return static::class;
+    }
+}
+
+eval('class EvalAotDirectScopeChild extends EvalAotDirectScopeParent {}
+echo (new EvalAotDirectScopeChild())->instanceClass() . "|";
+echo EvalAotDirectScopeChild::staticClass();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalAotDirectScopeChild|EvalAotDirectScopeChild"
+    );
+}
+
+/// Verifies eval classes keep late-static `static::method()` in inherited AOT methods.
+#[test]
+fn test_eval_declared_child_inherited_aot_method_static_call_preserves_late_static_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotDirectStaticCallParent {
+    public function instanceCall(): string {
+        return static::tag();
+    }
+
+    public static function staticCall(): string {
+        return static::tag();
+    }
+
+    public static function tag(): string {
+        return "parent";
+    }
+}
+
+eval('class EvalAotDirectStaticCallChild extends EvalAotDirectStaticCallParent {
+    public static function tag(): string {
+        return "child";
+    }
+}
+echo (new EvalAotDirectStaticCallChild())->instanceCall() . "|";
+echo EvalAotDirectStaticCallChild::staticCall();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "child|child");
+}
+
 /// Verifies eval fragments resolve `parent::` through AOT parent metadata.
 #[test]
 fn test_eval_fragment_in_aot_method_resolves_parent_scope() {

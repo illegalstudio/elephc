@@ -565,6 +565,67 @@ pub(super) fn lower_eval_static_method_call(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a late-static AOT-frame static method call through an active eval override.
+pub(super) fn lower_eval_native_frame_static_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    frame_class: &str,
+    method_name: &str,
+    no_override_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    let args_offset = EVAL_STACK_BYTES;
+    let stack_bytes = eval_static_method_call_stack_bytes(inst.operands.len());
+    let miss_stack_label = ctx.next_label("eval_native_frame_static_method_miss");
+    abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
+    emit_eval_native_frame_override_probe(ctx, frame_class, &miss_stack_label);
+    store_eval_static_method_call_arg_pack(ctx, inst, args_offset)?;
+    let (frame_label, frame_len) = ctx.data.add_string(frame_class.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &frame_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        frame_len as i64,
+    );
+    let (method_label, method_len) = ctx.data.add_string(method_name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        &method_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        method_len as i64,
+    );
+    let pack_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_temporary_stack_address(ctx.emitter, pack_arg, args_offset);
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_native_frame_static_method_call");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_branch_if_eval_c_int_negative(ctx, &miss_stack_label);
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    emit_eval_result_as_type(ctx, &inst.result_php_type)?;
+    abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, done_label);
+
+    ctx.emitter.label(&miss_stack_label);
+    abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
+    abi::emit_jump(ctx.emitter, no_override_label);
+    Ok(())
+}
+
 /// Lowers a callable-array dispatch through the eval bridge.
 pub(super) fn lower_eval_callable_call_array(
     ctx: &mut FunctionContext<'_>,
@@ -1175,6 +1236,118 @@ fn store_eval_mixed_operand_at(
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, offset);
     Ok(())
+}
+
+/// Probes whether eval has a late-static called-class override for an AOT frame.
+fn emit_eval_native_frame_override_probe(
+    ctx: &mut FunctionContext<'_>,
+    frame_class: &str,
+    no_override_label: &str,
+) {
+    let (frame_label, frame_len) = ctx.data.add_string(frame_class.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        &frame_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        frame_len as i64,
+    );
+    let out_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_temporary_stack_address(ctx.emitter, out_ptr_arg, EVAL_CALLED_CLASS_PTR_OFFSET);
+    let out_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_temporary_stack_address(ctx.emitter, out_len_arg, EVAL_CALLED_CLASS_LEN_OFFSET);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_native_frame_called_class_override");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, no_override_label);
+}
+
+/// Converts an eval Mixed result cell to the concrete EIR type expected here.
+fn emit_eval_result_as_type(ctx: &mut FunctionContext<'_>, result_ty: &PhpType) -> Result<()> {
+    match result_ty.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => Ok(()),
+        PhpType::Str => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            Ok(())
+        }
+        PhpType::Float => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+            Ok(())
+        }
+        PhpType::Int => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            Ok(())
+        }
+        PhpType::Bool => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+            Ok(())
+        }
+        PhpType::TaggedScalar => {
+            emit_eval_mixed_result_as_tagged_scalar(ctx);
+            Ok(())
+        }
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                0x7fff_ffff_ffff_fffe,
+            );
+            Ok(())
+        }
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Iterable
+        | PhpType::Object(_)
+        | PhpType::Buffer(_)
+        | PhpType::Callable
+        | PhpType::Packed(_)
+        | PhpType::Pointer(_)
+        | PhpType::Resource(_) => {
+            emit_eval_unbox_mixed_to_owned_result(ctx, &result_ty.codegen_repr());
+            Ok(())
+        }
+    }
+}
+
+/// Reorders an eval Mixed result cell into inline tagged-scalar result registers.
+fn emit_eval_mixed_result_as_tagged_scalar(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x9, x0");                              // preserve the unboxed eval result tag before moving the payload
+            ctx.emitter.instruction("mov x0, x1");                              // place the unboxed eval payload into the tagged-scalar payload register
+            ctx.emitter.instruction("mov x1, x9");                              // place the unboxed eval tag into the tagged-scalar tag register
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, rax");                            // preserve the unboxed eval result tag before moving the payload
+            ctx.emitter.instruction("mov rax, rdi");                            // place the unboxed eval payload into the tagged-scalar payload register
+            ctx.emitter.instruction("mov rdx, r10");                            // place the unboxed eval tag into the tagged-scalar tag register
+        }
+    }
+}
+
+/// Unboxes an eval Mixed result cell and retains concrete refcounted payloads.
+fn emit_eval_unbox_mixed_to_owned_result(ctx: &mut FunctionContext<'_>, result_ty: &PhpType) {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_eval_move_unboxed_low_payload_to_result(ctx);
+    abi::emit_incref_if_refcounted(ctx.emitter, result_ty);
+}
+
+/// Moves the low payload from `__rt_mixed_unbox` into the integer result register.
+fn emit_eval_move_unboxed_low_payload_to_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // return the unboxed eval low payload as the concrete result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // return the unboxed eval low payload as the concrete result
+        }
+    }
 }
 
 /// Boxes a raw eval predicate result when the enclosing IR value expects Mixed storage.

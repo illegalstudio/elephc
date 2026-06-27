@@ -4673,6 +4673,22 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     } else {
         None
     };
+    let eval_done_label = if late_bound_static && ctx.module.required_runtime_features.eval {
+        let no_override_label = ctx.next_label("eval_late_static_no_override");
+        let done_label = ctx.next_label("eval_late_static_done");
+        builtins::lower_eval_native_frame_static_method_call(
+            ctx,
+            inst,
+            receiver.as_str(),
+            method_name,
+            &no_override_label,
+            &done_label,
+        )?;
+        ctx.emitter.label(&no_override_label);
+        Some(done_label)
+    } else {
+        None
+    };
     let call_args = materialize_static_method_call_args_with_refs(
         ctx,
         &called_class_id,
@@ -4699,7 +4715,11 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
         ctx.store_result_value(result)?;
     }
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
+    if let Some(done_label) = eval_done_label {
+        ctx.emitter.label(&done_label);
+    }
+    Ok(())
 }
 
 /// Lowers a direct static-method call against a class declared by a previous eval fragment.

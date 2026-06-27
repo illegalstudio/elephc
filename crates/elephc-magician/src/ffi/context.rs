@@ -12,9 +12,11 @@
 
 use super::util::abi_name_to_string;
 use crate::abi::{ElephcEvalContext, ElephcEvalScope, ABI_VERSION};
+use crate::context::native_frame_called_class_override_bytes;
 use crate::errors::EvalStatus;
 #[cfg(not(test))]
 use crate::ffi::dynamic_destructors::install_dynamic_object_destructor_hook;
+use std::ptr;
 
 /// Returns the ABI version expected by generated elephc eval call sites.
 #[no_mangle]
@@ -114,6 +116,26 @@ pub unsafe extern "C" fn __elephc_eval_context_push_class_scope(
 pub unsafe extern "C" fn __elephc_eval_context_pop_class_scope(ctx: *mut ElephcEvalContext) -> i32 {
     std::panic::catch_unwind(|| unsafe { eval_context_pop_class_scope_inner(ctx) })
         .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Reads the late-static override currently installed for a generated/AOT frame.
+///
+/// # Safety
+/// `class_ptr` must be a readable UTF-8 slice for `class_len` bytes. `out_ptr`
+/// and `out_len` must be valid writable out-parameters. Returned bytes are
+/// owned by eval thread-local state and remain valid until the native frame
+/// override guard is dropped.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_native_frame_called_class_override(
+    class_ptr: *const u8,
+    class_len: u64,
+    out_ptr: *mut *const u8,
+    out_len: *mut u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_native_frame_called_class_override_inner(class_ptr, class_len, out_ptr, out_len)
+    })
+    .unwrap_or(0)
 }
 
 /// Runs the call-site metadata setter ABI body after installing a panic boundary.
@@ -226,4 +248,39 @@ unsafe fn eval_context_pop_class_scope_inner(ctx: *mut ElephcEvalContext) -> i32
     context.pop_called_class_scope();
     context.pop_class_scope();
     EvalStatus::Ok.code()
+}
+
+/// Runs the native-frame called-class lookup after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_native_frame_called_class_override`; generated code
+/// passes writable stack slots for both out-parameters.
+unsafe fn eval_native_frame_called_class_override_inner(
+    class_ptr: *const u8,
+    class_len: u64,
+    out_ptr: *mut *const u8,
+    out_len: *mut u64,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return 0;
+    }
+    unsafe {
+        *out_ptr = ptr::null();
+        *out_len = 0;
+    }
+    let Ok(class_name) = abi_name_to_string(class_ptr, class_len) else {
+        return 0;
+    };
+    let Some((called_ptr, called_len)) = native_frame_called_class_override_bytes(&class_name)
+    else {
+        return 0;
+    };
+    let Ok(called_len) = u64::try_from(called_len) else {
+        return 0;
+    };
+    unsafe {
+        *out_ptr = called_ptr;
+        *out_len = called_len;
+    }
+    1
 }

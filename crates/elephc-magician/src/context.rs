@@ -38,6 +38,8 @@ thread_local! {
 /// Late-static override installed while eval dispatches into a generated/AOT frame.
 #[derive(Clone)]
 struct NativeFrameCalledClassOverride {
+    #[cfg_attr(test, allow(dead_code))]
+    context: *mut ElephcEvalContext,
     frame_class: String,
     called_class: String,
 }
@@ -47,6 +49,7 @@ pub(crate) struct NativeFrameCalledClassOverrideGuard;
 
 /// Installs a late-static called-class override for a generated/AOT frame call.
 pub(crate) fn push_native_frame_called_class_override(
+    context: *mut ElephcEvalContext,
     frame_class: &str,
     called_class: &str,
 ) -> NativeFrameCalledClassOverrideGuard {
@@ -54,6 +57,7 @@ pub(crate) fn push_native_frame_called_class_override(
         overrides
             .borrow_mut()
             .push(NativeFrameCalledClassOverride {
+                context,
                 frame_class: frame_class.trim_start_matches('\\').to_string(),
                 called_class: called_class.trim_start_matches('\\').to_string(),
             });
@@ -80,6 +84,15 @@ fn native_frame_called_class_override(
     if frame_class.is_empty() || !called_class.eq_ignore_ascii_case(frame_class) {
         return None;
     }
+    native_frame_called_class_override_for_frame(frame_class)
+}
+
+/// Returns the active called-class override for one generated/AOT frame class.
+pub(crate) fn native_frame_called_class_override_for_frame(frame_class: &str) -> Option<String> {
+    let frame_class = frame_class.trim_start_matches('\\');
+    if frame_class.is_empty() {
+        return None;
+    }
     NATIVE_FRAME_CALLED_CLASS_OVERRIDES.with(|overrides| {
         overrides
             .borrow()
@@ -87,6 +100,43 @@ fn native_frame_called_class_override(
             .rev()
             .find(|entry| entry.frame_class.eq_ignore_ascii_case(frame_class))
             .map(|entry| entry.called_class.clone())
+    })
+}
+
+/// Returns the active called-class override bytes for one generated/AOT frame class.
+pub(crate) fn native_frame_called_class_override_bytes(
+    frame_class: &str,
+) -> Option<(*const u8, usize)> {
+    let frame_class = frame_class.trim_start_matches('\\');
+    if frame_class.is_empty() {
+        return None;
+    }
+    NATIVE_FRAME_CALLED_CLASS_OVERRIDES.with(|overrides| {
+        overrides
+            .borrow()
+            .iter()
+            .rev()
+            .find(|entry| entry.frame_class.eq_ignore_ascii_case(frame_class))
+            .map(|entry| (entry.called_class.as_ptr(), entry.called_class.len()))
+    })
+}
+
+/// Returns the active eval context and called class for one generated/AOT frame.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn native_frame_called_class_override_context(
+    frame_class: &str,
+) -> Option<(*mut ElephcEvalContext, String)> {
+    let frame_class = frame_class.trim_start_matches('\\');
+    if frame_class.is_empty() {
+        return None;
+    }
+    NATIVE_FRAME_CALLED_CLASS_OVERRIDES.with(|overrides| {
+        overrides
+            .borrow()
+            .iter()
+            .rev()
+            .find(|entry| entry.frame_class.eq_ignore_ascii_case(frame_class))
+            .map(|entry| (entry.context, entry.called_class.clone()))
     })
 }
 
