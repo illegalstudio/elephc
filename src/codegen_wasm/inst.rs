@@ -892,6 +892,7 @@ fn lower_builtin_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         "array_filter" => lower_array_filter(ctx, inst),
         "usort" => lower_usort(ctx, inst),
         "array_reduce" => lower_array_reduce(ctx, inst),
+        "array_walk" => lower_array_walk(ctx, inst),
         other => Err(WasmError::Unsupported(format!("builtin {}", other))),
     }
 }
@@ -1287,6 +1288,118 @@ fn lower_array_reduce(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Lowers `array_walk($array, $callback)` where operand 0 `$array` is an INDEXED
+/// `array<int>` and operand 1 `$callback` is a `Callable` descriptor (a closure or a
+/// free-function first-class callable) of shape `(int $value) -> void`. It lowers to a
+/// `__rt_array_walk_callable(desc, arr)` runtime call that invokes the callback once per
+/// element, value-only and left-to-right, FOR SIDE EFFECTS — NO key argument, NO by-ref
+/// `$value` writeback, NO array mutation, and NO result. The fifth higher-order consumer
+/// after `array_map`/`array_filter`/`usort`/`array_reduce`, and the simplest: a 1-arg
+/// per-element call, no carry, no writeback, no result materialization, no COW. The WASM
+/// analogue of the native `lower_array_walk`.
+///
+/// READ-ONLY / VALUE-ONLY (mirrors native exactly): native `lower_array_walk` passes the
+/// callback only the element value (1 visible param, NO key), models the callback return
+/// as `Void`, and does NO by-ref writeback; the WASM closure wrappers cannot express a
+/// by-ref visible param anyway, so this is both the native contract and the only thing
+/// WASM can express here. The 3-arg `$extra` form is rejected by the checker and never
+/// reaches this lowering.
+///
+/// RESULT: `array_walk` lowers to `Void` in EIR (native `store_void_builtin_result`), so
+/// `inst.result` is normally `None` and the runtime returns nothing — the stack is
+/// balanced after the call with no value to store or drop. DEFENSIVE (mirror `lower_usort`
+/// bool handling): should a call site attach a result slot, the PHP `true`
+/// (`WasmRepr::I64` 1) is materialized only when that result repr is a simple i64 slot;
+/// any other result repr is rejected rather than miscompiled.
+///
+/// Both `desc` and `arr` are materialized BORROWED: neither is released here, and the
+/// runtime does NOT incref/decref/ensure-unique or mutate the array (read-only). The EIR
+/// owns operands 0/1 (the array is borrowed by `array_walk`, the descriptor released
+/// after) and releases them at the call site.
+///
+/// Deferred (returns `Unsupported`, never miscompiled): a non-2-operand form (the 3-arg
+/// `$extra` shape); a string/array/object callback (operand 1 not `Callable`); and a
+/// non-`array<int>` source (operand 0 not `Heap(Array)` with an `Int` element — the
+/// runtime reads 8-byte int slots, so a 16-byte string/mixed source would be misread).
+fn lower_array_walk(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    // Single ($array, $callable) form only. The 3-arg `array_walk($a, $cb, $extra)` form
+    // is rejected by the checker and never reaches here; any other arity is deferred.
+    if inst.operands.len() != 2 {
+        return Err(WasmError::Unsupported(format!(
+            "array_walk with {} operands on wasm32-wasi (only ($array, $callable) supported; \
+             the 3-arg $extra form is deferred)",
+            inst.operands.len()
+        )));
+    }
+    let array = operand(inst, 0)?;
+    let callable = operand(inst, 1)?;
+
+    // GUARD: operand 1 must be a Callable descriptor (closure or free-fn FCC). A
+    // string/array/object callback would not be an i64 descriptor and needs its own
+    // runtime callback selection (deferred slice).
+    let callable_php = ctx.value_php_type(callable)?.codegen_repr();
+    if !matches!(callable_php, PhpType::Callable) {
+        return Err(WasmError::Unsupported(format!(
+            "array_walk with a {:?} callback on wasm32-wasi (only Callable descriptors \
+             supported; string/array/object callbacks deferred)",
+            callable_php
+        )));
+    }
+    // GUARD: operand 0 must be an indexed `array<int>`. The runtime reads 8-byte int slots
+    // (`arr+24+i*8`); a 16-byte string/mixed source would be misread, so reject any
+    // non-`Heap(Array)` source or any non-`Int` element type (string/mixed/object element
+    // walks are deferred). This guard is load-bearing for correctness.
+    let array_ir = ctx.function.value(array).map(|v| v.ir_type);
+    let array_php = ctx.value_php_type(array)?.codegen_repr();
+    let is_int_array = matches!(array_ir, Some(IrType::Heap(IrHeapKind::Array)))
+        && matches!(&array_php, PhpType::Array(elem) if elem.codegen_repr() == PhpType::Int);
+    if !is_int_array {
+        return Err(WasmError::Unsupported(format!(
+            "array_walk over a {:?} source on wasm32-wasi (only indexed array<int> supported; \
+             string/mixed/object element walks deferred)",
+            array_php
+        )));
+    }
+
+    // operand 1: callable descriptor (i64) -> i32 for __rt_array_walk_callable.
+    let desc = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(callable)?;
+    ctx.fb.ins("i32.wrap_i64", "callable descriptor i64 -> i32");
+    ctx.fb.ins(&format!("local.set {}", desc), "save descriptor pointer");
+
+    // Push the descriptor then the array pointer (i32); the runtime visits each int
+    // element value-only left-to-right (read-only) and returns NOTHING — the stack stays
+    // balanced after the call. Neither operand is released here: the EIR owns/releases
+    // operands 0/1 at the call site, and the array stays borrowed (no COW/mutation).
+    ctx.fb.ins(&format!("local.get {}", desc), "descriptor pointer");
+    ctx.emit_load_value(array)?; // array pointer (i32)
+    ctx.fb.ins(
+        "call $__rt_array_walk_callable",
+        "visit each int element value-only left-to-right (read-only), no result",
+    );
+
+    // array_walk lowers to Void in EIR (store_void_builtin_result), so inst.result is
+    // normally None and there is nothing to store. DEFENSIVE (mirror lower_usort's bool
+    // handling): materialize PHP `true` only when a result slot is attached AND it is a
+    // simple i64; any other result repr is rejected rather than miscompiled.
+    if let Some(result) = inst.result {
+        match ctx.value_repr(result)?.clone() {
+            WasmRepr::I64(_) => {
+                ctx.fb.ins("i64.const 1", "array_walk returns bool true");
+                store_result(ctx, inst)?;
+            }
+            other => {
+                return Err(WasmError::Unsupported(format!(
+                    "array_walk into {:?} on wasm32-wasi (array_walk returns bool true; only an \
+                     Int/Bool result slot supported)",
+                    other
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `exit`/`die`: an integer argument becomes the WASI exit status; any

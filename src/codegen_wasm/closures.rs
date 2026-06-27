@@ -1081,6 +1081,14 @@ pub(super) fn emit_closure_dispatch(
     // `__rt_array_push_mixed`, `__rt_mixed_from_value`, and `__rt_decref_any`, all present
     // in every module that has a ladder.
     wm.add_raw_func(RT_ARRAY_REDUCE_CALLABLE);
+    // `array_walk($arr, $cb)` (`__rt_array_walk_callable`) is the fifth higher-order
+    // consumer of the `__rt_closure_call` ladder, emitted on the same gate for the same
+    // reason: a module with neither closures nor FCC entries can never produce a
+    // `Callable` callback and so never reaches `array_walk`'s callable arm. The helper
+    // references only `__rt_closure_call`, `__rt_array_new`, `__rt_array_push_mixed`,
+    // `__rt_mixed_from_value`, and `__rt_decref_any`, all present in every module that has
+    // a ladder.
+    wm.add_raw_func(RT_ARRAY_WALK_CALLABLE);
     Ok(())
 }
 
@@ -1330,6 +1338,46 @@ const RT_ARRAY_REDUCE_CALLABLE: &str = r#"(func $__rt_array_reduce_callable (par
       (local.set $i (i64.add (local.get $i) (i64.const 1)))          ;; i++
       (br $L)))
   (local.get $carry))                                                ;; return the final i64 carry
+"#;
+
+/// `__rt_array_walk_callable(desc i32, arr i32)` (NO result): the runtime behind
+/// `array_walk($arr, $cb)` with an INDEXED `array<int>` `$arr` and a `Callable` descriptor
+/// `$cb` (a closure or a free-function first-class callable) of shape `(int $value) -> void`.
+/// Invokes the callback ONCE PER ELEMENT, value-only and left-to-right, FOR SIDE EFFECTS —
+/// NO key argument, NO by-ref `$value` writeback, NO array mutation, and NO return value.
+/// The fifth higher-order consumer of the `__rt_closure_call` ladder, and the simplest: a
+/// 1-slot arg buffer, no carry, no result materialization, no sort, no COW. The WASM
+/// analogue of the native `lower_array_walk` per-element call loop.
+///
+/// READ-ONLY / VALUE-ONLY: the element value (an 8-byte int slot at `arr+24+i*8`) is the
+/// only thing passed; the callback's owned result cell is DISCARDED (`__rt_decref_any`),
+/// never stored anywhere and never written back to the source slot. The array stays
+/// BORROWED — there is NO `__rt_array_ensure_unique`, NO incref/decref of the array, and
+/// NO mutation — matching the native value-only walk contract.
+///
+/// REFCOUNT DISCIPLINE: the int element is a raw i64 (no refcount). Only the per-iteration
+/// heap cells need freeing — every iteration deep-frees the 1-slot arg buffer via
+/// `__rt_decref_any (args1)` (releasing the boxed item cell) and then releases the OWNED,
+/// never-stored result cell (`__rt_decref_any (rcell)`). Because the function returns
+/// NOTHING (void), the `rcell` free is the SOLE load-bearing leak target — there is no
+/// returned heap pointer to decref. Neither `desc` nor `arr` is released here: the EIR
+/// owns/releases operands 0/1 at the call site.
+const RT_ARRAY_WALK_CALLABLE: &str = r#"(func $__rt_array_walk_callable (param $desc i32) (param $arr i32)
+  (local $len i64) (local $i i64) (local $item i64)
+  (local $args1 i32) (local $rcell i32)
+  (local.set $len (i64.load (local.get $arr)))                       ;; element count @ arr+0
+  (local.set $i (i64.const 0))                                       ;; element index = 0
+  (block $end
+    (loop $L
+      (br_if $end (i64.ge_s (local.get $i) (local.get $len)))        ;; i >= len -> walk done
+      (local.set $item (i64.load (i32.add (i32.add (local.get $arr) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 8))))))  ;; item = arr[i] @ arr+24+i*8 (8-byte int slot)
+      (local.set $args1 (call $__rt_array_new (i64.const 1) (i64.const 16)))  ;; 1-slot Mixed-cell arg buffer
+      (local.set $args1 (call $__rt_array_push_mixed (local.get $args1) (call $__rt_mixed_from_value (i64.const 0) (local.get $item) (i64.const 0))))  ;; arg0 = box int item (tag 0)
+      (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args1)))  ;; cb(item) -> owned result cell (value discarded)
+      (call $__rt_decref_any (local.get $args1))                     ;; deep-free the arg buffer (releases the boxed item cell)
+      (call $__rt_decref_any (local.get $rcell))                     ;; release the OWNED result cell (load-bearing: never stored)
+      (local.set $i (i64.add (local.get $i) (i64.const 1)))          ;; i++
+      (br $L))))
 "#;
 
 /// Derives the unified-ladder wrapper symbol for an FCC-of-free-function target
@@ -4415,6 +4463,373 @@ mod tests {
 "#;
         if let Some(o) = run_array_reduce_lowered_driver(driver, "t") {
             assert_eq!(o, "110");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // P7d2: array_walk($arr, $cb) — read-only, value-only per-element walk.
+    // -------------------------------------------------------------------------
+
+    /// Hand-written WAT body for the FCC target free function `walk_acc(int) -> int`,
+    /// defined under its canonical wasm symbol `fn_walk_acc` so the FCC wrapper's
+    /// `call $fn_walk_acc` resolves. Because `array_walk` is read-only (it DISCARDS the
+    /// callback result), the callback's per-element effect is observed by ACCUMULATING the
+    /// visited value into the module-level `$__walk_acc` global. Returns int 0, which
+    /// `array_walk` discards. Used by all three `array_walk` tests.
+    fn walk_acc_free_fn_body_wat() -> &'static str {
+        r#"(func $fn_walk_acc (param $p1 i64) (result i64)
+  (global.set $__walk_acc (i64.add (global.get $__walk_acc) (local.get $p1)))  ;; accumulate the visited value
+  (i64.const 0))                                                               ;; return 0 (array_walk discards it)
+"#
+    }
+
+    /// Builds the user callback `Function` (name `walk_acc`, ONE int param `v`, INT
+    /// return) that `emit_closure_dispatch` reads to generate the FCC wrapper for the
+    /// `array_walk` callback. ONE visible param: `__rt_array_walk_callable` boxes the
+    /// element into a 1-slot arg buffer. The INT return makes `box_result_wat` tag the
+    /// wrapper's result cell 0, which the runtime then discards (decrefs).
+    fn walk_acc_free_fn() -> Function {
+        let mut f = Function::new("walk_acc".to_string(), IrType::I64, PhpType::Int);
+        f.params.push(FunctionParam {
+            name: "v".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        f
+    }
+
+    /// A sibling of `run_fcc_driver` that ALSO declares the mutable `$__walk_acc` i64
+    /// accumulator global (init 0) before rendering, so a read-only `array_walk` callback
+    /// body can record its per-element visits there for the driver to read back. Identical
+    /// to `run_fcc_driver` in every other respect (full runtime surface, single FCC entry
+    /// `user_fn.name`, `wasmparser` validation, `wasmer --invoke`); `None` when wasmer is
+    /// absent (validation always runs). A separate function rather than a refactor of
+    /// `run_fcc_driver` so that helper's signature/behavior stay untouched for its callers.
+    fn run_fcc_driver_with_walk_global(
+        user_fn: Function,
+        body_wat: &str,
+        driver: &str,
+        export: &str,
+    ) -> Option<String> {
+        use super::super::wat::{Global, ValType};
+        let mut wm = WatModule::new();
+        wm.set_memory(3, Some("memory"));
+        emit_heap_runtime(&mut wm, 1024, 3 * 65536);
+        emit_refcount_runtime(&mut wm);
+        emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
+        super::super::hashes::emit_hash_runtime(&mut wm);
+        emit_object_runtime(&mut wm);
+        emit_gc_desc_stub(&mut wm);
+        emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
+        emit_closure_runtime(&mut wm);
+        // The read-only array_walk callback body accumulates each visited value here.
+        wm.add_global(Global {
+            name: "__walk_acc".into(),
+            ty: ValType::I64,
+            mutable: true,
+            init: 0,
+        });
+        wm.add_raw_func(body_wat);
+        let mut module = Module::new(Target::wasm());
+        let name = user_fn.name.clone();
+        module.functions.push(user_fn);
+        super::emit_closure_dispatch(&mut wm, &module, std::slice::from_ref(&name))
+            .expect("emit_closure_dispatch");
+        wm.add_raw_func(driver);
+        let wat = wm.render();
+        let bytes = ::wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("WAT did not assemble: {e}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|e| panic!("wasm did not validate: {e}\n{wat}"));
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = unique_tmp_dir();
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg(export)
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer --invoke {export} failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            wat
+        );
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// `__rt_array_walk_callable` walks `walk_acc(int)->int` (which accumulates each visited
+    /// value into `$__walk_acc`) over a value_type-0 int array `[1, 2, 3, 4]`, leaving the
+    /// accumulator at `1 + 2 + 3 + 4 = 10`. The CORRECTNESS pin: 10 distinguishes (a) zero
+    /// visits (accumulator stays 0), (b) partial visits (only the first -> 1, only the last
+    /// -> 4), and (c) double visits (-> 20). The driver ALSO walks an EMPTY array FIRST and
+    /// captures the accumulator afterward, returning the headline 10 only when that empty
+    /// walk left the accumulator untouched at 0 (the loop body never runs) — a `-1` sentinel
+    /// otherwise — so the empty-array path is load-bearing in the `== "10"` assertion.
+    #[test]
+    fn array_walk_callable_visits_each_element() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $desc i32) (local $src i32) (local $empty i32) (local $after_empty i64)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))            ;; FCC descriptor (rc 1)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp kind 6 (callable)
+  (i64.store (local.get $desc) (i64.const 11))                        ;; descriptor kind = 11 (Function)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0 (FCC slot, no closures)
+  (i32.store offset=12 (local.get $desc) (i32.const 0))              ;; capture_count = 0
+  (i32.store offset=16 (local.get $desc) (i32.const 0))              ;; capture_tags_ptr = 0
+  (local.set $empty (call $__rt_array_new (i64.const 0) (i64.const 8)))  ;; fresh empty int array (len 0)
+  (call $__rt_array_walk_callable (local.get $desc) (local.get $empty))  ;; walk empty -> accumulator untouched
+  (local.set $after_empty (global.get $__walk_acc))                 ;; accumulator after the empty walk (expect 0)
+  (local.set $src (call $__rt_array_new (i64.const 4) (i64.const 8)))  ;; fresh uniquely-owned int array
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 1)))  ;; src[0] = 1
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 2)))  ;; src[1] = 2
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 3)))  ;; src[2] = 3
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 4)))  ;; src[3] = 4
+  (call $__rt_array_walk_callable (local.get $desc) (local.get $src))  ;; visit each element -> acc += 1+2+3+4
+  (if (result i64) (i64.eq (local.get $after_empty) (i64.const 0))   ;; empty walk left the accumulator at 0?
+    (then (global.get $__walk_acc))                                  ;; yes -> headline 10 (1+2+3+4)
+    (else (i64.const -1))))                                          ;; no  -> sentinel (empty path broken)
+"#;
+        if let Some(o) =
+            run_fcc_driver_with_walk_global(walk_acc_free_fn(), walk_acc_free_fn_body_wat(), driver, "t")
+        {
+            assert_eq!(o, "10");
+        }
+    }
+
+    /// `array_walk` run TWICE over the SAME freshly built int array `[1, 2, 3]` (rc 1), for
+    /// refcount balance. Because the array is BORROWED/read-only, the same array is reused
+    /// across both passes (NOT freed between them); after the loop it is released once and
+    /// the FCC descriptor is released, leaving `_gc_live` at "0". A NON-RETURN loop, so the
+    /// per-iteration OWNED arg buffers and result cells are never stored anywhere: the
+    /// runtime's `__rt_decref_any (args1)` and `__rt_decref_any (rcell)` are the ONLY things
+    /// that free them. Proven load-bearing: removing the `rcell` free (or `args1`) leaves
+    /// `_gc_live` non-zero (6 leaked result/arg cells across the two 3-element passes). Since
+    /// `__rt_array_walk_callable` returns NOTHING (void), the per-iteration `rcell` free is
+    /// the SOLE load-bearing leak target — exactly the leak the GC-blindspot rule warns a
+    /// return-case balance test would miss.
+    #[test]
+    fn array_walk_callable_balanced_gc() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $desc i32) (local $src i32) (local $i i32)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))            ;; FCC descriptor (rc 1)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp kind 6 (callable)
+  (i64.store (local.get $desc) (i64.const 11))                        ;; descriptor kind = 11 (Function)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0
+  (i32.store offset=12 (local.get $desc) (i32.const 0))              ;; capture_count = 0
+  (i32.store offset=16 (local.get $desc) (i32.const 0))              ;; capture_tags_ptr = 0
+  (local.set $src (call $__rt_array_new (i64.const 3) (i64.const 8)))  ;; ONE shared (borrowed) int array, rc 1
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 1)))  ;; src[0] = 1
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 2)))  ;; src[1] = 2
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 3)))  ;; src[2] = 3
+  (local.set $i (i32.const 0))                                       ;; walk-pass counter
+  (block $end
+    (loop $L
+      (br_if $end (i32.ge_s (local.get $i) (i32.const 2)))           ;; two read-only passes over the SAME array
+      (call $__rt_array_walk_callable (local.get $desc) (local.get $src))  ;; walk (borrowed: no free between passes)
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))          ;; i++
+      (br $L)))
+  (call $__rt_decref_any (local.get $src))                          ;; release the shared array once (frees it)
+  (call $__rt_decref_any (local.get $desc))                          ;; release the FCC descriptor
+  (global.get $_gc_live))                                            ;; expect 0 (balanced)
+"#;
+        if let Some(o) =
+            run_fcc_driver_with_walk_global(walk_acc_free_fn(), walk_acc_free_fn_body_wat(), driver, "t")
+        {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// Builds the self-contained EIR `Function` `walk_sum() -> void` that exercises the full
+    /// `lower_array_walk` dispatch: it builds an indexed `array<int>` `[1, 2, 3, 4]`
+    /// (`ArrayNew` + `ArrayPush` of int constants), creates a first-class callable of
+    /// `walk_acc` (`FirstClassCallableNew`, Owned kind-6 descriptor), then walks with
+    /// `array_walk($arr, $f)` as an `Op::BuiltinCall` whose operands are `[arr, vf]`
+    /// (op0 = ARRAY, op1 = CALLBACK — the 2-operand order `lower_array_walk` consumes) and a
+    /// `Void` result type, so `emit` allocates NO result value (the call is purely for side
+    /// effects). It releases the source array and the FCC temp (mirroring `ir_lower`'s
+    /// owned-arg releases) and returns void. Each visited element is accumulated into
+    /// `$__walk_acc` by the `walk_acc` callback, so the driver reads back `1+2+3+4 = 10`.
+    fn walk_sum_via_builtin_fn(
+        walk_data: crate::ir::DataId,
+        array_walk_data: crate::ir::DataId,
+    ) -> Function {
+        let int_arr_ty = PhpType::Array(Box::new(PhpType::Int));
+        let mut f = Function::new("walk_sum".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            // $arr = [1, 2, 3, 4]  (array<int>, Owned, capacity 4; ArrayPush shapes it).
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(4)),
+                    IrType::Heap(IrHeapKind::Array),
+                    int_arr_ty.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            for v in [1i64, 2, 3, 4] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![arr, c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            // $f = walk_acc(...)  -> kind-6 Function descriptor (Owned).
+            let vf = b
+                .emit(
+                    Op::FirstClassCallableNew,
+                    Vec::new(),
+                    Some(Immediate::Data(walk_data)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            // array_walk($arr, $f) for side effects: op0 = array, op1 = callback. A Void
+            // result type makes `emit` allocate no result value (inst.result is None), so
+            // the call lowers purely for its effect.
+            let _ = b.emit(
+                Op::BuiltinCall,
+                vec![arr, vf],
+                Some(Immediate::Data(array_walk_data)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            // array_walk borrows the source array, so release it after the call; then
+            // release the FCC descriptor temp (mirrors ir_lower's owned-arg releases).
+            let _ = b.emit(
+                Op::Release,
+                vec![arr],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let _ = b.emit(
+                Op::Release,
+                vec![vf],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        f
+    }
+
+    /// A sibling of `run_array_reduce_lowered_driver` that injects the `$__walk_acc`
+    /// accumulator global and lowers the self-contained `walk_sum` body (via
+    /// `lower_function`, so the `lower_array_walk` builtin arm and the
+    /// `__rt_array_walk_callable` runtime are exercised together) with the `walk_acc`
+    /// fixture as the single FCC entry and `array_walk` interned as the builtin name.
+    /// Validates with `wasmparser` and runs `export` under `wasmer`; `None` if wasmer is
+    /// absent (validation always runs).
+    fn run_array_walk_lowered_driver(driver: &str, export: &str) -> Option<String> {
+        use super::super::wat::{Global, ValType};
+        let mut wm = WatModule::new();
+        wm.set_memory(3, Some("memory"));
+        // The lowered body's prologue references the `$__concat_off` cursor global.
+        super::super::runtime::emit_common_runtime(&mut wm);
+        emit_heap_runtime(&mut wm, 1024, 3 * 65536);
+        emit_refcount_runtime(&mut wm);
+        emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
+        super::super::hashes::emit_hash_runtime(&mut wm);
+        emit_object_runtime(&mut wm);
+        emit_gc_desc_stub(&mut wm);
+        emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
+        emit_closure_runtime(&mut wm);
+        // The read-only array_walk callback body accumulates each visited value here.
+        wm.add_global(Global {
+            name: "__walk_acc".into(),
+            ty: ValType::I64,
+            mutable: true,
+            init: 0,
+        });
+        wm.add_raw_func(walk_acc_free_fn_body_wat());
+        let mut module = Module::new(Target::wasm());
+        let walk_data = module.data.intern_string("walk_acc");
+        let array_walk_data = module.data.intern_function_name("array_walk");
+        module.functions.push(walk_acc_free_fn());
+        let body_fn = walk_sum_via_builtin_fn(walk_data, array_walk_data);
+        let fcc_entries = vec!["walk_acc".to_string()];
+        let body_fb =
+            super::super::function::lower_function(&module, &body_fn, &[], &[], &fcc_entries)
+                .expect("lower array_walk body");
+        wm.add_func(body_fb);
+        super::emit_closure_dispatch(&mut wm, &module, &fcc_entries).expect("emit_closure_dispatch");
+        wm.add_raw_func(driver);
+        let wat = wm.render();
+        let bytes = ::wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("WAT did not assemble: {e}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|e| panic!("wasm did not validate: {e}\n{wat}"));
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = unique_tmp_dir();
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg(export)
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer --invoke {export} failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            wat
+        );
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// `walk_sum()` lowers `array_walk([1,2,3,4], walk_acc(...))` through the real
+    /// `Op::BuiltinCall` -> `lower_array_walk` dispatch (NOT a hand-written runtime call)
+    /// with a Void result, so the lowered `fn_walk_sum` returns void and the call runs
+    /// purely for side effects. The driver invokes `(call $fn_walk_sum)` (void — no
+    /// `local.set`) then returns `(global.get $__walk_acc)`, asserting `10` (`1+2+3+4`).
+    /// Proves the 2-operand op0=array / op1=callback order is consumed correctly AND the
+    /// dispatch + `__rt_array_walk_callable` runtime wire up end-to-end; a no-op/aborted
+    /// walk would leave the accumulator at 0, the distinguishing number from 10.
+    #[test]
+    fn array_walk_lowering_via_builtin_call() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (call $fn_walk_sum)                                                ;; run array_walk([1,2,3,4], walk_acc(...)) for side effects (void)
+  (global.get $__walk_acc))                                          ;; accumulator after the lowered walk -> 10
+"#;
+        if let Some(o) = run_array_walk_lowered_driver(driver, "t") {
+            assert_eq!(o, "10");
         }
     }
 }
