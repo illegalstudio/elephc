@@ -18960,6 +18960,25 @@ echo $box->x;
     assert_eq!(out, "9:10:12:12");
 }
 
+/// Verifies native property writes can update eval-created objects after the barrier.
+#[test]
+fn test_eval_declared_class_native_property_write_after_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class DynEvalNativePropertyWrite {
+    public int $x = 1;
+    public string $label = "old";
+}');
+$box = new DynEvalNativePropertyWrite();
+$box->x = 8;
+$box->label = "new";
+echo $box->label . ":";
+echo $box->x;
+"#,
+    );
+    assert_eq!(out, "new:8");
+}
+
 /// Verifies native introspection sees eval-declared object metadata after the barrier.
 #[test]
 fn test_eval_declared_class_native_introspection_after_barrier() {
