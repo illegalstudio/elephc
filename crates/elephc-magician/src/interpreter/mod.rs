@@ -261,6 +261,48 @@ pub fn execute_context_method_call_outcome(
     }
 }
 
+/// Resolves object class-name builtins against eval dynamic-object metadata first.
+pub fn execute_context_object_class_name(
+    context: &mut ElephcEvalContext,
+    lookup: &str,
+    object_or_class: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match lookup {
+        "get_class" => eval_get_class_result(object_or_class, context, values),
+        "get_parent_class" => eval_get_parent_class_result(object_or_class, context, values),
+        _ => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
+/// Tests an object relation against eval dynamic-object metadata before AOT metadata.
+pub fn execute_context_object_is_a(
+    context: &mut ElephcEvalContext,
+    object: RuntimeCellHandle,
+    target_class: &str,
+    exclude_self: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if values.type_tag(object)? != EVAL_TAG_OBJECT {
+        return Ok(false);
+    }
+    let target_class = target_class.trim_start_matches('\\');
+    let resolved_target_class = context
+        .resolve_class_like_name(target_class)
+        .unwrap_or_else(|| target_class.to_string());
+    dynamic_object_is_a(
+        object,
+        &resolved_target_class,
+        exclude_self,
+        context,
+        values,
+    )?
+    .map_or_else(
+        || values.object_is_a(object, &resolved_target_class, exclude_self),
+        Ok,
+    )
+}
+
 /// Returns the current interpreter availability status for the ABI stub.
 pub fn current_stub_status() -> EvalStatus {
     EvalStatus::UnsupportedConstruct

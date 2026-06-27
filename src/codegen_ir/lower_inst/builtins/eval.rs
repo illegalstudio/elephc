@@ -51,6 +51,8 @@ const EVAL_CALLED_CLASS_PTR_OFFSET: usize = 72;
 const EVAL_CALLED_CLASS_LEN_OFFSET: usize = 80;
 const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
+const EVAL_CLASS_LOOKUP_GET_CLASS: i64 = 0;
+const EVAL_CLASS_LOOKUP_GET_PARENT_CLASS: i64 = 1;
 const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
 const NATIVE_DEFAULT_NULL: i64 = 0;
 const NATIVE_DEFAULT_BOOL: i64 = 1;
@@ -435,6 +437,94 @@ pub(super) fn lower_eval_method_call(
     store_if_result(ctx, inst)
 }
 
+/// Lowers object class-name introspection through the eval bridge.
+pub(super) fn lower_eval_object_class_name(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    name: &str,
+) -> Result<()> {
+    let lookup_kind = eval_class_lookup_kind(name)?;
+    let non_object_label = ctx.next_label("eval_object_class_non_object");
+    let done_label = ctx.next_label("eval_object_class_done");
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_context(ctx)?;
+    store_eval_object_operand(ctx, object)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_if_eval_unboxed_not_object(ctx, &non_object_label);
+    load_eval_context_to_arg(ctx, 0);
+    let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        lookup_kind,
+    );
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_object_class_name");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_eval_unboxed_string_result(ctx);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&non_object_label);
+    emit_eval_string_result(ctx, b"");
+
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers object/class relation predicates through the eval bridge.
+pub(super) fn lower_eval_object_is_a(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    target_class: &str,
+    exclude_self: bool,
+) -> Result<()> {
+    let false_label = ctx.next_label("eval_object_is_a_false");
+    let done_label = ctx.next_label("eval_object_is_a_done");
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_context(ctx)?;
+    store_eval_object_operand(ctx, object)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_if_eval_unboxed_not_object(ctx, &false_label);
+    load_eval_context_to_arg(ctx, 0);
+    let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
+    let (target_label, target_len) = ctx.data.add_string(target_class.as_bytes());
+    let target_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_symbol_address(ctx.emitter, target_arg, &target_label);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        target_len as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        i64::from(exclude_self),
+    );
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_object_is_a");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&false_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
 /// Returns true when the current function owns an eval context local.
 pub(super) fn has_eval_context(ctx: &FunctionContext<'_>) -> bool {
     eval_context_slot(ctx).is_ok()
@@ -596,6 +686,60 @@ fn store_eval_method_call_arg_pack(
         abi::emit_store_to_sp(ctx.emitter, result_reg, args_offset + 8 + index * 8);
     }
     Ok(())
+}
+
+/// Stores an object operand as a boxed Mixed cell in eval scratch storage.
+fn store_eval_object_operand(ctx: &mut FunctionContext<'_>, object: ValueId) -> Result<()> {
+    let object_ty = ctx.load_value_to_result(object)?.codegen_repr();
+    if !matches!(object_ty, PhpType::Mixed | PhpType::Union(_)) {
+        emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    Ok(())
+}
+
+/// Returns the eval ABI discriminator for a class-name builtin.
+fn eval_class_lookup_kind(name: &str) -> Result<i64> {
+    match name {
+        "get_class" => Ok(EVAL_CLASS_LOOKUP_GET_CLASS),
+        "get_parent_class" => Ok(EVAL_CLASS_LOOKUP_GET_PARENT_CLASS),
+        _ => Err(CodegenIrError::unsupported(format!(
+            "eval object class-name lookup {}",
+            name
+        ))),
+    }
+}
+
+/// Branches when `__rt_mixed_unbox` did not expose an object payload.
+fn emit_branch_if_eval_unboxed_not_object(ctx: &mut FunctionContext<'_>, label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 means the Mixed value contains an object
+            ctx.emitter
+                .instruction(&format!("b.ne {}", label));                       // non-object values use the native false/empty fallback
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 means the Mixed value contains an object
+            ctx.emitter
+                .instruction(&format!("jne {}", label));                        // non-object values use the native false/empty fallback
+        }
+    }
+}
+
+/// Reorders an unboxed eval string cell into the target string result registers.
+fn emit_eval_unboxed_string_result(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rax, rdi");                                // move the unboxed string pointer into the x86_64 string-result register
+    }
+}
+
+/// Emits a borrowed string literal as the current native string result.
+fn emit_eval_string_result(ctx: &mut FunctionContext<'_>, bytes: &[u8]) {
+    let (label, len) = ctx.data.add_string(bytes);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
 }
 
 /// Saves the loaded eval source string while scope setup calls use argument registers.

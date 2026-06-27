@@ -534,6 +534,27 @@ pub(super) fn lower_eval_method_call(
     eval::lower_eval_method_call(ctx, inst, object, method_name)
 }
 
+/// Lowers post-eval object class-name introspection against eval dynamic metadata.
+pub(super) fn lower_eval_object_class_name(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    name: &str,
+) -> Result<()> {
+    eval::lower_eval_object_class_name(ctx, inst, object, name)
+}
+
+/// Lowers post-eval object/class relation predicates against eval dynamic metadata.
+pub(super) fn lower_eval_object_is_a(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    target_class: &str,
+    exclude_self: bool,
+) -> Result<()> {
+    eval::lower_eval_object_is_a(ctx, inst, object, target_class, exclude_self)
+}
+
 /// Returns true when this lowered function has a persistent eval context local.
 pub(super) fn has_eval_context(ctx: &FunctionContext<'_>) -> bool {
     eval::has_eval_context(ctx)

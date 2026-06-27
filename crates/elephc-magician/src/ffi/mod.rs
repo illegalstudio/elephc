@@ -19,6 +19,8 @@ pub mod native_functions;
 pub mod native_methods;
 #[cfg(not(test))]
 pub mod object_construction;
+#[cfg(not(test))]
+pub mod object_introspection;
 pub mod scope;
 pub mod symbols;
 pub(crate) mod util;
@@ -32,6 +34,8 @@ pub use native_functions::*;
 pub use native_methods::*;
 #[cfg(not(test))]
 pub use object_construction::*;
+#[cfg(not(test))]
+pub use object_introspection::*;
 pub use scope::*;
 pub use symbols::*;
 
