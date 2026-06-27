@@ -19008,6 +19008,37 @@ echo is_callable([$box, "missing"]) ? "M" : "m";
     assert_eq!(out, "Y:5:F:S:m");
 }
 
+/// Verifies native member-existence probes see eval-declared class metadata after the barrier.
+#[test]
+fn test_eval_declared_class_native_member_exists_after_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class DynEvalNativeMemberProbe {
+    public int $value = 1;
+    private int $secret = 2;
+    public function bump() { return $this->value + 1; }
+    private function hidden() { return $this->secret; }
+}');
+$box = new DynEvalNativeMemberProbe();
+echo method_exists($box, "bump") ? "M" : "m";
+echo ":";
+echo method_exists("DynEvalNativeMemberProbe", "bump") ? "C" : "c";
+echo ":";
+echo method_exists($box, "missing") ? "x" : "X";
+echo ":";
+echo property_exists($box, "value") ? "P" : "p";
+echo ":";
+echo property_exists("DynEvalNativeMemberProbe", "value") ? "S" : "s";
+echo ":";
+echo property_exists($box, "missing") ? "y" : "Y";
+echo ":";
+echo function_exists("method_exists") ? "F" : "f";
+echo function_exists("property_exists") ? "G" : "g";
+"#,
+    );
+    assert_eq!(out, "M:C:X:P:S:Y:FG");
+}
+
 /// Verifies eval class declarations from a namespace are registered globally.
 #[test]
 fn test_eval_declared_class_in_namespace_is_global() {

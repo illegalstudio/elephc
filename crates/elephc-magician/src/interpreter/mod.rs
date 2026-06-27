@@ -332,6 +332,20 @@ pub fn execute_context_object_is_a(
     )
 }
 
+/// Tests whether a method or property exists through eval dynamic metadata.
+pub fn execute_context_member_exists(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    target: RuntimeCellHandle,
+    member: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let result = eval_member_exists_result(name, &[target, member], context, values)?;
+    let exists = values.truthy(result)?;
+    values.release(result)?;
+    Ok(exists)
+}
+
 /// Returns the current interpreter availability status for the ABI stub.
 pub fn current_stub_status() -> EvalStatus {
     EvalStatus::UnsupportedConstruct

@@ -25,6 +25,8 @@ const SUPPORTED_BUILTIN_FUNCTIONS: &[&str] = &[
     "is_long",
     "is_real",
     "isset",
+    "method_exists",
+    "property_exists",
     "strval",
     "unset",
 ];

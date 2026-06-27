@@ -9,13 +9,15 @@
 //! - Runtime conversions reuse existing target-aware helpers instead of duplicating parsing logic.
 //! - Selected Mixed predicates inspect the boxed runtime tag through shared predicate lowering.
 
+use std::collections::BTreeSet;
+
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::names::{define_seen_symbol, ir_global_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
 use crate::types::checker::builtins::is_php_visible_builtin_function;
-use crate::types::PhpType;
+use crate::types::{ClassInfo, PhpType};
 
 use super::super::context::FunctionContext;
 use super::{
@@ -65,6 +67,7 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "buffer_len" => buffers::lower_buffer_len(ctx, inst),
         "buffer_free" => buffers::lower_buffer_free(ctx, inst),
         "strval" => lower_strval(ctx, inst),
+        "method_exists" | "property_exists" => lower_member_exists(ctx, inst, key.as_str()),
         "is_integer" | "is_long" => {
             lower_static_type_predicate(ctx, inst, key.as_str(), PhpType::Int)
         }
@@ -140,6 +143,17 @@ pub(super) fn lower_eval_is_callable(
     callback: ValueId,
 ) -> Result<()> {
     eval::lower_eval_is_callable(ctx, inst, callback)
+}
+
+/// Lowers post-eval member-existence probes against eval dynamic metadata.
+pub(super) fn lower_eval_member_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: ValueId,
+    member: ValueId,
+    name: &str,
+) -> Result<()> {
+    eval::lower_eval_member_exists(ctx, inst, target, member, name)
 }
 
 /// Lowers post-eval object class-name introspection against eval dynamic metadata.
@@ -620,6 +634,190 @@ fn emit_is_callable_dynamic_string_lookup(ctx: &mut FunctionContext<'_>) {
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_is_callable_string");
+}
+
+/// Lowers `method_exists()` and `property_exists()` through eval or static metadata.
+fn lower_member_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction, name: &str) -> Result<()> {
+    ensure_arg_count(inst, name, 2)?;
+    let target = expect_operand(inst, 0)?;
+    let member = expect_operand(inst, 1)?;
+    if has_eval_context(ctx) {
+        return lower_eval_member_exists(ctx, inst, target, member, name);
+    }
+    let member_name = const_string_operand(ctx, member)?;
+    let exists = match ctx.value_php_type(target)?.codegen_repr() {
+        PhpType::Object(class_name) => {
+            static_member_exists_on_class(ctx, &class_name, &member_name, name, true)
+        }
+        PhpType::Str => {
+            let class_name = const_string_operand(ctx, target)?;
+            static_member_exists_on_class(ctx, &class_name, &member_name, name, false)
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} target PHP type {:?}",
+                name, other
+            )))
+        }
+    };
+    emit_static_bool(ctx, exists);
+    store_if_result(ctx, inst)
+}
+
+/// Checks one static class-like target for `method_exists()` or `property_exists()`.
+fn static_member_exists_on_class(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    member_name: &str,
+    name: &str,
+    target_is_object: bool,
+) -> bool {
+    let Some((resolved_class, class_info)) = lookup_class_info(ctx, class_name) else {
+        return false;
+    };
+    match name {
+        "method_exists" => static_method_exists_on_class_info(
+            ctx,
+            &resolved_class,
+            class_info,
+            member_name,
+            target_is_object,
+        ),
+        "property_exists" => static_property_exists_on_class_info(
+            &resolved_class,
+            class_info,
+            member_name,
+            target_is_object,
+        ),
+        _ => false,
+    }
+}
+
+/// Looks up class metadata using PHP's case-insensitive class-name semantics.
+fn lookup_class_info<'a>(
+    ctx: &'a FunctionContext<'_>,
+    class_name: &str,
+) -> Option<(String, &'a ClassInfo)> {
+    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    ctx.module
+        .class_infos
+        .iter()
+        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
+        .map(|(candidate, class_info)| (candidate.clone(), class_info))
+}
+
+/// Checks static method metadata while hiding inherited private methods on class-string targets.
+fn static_method_exists_on_class_info(
+    ctx: &FunctionContext<'_>,
+    resolved_class: &str,
+    class_info: &ClassInfo,
+    method_name: &str,
+    target_is_object: bool,
+) -> bool {
+    let method_key = php_symbol_key(method_name);
+    if class_info.methods.contains_key(&method_key) {
+        return target_is_object
+            || method_visible_from_class_string(
+                resolved_class,
+                &method_key,
+                &class_info.method_visibilities,
+                &class_info.method_declaring_classes,
+            );
+    }
+    if class_info.static_methods.contains_key(&method_key) {
+        return target_is_object
+            || method_visible_from_class_string(
+                resolved_class,
+                &method_key,
+                &class_info.static_method_visibilities,
+                &class_info.static_method_declaring_classes,
+            );
+    }
+    if target_is_object {
+        return static_parent_chain_method_exists(ctx, class_info, &method_key);
+    }
+    false
+}
+
+/// Checks parent class metadata for private methods visible to object-target `method_exists()`.
+fn static_parent_chain_method_exists(
+    ctx: &FunctionContext<'_>,
+    class_info: &ClassInfo,
+    method_key: &str,
+) -> bool {
+    let mut visited = BTreeSet::new();
+    let mut parent_name = class_info.parent.as_deref();
+    while let Some(candidate) = parent_name {
+        let parent_key = php_symbol_key(candidate.trim_start_matches('\\'));
+        if !visited.insert(parent_key) {
+            return false;
+        }
+        let Some((_resolved_class, parent_info)) = lookup_class_info(ctx, candidate) else {
+            return false;
+        };
+        if parent_info.methods.contains_key(method_key)
+            || parent_info.static_methods.contains_key(method_key)
+        {
+            return true;
+        }
+        parent_name = parent_info.parent.as_deref();
+    }
+    false
+}
+
+/// Returns whether a method should be visible for a class-string member probe.
+fn method_visible_from_class_string(
+    resolved_class: &str,
+    method_key: &str,
+    visibilities: &std::collections::HashMap<String, Visibility>,
+    declaring_classes: &std::collections::HashMap<String, String>,
+) -> bool {
+    visibilities.get(method_key) != Some(&Visibility::Private)
+        || declaring_classes
+            .get(method_key)
+            .is_none_or(|declaring_class| {
+                php_symbol_key(declaring_class.trim_start_matches('\\'))
+                    == php_symbol_key(resolved_class.trim_start_matches('\\'))
+            })
+}
+
+/// Checks static property metadata while hiding inherited private properties.
+fn static_property_exists_on_class_info(
+    resolved_class: &str,
+    class_info: &ClassInfo,
+    property_name: &str,
+    _target_is_object: bool,
+) -> bool {
+    property_visible_from_class_string(
+        resolved_class,
+        property_name,
+        &class_info.property_visibilities,
+        &class_info.property_declaring_classes,
+    ) || property_visible_from_class_string(
+        resolved_class,
+        property_name,
+        &class_info.static_property_visibilities,
+        &class_info.static_property_declaring_classes,
+    )
+}
+
+/// Returns whether a property exists for a class-string or ordinary object probe.
+fn property_visible_from_class_string(
+    resolved_class: &str,
+    property_name: &str,
+    visibilities: &std::collections::HashMap<String, Visibility>,
+    declaring_classes: &std::collections::HashMap<String, String>,
+) -> bool {
+    let Some(visibility) = visibilities.get(property_name) else {
+        return false;
+    };
+    visibility != &Visibility::Private
+        || declaring_classes
+            .get(property_name)
+            .is_none_or(|declaring_class| {
+                php_symbol_key(declaring_class.trim_start_matches('\\'))
+                    == php_symbol_key(resolved_class.trim_start_matches('\\'))
+            })
 }
 
 /// Returns true when a static `Class::method` string names a public static method.
