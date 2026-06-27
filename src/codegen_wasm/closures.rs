@@ -1073,6 +1073,14 @@ pub(super) fn emit_closure_dispatch(
     // `__rt_array_push_mixed`, `__rt_mixed_from_value`, and `__rt_decref_any`, all present
     // in every module that has a ladder.
     wm.add_raw_func(RT_USORT_CALLABLE);
+    // `array_reduce($arr, $cb, $init)` (`__rt_array_reduce_callable`) is the fourth
+    // higher-order consumer of the `__rt_closure_call` ladder, emitted on the same gate
+    // for the same reason: a module with neither closures nor FCC entries can never
+    // produce a `Callable` callback and so never reaches `array_reduce`'s callable arm.
+    // The helper references only `__rt_closure_call`, `__rt_array_new`,
+    // `__rt_array_push_mixed`, `__rt_mixed_from_value`, and `__rt_decref_any`, all present
+    // in every module that has a ladder.
+    wm.add_raw_func(RT_ARRAY_REDUCE_CALLABLE);
     Ok(())
 }
 
@@ -1279,6 +1287,49 @@ const RT_USORT_CALLABLE: &str = r#"(func $__rt_usort_callable (param $desc i32) 
       (local.set $i (i64.add (local.get $i) (i64.const 1)))          ;; i++
       (br $Li)))
   (local.get $arr))                                                  ;; return the (possibly cloned) sorted array
+"#;
+
+/// `__rt_array_reduce_callable(desc i32, arr i32, carry i64) -> i64`: the runtime behind
+/// `array_reduce($arr, $cb, $init)` with an INDEXED `array<int>` `$arr`, a `Callable`
+/// descriptor `$cb` (a closure or a free-function first-class callable) of shape
+/// `(int $carry, int $item) -> int`, and an int initial `$carry`. Folds the array
+/// left-to-right (`carry = cb(carry, item)`) and returns the final int carry. The fourth
+/// higher-order consumer of the `__rt_closure_call` ladder, and the simplest: a scalar
+/// i64 carry, NO array output, NO by-ref, NO key handling, NO sort. The WASM analogue of
+/// the native `lower_array_reduce` fold loop.
+///
+/// RAW-i64 CARRY: the int element and the int carry are pure i64 scalars, so the carry is
+/// threaded through the loop as a plain i64 — there is NO Mixed cell to thread across
+/// iterations. Each iteration re-boxes the CURRENT carry (`__rt_mixed_from_value (tag 0)`)
+/// and the item into a 2-slot Mixed-cell arg buffer, dispatches `__rt_closure_call(desc,
+/// args2)`, and reads the new carry back as the lo payload at `rcell+8` (offset 8, NOT 0
+/// which is the tag — the same offset lesson as `__rt_array_filter_callable`/`usort`).
+///
+/// REFCOUNT DISCIPLINE: the carry/item are raw i64 (no refcount). Only the per-iteration
+/// heap cells need freeing — every iteration deep-frees the arg buffer via
+/// `__rt_decref_any` (releasing both boxed arg cells) and then releases the OWNED,
+/// never-stored result cell (`__rt_decref_any (rcell)`, load-bearing: it is the sole leak
+/// target since the carry is an i64, not a returned heap pointer). Neither `desc` nor
+/// `arr` is released here: the EIR owns/releases operands 0/1/2 at the call site.
+const RT_ARRAY_REDUCE_CALLABLE: &str = r#"(func $__rt_array_reduce_callable (param $desc i32) (param $arr i32) (param $carry i64) (result i64)
+  (local $len i64) (local $i i64) (local $item i64)
+  (local $args2 i32) (local $rcell i32)
+  (local.set $len (i64.load (local.get $arr)))                       ;; element count @ arr+0
+  (local.set $i (i64.const 0))                                       ;; element index = 0
+  (block $end
+    (loop $L
+      (br_if $end (i64.ge_s (local.get $i) (local.get $len)))        ;; i >= len -> fold done
+      (local.set $item (i64.load (i32.add (i32.add (local.get $arr) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 8))))))  ;; item = arr[i] @ arr+24+i*8 (8-byte int slot)
+      (local.set $args2 (call $__rt_array_new (i64.const 2) (i64.const 16)))  ;; 2-slot Mixed-cell arg buffer
+      (local.set $args2 (call $__rt_array_push_mixed (local.get $args2) (call $__rt_mixed_from_value (i64.const 0) (local.get $carry) (i64.const 0))))  ;; arg0 = box int carry (tag 0)
+      (local.set $args2 (call $__rt_array_push_mixed (local.get $args2) (call $__rt_mixed_from_value (i64.const 0) (local.get $item) (i64.const 0))))   ;; arg1 = box int item (tag 0)
+      (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args2)))  ;; cb(carry, item) -> owned result cell
+      (local.set $carry (i64.load offset=8 (local.get $rcell)))      ;; new carry = lo payload @ rcell+8
+      (call $__rt_decref_any (local.get $args2))                     ;; deep-free the arg buffer (releases both boxed cells)
+      (call $__rt_decref_any (local.get $rcell))                     ;; release the OWNED result cell (load-bearing: never stored)
+      (local.set $i (i64.add (local.get $i) (i64.const 1)))          ;; i++
+      (br $L)))
+  (local.get $carry))                                                ;; return the final i64 carry
 "#;
 
 /// Derives the unified-ladder wrapper symbol for an FCC-of-free-function target
@@ -4065,6 +4116,305 @@ mod tests {
 "#;
         if let Some(o) = run_usort_lowered_driver(driver, "t") {
             assert_eq!(o, "123");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // array_reduce with a callable callback (`__rt_array_reduce_callable`).
+    // The first test drives the runtime directly with a hand-stamped FCC descriptor
+    // for the reducer `sum2`; the second is the non-return GC balance loop; the third
+    // lowers a real EIR body through `lower_function` so the `lower_array_reduce`
+    // dispatch + the Mixed-result boxing path (`WasmRepr::Ptr` arm) are tested
+    // end-to-end.
+    // -------------------------------------------------------------------------
+
+    /// Hand-written WAT body for the FCC target free function `sum2(int,int) -> int
+    /// { carry + item }`, defined under its canonical wasm symbol `fn_sum2` so the FCC
+    /// wrapper's `call $fn_sum2` resolves. `__rt_array_reduce_callable` boxes the running
+    /// carry as arg0 (`$p1`) and the element as arg1 (`$p2`), so this body realizes the
+    /// running sum the fold accumulates. The wrapper unboxes each arg via
+    /// `__rt_mixed_cast_int` and boxes the int result, so the runtime's `rcell+8`
+    /// lo-payload read sees the new carry.
+    fn sum2_free_fn_body_wat() -> &'static str {
+        r#"(func $fn_sum2 (param $p1 i64) (param $p2 i64) (result i64)
+  (i64.add (local.get $p1) (local.get $p2)))                            ;; body: return carry + item
+"#
+    }
+
+    /// Builds the user reducer `Function` (name `sum2`, two int params `carry`/`item`,
+    /// INT return) that `emit_closure_dispatch` reads to generate the FCC wrapper. Two
+    /// params are required: `__rt_array_reduce_callable` boxes the carry (arg0) and the
+    /// element (arg1) into a 2-slot arg buffer; the INT return makes `box_result_wat` tag
+    /// the wrapper's result cell 0 so the runtime reads the new carry at `rcell+8`.
+    fn sum2_free_fn() -> Function {
+        let mut f = Function::new("sum2".to_string(), IrType::I64, PhpType::Int);
+        for name in ["carry", "item"] {
+            f.params.push(FunctionParam {
+                name: name.to_string(),
+                ir_type: IrType::I64,
+                php_type: PhpType::Int,
+                by_ref: false,
+                variadic: false,
+            });
+        }
+        f
+    }
+
+    /// `__rt_array_reduce_callable` folds `sum2(int,int)->int { carry + item }` over a
+    /// value_type-0 int array `[1, 2, 3, 4]` starting from initial carry `100`, returning
+    /// `100 + 1 + 2 + 3 + 4 = 110`. The CORRECTNESS pin: 110 distinguishes (a) IGNORING the
+    /// initial (a fold from 0 would return `10`), (b) a product/other fold, and (c) reading
+    /// the wrong result offset (the cell tag at `rcell+0` instead of the lo payload at
+    /// `rcell+8`), each of which yields a different number. The driver ALSO folds an EMPTY
+    /// source from the same initial 100 and returns the headline 110 only when that empty
+    /// fold returns the untouched initial `100` (the loop body never runs) — a `-1` sentinel
+    /// otherwise — so the empty-array path is load-bearing in the `== "110"` assertion.
+    #[test]
+    fn array_reduce_callable_sums_with_initial() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $desc i32) (local $src i32) (local $empty i32) (local $full i64) (local $emptyc i64)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))            ;; FCC descriptor (rc 1)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp kind 6 (callable)
+  (i64.store (local.get $desc) (i64.const 11))                        ;; descriptor kind = 11 (Function)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0 (FCC slot, no closures)
+  (i32.store offset=12 (local.get $desc) (i32.const 0))              ;; capture_count = 0
+  (i32.store offset=16 (local.get $desc) (i32.const 0))              ;; capture_tags_ptr = 0
+  (local.set $src (call $__rt_array_new (i64.const 4) (i64.const 8)))  ;; fresh uniquely-owned int array
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 1)))  ;; src[0] = 1
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 2)))  ;; src[1] = 2
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 3)))  ;; src[2] = 3
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 4)))  ;; src[3] = 4
+  (local.set $full (call $__rt_array_reduce_callable (local.get $desc) (local.get $src) (i64.const 100)))  ;; 100 + 1 + 2 + 3 + 4 = 110
+  (local.set $empty (call $__rt_array_new (i64.const 0) (i64.const 8)))  ;; fresh empty int array (len 0)
+  (local.set $emptyc (call $__rt_array_reduce_callable (local.get $desc) (local.get $empty) (i64.const 100)))  ;; empty fold -> untouched initial 100
+  (if (result i64) (i64.eq (local.get $emptyc) (i64.const 100))      ;; empty fold returned the initial carry?
+    (then (local.get $full))                                         ;; yes -> headline 110
+    (else (i64.const -1))))                                          ;; no  -> sentinel (empty path broken)
+"#;
+        if let Some(o) = run_fcc_driver(sum2_free_fn(), sum2_free_fn_body_wat(), driver, "t") {
+            assert_eq!(o, "110");
+        }
+    }
+
+    /// `array_reduce` run twice over freshly built uniquely-owned int arrays, for refcount
+    /// balance: each pass builds `[1, 2, 3]` (rc 1), folds it (DISCARDING the raw i64 carry —
+    /// the runtime returns an i64, NOT a heap pointer, so there is nothing to free for the
+    /// carry), and releases that array; after the loop the FCC descriptor is released,
+    /// leaving `_gc_live` at "0". A non-return loop, so the per-iteration OWNED arg buffers
+    /// and result cells are never stored anywhere: the runtime's `__rt_decref_any (args2)`
+    /// and `__rt_decref_any (rcell)` are the only things that free them. Proven load-bearing:
+    /// removing the `rcell` free (or the `args2` free) leaves `_gc_live` non-zero (6 leaked
+    /// result cells across the two 3-element passes — each pass does 3 fold iterations).
+    /// Because array_reduce returns an i64 (not a heap pointer), there is NO returned pointer
+    /// to decref, so the per-iteration `rcell` free is the SOLE load-bearing leak target —
+    /// exactly the leak the GC-blindspot rule warns a return-case balance test would miss.
+    #[test]
+    fn array_reduce_callable_balanced_gc() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $desc i32) (local $src i32) (local $i i32)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))            ;; FCC descriptor (rc 1)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp kind 6 (callable)
+  (i64.store (local.get $desc) (i64.const 11))                        ;; descriptor kind = 11 (Function)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0
+  (i32.store offset=12 (local.get $desc) (i32.const 0))              ;; capture_count = 0
+  (i32.store offset=16 (local.get $desc) (i32.const 0))              ;; capture_tags_ptr = 0
+  (local.set $i (i32.const 0))                                       ;; fold-pass counter
+  (block $end
+    (loop $L
+      (br_if $end (i32.ge_s (local.get $i) (i32.const 2)))           ;; two fold passes
+      (local.set $src (call $__rt_array_new (i64.const 3) (i64.const 8)))  ;; fresh uniquely-owned int array
+      (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 1)))  ;; src[0] = 1
+      (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 2)))  ;; src[1] = 2
+      (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 3)))  ;; src[2] = 3
+      (drop (call $__rt_array_reduce_callable (local.get $desc) (local.get $src) (i64.const 0)))  ;; fold; discard the raw i64 carry
+      (call $__rt_decref_any (local.get $src))                       ;; release this pass's array (frees it)
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))          ;; i++
+      (br $L)))
+  (call $__rt_decref_any (local.get $desc))                          ;; release the FCC descriptor
+  (global.get $_gc_live))                                             ;; expect 0 (balanced)
+"#;
+        if let Some(o) = run_fcc_driver(sum2_free_fn(), sum2_free_fn_body_wat(), driver, "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// Builds the self-contained EIR `Function` `reduce_sum() -> mixed` that exercises the
+    /// full `lower_array_reduce` Mixed-result path: it builds an indexed `array<int>`
+    /// `[1, 2, 3, 4]` (`ArrayNew` + `ArrayPush` of int constants), creates a first-class
+    /// callable of `sum2` (`FirstClassCallableNew`, Owned kind-6 descriptor), then folds
+    /// with `array_reduce($arr, $f, 100)` as an `Op::BuiltinCall` whose operands are
+    /// `[arr, vf, initial]` (op0 = ARRAY, op1 = CALLBACK, op2 = INITIAL — the 3-operand
+    /// order `lower_array_reduce` consumes) and a **Mixed** result. The Mixed result repr
+    /// is `WasmRepr::Ptr`, so the lowering boxes the i64 carry into a Mixed cell — the new
+    /// boxing arm under test. It releases the source array and the FCC temp (mirroring
+    /// `ir_lower`: `array_reduce` borrows the array and releases the FCC temp / the int
+    /// initial is NonHeap) and returns the Owned Mixed cell.
+    fn reduce_sum_via_builtin_fn(
+        sum_data: crate::ir::DataId,
+        array_reduce_data: crate::ir::DataId,
+    ) -> Function {
+        let int_arr_ty = PhpType::Array(Box::new(PhpType::Int));
+        let mut f = Function::new(
+            "reduce_sum".to_string(),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            // $arr = [1, 2, 3, 4]  (array<int>, Owned, capacity 4; ArrayPush shapes it).
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(4)),
+                    IrType::Heap(IrHeapKind::Array),
+                    int_arr_ty.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            for v in [1i64, 2, 3, 4] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![arr, c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            // $f = sum2(...)  -> kind-6 Function descriptor (Owned).
+            let vf = b
+                .emit(
+                    Op::FirstClassCallableNew,
+                    Vec::new(),
+                    Some(Immediate::Data(sum_data)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            // $initial = 100  (int carry, NonHeap; repr I64 -> passes the initial guard).
+            let initial = b.emit_const_i64(100);
+            // $res = array_reduce($arr, $f, 100)  -> mixed (Owned). op0 = array, op1 =
+            // callback, op2 = initial. A Mixed result forces the WasmRepr::Ptr boxing arm.
+            let res = b
+                .emit(
+                    Op::BuiltinCall,
+                    vec![arr, vf, initial],
+                    Some(Immediate::Data(array_reduce_data)),
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            // array_reduce borrows the source array, so release it after the call; then
+            // release the FCC descriptor temp (mirrors ir_lower's owned-arg releases).
+            let _ = b.emit(
+                Op::Release,
+                vec![arr],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let _ = b.emit(
+                Op::Release,
+                vec![vf],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: Some(res) });
+        }
+        f
+    }
+
+    /// Builds a reactor module with the full runtime surface, the lowered self-contained
+    /// `reduce_sum` body (via `lower_function`, so the `lower_array_reduce` builtin arm and
+    /// the `__rt_array_reduce_callable` runtime are under test together), the hand-written
+    /// `fn_sum2` body, and the unified closure/FCC dispatch ladder (single FCC entry
+    /// `sum2`). Validates with `wasmparser` and runs `export` under `wasmer`; `None` if
+    /// wasmer is absent (validation always runs).
+    fn run_array_reduce_lowered_driver(driver: &str, export: &str) -> Option<String> {
+        let mut wm = WatModule::new();
+        wm.set_memory(3, Some("memory"));
+        // The lowered body's prologue references the `$__concat_off` cursor global.
+        super::super::runtime::emit_common_runtime(&mut wm);
+        emit_heap_runtime(&mut wm, 1024, 3 * 65536);
+        emit_refcount_runtime(&mut wm);
+        emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
+        super::super::hashes::emit_hash_runtime(&mut wm);
+        emit_object_runtime(&mut wm);
+        emit_gc_desc_stub(&mut wm);
+        emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
+        emit_closure_runtime(&mut wm);
+        wm.add_raw_func(sum2_free_fn_body_wat());
+        let mut module = Module::new(Target::wasm());
+        let sum_data = module.data.intern_string("sum2");
+        let array_reduce_data = module.data.intern_function_name("array_reduce");
+        module.functions.push(sum2_free_fn());
+        let body_fn = reduce_sum_via_builtin_fn(sum_data, array_reduce_data);
+        let fcc_entries = vec!["sum2".to_string()];
+        let body_fb =
+            super::super::function::lower_function(&module, &body_fn, &[], &[], &fcc_entries)
+                .expect("lower array_reduce body");
+        wm.add_func(body_fb);
+        super::emit_closure_dispatch(&mut wm, &module, &fcc_entries).expect("emit_closure_dispatch");
+        wm.add_raw_func(driver);
+        let wat = wm.render();
+        let bytes = ::wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("WAT did not assemble: {e}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|e| panic!("wasm did not validate: {e}\n{wat}"));
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = unique_tmp_dir();
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg(export)
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer --invoke {export} failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            wat
+        );
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// `reduce_sum()` lowers `array_reduce([1,2,3,4], sum2(...), 100)` through the real
+    /// `Op::BuiltinCall` -> `lower_array_reduce` dispatch (NOT a hand-written runtime call)
+    /// with a **Mixed** result, so the lowering boxes the folded i64 carry into a Mixed cell
+    /// (the `WasmRepr::Ptr` arm). The driver unboxes that cell via `__rt_mixed_cast_int` and
+    /// asserts `110` (`100 + 1 + 2 + 3 + 4`). Proves the 3-operand op0=array / op1=callback /
+    /// op2=initial order is consumed correctly AND the Mixed-result boxing path works
+    /// end-to-end; a missing initial would fold to `10`, the distinguishing number from 110.
+    #[test]
+    fn array_reduce_lowering_boxes_mixed_result() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $cell i32)
+  (local.set $cell (call $fn_reduce_sum))                            ;; cell = array_reduce([1,2,3,4], sum2(...), 100) as Mixed
+  (call $__rt_mixed_cast_int (local.get $cell)))                     ;; unbox the boxed int carry -> 110
+"#;
+        if let Some(o) = run_array_reduce_lowered_driver(driver, "t") {
+            assert_eq!(o, "110");
         }
     }
 }

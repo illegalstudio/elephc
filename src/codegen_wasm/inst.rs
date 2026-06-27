@@ -891,6 +891,7 @@ fn lower_builtin_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         "array_map" => lower_array_map(ctx, inst),
         "array_filter" => lower_array_filter(ctx, inst),
         "usort" => lower_usort(ctx, inst),
+        "array_reduce" => lower_array_reduce(ctx, inst),
         other => Err(WasmError::Unsupported(format!("builtin {}", other))),
     }
 }
@@ -1152,6 +1153,140 @@ fn lower_usort(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         store_result(ctx, inst)?;
     }
     Ok(())
+}
+
+/// Lowers `array_reduce($array, $callback, $initial)` where operand 0 `$array` is an
+/// INDEXED `array<int>`, operand 1 `$callback` is a `Callable` descriptor (a closure or
+/// a free-function first-class callable) of shape `(int $carry, int $item) -> int`, and
+/// operand 2 `$initial` is the initial int carry. It lowers to a
+/// `__rt_array_reduce_callable(desc, arr, carry)` runtime call that folds the array
+/// left-to-right (`carry = callback($carry, $item)`) and returns the final i64 carry.
+/// The fourth higher-order consumer after `array_map`/`array_filter`/`usort`, and the
+/// simplest: a scalar i64 carry threaded through the loop, NO array output, NO by-ref,
+/// NO key handling, NO sort. The WASM analogue of the native `lower_array_reduce`.
+///
+/// RAW-i64 CARRY: both the element and the initial are 8-byte int scalars, so the carry,
+/// the item, and the callback result are all raw i64 — there is NO Mixed cell to thread
+/// across iterations. The runtime re-boxes the current i64 carry into a fresh arg cell
+/// each iteration (and reads the callback's int result back from the result cell), so the
+/// carry never accumulates heap state.
+///
+/// RESULT-REPR BRANCH (mirrors native `box_int_result_for_mixed_builtin`): the runtime
+/// returns the carry as an i64 on the stack. When the instruction's result repr is
+/// `Ptr` (a `Mixed`/`Union` result), the carry is boxed into a tag-0 int Mixed cell via
+/// `__rt_mixed_from_value`; when it is `I64` (an `Int` result), the raw i64 is stored
+/// directly. A void call site (`inst.result` is `None`) drops the carry to keep the stack
+/// balanced. Any other result repr is rejected rather than miscompiled.
+///
+/// Both `desc` and `arr` are materialized BORROWED: neither is released here. The EIR
+/// owns operands 0/1/2 (the array is borrowed by `array_reduce`, the descriptor and the
+/// initial are released after) and releases them at the call site.
+///
+/// Deferred (returns `Unsupported`, never miscompiled): a non-3-operand form; a
+/// string/array/object callback (operand 1 not `Callable`); a non-`array<int>` source
+/// (operand 0 not `Heap(Array)` with an `Int` element — the runtime reads 8-byte int
+/// slots, so a 16-byte string/mixed source would be misread); and a non-int initial
+/// carry (operand 2 not `WasmRepr::I64` — a string/mixed/null-default carry has no
+/// 8-byte runtime contract).
+fn lower_array_reduce(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    // Single ($array, $callable, $initial) form only. The EIR planner always supplies a
+    // 3-operand call (defaulting a missing initial to null); any other arity is a
+    // different builtin shape and is deferred.
+    if inst.operands.len() != 3 {
+        return Err(WasmError::Unsupported(format!(
+            "array_reduce with {} operands on wasm32-wasi (only ($array, $callable, \
+             $initial) supported; other arities deferred)",
+            inst.operands.len()
+        )));
+    }
+    let array = operand(inst, 0)?;
+    let callable = operand(inst, 1)?;
+    let initial = operand(inst, 2)?;
+
+    // GUARD: operand 1 must be a Callable descriptor (closure or free-fn FCC). A
+    // string/array/object callback would not be an i64 descriptor and needs its own
+    // runtime callback selection (deferred slice).
+    let callable_php = ctx.value_php_type(callable)?.codegen_repr();
+    if !matches!(callable_php, PhpType::Callable) {
+        return Err(WasmError::Unsupported(format!(
+            "array_reduce with a {:?} callback on wasm32-wasi (only Callable descriptors \
+             supported; string/array/object callbacks deferred)",
+            callable_php
+        )));
+    }
+    // GUARD: operand 0 must be an indexed `array<int>`. The runtime reads 8-byte int slots
+    // (`arr+24+i*8`); a 16-byte string/mixed source would be misread, so reject any
+    // non-`Heap(Array)` source or any non-`Int` element type (string/mixed/object element
+    // folds are deferred). This guard is load-bearing for correctness.
+    let array_ir = ctx.function.value(array).map(|v| v.ir_type);
+    let array_php = ctx.value_php_type(array)?.codegen_repr();
+    let is_int_array = matches!(array_ir, Some(IrType::Heap(IrHeapKind::Array)))
+        && matches!(&array_php, PhpType::Array(elem) if elem.codegen_repr() == PhpType::Int);
+    if !is_int_array {
+        return Err(WasmError::Unsupported(format!(
+            "array_reduce over a {:?} source on wasm32-wasi (only indexed array<int> \
+             supported; string/mixed/object element folds deferred)",
+            array_php
+        )));
+    }
+    // GUARD: operand 2 (initial carry) must be an i64. Only an int/bool initial has the
+    // 8-byte runtime contract the carry threading relies on; a string/mixed/null-default
+    // initial is deferred.
+    let initial_repr = ctx.value_repr(initial)?.clone();
+    if !matches!(initial_repr, WasmRepr::I64(_)) {
+        return Err(WasmError::Unsupported(format!(
+            "array_reduce with a {:?} initial carry on wasm32-wasi (only an int/bool \
+             initial supported; string/mixed/null-default carry deferred)",
+            initial_repr
+        )));
+    }
+
+    // operand 1: callable descriptor (i64) -> i32 for __rt_array_reduce_callable.
+    let desc = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(callable)?;
+    ctx.fb.ins("i32.wrap_i64", "callable descriptor i64 -> i32");
+    ctx.fb.ins(&format!("local.set {}", desc), "save descriptor pointer");
+
+    // Push the descriptor, then the array pointer (i32), then the initial carry (i64);
+    // the runtime folds carry = cb(carry, item) left-to-right and leaves the final i64
+    // carry on the stack. Neither operand is released here: the EIR owns/releases
+    // operands 0/1/2 at the call site.
+    ctx.fb.ins(&format!("local.get {}", desc), "descriptor pointer");
+    ctx.emit_load_value(array)?; // array pointer (i32)
+    ctx.emit_load_value(initial)?; // initial carry (i64)
+    ctx.fb.ins(
+        "call $__rt_array_reduce_callable",
+        "left-to-right fold carry = cb(carry, item), returns the final i64 carry",
+    );
+
+    // The final i64 carry is on the stack. Box it (Mixed/Union result), store it raw
+    // (Int result), or drop it (void call) — mirroring native box_int_result_for_mixed_builtin.
+    match inst.result {
+        Some(result) => match ctx.value_repr(result)?.clone() {
+            WasmRepr::Ptr(_) => {
+                let carry = ctx.fresh_temp(ValType::I64);
+                ctx.fb.ins(&format!("local.set {}", carry), "save the folded i64 carry");
+                ctx.fb.ins(
+                    &format!(
+                        "(call $__rt_mixed_from_value (i64.const 0) (local.get {}) (i64.const 0))",
+                        carry
+                    ),
+                    "box the int carry into a Mixed cell (tag 0) for a Mixed/Union result",
+                );
+                store_result(ctx, inst)
+            }
+            WasmRepr::I64(_) => store_result(ctx, inst),
+            other => Err(WasmError::Unsupported(format!(
+                "array_reduce into {:?} on wasm32-wasi (only an Int or Mixed/Union result \
+                 supported)",
+                other
+            ))),
+        },
+        None => {
+            ctx.fb.ins("drop", "discard the unused folded carry (no result)");
+            Ok(())
+        }
+    }
 }
 
 /// Lowers `exit`/`die`: an integer argument becomes the WASI exit status; any
