@@ -11393,11 +11393,56 @@ echo call_user_func_array($box, ["right" => "J", "left" => "I"]);');
     );
 }
 
+/// Verifies eval AOT invokable objects dispatch through variable and callback call paths.
+#[test]
+fn test_eval_aot_invokable_object_dynamic_callables() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function eval_aot_invokable_side_effect() {
+    echo "bad";
+    return "x";
+}
+
+class EvalAotInvokableBox {
+    public function __invoke(string $left = "A", string $right = "B"): string {
+        return $left . $right;
+    }
+}
+
+class EvalAotPlainInvokableProbe {}
+
+eval('$box = new EvalAotInvokableBox();
+echo is_callable($box) ? "Y:" : "N:";
+echo $box(right: "D", left: "C") . ":";
+echo $box("E") . ":";
+echo call_user_func($box, "F", "G") . ":";
+echo call_user_func_array($box, ["right" => "I", "left" => "H"]) . ":";
+try {
+    (new EvalAotPlainInvokableProbe())(eval_aot_invokable_side_effect());
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "Y:CD:EB:FG:HI:Error:Object of type EvalAotPlainInvokableProbe is not callable"
+    );
+}
+
 /// Verifies eval call_user_func rejects non-invokable objects with PHP's TypeError.
 #[test]
 fn test_eval_call_user_func_rejects_non_invokable_object() {
     let out = compile_and_run_capture(
         r#"<?php
+class EvalAotPlainCallbackError {}
+
 eval('class EvalPlainCallbackError {}
 $plain = new EvalPlainCallbackError();
 try {
@@ -11412,6 +11457,14 @@ try {
     echo "bad";
 } catch (TypeError $e) {
     echo get_class($e) . ":" . $e->getMessage();
+}
+echo "|";
+$aotPlain = new EvalAotPlainCallbackError();
+try {
+    call_user_func($aotPlain);
+    echo "bad";
+} catch (TypeError $e) {
+    echo get_class($e) . ":" . $e->getMessage();
 }');
 "#,
     );
@@ -11423,7 +11476,8 @@ try {
     assert_eq!(
         out.stdout,
         "TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, no array or string given|\
-TypeError:call_user_func_array(): Argument #1 ($callback) must be a valid callback, no array or string given"
+TypeError:call_user_func_array(): Argument #1 ($callback) must be a valid callback, no array or string given|\
+TypeError:call_user_func(): Argument #1 ($callback) must be a valid callback, no array or string given"
     );
 }
 

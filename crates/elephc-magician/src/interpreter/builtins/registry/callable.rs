@@ -118,6 +118,20 @@ pub(in crate::interpreter) fn eval_object_callable(
 ) -> Result<EvaluatedCallable, EvalStatus> {
     let identity = values.object_identity(callback)?;
     let Some(class) = context.dynamic_object_class(identity) else {
+        let class_name = runtime_object_class_name(callback, values)?;
+        let Some((_, _, is_static, is_abstract)) =
+            eval_aot_method_dispatch_metadata_in_hierarchy(
+                &class_name,
+                "__invoke",
+                context,
+                values,
+            )?
+        else {
+            return Err(EvalStatus::UnsupportedConstruct);
+        };
+        if is_static || is_abstract {
+            return Err(EvalStatus::UnsupportedConstruct);
+        }
         return Ok(EvaluatedCallable::InvokableObject { object: callback });
     };
     let Some((_, method)) = context.class_method(class.name(), "__invoke") else {

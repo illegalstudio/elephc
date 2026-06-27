@@ -7031,8 +7031,28 @@ pub(in crate::interpreter) fn eval_invokable_object_call_result(
         return values.method_call(object, "__invoke", evaluated_args);
     };
     let Some(class) = context.dynamic_object_class(identity) else {
-        let evaluated_args = positional_evaluated_arg_values(evaluated_args)?;
-        return values.method_call(object, "__invoke", evaluated_args);
+        let class_name = runtime_object_class_name(object, values)?;
+        let Some((_, _, is_static, is_abstract)) =
+            eval_aot_method_dispatch_metadata_in_hierarchy(
+                &class_name,
+                "__invoke",
+                context,
+                values,
+            )?
+        else {
+            return eval_throw_object_not_callable_error(&class_name, context, values);
+        };
+        if is_static || is_abstract {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        return eval_native_method_with_evaluated_args_unchecked(
+            object,
+            &class_name,
+            "__invoke",
+            evaluated_args,
+            context,
+            values,
+        );
     };
     let called_class_name = class.name().to_string();
     let Some((declaring_class, method)) = context.class_method(&called_class_name, "__invoke")
@@ -7063,6 +7083,20 @@ pub(in crate::interpreter) fn eval_invokable_object_precheck(
         return Ok(());
     };
     let Some(class) = context.dynamic_object_class(identity) else {
+        let class_name = runtime_object_class_name(object, values)?;
+        let Some((_, _, is_static, is_abstract)) =
+            eval_aot_method_dispatch_metadata_in_hierarchy(
+                &class_name,
+                "__invoke",
+                context,
+                values,
+            )?
+        else {
+            return eval_throw_object_not_callable_error(&class_name, context, values);
+        };
+        if is_static || is_abstract {
+            return Err(EvalStatus::RuntimeFatal);
+        }
         return Ok(());
     };
     let called_class_name = class.name().to_string();
