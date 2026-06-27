@@ -156,8 +156,8 @@ containers to eval-declared functions.
 ## Classes and objects
 
 Eval-declared classes support inheritance, public/protected/private properties,
-PHP's legacy `var` marker for public properties, and methods, asymmetric
-property write visibility (`private(set)` /
+comma-separated simple property declarations, PHP's legacy `var` marker for
+public properties, and methods, asymmetric property write visibility (`private(set)` /
 `protected(set)`), constructor property promotion including by-reference promotion
 for variable, array-element, object-property, static-property,
 property-array-element, static-property-array-element, and default-value targets,

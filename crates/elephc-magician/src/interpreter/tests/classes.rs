@@ -112,6 +112,39 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies comma-separated eval properties initialize instance, static, and trait storage.
+#[test]
+fn execute_program_reads_comma_separated_eval_properties() {
+    let program = parse_fragment(
+        br#"class EvalMultiPropertyBox {
+    public int $a = 1, $b = 2;
+    public static int $s = 3, $t = 4;
+    public function sum() { return $this->a + $this->b + self::$s + self::$t; }
+}
+trait EvalMultiPropertyTrait {
+    public int $x = 5, $y = 6;
+}
+class EvalMultiPropertyTraitBox {
+    use EvalMultiPropertyTrait;
+    public function sum() { return $this->x + $this->y; }
+}
+$box = new EvalMultiPropertyBox();
+$traitBox = new EvalMultiPropertyTraitBox();
+echo $box->a; echo $box->b; echo ":";
+echo EvalMultiPropertyBox::$s; echo EvalMultiPropertyBox::$t; echo ":";
+echo $traitBox->x; echo $traitBox->y; echo ":";
+return $box->sum() + $traitBox->sum();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "12:34:56:");
+    assert_eq!(values.get(result), FakeValue::Int(21));
+}
+
 /// Verifies eval static method calls preserve PHP late-static forwarding rules.
 #[test]
 fn execute_program_forwards_eval_static_method_called_class() {

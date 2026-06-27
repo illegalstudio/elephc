@@ -7483,6 +7483,34 @@ echo $label->getType()->getName();');
     assert_eq!(out, "p:P:t:C:int:N:null:trait:L:string");
 }
 
+/// Verifies eval supports PHP comma-separated instance, static, and trait properties.
+#[test]
+fn test_eval_declared_comma_separated_properties() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('class EvalMultiPropertyBox {
+    public int $a = 1, $b = 2;
+    public static int $s = 3, $t = 4;
+    public function sum() { return $this->a + $this->b + self::$s + self::$t; }
+}
+trait EvalMultiPropertyTrait {
+    public int $x = 5, $y = 6;
+}
+class EvalMultiPropertyTraitBox {
+    use EvalMultiPropertyTrait;
+    public function sum() { return $this->x + $this->y; }
+}
+$box = new EvalMultiPropertyBox();
+$traitBox = new EvalMultiPropertyTraitBox();
+echo $box->a . $box->b . ":";
+echo EvalMultiPropertyBox::$s . EvalMultiPropertyBox::$t . ":";
+echo $traitBox->x . $traitBox->y . ":";
+return $box->sum() + $traitBox->sum();');
+"#,
+    );
+    assert_eq!(out, "12:34:56:21");
+}
+
 /// Verifies native callable probes can see functions declared by eval after the barrier.
 #[test]
 fn test_eval_declared_function_is_visible_to_callable_probes() {

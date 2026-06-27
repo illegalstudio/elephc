@@ -744,7 +744,7 @@ impl Parser {
         }
 
         let visibility = visibility.unwrap_or(EvalVisibility::Public);
-        let (property, mut hook_methods) = self.parse_class_property_decl(
+        let (parsed_properties, mut hook_methods) = self.parse_class_property_decl(
             visibility,
             set_visibility,
             is_static,
@@ -753,7 +753,11 @@ impl Parser {
             is_readonly_class,
             is_abstract,
         )?;
-        properties.push(property.with_attributes(attributes));
+        properties.extend(
+            parsed_properties
+                .into_iter()
+                .map(|property| property.with_attributes(attributes.clone())),
+        );
         methods.append(&mut hook_methods);
         Ok(())
     }
@@ -771,7 +775,7 @@ impl Parser {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         self.advance();
-        let (property, mut hook_methods) = self.parse_class_property_decl(
+        let (parsed_properties, mut hook_methods) = self.parse_class_property_decl(
             EvalVisibility::Public,
             None,
             false,
@@ -780,7 +784,11 @@ impl Parser {
             is_readonly_class,
             false,
         )?;
-        properties.push(property.with_attributes(attributes));
+        properties.extend(
+            parsed_properties
+                .into_iter()
+                .map(|property| property.with_attributes(attributes.clone())),
+        );
         methods.append(&mut hook_methods);
         Ok(())
     }
@@ -1141,7 +1149,7 @@ impl Parser {
         ))
     }
 
-    /// Parses one public property declaration with an optional initializer.
+    /// Parses one property declaration, including comma-separated simple properties.
     pub(super) fn parse_class_property_decl(
         &mut self,
         visibility: EvalVisibility,
@@ -1151,7 +1159,7 @@ impl Parser {
         is_readonly: bool,
         is_readonly_class: bool,
         is_abstract: bool,
-    ) -> Result<(EvalClassProperty, Vec<EvalClassMethod>), EvalParseError> {
+    ) -> Result<(Vec<EvalClassProperty>, Vec<EvalClassMethod>), EvalParseError> {
         if is_static && is_readonly {
             return Err(EvalParseError::UnsupportedConstruct);
         }
@@ -1168,65 +1176,105 @@ impl Parser {
         if set_visibility.is_some() && property_type.is_none() {
             return Err(EvalParseError::UnsupportedConstruct);
         }
-        let TokenKind::DollarIdent(name) = self.current() else {
-            return Err(EvalParseError::UnexpectedToken);
-        };
-        let name = name.clone();
-        self.advance();
-        let default = if self.consume(TokenKind::Equal) {
-            if is_abstract || effective_readonly {
+        let mut properties = Vec::new();
+        let mut hook_methods = Vec::new();
+        loop {
+            let TokenKind::DollarIdent(name) = self.current() else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            let name = name.clone();
+            self.advance();
+            let default = if self.consume(TokenKind::Equal) {
+                if is_abstract || effective_readonly {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+            if is_abstract {
+                if is_static || effective_readonly {
+                    return Err(EvalParseError::UnsupportedConstruct);
+                }
+                let (requires_get_hook, requires_set_hook) =
+                    self.parse_property_hook_contracts()?;
+                let property = EvalClassProperty::with_visibility_static_final_and_readonly(
+                    name,
+                    visibility,
+                    is_static,
+                    is_final,
+                    effective_readonly,
+                    None,
+                )
+                .with_type(property_type)
+                .with_set_visibility(set_visibility)
+                .with_abstract_hook_contract(requires_get_hook, requires_set_hook);
+                return Ok((vec![property], Vec::new()));
+            }
+            let default_is_some = default.is_some();
+            if self.consume(TokenKind::Comma) {
+                properties.push(
+                    EvalClassProperty::with_visibility_static_final_and_readonly(
+                        name,
+                        visibility,
+                        is_static,
+                        is_final,
+                        effective_readonly,
+                        default,
+                    )
+                    .with_type(property_type.clone())
+                    .with_set_visibility(set_visibility),
+                );
+                continue;
+            }
+            if !properties.is_empty() {
+                self.expect_semicolon()?;
+                properties.push(
+                    EvalClassProperty::with_visibility_static_final_and_readonly(
+                        name,
+                        visibility,
+                        is_static,
+                        is_final,
+                        effective_readonly,
+                        default,
+                    )
+                    .with_type(property_type.clone())
+                    .with_set_visibility(set_visibility),
+                );
+                break;
+            }
+            let (has_get_hook, has_set_hook, set_hook_type, parsed_hook_methods) = self
+                .parse_property_hook_tail(
+                    &name,
+                    property_type.as_ref(),
+                    is_static,
+                    effective_readonly,
+                    default_is_some,
+                )?;
+            if set_hook_type.is_some() && property_type.is_none() {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            Some(self.parse_expr()?)
-        } else {
-            None
-        };
-        if is_abstract {
-            if is_static || effective_readonly {
-                return Err(EvalParseError::UnsupportedConstruct);
-            }
-            let (requires_get_hook, requires_set_hook) = self.parse_property_hook_contracts()?;
-            let property = EvalClassProperty::with_visibility_static_final_and_readonly(
-                name,
-                visibility,
-                is_static,
-                is_final,
-                effective_readonly,
-                None,
-            )
-            .with_type(property_type)
-            .with_set_visibility(set_visibility)
-            .with_abstract_hook_contract(requires_get_hook, requires_set_hook);
-            return Ok((property, Vec::new()));
+            let is_virtual = (has_get_hook || has_set_hook)
+                && !property_hook_methods_use_backing_slot(&parsed_hook_methods, &name);
+            properties.push(
+                EvalClassProperty::with_visibility_static_final_and_readonly(
+                    name,
+                    visibility,
+                    is_static,
+                    is_final,
+                    effective_readonly,
+                    default,
+                )
+                .with_type(property_type.clone())
+                .with_set_hook_type(set_hook_type)
+                .with_set_visibility(set_visibility)
+                .with_hooks(has_get_hook, has_set_hook)
+                .with_virtual(is_virtual),
+            );
+            hook_methods.extend(parsed_hook_methods);
+            break;
         }
-        let default_is_some = default.is_some();
-        let (has_get_hook, has_set_hook, set_hook_type, hook_methods) = self
-            .parse_property_hook_tail(
-                &name,
-                property_type.as_ref(),
-                is_static,
-                effective_readonly,
-                default_is_some,
-            )?;
-        if set_hook_type.is_some() && property_type.is_none() {
-            return Err(EvalParseError::UnsupportedConstruct);
-        }
-        let is_virtual = (has_get_hook || has_set_hook)
-            && !property_hook_methods_use_backing_slot(&hook_methods, &name);
-        let property = EvalClassProperty::with_visibility_static_final_and_readonly(
-            name,
-            visibility,
-            is_static,
-            is_final,
-            effective_readonly,
-            default,
-        )
-        .with_type(property_type)
-        .with_set_hook_type(set_hook_type)
-        .with_set_visibility(set_visibility)
-        .with_hooks(has_get_hook, has_set_hook)
-        .with_virtual(is_virtual);
-        Ok((property, hook_methods))
+        Ok((properties, hook_methods))
     }
 
     /// Parses `;` or a concrete eval property hook block after one property declaration.
@@ -1492,7 +1540,7 @@ impl Parser {
             return Ok(());
         }
         let visibility = visibility.unwrap_or(EvalVisibility::Public);
-        let (property, mut hook_methods) = self.parse_class_property_decl(
+        let (parsed_properties, mut hook_methods) = self.parse_class_property_decl(
             visibility,
             set_visibility,
             is_static,
@@ -1501,7 +1549,11 @@ impl Parser {
             false,
             is_abstract,
         )?;
-        properties.push(property.with_attributes(attributes));
+        properties.extend(
+            parsed_properties
+                .into_iter()
+                .map(|property| property.with_attributes(attributes.clone())),
+        );
         methods.append(&mut hook_methods);
         Ok(())
     }

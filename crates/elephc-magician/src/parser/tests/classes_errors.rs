@@ -690,6 +690,64 @@ fn parse_fragment_accepts_constructor_promoted_properties() {
     );
 }
 
+/// Verifies comma-separated simple properties lower to individual eval properties.
+#[test]
+fn parse_fragment_accepts_comma_separated_class_properties() {
+    let program = parse_fragment(
+        br#"class DynEvalMultiProperties {
+    public private(set) int $id = 1, $nextId;
+    public static string $first = "a", $second = "b";
+    var $legacy, $legacyDefault = 3;
+}
+trait DynEvalMultiPropertyTrait {
+    protected int $left = 4, $right = 5;
+}"#,
+    )
+    .expect("fragment should parse");
+    let EvalStmt::ClassDecl(class) = &program.statements()[0] else {
+        panic!("expected class declaration");
+    };
+    let properties = class.properties();
+    assert_eq!(properties.len(), 6);
+    assert_eq!(properties[0].name(), "id");
+    assert_eq!(properties[0].set_visibility(), Some(EvalVisibility::Private));
+    assert_eq!(
+        properties[0].property_type(),
+        Some(&EvalParameterType::new(
+            vec![EvalParameterTypeVariant::Int],
+            false,
+        )),
+    );
+    assert_eq!(properties[0].default(), Some(&EvalExpr::Const(EvalConst::Int(1))));
+    assert_eq!(properties[1].name(), "nextId");
+    assert_eq!(properties[1].set_visibility(), Some(EvalVisibility::Private));
+    assert_eq!(properties[1].default(), None);
+    assert_eq!(properties[2].name(), "first");
+    assert!(properties[2].is_static());
+    assert_eq!(
+        properties[2].property_type(),
+        Some(&EvalParameterType::new(
+            vec![EvalParameterTypeVariant::String],
+            false,
+        )),
+    );
+    assert_eq!(properties[3].name(), "second");
+    assert!(properties[3].is_static());
+    assert_eq!(properties[4].name(), "legacy");
+    assert_eq!(properties[4].property_type(), None);
+    assert_eq!(properties[5].name(), "legacyDefault");
+    assert_eq!(properties[5].default(), Some(&EvalExpr::Const(EvalConst::Int(3))));
+
+    let EvalStmt::TraitDecl(trait_decl) = &program.statements()[1] else {
+        panic!("expected trait declaration");
+    };
+    assert_eq!(trait_decl.properties().len(), 2);
+    assert_eq!(trait_decl.properties()[0].name(), "left");
+    assert_eq!(trait_decl.properties()[0].visibility(), EvalVisibility::Protected);
+    assert_eq!(trait_decl.properties()[1].name(), "right");
+    assert_eq!(trait_decl.properties()[1].visibility(), EvalVisibility::Protected);
+}
+
 /// Verifies by-reference promoted constructor parameters lower to property aliases.
 #[test]
 fn parse_fragment_accepts_by_reference_constructor_promoted_properties() {
