@@ -97,6 +97,16 @@ pub(super) struct FnCtx<'a> {
     /// closure (no tag array emitted). `ClosureNew` stamps this as the
     /// descriptor's `capture_tags_ptr` so the release runtime can walk it.
     pub(super) closure_tag_ptrs: &'a [u32],
+    /// Distinct names of user FREE FUNCTIONS that are the target of an
+    /// `Op::FirstClassCallableNew` somewhere in the module, in first-seen order
+    /// (P7d2a). These occupy the UNIFIED callable-ladder index space *after* the
+    /// closures: an FCC target's `entry_index` is `module.closures.len() + its
+    /// position here`, so closures keep `0..N` and FCC entries take `N..N+M`.
+    /// `lower_first_class_callable_new` looks a target name up here (via
+    /// `fcc_entry_index`) to stamp the kind-6 descriptor's `entry_index`; a name
+    /// absent from this slice is a builtin/extern/method FCC target (deferred) and
+    /// is rejected rather than miscompiled. Built once in `generate()`.
+    pub(super) fcc_entries: &'a [String],
     /// Maps an `IterStart` result `ValueId::as_raw()` to its iterator locals, so the
     /// loop's `IterNext`/`IterCurrent*` ops (which reference the iterator value by
     /// dominance) recover its source/cursor without any heap state.
@@ -190,6 +200,21 @@ impl<'a> FnCtx<'a> {
     /// (defensive; should not happen for a valid `ClosureNew`).
     pub(super) fn closure_tag_base(&self, entry_index: usize) -> u32 {
         self.closure_tag_ptrs.get(entry_index).copied().unwrap_or(0)
+    }
+
+    /// Resolves the unified callable-ladder `entry_index` for a first-class
+    /// callable whose target is the user free function `name`, or `None` when the
+    /// name is not a registered free-function FCC target (a builtin/extern/method
+    /// target — the caller rejects those as a deferred slice rather than
+    /// miscompiling). The index is `module.closures.len() + position`, so it never
+    /// collides with a closure's index (`0..N`). Exact-match by name: the registry
+    /// is built from the SAME interned `Immediate::Data` names these instructions
+    /// carry, so the lookup string equals the registered string.
+    pub(super) fn fcc_entry_index(&self, name: &str) -> Option<u32> {
+        self.fcc_entries
+            .iter()
+            .position(|n| n == name)
+            .map(|p| self.module.closures.len() as u32 + p as u32)
     }
 
     /// Declares a fresh temp local of the given type and returns its `$name` reference.

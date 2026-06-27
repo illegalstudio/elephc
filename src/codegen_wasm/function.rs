@@ -54,12 +54,16 @@ use crate::ir::{
 /// used by `ConstStr` lowering to address the data segments. `closure_tag_ptrs`
 /// is the per-closure capture-tag-array base address layout (indexed by
 /// `module.closures` position), used by `ClosureNew` lowering to stamp the
-/// descriptor's `capture_tags_ptr`.
+/// descriptor's `capture_tags_ptr`. `fcc_entries` is the distinct first-class
+/// callable free-function target list (P7d2a), used by
+/// `FirstClassCallableNew` lowering to resolve a target's unified ladder
+/// `entry_index`.
 pub fn lower_function(
     module: &Module,
     function: &Function,
     str_literals: &[(u32, u32)],
     closure_tag_ptrs: &[u32],
+    fcc_entries: &[String],
 ) -> Result<FuncBuilder> {
     let is_main = function.flags.is_main;
 
@@ -133,6 +137,7 @@ pub fn lower_function(
         temp_counter: 0,
         str_literals,
         closure_tag_ptrs,
+        fcc_entries,
         iter_state: std::collections::HashMap::new(),
         ref_cell_ptrs: std::collections::HashMap::new(),
         ref_cell_owners: Vec::new(),

@@ -57,7 +57,10 @@ use super::objects::emit_box_value_into_mixed;
 use super::values::WasmRepr;
 use super::wat::{DataSegment, ValType, WatModule};
 use super::WasmError;
-use crate::ir::{Function, Instruction, IrHeapKind, IrType, LocalSlotId, Module, Ownership, ValueId};
+use crate::ir::{
+    Function, Immediate, Instruction, IrHeapKind, IrType, LocalSlotId, Module, Op, Ownership,
+    ValueId,
+};
 use crate::types::PhpType;
 
 /// Registers the callable-descriptor refcount runtime (`__rt_callable_descriptor_release`)
@@ -328,6 +331,153 @@ pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
             stamp_capture_slot(ctx, &desc, i, operand, cap_p)?;
         }
     }
+
+    ctx.fb.ins(&format!("local.get {}", desc), "descriptor pointer");
+    ctx.fb.ins("i64.extend_i32_u", "zero-extend ptr -> i64 callable value");
+    store_result(ctx, inst)
+}
+
+// ---------------------------------------------------------------------------
+// P7d2a: first-class callable of a no-capture user free function.
+// ---------------------------------------------------------------------------
+
+/// Scans every function / class-method / closure body for `Op::FirstClassCallableNew`
+/// instructions whose target is a user FREE FUNCTION, returning the DISTINCT target
+/// names in first-seen order (the FCC entry registry).
+///
+/// A target qualifies iff its `Immediate::Data` name (interned in
+/// `module.data.strings`) contains no `::` (so it is not a static/instance-method
+/// callable, whose target name is `Receiver::method` / `object::method`) AND it
+/// resolves to a `module.functions` entry under PHP case-insensitive name matching
+/// (so it is neither a builtin/extern, which are absent from `module.functions`, nor
+/// a closure). This is the WASM analogue of the native `callable_function_by_name`
+/// kind-`Function` (=11) gate: builtins/externs/methods fall through and are later
+/// rejected by `lower_first_class_callable_new` with a deferred-slice diagnostic.
+///
+/// All three body lists are scanned (not just `module.functions`) because an
+/// `Op::FirstClassCallableNew` can be lowered inside a method or closure body too;
+/// the unified ladder + wrappers are emitted once from this single registry, so a
+/// superset scan only ever adds an unused arm — it never miscompiles. The returned
+/// names feed both `FnCtx::fcc_entry_index` (descriptor stamping) and
+/// `emit_closure_dispatch` (wrapper + ladder-arm emission), keeping the index space
+/// consistent.
+pub(super) fn collect_fcc_free_function_entries(module: &Module) -> Vec<String> {
+    let mut entries: Vec<String> = Vec::new();
+    let bodies = module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter());
+    for f in bodies {
+        for inst in &f.instructions {
+            if inst.op != Op::FirstClassCallableNew {
+                continue;
+            }
+            let Some(Immediate::Data(data_id)) = inst.immediate else {
+                continue;
+            };
+            let Some(name) = module.data.strings.get(data_id.as_raw() as usize) else {
+                continue;
+            };
+            if is_user_free_function_target(module, name) && !entries.iter().any(|n| n == name) {
+                entries.push(name.clone());
+            }
+        }
+    }
+    entries
+}
+
+/// Returns whether the FCC target `name` is a user free function (no `::`, resolves
+/// in `module.functions` by PHP case-insensitive name). Mirrors the native
+/// kind-`Function` gate; excludes static/instance methods (`::`-bearing names),
+/// builtins/externs (absent from `module.functions`), and closures.
+fn is_user_free_function_target(module: &Module, name: &str) -> bool {
+    if name.contains("::") {
+        return false;
+    }
+    let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    module
+        .functions
+        .iter()
+        .any(|f| crate::names::php_symbol_key(f.name.trim_start_matches('\\')) == key)
+}
+
+/// Resolves the user free `Function` registered under the FCC target `name`
+/// (PHP case-insensitive), so `emit_closure_dispatch` can read its EIR signature
+/// to build the FCC wrapper. Returns `None` only for a name no longer present in
+/// `module.functions` (should not happen for a registered entry).
+fn fcc_target_function<'a>(module: &'a Module, name: &str) -> Option<&'a Function> {
+    let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    module
+        .functions
+        .iter()
+        .find(|f| crate::names::php_symbol_key(f.name.trim_start_matches('\\')) == key)
+}
+
+/// Lowers `Op::FirstClassCallableNew` whose target is a no-capture user free
+/// function (`$f = foo(...)`), allocating the same kind-6 callable descriptor a
+/// 0-capture closure uses and stamping it as a Function descriptor.
+///
+/// The target name is carried by an `Immediate::Data` index into `module.data.strings`
+/// (the interned `callable_target_name`). Its unified ladder `entry_index` is resolved
+/// via `FnCtx::fcc_entry_index` (`module.closures.len() + position` in the FCC
+/// registry); `__rt_closure_call` then dispatches it through the FCC wrapper emitted by
+/// `emit_closure_dispatch`. The descriptor payload is stamped: `[hdr-8]`=6 (callable
+/// heap kind), `[+0]` i64 = 11 (Function descriptor kind, distinct from Closure=1),
+/// `[+8]` i32 = entry_index, `[+12]` i32 = 0 (capture_count), `[+16]` i32 = 0
+/// (capture_tags_ptr). Capture_count 0 means `__rt_callable_descriptor_release` walks no
+/// captures and frees the block cleanly (no leak). The result is the descriptor pointer
+/// zero-extended to the `I64` Callable value (Owned: an owning temporary).
+///
+/// A target that is NOT a registered user free function (builtin/extern/static or
+/// instance method) returns `WasmError::Unsupported` naming the deferred slice rather
+/// than miscompiling: those FCC shapes need their own wrappers (P7d2c/P7d2d).
+pub(super) fn lower_first_class_callable_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let data_id = data_immediate(inst)?;
+    let name = ctx
+        .module
+        .data
+        .strings
+        .get(data_id.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| {
+            WasmError::Unsupported(format!("first-class callable: unknown name {:?}", data_id))
+        })?;
+    let entry_index = ctx.fcc_entry_index(&name).ok_or_else(|| {
+        WasmError::Unsupported(format!(
+            "first-class callable of {:?} on wasm32-wasi: only no-capture user free \
+             functions are supported (builtin/extern/method FCC deferred: P7d2c/P7d2d)",
+            name
+        ))
+    })?;
+
+    // A Function FCC has no captures, so the descriptor is the fixed 32-byte payload.
+    let desc = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(
+        &format!("(call $__rt_heap_alloc (i32.const {}))", DESCRIPTOR_PAYLOAD_BYTES),
+        "allocate callable descriptor (refcount 1), no capture slots",
+    );
+    ctx.fb.ins(&format!("local.set {}", desc), "save descriptor pointer");
+    ctx.fb.ins(
+        &format!("(i64.store (i32.sub (local.get {}) (i32.const 8)) (i64.const 6))", desc),
+        "stamp heap-header kind = 6 (callable)",
+    );
+    ctx.fb.ins(
+        &format!("(i64.store (local.get {}) (i64.const 11))", desc),
+        "descriptor kind = 11 (Function)",
+    );
+    ctx.fb.ins(
+        &format!("(i32.store offset=8 (local.get {}) (i32.const {}))", desc, entry_index),
+        "entry_index = unified callable-ladder slot (after the closures)",
+    );
+    ctx.fb.ins(
+        &format!("(i32.store offset=12 (local.get {}) (i32.const 0))", desc),
+        "capture_count = 0 (no captures)",
+    );
+    ctx.fb.ins(
+        &format!("(i32.store offset=16 (local.get {}) (i32.const 0))", desc),
+        "capture_tags_ptr = 0 (no capture walk)",
+    );
 
     ctx.fb.ins(&format!("local.get {}", desc), "descriptor pointer");
     ctx.fb.ins("i64.extend_i32_u", "zero-extend ptr -> i64 callable value");
@@ -776,10 +926,18 @@ fn release_cell(ctx: &mut FnCtx, rcell: &str) {
 /// containers/callables so the body's Owned params balance), calls the body, boxes the
 /// body's result into a Mixed cell, and returns the cell. `__rt_closure_call` reads the
 /// `entry_index` from `[desc+8]` and tail-calls the matching wrapper; the fall-through is
-/// `unreachable` (a valid descriptor always carries a known index). No wrappers are
-/// emitted when the module has no closures.
-pub(super) fn emit_closure_dispatch(wm: &mut WatModule, module: &Module) -> Result<()> {
-    if module.closures.is_empty() {
+/// `unreachable` (a valid descriptor always carries a known index).
+///
+/// The ladder is UNIFIED (P7d2a): the `module.closures` wrappers take indices `0..N`
+/// (`N = module.closures.len()`), then one FCC wrapper per `fcc_entries` name takes
+/// indices `N..N+M` — exactly the index space `FnCtx::fcc_entry_index` stamps into the
+/// descriptors. Nothing is emitted when there are neither closures nor FCC entries.
+pub(super) fn emit_closure_dispatch(
+    wm: &mut WatModule,
+    module: &Module,
+    fcc_entries: &[String],
+) -> Result<()> {
+    if module.closures.is_empty() && fcc_entries.is_empty() {
         return Ok(());
     }
     let mut arms: Vec<(u32, String)> = Vec::new();
@@ -789,8 +947,79 @@ pub(super) fn emit_closure_dispatch(wm: &mut WatModule, module: &Module) -> Resu
         wm.add_raw_func(&wat);
         arms.push((idx as u32, wrapper_symbol));
     }
+    let base = module.closures.len() as u32;
+    for (k, name) in fcc_entries.iter().enumerate() {
+        let entry_index = base + k as u32;
+        let target = fcc_target_function(module, name).ok_or_else(|| {
+            WasmError::Unsupported(format!("first-class callable: no body for {}", name))
+        })?;
+        let wrapper_symbol = fcc_wrapper_symbol(name);
+        let wat = build_fcc_wrapper(&wrapper_symbol, target)?;
+        wm.add_raw_func(&wat);
+        arms.push((entry_index, wrapper_symbol));
+    }
     wm.add_raw_func(&build_closure_call_ladder(&arms));
     Ok(())
+}
+
+/// Derives the unified-ladder wrapper symbol for an FCC-of-free-function target
+/// `name`: `__fcc_wrap_<name>`, sanitized through `wasm_fn_symbol`. Distinct from
+/// both the user function symbol (`fn_<name>`) and the closure wrappers
+/// (`fn___closure_wrap_*`), so the three never collide in the module namespace.
+fn fcc_wrapper_symbol(name: &str) -> String {
+    wasm_fn_symbol(&format!("__fcc_wrap_{}", name))
+}
+
+/// Builds the raw WAT body of an FCC wrapper for a no-capture user free function:
+/// unbox each (visible) param from the Mixed-cell arg buffer, call the user body
+/// `fn_<name>`, box the result into a Mixed cell, and return the cell. This is the
+/// 0-capture analogue of `build_closure_wrapper`, reusing the same `unbox_arg_wat` /
+/// `box_result_wat` helpers; the only difference is the body symbol (the user
+/// function, not a `__eir_closure_*` body) and that there are never captures to read
+/// from the descriptor.
+///
+/// A by-ref or variadic param is rejected with a clean diagnostic: the FCC arg buffer
+/// carries Mixed cells, not ref-cell pointers, and the variadic split has no wrapper
+/// support yet, so those FCC shapes are deferred rather than miscompiled.
+fn build_fcc_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
+    let body_symbol = wasm_fn_symbol(&f.name);
+    for p in &f.params {
+        if p.by_ref || p.variadic {
+            return Err(WasmError::Unsupported(format!(
+                "first-class callable of {} with by-ref/variadic param {} on wasm32-wasi (deferred)",
+                f.name, p.name
+            )));
+        }
+    }
+    let mut wat = String::new();
+    wat.push_str(&format!(
+        "(func ${} (param $desc i32) (param $args i32) (result i32)\n",
+        wrapper_symbol
+    ));
+    // Shared unbox/box locals (reused per arg/result; each value is pushed before reuse).
+    wat.push_str("  (local $ub_tag i64) (local $ub_lo i64) (local $ub_hi i64)\n");
+    wat.push_str("  (local $rb_i64 i64) (local $rb_f64 f64) (local $rb_ptr i32) (local $rb_len i64)\n");
+
+    // Unbox each parameter from the arg buffer and push it for the body call.
+    for (i, p) in f.params.iter().enumerate() {
+        let slot_off = 24 + i * 16;
+        wat.push_str(&format!(
+            "  ;; unbox arg {} (param {} : {:?}) from arg slot +{}\n",
+            i, p.name, p.ir_type, slot_off
+        ));
+        wat.push_str(&format!(
+            "  (i32.wrap_i64 (i64.load offset={} (local.get $args)))\n",
+            slot_off
+        ));
+        wat.push_str(&unbox_arg_wat(&p.ir_type, &p.php_type)?);
+    }
+
+    // Call the user function body with the forwarded args on the stack.
+    wat.push_str(&format!("  call ${}\n", body_symbol));
+    wat.push_str("  ;; box the body result into a Mixed cell (result i32)\n");
+    wat.push_str(&box_result_wat(&f.return_type, &f.return_php_type)?);
+    wat.push_str(")\n");
+    Ok(wat)
 }
 
 /// Formats one raw WAT instruction line (2-space indented) with a trailing `;;` comment
@@ -1397,7 +1626,7 @@ mod tests {
         wm.add_raw_func(body_wat);
         let mut module = Module::new(Target::wasm());
         module.closures.push(closure_fn);
-        super::emit_closure_dispatch(&mut wm, &module).expect("emit_closure_dispatch");
+        super::emit_closure_dispatch(&mut wm, &module, &[]).expect("emit_closure_dispatch");
         wm.add_raw_func(driver);
         let wat = wm.render();
         let bytes = ::wat::parse_str(&wat)
@@ -1569,7 +1798,7 @@ mod tests {
         wm.add_raw_func(body_wat);
         let mut module = Module::new(Target::wasm());
         module.closures.push(closure_fn);
-        super::emit_closure_dispatch(&mut wm, &module).expect("emit_closure_dispatch");
+        super::emit_closure_dispatch(&mut wm, &module, &[]).expect("emit_closure_dispatch");
         wm.add_raw_func(driver);
         let wat = wm.render();
         let bytes = ::wat::parse_str(&wat)
@@ -1958,10 +2187,10 @@ mod tests {
         let mut module = Module::new(Target::wasm());
         module.closures.push(closure_fn);
         let body_fb =
-            super::super::function::lower_function(&module, &module.closures[0], &[], &[])
+            super::super::function::lower_function(&module, &module.closures[0], &[], &[], &[])
                 .expect("lower closure body");
         wm.add_func(body_fb);
-        super::emit_closure_dispatch(&mut wm, &module).expect("emit_closure_dispatch");
+        super::emit_closure_dispatch(&mut wm, &module, &[]).expect("emit_closure_dispatch");
         wm.add_raw_func(driver);
         let wat = wm.render();
         let bytes = ::wat::parse_str(&wat)
@@ -2259,6 +2488,159 @@ mod tests {
         // __rt_decref_any(V) frees V inside the release → [V-12] = 0 → returns "0" → FAIL.
         if let Some(o) = run_driver_with_tag_data(driver, "t", 16) {
             assert_eq!(o, "1");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // P7d2a: first-class callable of a no-capture user free function.
+    // -------------------------------------------------------------------------
+
+    /// Hand-written WAT body for the user free function `dbl(int) -> int { x * 2 }`,
+    /// defined under its canonical wasm symbol `fn_dbl` so the FCC wrapper's
+    /// `call $fn_dbl` resolves. The wrapper unboxes the arg cell via
+    /// `__rt_mixed_cast_int`, calls this body, and boxes the int result.
+    fn dbl_free_fn_body_wat() -> &'static str {
+        r#"(func $fn_dbl (param $p1 i64) (result i64)
+  (i64.mul (local.get $p1) (i64.const 2)))                              ;; body: return arg * 2
+"#
+    }
+
+    /// Builds the user free `Function` (name `dbl`, one int param, int return) that
+    /// `emit_closure_dispatch` reads to generate the FCC wrapper + unified-ladder arm.
+    fn dbl_free_fn() -> Function {
+        let mut f = Function::new("dbl".to_string(), IrType::I64, PhpType::Int);
+        f.params.push(FunctionParam {
+            name: "x".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        f
+    }
+
+    /// Builds a reactor module with the full runtime surface (so `__rt_decref_any`
+    /// validates), the hand-written user function body, and the unified closure/FCC
+    /// dispatch ladder generated from a single FCC entry (`user_fn.name`) via
+    /// `emit_closure_dispatch`, then runs `export` under `wasmer`. With no closures,
+    /// the FCC entry takes unified-ladder index 0. Validates with `wasmparser`;
+    /// `None` if wasmer is absent (validation always runs).
+    fn run_fcc_driver(
+        user_fn: Function,
+        body_wat: &str,
+        driver: &str,
+        export: &str,
+    ) -> Option<String> {
+        let mut wm = WatModule::new();
+        wm.set_memory(3, Some("memory"));
+        emit_heap_runtime(&mut wm, 1024, 3 * 65536);
+        emit_refcount_runtime(&mut wm);
+        emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
+        super::super::hashes::emit_hash_runtime(&mut wm);
+        emit_object_runtime(&mut wm);
+        emit_gc_desc_stub(&mut wm);
+        emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
+        emit_closure_runtime(&mut wm);
+        wm.add_raw_func(body_wat);
+        let mut module = Module::new(Target::wasm());
+        let name = user_fn.name.clone();
+        module.functions.push(user_fn);
+        super::emit_closure_dispatch(&mut wm, &module, std::slice::from_ref(&name))
+            .expect("emit_closure_dispatch");
+        wm.add_raw_func(driver);
+        let wat = wm.render();
+        let bytes = ::wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("WAT did not assemble: {e}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|e| panic!("wasm did not validate: {e}\n{wat}"));
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = unique_tmp_dir();
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg(export)
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer --invoke {export} failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            wat
+        );
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// A first-class callable of `dbl(int) -> int`, invoked with arg 21 through the
+    /// real FCC dispatch path: a kind-6 Function descriptor (kind word 11, unified
+    /// ladder index 0, no captures) -> Mixed-cell arg buffer -> `__rt_closure_call`
+    /// if-ladder -> FCC wrapper unbox -> `fn_dbl` -> wrapper box -> caller unbox,
+    /// returns 42. Proves `build_fcc_wrapper` + the unified ladder dispatch a
+    /// free-function FCC descriptor correctly (the same wrapper/ladder the real
+    /// `lower_first_class_callable_new` descriptor reaches via `__rt_closure_call`).
+    #[test]
+    fn fcc_free_fn_call_doubles_arg() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $desc i32) (local $args i32) (local $cell i32) (local $rcell i32)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))            ;; descriptor (rc 1)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp kind 6 (callable)
+  (i64.store (local.get $desc) (i64.const 11))                        ;; descriptor kind = 11 (Function)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0 (FCC slot, no closures)
+  (i32.store offset=12 (local.get $desc) (i32.const 0))              ;; capture_count = 0
+  (i32.store offset=16 (local.get $desc) (i32.const 0))              ;; capture_tags_ptr = 0
+  (local.set $args (call $__rt_array_new (i64.const 1) (i64.const 16)))  ;; 1-slot arg buffer
+  (i64.const 0) (i64.const 21) (i64.const 0) (call $__rt_mixed_from_value)  ;; box int 21 -> cell
+  (local.set $cell)
+  (local.set $args (call $__rt_array_push_mixed (local.get $args) (local.get $cell)))  ;; append cell
+  (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args)))     ;; dispatch -> result cell
+  (call $__rt_mixed_cast_int (local.get $rcell)))                    ;; unbox result int -> 42
+"#;
+        if let Some(o) = run_fcc_driver(dbl_free_fn(), dbl_free_fn_body_wat(), driver, "t") {
+            assert_eq!(o, "42");
+        }
+    }
+
+    /// The same FCC call, fully balanced: after unboxing the result the driver
+    /// releases the result cell, the arg buffer (whose deep free releases the arg
+    /// cell), and the kind-6 Function descriptor (capture_count 0 -> empty release
+    /// walk -> free), leaving `_gc_live` at "0". Proves the FCC descriptor
+    /// materialize + release path is refcount-balanced (no descriptor/cell/array
+    /// leak). Proven load-bearing: dropping the descriptor release leaves `_gc_live`
+    /// non-zero (a leaked descriptor).
+    #[test]
+    fn fcc_free_fn_call_balanced_gc() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $desc i32) (local $args i32) (local $cell i32) (local $rcell i32)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6))
+  (i64.store (local.get $desc) (i64.const 11))
+  (i32.store offset=8 (local.get $desc) (i32.const 0))
+  (i32.store offset=12 (local.get $desc) (i32.const 0))
+  (i32.store offset=16 (local.get $desc) (i32.const 0))
+  (local.set $args (call $__rt_array_new (i64.const 1) (i64.const 16)))
+  (i64.const 0) (i64.const 21) (i64.const 0) (call $__rt_mixed_from_value)
+  (local.set $cell)
+  (local.set $args (call $__rt_array_push_mixed (local.get $args) (local.get $cell)))
+  (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args)))
+  (call $__rt_mixed_cast_int (local.get $rcell))                     ;; 42 (borrowed read of the cell)
+  drop                                                                ;; discard the result value
+  (call $__rt_decref_any (local.get $rcell))                         ;; release the result cell
+  (call $__rt_decref_any (local.get $args))                          ;; release the arg buffer (frees the arg cell)
+  (call $__rt_decref_any (local.get $desc))                          ;; release the kind-6 Function descriptor
+  (global.get $_gc_live))                                             ;; expect 0 (balanced)
+"#;
+        if let Some(o) = run_fcc_driver(dbl_free_fn(), dbl_free_fn_body_wat(), driver, "t") {
+            assert_eq!(o, "0");
         }
     }
 }

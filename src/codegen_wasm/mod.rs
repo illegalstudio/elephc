@@ -140,6 +140,16 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // get a `0` sentinel (no segment emitted).
     let (cursor, closure_tag_ptrs) = closures::emit_closure_capture_tag_tables(&mut wm, module, cursor)?;
 
+    // P7d2a: build the first-class-callable entry registry once, before any function
+    // is lowered. It collects the distinct user-free-function targets of every
+    // `Op::FirstClassCallableNew` in the module and assigns them unified callable-ladder
+    // indices AFTER the closures (`module.closures.len() + position`), so closures keep
+    // `0..N` and FCC entries take `N..N+M`. `FirstClassCallableNew` lowering reads it
+    // (via `FnCtx::fcc_entry_index`) to stamp descriptors; `emit_closure_dispatch` reads
+    // it to emit one FCC wrapper + ladder arm per entry. A builtin/extern/method FCC
+    // target is excluded here and rejected at lowering time (deferred slice).
+    let fcc_entries = closures::collect_fcc_free_function_entries(module);
+
     // The heap begins 16-aligned just above the string/data region; reserve two
     // pages of initial headroom above it. The bump allocator grows beyond
     // `heap_end` with `memory.grow` when this region is exhausted.
@@ -179,7 +189,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
 
     // Lower every user function; `main` becomes the WASI `_start` command entry.
     for func in &module.functions {
-        let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs)?;
+        let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs, &fcc_entries)?;
         wm.add_func(fb);
     }
 
@@ -192,7 +202,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // order, so a `module.functions` entry calling `__construct` (via `ObjectNew`)
     // sees the method defined here even though methods are lowered after it.
     for func in &module.class_methods {
-        let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs)?;
+        let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs, &fcc_entries)?;
         wm.add_func(fb);
     }
 
@@ -203,7 +213,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // the whole module regardless of definition order, so the P7a1 wrapper that calls a
     // closure body sees it defined here.
     for func in &module.closures {
-        let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs)?;
+        let fb = function::lower_function(module, func, &str_literals, &closure_tag_ptrs, &fcc_entries)?;
         wm.add_func(fb);
     }
 
@@ -216,7 +226,7 @@ pub fn generate(module: &Module, emit: Emit) -> Result<String, WasmError> {
     // Emit one wrapper per closure body plus the `__rt_closure_call` if-ladder that
     // `ClosureCall` lowering dispatches through (P7a1). Must run after closure bodies are
     // lowered (wrappers call `fn___eir_closure_<owner>_<n>`) but before `wm.render()`.
-    closures::emit_closure_dispatch(&mut wm, module)?;
+    closures::emit_closure_dispatch(&mut wm, module, &fcc_entries)?;
 
     Ok(wm.render())
 }
@@ -666,6 +676,106 @@ mod tests {
 
         if let Some(out) = run_main(&module) {
             assert_eq!(out, "84");
+        }
+    }
+
+    /// End-to-end first-class callable of a no-capture user free function (P7d2a),
+    /// modeling `function foo(int $x): int { return $x + 1; } $f = foo(...); echo $f(21);`.
+    /// `main` lowers `Op::FirstClassCallableNew` (the real `lower_first_class_callable_new`
+    /// path: `generate()` registers `foo` in the FCC entry registry, the descriptor is
+    /// stamped kind-6/Function with the unified ladder index, and `emit_closure_dispatch`
+    /// emits the FCC wrapper + ladder arm), then statically calls `foo(21)` via `Op::Call`
+    /// (the call resolves at compile time, as PHP does), echoes the int result, and
+    /// releases the descriptor (`Op::Release` -> kind-6 `__rt_callable_descriptor_release`).
+    /// Asserts stdout "22": proves the descriptor materializes, the module validates with
+    /// the FCC wrapper present, and the program runs + exits cleanly without trapping.
+    #[test]
+    fn first_class_callable_free_fn_e2e() {
+        let mut module = Module::new(Target::wasm());
+        // `foo` is interned into BOTH pools: the strings pool (FCC's Data immediate, read
+        // by `lower_first_class_callable_new`) and the function_names pool (Op::Call's
+        // Data immediate). The two pools carry independent DataIds.
+        let fcc_name = module.data.intern_string("foo");
+        let call_name = module.data.intern_function_name("foo");
+
+        // foo(int $x): int { return $x + 1; }
+        let mut foo = Function::new("foo".to_string(), IrType::I64, PhpType::Int);
+        foo.params.push(FunctionParam {
+            name: "x".to_string(),
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            by_ref: false,
+            variadic: false,
+        });
+        let foo_x = foo.add_local(Some("x".to_string()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        {
+            let mut b = Builder::new(&mut foo);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let x = b.emit_load_local(foo_x, IrType::I64, PhpType::Int);
+            let one = b.emit_const_i64(1);
+            let sum = b
+                .emit(Op::IAdd, vec![x, one], None, IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(sum) });
+        }
+        module.add_function(foo);
+
+        // main: $f = foo(...); echo $f(21);  (the call resolves statically to Op::Call)
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            // $f = foo(...): materialize the first-class callable descriptor.
+            let desc = b
+                .emit(
+                    Op::FirstClassCallableNew,
+                    Vec::new(),
+                    Some(Immediate::Data(fcc_name)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            // echo $f(21): the call statically resolves to foo, returning 22.
+            let arg = b.emit_const_i64(21);
+            let result = b
+                .emit(
+                    Op::Call,
+                    vec![arg],
+                    Some(Immediate::Data(call_name)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![result],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            // Release the owning-temporary descriptor (no leak).
+            let _ = b.emit(
+                Op::Release,
+                vec![desc],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "22");
         }
     }
 
