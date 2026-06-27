@@ -10124,6 +10124,50 @@ eval('class EvalBadStaticPromoted {
     }
 }
 
+/// Verifies eval-declared plain abstract properties can be concretized by child storage.
+#[test]
+fn test_eval_declared_plain_abstract_property_concretization() {
+    let out = compile_and_run(
+        r#"<?php
+eval('abstract class EvalPlainAbstractShape {
+    abstract public int $sides { get; set; }
+
+    public function show() {
+        return $this->sides;
+    }
+}
+abstract class EvalPlainAbstractPolygon extends EvalPlainAbstractShape {}
+class EvalPlainAbstractSquare extends EvalPlainAbstractPolygon {
+    public int $sides = 4;
+}
+
+abstract class EvalPlainAbstractEntity {
+    abstract public int $id { get; set; }
+}
+class EvalPlainAbstractUser extends EvalPlainAbstractEntity {
+    public function __construct(public int $id) {}
+}
+
+abstract class EvalPlainAbstractReadonlyBase {
+    abstract public int $value { get; }
+}
+class EvalPlainAbstractReadonlyBox extends EvalPlainAbstractReadonlyBase {
+    public readonly int $value;
+
+    public function __construct(int $value) {
+        $this->value = $value;
+    }
+}
+
+$shape = new EvalPlainAbstractSquare();
+$user = new EvalPlainAbstractUser(7);
+$box = new EvalPlainAbstractReadonlyBox(42);
+echo $shape->show() . ":" . $user->id . ":" . $box->value;');
+"#,
+    );
+    assert_eq!(out, "4:7:42");
+}
+
 /// Verifies eval-declared abstract property hook contracts validate concrete subclasses.
 #[test]
 fn test_eval_declared_abstract_property_hook_contracts() {
