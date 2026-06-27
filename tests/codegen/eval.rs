@@ -19024,10 +19024,50 @@ echo $aotBox instanceof DynEvalNativeInstanceAotBase ? "A" : "a";
 echo ":";
 echo $aotBox instanceof DynEvalNativeInstanceAotIface ? "F" : "f";
 echo ":";
+$target = "DynEvalNativeInstanceChild";
+echo $box instanceof $target ? "D" : "d";
+echo ":";
+$iface = "DynEvalNativeInstanceIface";
+echo $box instanceof $iface ? "T" : "t";
+echo ":";
 echo 7 instanceof DynEvalNativeInstanceChild ? "bad" : "S";
 "#,
     );
-    assert_eq!(out, "C:B:I:A:F:S");
+    assert_eq!(out, "C:B:I:A:F:D:T:S");
+}
+
+/// Verifies dynamic `instanceof` keeps invalid-target fatals after the eval barrier.
+#[test]
+fn test_eval_declared_class_native_dynamic_instanceof_invalid_target_after_barrier() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class DynEvalNativeInstanceInvalid {}');
+$box = new DynEvalNativeInstanceInvalid();
+$target = 7;
+echo $box instanceof $target ? "bad" : "bad";
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: Class name must be a valid object or a string"),
+        "{err}"
+    );
+}
+
+/// Verifies invalid dynamic targets still fatal when the tested value is scalar.
+#[test]
+fn test_eval_declared_class_native_dynamic_instanceof_scalar_lhs_invalid_target_after_barrier() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+eval('class DynEvalNativeInstanceScalarInvalid {}');
+$value = 7;
+$target = 7;
+echo $value instanceof $target ? "bad" : "bad";
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: Class name must be a valid object or a string"),
+        "{err}"
+    );
 }
 
 /// Verifies native callable probes see eval-declared dynamic callable targets.

@@ -6,12 +6,14 @@
 //! Called from:
 //! - Generated EIR backend assembly through `__elephc_eval_object_class_name`.
 //! - Generated EIR backend assembly through `__elephc_eval_object_is_a`.
+//! - Generated EIR backend assembly through `__elephc_eval_object_is_a_dynamic`.
 //! - Generated EIR backend assembly through `__elephc_eval_member_exists`.
 //! - Generated EIR backend assembly through `__elephc_eval_class_relation`.
 //!
 //! Key details:
 //! - Class-name and relation lookups return boxed Mixed cells through `ElephcEvalResult`.
-//! - Predicate probes fail closed as false when ABI inputs are invalid.
+//! - Named predicate probes fail closed as false; dynamic `instanceof` invalid
+//!   targets return -1 so generated code can raise PHP's fatal diagnostic.
 
 use super::util::{abi_name_to_string, clear_result, write_outcome};
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
@@ -67,6 +69,26 @@ pub unsafe extern "C" fn __elephc_eval_object_is_a(
         eval_object_is_a_inner(ctx, object, target_ptr, target_len, exclude_self)
     })
     .unwrap_or(0)
+}
+
+/// Tests whether an object satisfies a runtime string/object class target.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `object` and `target` must point
+/// at boxed runtime cells. Returns -1 when the target is invalid for
+/// `instanceof`.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_object_is_a_dynamic(
+    ctx: *mut ElephcEvalContext,
+    object: *mut RuntimeCell,
+    target: *mut RuntimeCell,
+    exclude_self: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_object_is_a_dynamic_inner(ctx, object, target, exclude_self)
+    })
+    .unwrap_or(-1)
 }
 
 /// Tests whether a method or property exists in the eval context.
@@ -219,6 +241,37 @@ unsafe fn eval_object_is_a_inner(
     ) {
         Ok(result) => i32::from(result),
         Err(_) => 0,
+    }
+}
+
+/// Runs the eval dynamic object relation ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_object_is_a_dynamic`; invalid target cells report -1
+/// so generated code can use the normal dynamic-`instanceof` fatal path.
+#[cfg(not(test))]
+unsafe fn eval_object_is_a_dynamic_inner(
+    ctx: *mut ElephcEvalContext,
+    object: *mut RuntimeCell,
+    target: *mut RuntimeCell,
+    exclude_self: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return -1;
+    };
+    if context.abi_version() != ABI_VERSION || object.is_null() || target.is_null() {
+        return -1;
+    }
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    match interpreter::execute_context_object_is_a_dynamic(
+        context,
+        RuntimeCellHandle::from_raw(object),
+        RuntimeCellHandle::from_raw(target),
+        exclude_self != 0,
+        &mut values,
+    ) {
+        Ok(result) => i32::from(result),
+        Err(_) => -1,
     }
 }
 

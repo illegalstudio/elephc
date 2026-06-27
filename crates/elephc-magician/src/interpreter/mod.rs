@@ -421,6 +421,37 @@ pub fn execute_context_object_is_a(
     )
 }
 
+/// Tests an object relation when the target is a runtime string or object cell.
+pub fn execute_context_object_is_a_dynamic(
+    context: &mut ElephcEvalContext,
+    object: RuntimeCellHandle,
+    target: RuntimeCellHandle,
+    exclude_self: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let target_class = match values.type_tag(target)? {
+        EVAL_TAG_STRING => {
+            let bytes = values.string_bytes(target)?;
+            let target = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+            target.trim_start_matches('\\').to_string()
+        }
+        EVAL_TAG_OBJECT => {
+            let identity = values.object_identity(target)?;
+            if let Some(class) = context.dynamic_object_class(identity) {
+                class.name().to_string()
+            } else {
+                let class_name = values.object_class_name(target)?;
+                let bytes = values.string_bytes(class_name);
+                values.release(class_name)?;
+                let class_name = String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
+                class_name.trim_start_matches('\\').to_string()
+            }
+        }
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    execute_context_object_is_a(context, object, &target_class, exclude_self, values)
+}
+
 /// Tests whether a method or property exists through eval dynamic metadata.
 pub fn execute_context_member_exists(
     context: &mut ElephcEvalContext,
