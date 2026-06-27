@@ -116,6 +116,9 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ClosureCall => super::closures::lower_closure_call(ctx, &inst),
         Op::ClosureCapture => super::closures::lower_closure_capture(ctx, &inst),
         Op::FirstClassCallableNew => super::closures::lower_first_class_callable_new(ctx, &inst),
+        Op::CallableDescriptorInvoke => {
+            super::closures::lower_callable_descriptor_invoke(ctx, &inst)
+        }
         Op::LoadRefCell => super::refcell::lower_load_ref_cell(ctx, &inst),
         Op::StoreRefCell => super::refcell::lower_store_ref_cell(ctx, &inst),
         Op::PromoteLocalRefCell => super::refcell::lower_promote_local_ref_cell(ctx, &inst),
@@ -1166,6 +1169,40 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.emit_load_value(value)?; // string pointer (i32) + length (i64)
             ctx.fb
                 .ins("call $__rt_array_push_str", "append string (persists + may reallocate)");
+        }
+        WasmRepr::Ptr(_) => {
+            // A Mixed/Union value is a kind-5 Mixed-cell pointer pushed into a
+            // value_type-7 mixed-cell array (16-byte slots, cell at slot+0) — the
+            // shape the closure/FCC arg buffer uses. The array shares ownership of
+            // the cell (incref) and the EIR releases the operand after the push
+            // (`release_indexed_array_write_operand`), mirroring the native
+            // `__rt_array_push_refcounted` contract (`__rt_array_push_mixed` stores
+            // the cell BORROWED). Other heap kinds (array/hash/object containers)
+            // have no WASM append helper yet and stay unsupported.
+            let value_ir = ctx.function.value(value).map(|v| v.ir_type);
+            if !matches!(
+                value_ir,
+                Some(IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union))
+            ) {
+                return Err(WasmError::Unsupported(format!(
+                    "array_push of {:?} on wasm32-wasi",
+                    value_repr
+                )));
+            }
+            let cell = ctx.fresh_temp(ValType::I32);
+            ctx.emit_load_value(value)?; // kind-5 Mixed-cell pointer (i32)
+            ctx.fb.ins(&format!("local.set {}", cell), "mixed cell to append");
+            ctx.fb.ins(
+                &format!("(call $__rt_incref (local.get {}))", cell),
+                "array shares the mixed cell (the EIR releases the operand after the push)",
+            );
+            ctx.emit_load_value(array)?;
+            ctx.fb
+                .ins(&format!("local.get {}", cell), "mixed cell pointer for the append");
+            ctx.fb.ins(
+                "call $__rt_array_push_mixed",
+                "append mixed cell into a value_type-7 array (may reallocate)",
+            );
         }
         other => return Err(WasmError::Unsupported(format!("array_push of {:?}", other))),
     }

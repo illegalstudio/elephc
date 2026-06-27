@@ -825,6 +825,96 @@ pub(super) fn lower_closure_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<
     Ok(())
 }
 
+/// Lowers `Op::CallableDescriptorInvoke`: invokes a callable descriptor (operand 0)
+/// through the unified `__rt_closure_call` ladder with a pre-built argument array
+/// (operand 1), unboxes the returned Mixed cell to the instruction's result type, and
+/// stores it. This is the EIR op for a dynamic `$f(...)` / non-static
+/// `call_user_func($f, ...)` whose callee is not statically resolvable (a callable from
+/// a param, a reassignment, or a generic `Callable`).
+///
+/// Operand 0 is the callable (an `I64` kind-6 descriptor: a closure from `ClosureNew`
+/// or a Function from `FirstClassCallableNew`); operand 1 is the EIR-built argument
+/// container. The container is an indexed `array<mixed>` (`Op::ArrayNew` +
+/// `Op::ArrayPush` of Mixed), which lowers to a `value_type`-7 Mixed-cell array
+/// (16-byte slots, cell pointer at `[args + 24 + i*16]`) — byte-identical to the buffer
+/// `lower_closure_call` builds and the `__rt_closure_call` ladder wrappers read. So the
+/// container is routed straight into `__rt_closure_call(desc, args)`; no re-boxing or
+/// adapter is needed.
+///
+/// Mirrors native `lower_callable_descriptor_invoke` (`codegen_ir/lower_inst/callables.rs`):
+/// the WASM analogue of native's uniform `[desc+56]` invoker fn-ptr is `__rt_closure_call`.
+/// The arg array is NOT released here — the EIR owns operand 1 (an `array<mixed>`
+/// temporary) and releases it after this op (`release v_args`); result-cell handling and
+/// container/callable incref-on-store reuse `unbox_result_cell` exactly as
+/// `lower_closure_call` does.
+///
+/// Only a `Callable` descriptor (closure / FCC-Function) routes here; string/array/object
+/// callables (runtime-string, callable-array, invokable-object dispatch) and named/spread
+/// hash containers are rejected with a deferred-slice diagnostic (P7d2c/P7d2d) rather than
+/// miscompiled, since their layout/dispatch differs.
+pub(super) fn lower_callable_descriptor_invoke(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let callable = operand(inst, 0)?;
+    let args = operand(inst, 1)?;
+
+    // Only an I64 Callable descriptor (closure or FCC-Function) dispatches through the
+    // unified ladder. A string/array/object callable would not be an i64 descriptor and
+    // needs its own runtime selection (P7d2c/P7d2d).
+    let callable_php = ctx.value_php_type(callable)?.codegen_repr();
+    if !matches!(callable_php, PhpType::Callable) {
+        return Err(WasmError::Unsupported(format!(
+            "callable_descriptor_invoke of a {:?} callable on wasm32-wasi (only Callable \
+             descriptors supported; string/array/object callables deferred: P7d2c/P7d2d)",
+            callable_php
+        )));
+    }
+    // The arg container must be the EIR indexed `array<mixed>` (positional args, incl.
+    // positional spreads): `Op::ArrayPush` of Mixed builds the value_type-7 mixed-cell
+    // array the ladder reads. A `HashNew` named-arg container (or a Mixed/Union spread
+    // container) has a different layout and is deferred rather than misread.
+    let args_ir = ctx.function.value(args).map(|v| v.ir_type);
+    if !matches!(args_ir, Some(IrType::Heap(IrHeapKind::Array))) {
+        return Err(WasmError::Unsupported(format!(
+            "callable_descriptor_invoke arg container {:?} on wasm32-wasi (only indexed \
+             array<mixed> positional args supported; named/spread containers deferred)",
+            args_ir
+        )));
+    }
+
+    // operand 0: callable descriptor (i64) -> i32 for __rt_closure_call.
+    let desc = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(callable)?;
+    ctx.fb.ins("i32.wrap_i64", "callable descriptor i64 -> i32");
+    ctx.fb.ins(&format!("local.set {}", desc), "save descriptor pointer");
+
+    // operand 1: the EIR-built value_type-7 Mixed-cell arg array (a single i32 ptr).
+    let argsp = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(args)?;
+    ctx.fb.ins(&format!("local.set {}", argsp), "save arg array pointer");
+
+    // Dispatch through the unified closure/FCC if-ladder and capture the result cell.
+    let rcell = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(
+        &format!(
+            "(local.set {} (call $__rt_closure_call (local.get {}) (local.get {})))",
+            rcell, desc, argsp
+        ),
+        "dispatch through the unified closure/FCC ladder and capture the result cell",
+    );
+
+    // Unbox the result cell to the inst result shape, or release it if the call is void.
+    // The arg array is NOT released here: the EIR releases operand 1 after this op.
+    if let Some(result) = inst.result {
+        unbox_result_cell(ctx, &rcell, result)?;
+    } else {
+        ctx.fb.ins(
+            &format!("local.get {}", rcell),
+            "void descriptor-invoke result cell (wrapper boxed null)",
+        );
+        ctx.fb.ins("call $__rt_decref_any", "release the void-result cell");
+    }
+    Ok(())
+}
+
 /// Unboxes a result Mixed cell (`$rcell`) into the inst result value's `WasmRepr` shape
 /// and stores it, releasing the cell afterward — except for a `Mixed`/`Union` result,
 /// where the cell IS the value and ownership transfers to the inst (no release).
@@ -2640,6 +2730,263 @@ mod tests {
   (global.get $_gc_live))                                             ;; expect 0 (balanced)
 "#;
         if let Some(o) = run_fcc_driver(dbl_free_fn(), dbl_free_fn_body_wat(), driver, "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // P7d2b: dynamic callable descriptor invoke (`Op::CallableDescriptorInvoke`).
+    // These tests lower a real EIR body through `lower_function`, so they exercise
+    // both the new `Op::ArrayPush` Mixed arm (the value_type-7 arg-array build) and
+    // `lower_callable_descriptor_invoke` end-to-end under wasmer, dispatching an FCC
+    // descriptor created in-body through the unified `__rt_closure_call` ladder.
+    // -------------------------------------------------------------------------
+
+    /// Hand-written WAT body for the FCC target free function `add2(int,int) -> int
+    /// { a + b }`, defined under its canonical wasm symbol `fn_add2` so the FCC wrapper's
+    /// `call $fn_add2` resolves. Two params are deliberate: the second argument's
+    /// Mixed-cell allocation reuses the first's heap slot (LIFO first-fit freelist) if the
+    /// first cell was freed prematurely, so a missing `ArrayPush` incref aliases the two
+    /// arg slots and corrupts the result — making the correctness test load-bearing for the
+    /// incref. The FCC wrapper unboxes each arg via `__rt_mixed_cast_int` and boxes the int
+    /// result.
+    fn add2_free_fn_body_wat() -> &'static str {
+        r#"(func $fn_add2 (param $p1 i64) (param $p2 i64) (result i64)
+  (i64.add (local.get $p1) (local.get $p2)))                            ;; body: return a + b
+"#
+    }
+
+    /// Builds the FCC target free `Function` `add2(int,int) -> int` that
+    /// `emit_closure_dispatch` reads to generate the FCC wrapper + unified-ladder arm,
+    /// and `apply_via_descriptor_invoke_fn` references by its interned name.
+    fn add2_free_fn() -> Function {
+        let mut f = Function::new("add2".to_string(), IrType::I64, PhpType::Int);
+        for name in ["a", "b"] {
+            f.params.push(FunctionParam {
+                name: name.to_string(),
+                ir_type: IrType::I64,
+                php_type: PhpType::Int,
+                by_ref: false,
+                variadic: false,
+            });
+        }
+        f
+    }
+
+    /// Builds the self-contained EIR `Function` `apply_via_descriptor_invoke() -> int`
+    /// that exercises the full P7d2b path: it creates a first-class callable of `add2`
+    /// (`FirstClassCallableNew`, an Owned kind-6 Function descriptor), builds a 2-element
+    /// indexed `array<mixed>` argument container (`ArrayNew` + per arg `MixedBox` +
+    /// `ArrayPush` of the Mixed cell — the new value_type-7 push arm), invokes it through
+    /// `CallableDescriptorInvoke`, and returns the int result (21 + 100 = 121). Explicit
+    /// `Release` ops after each push, plus the arg-array and descriptor releases, mirror
+    /// exactly what the real `ir_lower` descriptor-invoke path emits (`release v_cell` /
+    /// `release v_args` and the owned-FCC release), so the body is refcount-balanced at
+    /// return. Two args are used so the second `MixedBox` reuses the first cell's slot when
+    /// the push fails to incref (see `add2_free_fn_body_wat`).
+    fn apply_via_descriptor_invoke_fn(add2_data: crate::ir::DataId) -> Function {
+        let mut f = Function::new(
+            "apply_via_descriptor_invoke".to_string(),
+            IrType::I64,
+            PhpType::Int,
+        );
+        let mixed_arr_ty = PhpType::Array(Box::new(PhpType::Mixed));
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            // $f = add2(...)  -> kind-6 Function descriptor (Owned).
+            let vf = b
+                .emit(
+                    Op::FirstClassCallableNew,
+                    Vec::new(),
+                    Some(Immediate::Data(add2_data)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            // $args = []  (array<mixed>, Owned, capacity 2).
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Array),
+                    mixed_arr_ty.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            // For each argument: box into a kind-5 Mixed cell, push it (new arm:
+            // incref + __rt_array_push_mixed -> value_type 7), then release the boxed
+            // operand (EIR contract after a Mixed push).
+            for arg in [21i64, 100i64] {
+                let c = b.emit_const_i64(arg);
+                let cell = b
+                    .emit(
+                        Op::MixedBox,
+                        vec![c],
+                        None,
+                        IrType::Heap(IrHeapKind::Mixed),
+                        PhpType::Mixed,
+                        Ownership::Owned,
+                    )
+                    .unwrap();
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![arr, cell],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+                let _ = b.emit(
+                    Op::Release,
+                    vec![cell],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            // res = $f($args...)  via descriptor invoke (int result).
+            let res = b
+                .emit(
+                    Op::CallableDescriptorInvoke,
+                    vec![vf, arr],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            // release the arg array, then the FCC descriptor (mirrors ir_lower).
+            let _ = b.emit(
+                Op::Release,
+                vec![arr],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let _ = b.emit(
+                Op::Release,
+                vec![vf],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: Some(res) });
+        }
+        f
+    }
+
+    /// Builds a reactor module with the full runtime surface, the lowered self-contained
+    /// `apply_via_descriptor_invoke` body (via `lower_function`, so the new `ArrayPush`
+    /// Mixed arm and `lower_callable_descriptor_invoke` are under test), the hand-written
+    /// `fn_add2` body, and the unified closure/FCC dispatch ladder (single FCC entry
+    /// `add2`). Validates with `wasmparser` and runs `export` under `wasmer`; `None` if
+    /// wasmer is absent (validation always runs).
+    fn run_descriptor_invoke_driver(driver: &str, export: &str) -> Option<String> {
+        let mut wm = WatModule::new();
+        wm.set_memory(3, Some("memory"));
+        // The lowered body's prologue references the `$__concat_off` cursor global.
+        super::super::runtime::emit_common_runtime(&mut wm);
+        emit_heap_runtime(&mut wm, 1024, 3 * 65536);
+        emit_refcount_runtime(&mut wm);
+        emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
+        super::super::hashes::emit_hash_runtime(&mut wm);
+        emit_object_runtime(&mut wm);
+        emit_gc_desc_stub(&mut wm);
+        emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
+        emit_closure_runtime(&mut wm);
+        wm.add_raw_func(add2_free_fn_body_wat());
+        let mut module = Module::new(Target::wasm());
+        let add2_data = module.data.intern_string("add2");
+        module.functions.push(add2_free_fn());
+        let body_fn = apply_via_descriptor_invoke_fn(add2_data);
+        let fcc_entries = vec!["add2".to_string()];
+        let body_fb =
+            super::super::function::lower_function(&module, &body_fn, &[], &[], &fcc_entries)
+                .expect("lower descriptor-invoke body");
+        wm.add_func(body_fb);
+        super::emit_closure_dispatch(&mut wm, &module, &fcc_entries).expect("emit_closure_dispatch");
+        wm.add_raw_func(driver);
+        let wat = wm.render();
+        let bytes = ::wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("WAT did not assemble: {e}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|e| panic!("wasm did not validate: {e}\n{wat}"));
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = unique_tmp_dir();
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg(export)
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer --invoke {export} failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            wat
+        );
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// `apply_via_descriptor_invoke()` builds an FCC descriptor of `add2(int,int)->int`,
+    /// a 2-element indexed `array<mixed>` arg container holding boxed 21 and 100, and
+    /// dispatches it through `CallableDescriptorInvoke` -> `__rt_closure_call` -> FCC
+    /// wrapper -> `fn_add2` -> boxed result -> int unbox, returning 121. Proves the
+    /// descriptor-invoke ABI: the EIR-built `Op::ArrayPush`(Mixed) container is a
+    /// value_type-7 array the ladder reads straight, with no re-boxing.
+    ///
+    /// NEGATIVE CONTROL (proven load-bearing for the new `ArrayPush` incref): with the
+    /// `__rt_incref` removed from the `WasmRepr::Ptr` arm of `lower_array_push`, the array
+    /// no longer owns a ref, so each `release v_cell` frees that cell immediately; the next
+    /// argument's `MixedBox` then reuses the just-freed slot (LIFO first-fit heap), so both
+    /// arg-array slots alias the second cell and the result is `100 + 100 = 200`, not 121.
+    /// Verified during development: with the incref, the result is "121"; with it removed,
+    /// the result is "200" (this assertion fails). So this correctness test — not the GC
+    /// test, which is blind to the idempotent rc-0 free guard — pins the incref.
+    #[test]
+    fn descriptor_invoke_fcc_free_fn_returns_121() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (call $fn_apply_via_descriptor_invoke))                              ;; dynamic add2(21, 100) -> 121
+"#;
+        if let Some(o) = run_descriptor_invoke_driver(driver, "t") {
+            assert_eq!(o, "121");
+        }
+    }
+
+    /// The same descriptor invoke, run for refcount balance: after discarding the int
+    /// result, `_gc_live` is "0". The lowered body releases each boxed operand, the arg
+    /// array (whose deep free releases the arg cells it owns), and the FCC descriptor; the
+    /// invoke releases its result cell. A leak guard for the new `Op::ArrayPush`(Mixed) +
+    /// `lower_callable_descriptor_invoke` path (no cell/array/descriptor leak). Note: this
+    /// test is BALANCED with or without the push incref (the idempotent rc-0 free guard
+    /// makes the premature-free count cancel), so `descriptor_invoke_fcc_free_fn_returns_121`
+    /// is what pins the incref; this one catches an outright leak.
+    #[test]
+    fn descriptor_invoke_balanced_gc() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (drop (call $fn_apply_via_descriptor_invoke))                        ;; discard the 121 result
+  (global.get $_gc_live))                                              ;; expect 0 (balanced)
+"#;
+        if let Some(o) = run_descriptor_invoke_driver(driver, "t") {
             assert_eq!(o, "0");
         }
     }
