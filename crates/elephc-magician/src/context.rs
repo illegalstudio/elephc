@@ -646,6 +646,7 @@ pub struct ElephcEvalContext {
     native_method_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
     native_constant_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
     native_interface_properties: HashMap<String, Vec<(String, EvalInterfaceProperty)>>,
+    native_abstract_properties: HashMap<String, Vec<(String, EvalInterfaceProperty)>>,
     native_property_types: HashMap<(String, String), EvalParameterType>,
     native_property_defaults: HashMap<(String, String), NativeCallableDefault>,
     native_property_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
@@ -710,6 +711,7 @@ impl ElephcEvalContext {
             native_method_attributes: HashMap::new(),
             native_constant_attributes: HashMap::new(),
             native_interface_properties: HashMap::new(),
+            native_abstract_properties: HashMap::new(),
             native_property_types: HashMap::new(),
             native_property_defaults: HashMap::new(),
             native_property_attributes: HashMap::new(),
@@ -775,6 +777,7 @@ impl ElephcEvalContext {
             native_method_attributes: HashMap::new(),
             native_constant_attributes: HashMap::new(),
             native_interface_properties: HashMap::new(),
+            native_abstract_properties: HashMap::new(),
             native_property_types: HashMap::new(),
             native_property_defaults: HashMap::new(),
             native_property_attributes: HashMap::new(),
@@ -3022,6 +3025,40 @@ impl ElephcEvalContext {
     ) -> Vec<(String, EvalInterfaceProperty)> {
         self.native_interface_properties
             .get(&normalize_class_name(interface_name))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Defines generated AOT abstract class property-hook metadata for eval validation.
+    pub fn define_native_abstract_property_requirement(
+        &mut self,
+        class_name: &str,
+        declaring_class_name: &str,
+        property: EvalInterfaceProperty,
+    ) -> bool {
+        let key = normalize_class_name(class_name);
+        let owner = declaring_class_name.trim_start_matches('\\').to_string();
+        if key.is_empty() || owner.is_empty() || property.name().is_empty() {
+            return false;
+        }
+        let requirements = self.native_abstract_properties.entry(key).or_default();
+        if requirements
+            .iter()
+            .any(|(_, existing)| existing.name() == property.name())
+        {
+            return false;
+        }
+        requirements.push((owner, property));
+        true
+    }
+
+    /// Returns generated AOT abstract class property-hook metadata by class name.
+    pub fn native_abstract_property_requirements(
+        &self,
+        class_name: &str,
+    ) -> Vec<(String, EvalInterfaceProperty)> {
+        self.native_abstract_properties
+            .get(&normalize_class_name(class_name))
             .cloned()
             .unwrap_or_default()
     }

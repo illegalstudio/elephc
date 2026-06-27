@@ -12843,6 +12843,112 @@ eval('class EvalAotTypedPropertyChild extends EvalAotTypedPropertyBase {
     );
 }
 
+/// Verifies eval concrete classes can implement generated/AOT abstract parent properties.
+#[test]
+fn test_eval_declared_class_implements_aot_abstract_parent_property() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class EvalAotAbstractPropertyBaseOk {
+    abstract public int $id { get; set; }
+}
+eval('class EvalAotAbstractPropertyChildOk extends EvalAotAbstractPropertyBaseOk {
+    public int $id = 7;
+}
+echo (new EvalAotAbstractPropertyChildOk())->id;');
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies eval concrete classes must implement generated/AOT abstract parent properties.
+#[test]
+fn test_eval_declared_class_rejects_missing_aot_abstract_parent_property() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+abstract class EvalAotAbstractPropertyBaseMissing {
+    abstract public int $id { get; set; }
+}
+eval('class EvalAotAbstractPropertyChildMissing extends EvalAotAbstractPropertyBaseMissing {}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval carries generated/AOT abstract property requirements through eval parents.
+#[test]
+fn test_eval_declared_class_rejects_missing_aot_abstract_parent_property_via_eval_parent() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+abstract class EvalAotAbstractPropertyBaseViaEval {
+    abstract public int $id { get; set; }
+}
+eval('abstract class EvalAotAbstractPropertyMiddle extends EvalAotAbstractPropertyBaseViaEval {}');
+eval('class EvalAotAbstractPropertyLeaf extends EvalAotAbstractPropertyMiddle {}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval checks generated/AOT abstract property types through eval parents.
+#[test]
+fn test_eval_declared_class_rejects_incompatible_aot_abstract_parent_property_via_eval_parent() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+abstract class EvalAotAbstractPropertyBaseViaEvalType {
+    abstract public string $name { get; set; }
+}
+eval('abstract class EvalAotAbstractPropertyMiddleType extends EvalAotAbstractPropertyBaseViaEvalType {}');
+eval('class EvalAotAbstractPropertyLeafType extends EvalAotAbstractPropertyMiddleType {
+    public int $name = 1;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval honors get-only versus get/set generated/AOT abstract property contracts.
+#[test]
+fn test_eval_declared_class_validates_aot_abstract_parent_property_set_requirement() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class EvalAotAbstractPropertyGetOnlyBase {
+    abstract public int $id { get; }
+}
+eval('class EvalAotAbstractPropertyReadonlyChild extends EvalAotAbstractPropertyGetOnlyBase {
+    public readonly int $id;
+    public function __construct(int $id) { $this->id = $id; }
+}
+echo (new EvalAotAbstractPropertyReadonlyChild(9))->id;');
+"#,
+    );
+    assert_eq!(out, "9");
+
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+abstract class EvalAotAbstractPropertyGetSetBase {
+    abstract public int $id { get; set; }
+}
+eval('class EvalAotAbstractPropertyReadonlyBadChild extends EvalAotAbstractPropertyGetSetBase {
+    public readonly int $id;
+    public function __construct(int $id) { $this->id = $id; }
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval rejects global builtin attributes on unsupported OOP targets.
 #[test]
 fn test_eval_declared_builtin_attribute_target_validation() {

@@ -2654,6 +2654,12 @@ struct EvalAotAbstractMethodRequirement {
     signature: Option<EvalInterfaceMethod>,
 }
 
+/// Abstract property requirement discovered from generated/AOT parent metadata.
+struct EvalAotAbstractPropertyRequirement {
+    owner: String,
+    property: EvalClassProperty,
+}
+
 /// Rejects builtin attributes that cannot target an eval-declared class.
 fn validate_eval_class_attribute_targets(
     attributes: &[EvalAttribute],
@@ -3950,6 +3956,10 @@ fn validate_concrete_class_aot_parent_requirements(
     if !pending_class_aot_parent_abstract_method_requirements(class, context, values)?.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
+    if !pending_class_aot_parent_abstract_property_requirements(class, context, values)?.is_empty()
+    {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     Ok(())
 }
 
@@ -4016,6 +4026,25 @@ fn pending_class_aot_parent_abstract_method_requirements(
         )?;
     }
     apply_class_aot_parent_abstract_method_requirements(class, context, &mut requirements)?;
+    Ok(requirements.into_values().collect())
+}
+
+/// Returns generated/AOT abstract parent properties the pending class has not concretized.
+fn pending_class_aot_parent_abstract_property_requirements(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvalAotAbstractPropertyRequirement>, EvalStatus> {
+    let mut requirements = std::collections::HashMap::new();
+    if let Some(parent) = class.parent() {
+        collect_aot_parent_abstract_property_requirements(
+            parent,
+            context,
+            values,
+            &mut requirements,
+        )?;
+    }
+    apply_class_aot_parent_abstract_property_requirements(class, context, &mut requirements)?;
     Ok(requirements.into_values().collect())
 }
 
@@ -4091,6 +4120,71 @@ fn collect_native_aot_abstract_method_requirements(
     Ok(())
 }
 
+/// Collects generated/AOT abstract property requirements through eval and AOT parents.
+fn collect_aot_parent_abstract_property_requirements(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    requirements: &mut std::collections::HashMap<String, EvalAotAbstractPropertyRequirement>,
+) -> Result<(), EvalStatus> {
+    let class_name = class_name.trim_start_matches('\\');
+    if let Some(class) = context.class(class_name) {
+        if let Some(parent) = class.parent() {
+            collect_aot_parent_abstract_property_requirements(
+                parent,
+                context,
+                values,
+                requirements,
+            )?;
+        }
+        apply_class_aot_parent_abstract_property_requirements(class, context, requirements)?;
+        return Ok(());
+    }
+    if values.class_exists(class_name)? {
+        collect_native_aot_abstract_property_requirements(
+            class_name,
+            context,
+            values,
+            requirements,
+        )?;
+    }
+    Ok(())
+}
+
+/// Collects abstract properties exposed by one generated/AOT class metadata row.
+fn collect_native_aot_abstract_property_requirements(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    requirements: &mut std::collections::HashMap<String, EvalAotAbstractPropertyRequirement>,
+) -> Result<(), EvalStatus> {
+    for (owner, property) in context.native_abstract_property_requirements(class_name) {
+        let Some(flags) = values.reflection_property_flags(class_name, property.name())? else {
+            continue;
+        };
+        if flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT == 0
+            || flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0
+        {
+            continue;
+        }
+        let visibility = eval_aot_property_visibility(flags);
+        let write_visibility = eval_aot_property_write_visibility(flags, visibility);
+        let set_visibility = (write_visibility != visibility).then_some(write_visibility);
+        let requirement = EvalClassProperty::with_visibility(property.name(), visibility, None)
+            .with_type(property.property_type().cloned())
+            .with_set_visibility(set_visibility)
+            .with_abstract_hook_contract(property.requires_get(), property.requires_set());
+        requirements.insert(
+            property.name().to_string(),
+            EvalAotAbstractPropertyRequirement {
+                owner,
+                property: requirement,
+            },
+        );
+    }
+    Ok(())
+}
+
 /// Collects abstract property requirements from one declared eval class ancestry chain.
 fn collect_class_abstract_property_requirements(
     class_name: &str,
@@ -4143,6 +4237,49 @@ fn apply_class_aot_parent_abstract_method_requirements(
             return Err(EvalStatus::RuntimeFatal);
         }
         if !method.is_abstract() {
+            requirements.remove(&key);
+        }
+    }
+    Ok(())
+}
+
+/// Applies one eval class's properties to the open AOT abstract-property requirement set.
+fn apply_class_aot_parent_abstract_property_requirements(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+    requirements: &mut std::collections::HashMap<String, EvalAotAbstractPropertyRequirement>,
+) -> Result<(), EvalStatus> {
+    for property in class.properties() {
+        let key = property.name().to_string();
+        let Some(requirement) = requirements.get(&key).map(|requirement| {
+            EvalAotAbstractPropertyRequirement {
+                owner: requirement.owner.clone(),
+                property: requirement.property.clone(),
+            }
+        }) else {
+            continue;
+        };
+        if !class_property_satisfies_aot_abstract_parent_requirement(
+            property,
+            class.name(),
+            &requirement,
+            Some(class),
+            context,
+        ) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if property.is_abstract() {
+            requirements.insert(
+                key,
+                EvalAotAbstractPropertyRequirement {
+                    owner: class.name().to_string(),
+                    property: merge_abstract_property_contracts(
+                        &requirement.property,
+                        property,
+                    ),
+                },
+            );
+        } else {
             requirements.remove(&key);
         }
     }
@@ -4224,6 +4361,45 @@ fn class_property_satisfies_abstract_contract(
             && (property.has_set_hook() || (!property.has_get_hook() && !property.is_readonly()));
     }
     requirement.requires_get_hook()
+}
+
+/// Returns whether one property satisfies a generated/AOT abstract parent contract.
+fn class_property_satisfies_aot_abstract_parent_requirement(
+    property: &EvalClassProperty,
+    property_owner: &str,
+    requirement: &EvalAotAbstractPropertyRequirement,
+    pending_class: Option<&EvalClass>,
+    context: &ElephcEvalContext,
+) -> bool {
+    let required = &requirement.property;
+    if property.is_static() != required.is_static()
+        || !property_contract_visibility_allows(required, property)
+        || !property_type_signature_matches(
+            property.property_type(),
+            property_owner,
+            required.property_type(),
+            &requirement.owner,
+            pending_class,
+            context,
+        )
+    {
+        return false;
+    }
+    if property.is_abstract() {
+        return (!required.requires_get_hook() || property.requires_get_hook())
+            && (!required.requires_set_hook()
+                || (property.requires_set_hook()
+                    && property_contract_write_visibility_allows(required, property)));
+    }
+    if required.requires_get_hook() && !class_property_supports_interface_get(property) {
+        return false;
+    }
+    if required.requires_set_hook() {
+        return required.set_visibility() != Some(EvalVisibility::Private)
+            && property_contract_write_visibility_allows(required, property)
+            && class_property_supports_interface_set(property);
+    }
+    required.requires_get_hook()
 }
 
 /// Returns a comparable rank where larger means less restrictive property visibility.

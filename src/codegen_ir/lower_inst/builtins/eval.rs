@@ -66,8 +66,8 @@ const NATIVE_DEFAULT_BOOL: i64 = 1;
 const NATIVE_DEFAULT_INT: i64 = 2;
 const NATIVE_DEFAULT_FLOAT: i64 = 3;
 const NATIVE_DEFAULT_EMPTY_ARRAY: i64 = 4;
-const NATIVE_INTERFACE_PROPERTY_REQUIRES_GET: i64 = 1;
-const NATIVE_INTERFACE_PROPERTY_REQUIRES_SET: i64 = 2;
+const NATIVE_PROPERTY_REQUIRES_GET: i64 = 1;
+const NATIVE_PROPERTY_REQUIRES_SET: i64 = 2;
 const NATIVE_MEMBER_ATTRIBUTE_METHOD: u8 = 0;
 const NATIVE_MEMBER_ATTRIBUTE_PROPERTY: u8 = 1;
 const NATIVE_MEMBER_ATTRIBUTE_CLASS_CONSTANT: u8 = 2;
@@ -147,6 +147,16 @@ struct EvalNativePropertyTypeRegistration {
 struct EvalNativeInterfacePropertyRegistration {
     interface_name: String,
     declaring_interface_name: String,
+    property_name: String,
+    type_spec: String,
+    requires_get: bool,
+    requires_set: bool,
+}
+
+/// A module-local abstract class property contract that can be registered with the eval context.
+struct EvalNativeAbstractPropertyRegistration {
+    class_name: String,
+    declaring_class_name: String,
     property_name: String,
     type_spec: String,
     requires_get: bool,
@@ -1346,6 +1356,9 @@ fn register_eval_native_method_signatures(ctx: &mut FunctionContext<'_>, context
     for registration in eval_native_property_type_registrations(ctx) {
         register_eval_native_property_type(ctx, context_offset, &registration);
     }
+    for registration in eval_native_abstract_property_registrations(ctx) {
+        register_eval_native_abstract_property(ctx, context_offset, &registration);
+    }
     for registration in eval_native_interface_property_registrations(ctx) {
         register_eval_native_interface_property(ctx, context_offset, &registration);
     }
@@ -1519,6 +1532,53 @@ fn eval_native_interface_property_registrations(
         }
     }
     registrations
+}
+
+/// Collects AOT abstract class property contracts that eval can validate at declaration time.
+fn eval_native_abstract_property_registrations(
+    ctx: &FunctionContext<'_>,
+) -> Vec<EvalNativeAbstractPropertyRegistration> {
+    let mut registrations = Vec::new();
+    let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    for (class_name, class_info) in classes {
+        let mut property_names = class_info.abstract_property_hooks.keys().collect::<Vec<_>>();
+        property_names.sort();
+        for property_name in property_names {
+            let Some(contract) = class_info.abstract_property_hooks.get(property_name) else {
+                continue;
+            };
+            let Some(registration) =
+                eval_native_abstract_property_registration(class_name, property_name, contract)
+            else {
+                continue;
+            };
+            registrations.push(registration);
+        }
+    }
+    registrations
+}
+
+/// Converts one static abstract class property contract into eval-native metadata.
+fn eval_native_abstract_property_registration(
+    class_name: &str,
+    property_name: &str,
+    contract: &PropertyHookContract,
+) -> Option<EvalNativeAbstractPropertyRegistration> {
+    let requires_get = contract.get_type.is_some();
+    let requires_set = contract.set_type.is_some();
+    if !requires_get && !requires_set {
+        return None;
+    }
+    let type_spec = eval_native_interface_property_type_spec(contract)?;
+    Some(EvalNativeAbstractPropertyRegistration {
+        class_name: class_name.to_string(),
+        declaring_class_name: contract.declaring_type.clone(),
+        property_name: property_name.to_string(),
+        type_spec,
+        requires_get,
+        requires_set,
+    })
 }
 
 /// Converts one static interface property contract into eval-native metadata.
@@ -3331,10 +3391,10 @@ fn register_eval_native_interface_property(
     );
     let mut flags = 0;
     if registration.requires_get {
-        flags |= NATIVE_INTERFACE_PROPERTY_REQUIRES_GET;
+        flags |= NATIVE_PROPERTY_REQUIRES_GET;
     }
     if registration.requires_set {
-        flags |= NATIVE_INTERFACE_PROPERTY_REQUIRES_SET;
+        flags |= NATIVE_PROPERTY_REQUIRES_SET;
     }
     abi::emit_load_int_immediate(
         ctx.emitter,
@@ -3345,6 +3405,58 @@ fn register_eval_native_interface_property(
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_interface_property");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native abstract-property metadata registration call into the eval context.
+fn register_eval_native_abstract_property(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    registration: &EvalNativeAbstractPropertyRegistration,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    let property_key = format!(
+        "{}::{}::{}",
+        registration.class_name, registration.declaring_class_name, registration.property_name
+    );
+    let (property_key_label, property_key_len) = ctx.data.add_string(property_key.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &property_key_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        property_key_len as i64,
+    );
+    let (type_label, type_len) = ctx.data.add_string(registration.type_spec.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        &type_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        type_len as i64,
+    );
+    let mut flags = 0;
+    if registration.requires_get {
+        flags |= NATIVE_PROPERTY_REQUIRES_GET;
+    }
+    if registration.requires_set {
+        flags |= NATIVE_PROPERTY_REQUIRES_SET;
+    }
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        flags,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_abstract_property");
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 

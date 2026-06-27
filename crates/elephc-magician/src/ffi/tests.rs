@@ -35,8 +35,8 @@ const TEST_NATIVE_DEFAULT_BOOL: u64 = 1;
 const TEST_NATIVE_DEFAULT_INT: u64 = 2;
 const TEST_NATIVE_DEFAULT_FLOAT: u64 = 3;
 const TEST_NATIVE_DEFAULT_EMPTY_ARRAY: u64 = 4;
-const TEST_NATIVE_INTERFACE_PROPERTY_REQUIRES_GET: u64 = 1;
-const TEST_NATIVE_INTERFACE_PROPERTY_REQUIRES_SET: u64 = 2;
+const TEST_NATIVE_PROPERTY_REQUIRES_GET: u64 = 1;
+const TEST_NATIVE_PROPERTY_REQUIRES_SET: u64 = 2;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_OBJECT: u8 = 2;
@@ -1174,8 +1174,7 @@ fn register_native_interface_property_records_metadata() {
             property.len() as u64,
             property_type.as_ptr(),
             property_type.len() as u64,
-            TEST_NATIVE_INTERFACE_PROPERTY_REQUIRES_GET
-                | TEST_NATIVE_INTERFACE_PROPERTY_REQUIRES_SET,
+            TEST_NATIVE_PROPERTY_REQUIRES_GET | TEST_NATIVE_PROPERTY_REQUIRES_SET,
         )
     };
     let invalid_registered = unsafe {
@@ -1185,7 +1184,7 @@ fn register_native_interface_property_records_metadata() {
             invalid_property.len() as u64,
             invalid_type.as_ptr(),
             invalid_type.len() as u64,
-            TEST_NATIVE_INTERFACE_PROPERTY_REQUIRES_GET,
+            TEST_NATIVE_PROPERTY_REQUIRES_GET,
         )
     };
 
@@ -1203,6 +1202,54 @@ fn register_native_interface_property_records_metadata() {
     assert_eq!(invalid_registered, 0);
     assert!(ctx
         .native_interface_property_requirements("KnownContract")
+        .iter()
+        .all(|(_, property)| property.name() != "bad"));
+}
+
+/// Verifies native AOT abstract class property contracts are available to eval validation.
+#[test]
+fn register_native_abstract_property_records_metadata() {
+    let mut ctx = ElephcEvalContext::new();
+    let property = b"KnownClass::KnownParent::name";
+    let property_type = b"string";
+    let invalid_property = b"KnownClass::KnownParent::bad";
+    let invalid_type = b"void";
+
+    let registered = unsafe {
+        __elephc_eval_register_native_abstract_property(
+            &mut ctx,
+            property.as_ptr(),
+            property.len() as u64,
+            property_type.as_ptr(),
+            property_type.len() as u64,
+            TEST_NATIVE_PROPERTY_REQUIRES_GET | TEST_NATIVE_PROPERTY_REQUIRES_SET,
+        )
+    };
+    let invalid_registered = unsafe {
+        __elephc_eval_register_native_abstract_property(
+            &mut ctx,
+            invalid_property.as_ptr(),
+            invalid_property.len() as u64,
+            invalid_type.as_ptr(),
+            invalid_type.len() as u64,
+            TEST_NATIVE_PROPERTY_REQUIRES_GET,
+        )
+    };
+
+    let requirements = ctx.native_abstract_property_requirements("knownclass");
+    assert_eq!(registered, 1);
+    assert_eq!(requirements.len(), 1);
+    assert_eq!(requirements[0].0, "KnownParent");
+    assert_eq!(requirements[0].1.name(), "name");
+    assert!(requirements[0].1.requires_get());
+    assert!(requirements[0].1.requires_set());
+    assert_eq!(
+        requirements[0].1.property_type().map(|ty| ty.variants()),
+        Some(&[EvalParameterTypeVariant::String][..])
+    );
+    assert_eq!(invalid_registered, 0);
+    assert!(ctx
+        .native_abstract_property_requirements("KnownClass")
         .iter()
         .all(|(_, property)| property.name() != "bad"));
 }
