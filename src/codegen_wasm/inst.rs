@@ -890,6 +890,7 @@ fn lower_builtin_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         "get_class" => super::classes::lower_get_class(ctx, inst),
         "array_map" => lower_array_map(ctx, inst),
         "array_filter" => lower_array_filter(ctx, inst),
+        "usort" => lower_usort(ctx, inst),
         other => Err(WasmError::Unsupported(format!("builtin {}", other))),
     }
 }
@@ -1044,6 +1045,113 @@ fn lower_array_filter(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         "keep each element whose callback result is truthy, re-indexed into a fresh array",
     );
     store_result(ctx, inst)
+}
+
+/// Lowers `usort($array, $cmp)` where operand 0 `$array` is a BY-REFERENCE indexed
+/// `array<int>` (mutated IN PLACE and re-indexed) and operand 1 `$cmp` is a `Callable`
+/// descriptor (a closure or a free-function first-class callable) taking two ints and
+/// returning an int (`<0 / 0 / >0`). It lowers to a `__rt_usort_callable(desc, arr)`
+/// runtime call that copy-on-write-uniques the array, STABLE bubble-sorts its int slots
+/// in place via 2-arg `__rt_closure_call` comparisons, and returns the (possibly cloned)
+/// array pointer. The third higher-order consumer after `array_map`/`array_filter`.
+///
+/// BY-REF WRITEBACK: usort mutates its first argument, so the returned pointer is stored
+/// back into the array operand value's local AND mirrored to the operand's source slot
+/// via `value_source_slot` — the verbatim `lower_array_set`/`lower_array_push` by-ref
+/// template — so a later `LoadLocal` of `$array` sees the sorted (possibly cloned) array.
+///
+/// RESULT: usort returns bool `true`. The bool (`WasmRepr::I64` 1) is materialized only
+/// when the call site uses the result (`inst.result.is_some()`); the runtime's array
+/// pointer is the writeback target, never the bool result.
+///
+/// Both operands are materialized BORROWED: neither is released here. The EIR owns and
+/// releases the descriptor and the array local; the runtime only adjusts refcounts on a
+/// COW clone (`__rt_array_ensure_unique`).
+///
+/// Deferred (returns `Unsupported`, never miscompiled): a non-2-operand form (the
+/// optional sort-flags / multi-array shapes are not `usort`); a string/array/object
+/// comparator (operand 1 not `Callable`); and any non-`array<int>` source (operand 0 not
+/// `Heap(Array)` with an `Int` element type). The runtime reads 8-byte int slots, so a
+/// 16-byte string/mixed source would be misread — the int-element guard is load-bearing
+/// for correctness.
+fn lower_usort(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    // Single ($array, $callable) form only. usort has no sort-flags / multi-array
+    // overloads; any other arity is a different builtin shape and is deferred.
+    if inst.operands.len() != 2 {
+        return Err(WasmError::Unsupported(format!(
+            "usort with {} operands on wasm32-wasi (only ($array, $callable) supported; \
+             the optional sort-flags / multi-array forms are not usort)",
+            inst.operands.len()
+        )));
+    }
+    let array = operand(inst, 0)?;
+    let callable = operand(inst, 1)?;
+
+    // GUARD: operand 1 must be a Callable descriptor (closure or free-fn FCC). A
+    // string/array/object comparator would not be an i64 descriptor and needs its own
+    // runtime callback selection (deferred slice).
+    let callable_php = ctx.value_php_type(callable)?.codegen_repr();
+    if !matches!(callable_php, PhpType::Callable) {
+        return Err(WasmError::Unsupported(format!(
+            "usort with a {:?} comparator on wasm32-wasi (only Callable descriptors \
+             supported; string/array/object callbacks deferred)",
+            callable_php
+        )));
+    }
+    // GUARD: operand 0 must be an indexed `array<int>`. The runtime stable-bubble-sorts
+    // 8-byte int slots in place; a 16-byte string/mixed source would be misread, so reject
+    // any non-`Heap(Array)` source or any non-`Int` element type (string/mixed/object
+    // element sorts are deferred). This guard is load-bearing for correctness.
+    let array_ir = ctx.function.value(array).map(|v| v.ir_type);
+    let array_php = ctx.value_php_type(array)?.codegen_repr();
+    let is_int_array = matches!(array_ir, Some(IrType::Heap(IrHeapKind::Array)))
+        && matches!(&array_php, PhpType::Array(elem) if elem.codegen_repr() == PhpType::Int);
+    if !is_int_array {
+        return Err(WasmError::Unsupported(format!(
+            "usort over a {:?} source on wasm32-wasi (only indexed array<int> supported; \
+             string/mixed/object element sorts deferred)",
+            array_php
+        )));
+    }
+
+    // operand 1: callable descriptor (i64) -> i32 for __rt_usort_callable.
+    let desc = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(callable)?;
+    ctx.fb.ins("i32.wrap_i64", "callable descriptor i64 -> i32");
+    ctx.fb.ins(&format!("local.set {}", desc), "save descriptor pointer");
+
+    // operand 0 (by-ref): push the descriptor then the array pointer; the runtime
+    // COW-uniques, stable-bubble-sorts the int slots in place, and returns the (possibly
+    // cloned) pointer, left on the stack for the writeback.
+    ctx.fb.ins(&format!("local.get {}", desc), "descriptor pointer");
+    ctx.emit_load_value(array)?; // array pointer (i32)
+    ctx.fb.ins(
+        "call $__rt_usort_callable",
+        "stable bubble-sort the int array in place (COW), returns the array pointer",
+    );
+
+    // The runtime returned the (possibly cloned) pointer: store it back into the array
+    // operand value's local.
+    ctx.emit_store_value(array)?;
+    // And mirror it to the source slot so a later LoadLocal sees the sorted pointer —
+    // the verbatim lower_array_set / lower_array_push by-ref writeback.
+    if let Some(slot) = value_source_slot(ctx, array) {
+        let array_ref = ctx.value_repr(array)?.local_refs();
+        let slot_ref = ctx.slot_repr(slot)?.local_refs();
+        if array_ref.len() == 1 && slot_ref.len() == 1 {
+            ctx.fb
+                .ins(&format!("local.get {}", array_ref[0]), "sorted array pointer");
+            ctx.fb
+                .ins(&format!("local.set {}", slot_ref[0]), "write back to the array slot");
+        }
+    }
+
+    // usort returns bool true; materialize it only when the call site uses the result.
+    if inst.result.is_some() {
+        ctx.fb.ins("i64.const 1", "usort returns bool true");
+        store_result(ctx, inst)?;
+    }
+    Ok(())
 }
 
 /// Lowers `exit`/`die`: an integer argument becomes the WASI exit status; any

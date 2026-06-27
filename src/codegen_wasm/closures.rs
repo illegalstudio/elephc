@@ -1065,6 +1065,14 @@ pub(super) fn emit_closure_dispatch(
     // `__rt_array_push_str`, `__rt_array_push_mixed`, `__rt_mixed_from_value`,
     // `__rt_incref`, and `__rt_decref_any`, all present in every module that has a ladder.
     wm.add_raw_func(RT_ARRAY_FILTER_CALLABLE);
+    // `usort($arr, $cmp)` (`__rt_usort_callable`) is the third higher-order consumer of
+    // the `__rt_closure_call` ladder, emitted on the same gate for the same reason: a
+    // module with neither closures nor FCC entries can never produce a `Callable`
+    // comparator and so never reaches `usort`'s callable arm. The helper references only
+    // `__rt_closure_call`, `__rt_array_ensure_unique`, `__rt_array_new`,
+    // `__rt_array_push_mixed`, `__rt_mixed_from_value`, and `__rt_decref_any`, all present
+    // in every module that has a ladder.
+    wm.add_raw_func(RT_USORT_CALLABLE);
     Ok(())
 }
 
@@ -1212,6 +1220,65 @@ const RT_ARRAY_FILTER_CALLABLE: &str = r#"(func $__rt_array_filter_callable (par
       (local.set $i (i64.add (local.get $i) (i64.const 1)))        ;; i++
       (br $L)))                                                    ;; loop back
   (local.get $result))                                              ;; return the re-indexed filtered array
+"#;
+
+/// `__rt_usort_callable(desc i32, arr i32) -> i32`: the runtime behind `usort($arr, $cmp)`
+/// with a BY-REFERENCE indexed `array<int>` `$arr` and a `Callable` descriptor `$cmp`
+/// (a closure or a free-function first-class callable) taking two ints and returning an
+/// int. Copy-on-write-uniques the array (`__rt_array_ensure_unique`), then STABLE bubble
+/// sorts its 8-byte int slots IN PLACE and returns the (possibly cloned) array pointer —
+/// the dispatch writes that pointer back into the caller's local. The WASM analogue of the
+/// native `usort.rs` bubble sort.
+///
+/// STABLE BUBBLE SORT (mirrors native `usort.rs`): outer `i` over `0..len`, inner `j` over
+/// `0..len-1-i`; for each adjacent pair `a = arr[j]`, `b = arr[j+1]` it boxes both as tag-0
+/// int Mixed cells into a 2-slot arg buffer, dispatches `__rt_closure_call(desc, args2)`,
+/// and SWAPS them only when the comparison is strictly `> 0` (`i64.gt_s`), so equal elements
+/// keep their order. The comparison int is the lo payload at `cmp_cell+8` (offset 8, NOT 0
+/// which is the tag — the same offset lesson as `__rt_array_filter_callable`).
+///
+/// REFCOUNT DISCIPLINE: the int elements are pure i64 (no refcount). Only the per-comparison
+/// heap cells need freeing — every comparison deep-frees the arg buffer via `__rt_decref_any`
+/// (releasing both boxed arg cells) and then releases the OWNED comparison-result cell
+/// (`__rt_decref_any (cmp_cell)`, load-bearing: it is never stored anywhere). Neither `desc`
+/// nor `arr` is released here: the dispatch writes `arr` back to the local and the EIR owns
+/// both operands; `__rt_array_ensure_unique` already adjusted refcounts on a COW clone.
+const RT_USORT_CALLABLE: &str = r#"(func $__rt_usort_callable (param $desc i32) (param $arr i32) (result i32)
+  (local $len i64) (local $i i64) (local $j i64)
+  (local $slotj i32) (local $slotk i32) (local $a i64) (local $b i64)
+  (local $args2 i32) (local $cmp_cell i32) (local $cmp i64)
+  (local.set $arr (call $__rt_array_ensure_unique (local.get $arr)))  ;; COW split: mutate only an unshared buffer
+  (local.set $len (i64.load (local.get $arr)))                       ;; element count @ arr+0
+  (if (i64.le_s (local.get $len) (i64.const 1))                      ;; 0 or 1 elements -> already sorted
+    (then (return (local.get $arr))))
+  (local.set $i (i64.const 0))                                       ;; outer pass index = 0
+  (block $endi
+    (loop $Li
+      (br_if $endi (i64.ge_s (local.get $i) (local.get $len)))       ;; i >= len -> done
+      (local.set $j (i64.const 0))                                   ;; inner index = 0
+      (block $endj
+        (loop $Lj
+          (br_if $endj (i64.ge_s (local.get $j) (i64.sub (i64.sub (local.get $len) (i64.const 1)) (local.get $i))))  ;; j >= len-1-i -> pass done
+          (local.set $slotj (i32.add (i32.add (local.get $arr) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $j) (i64.const 8)))))  ;; slot j = arr+24+j*8
+          (local.set $slotk (i32.add (local.get $slotj) (i32.const 8)))  ;; slot j+1 = slot j + 8 (next i64)
+          (local.set $a (i64.load (local.get $slotj)))               ;; a = arr[j]
+          (local.set $b (i64.load (local.get $slotk)))               ;; b = arr[j+1]
+          (local.set $args2 (call $__rt_array_new (i64.const 2) (i64.const 16)))  ;; 2-slot Mixed-cell arg buffer
+          (local.set $args2 (call $__rt_array_push_mixed (local.get $args2) (call $__rt_mixed_from_value (i64.const 0) (local.get $a) (i64.const 0))))  ;; arg0 = box int a (tag 0)
+          (local.set $args2 (call $__rt_array_push_mixed (local.get $args2) (call $__rt_mixed_from_value (i64.const 0) (local.get $b) (i64.const 0))))  ;; arg1 = box int b (tag 0)
+          (local.set $cmp_cell (call $__rt_closure_call (local.get $desc) (local.get $args2)))  ;; cmp(a, b) -> owned result cell
+          (local.set $cmp (i64.load offset=8 (local.get $cmp_cell)))  ;; comparison int = lo payload @ cmp_cell+8
+          (call $__rt_decref_any (local.get $args2))                 ;; deep-free the arg buffer (releases both boxed cells)
+          (call $__rt_decref_any (local.get $cmp_cell))              ;; release the OWNED comparison cell (load-bearing: never stored)
+          (if (i64.gt_s (local.get $cmp) (i64.const 0))              ;; cmp > 0: a should follow b -> swap (stable: strict >)
+            (then
+              (i64.store (local.get $slotj) (local.get $b))          ;; arr[j]   = b
+              (i64.store (local.get $slotk) (local.get $a))))        ;; arr[j+1] = a
+          (local.set $j (i64.add (local.get $j) (i64.const 1)))      ;; j++
+          (br $Lj)))
+      (local.set $i (i64.add (local.get $i) (i64.const 1)))          ;; i++
+      (br $Li)))
+  (local.get $arr))                                                  ;; return the (possibly cloned) sorted array
 "#;
 
 /// Derives the unified-ladder wrapper symbol for an FCC-of-free-function target
@@ -3703,6 +3770,301 @@ mod tests {
 "#;
         if let Some(o) = run_array_filter_lowered_driver(driver, "t") {
             assert_eq!(o, "3345");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // usort with a callable comparator (`__rt_usort_callable`).
+    // The first test drives the runtime directly with a hand-stamped FCC descriptor
+    // for the comparator `cmp_asc`; the second is the non-return GC balance loop; the
+    // third lowers a real EIR body through `lower_function` so the `lower_usort`
+    // dispatch + the by-ref `value_source_slot` writeback into the caller's local are
+    // tested end-to-end.
+    // -------------------------------------------------------------------------
+
+    /// Hand-written WAT body for the user comparator `cmp_asc(int, int) -> int { a - b }`,
+    /// defined under its canonical wasm symbol `fn_cmp_asc` so the FCC wrapper's
+    /// `call $fn_cmp_asc` resolves. The wrapper unboxes each arg via `__rt_mixed_cast_int`,
+    /// calls this body, and boxes the i64 `a - b` result as a tag-0 int Mixed cell — so the
+    /// runtime's `cmp_cell+8` lo-payload read sees the ascending comparison value.
+    fn cmp_asc_free_fn_body_wat() -> &'static str {
+        r#"(func $fn_cmp_asc (param $p1 i64) (param $p2 i64) (result i64)
+  (i64.sub (local.get $p1) (local.get $p2)))                            ;; body: return a - b (ascending order)
+"#
+    }
+
+    /// Builds the user comparator `Function` (name `cmp_asc`, two int params, INT return)
+    /// that `emit_closure_dispatch` reads to generate the FCC wrapper. Two params are
+    /// required: `__rt_usort_callable` boxes the two adjacent elements into a 2-slot arg
+    /// buffer, and `box_result_wat` tags the wrapper's result cell 0 so the runtime reads
+    /// the signed `a - b` at `cmp_cell+8`.
+    fn cmp_asc_free_fn() -> Function {
+        let mut f = Function::new("cmp_asc".to_string(), IrType::I64, PhpType::Int);
+        for name in ["a", "b"] {
+            f.params.push(FunctionParam {
+                name: name.to_string(),
+                ir_type: IrType::I64,
+                php_type: PhpType::Int,
+                by_ref: false,
+                variadic: false,
+            });
+        }
+        f
+    }
+
+    /// `__rt_usort_callable` sorts a uniquely-owned value_type-0 int array `[3, 1, 2]`
+    /// ASCENDING through `cmp_asc(int,int)->int { a - b }` and returns the (same, COW no-op)
+    /// pointer sorted IN PLACE. The driver reads `res[0..2]` via `__rt_array_get_int` and
+    /// folds them into `e0*100 + e1*10 + e2` = `1*100 + 2*10 + 3` = `123`. The CORRECTNESS
+    /// pin for the sort: an unsorted/no-swap bug leaves `[3, 1, 2]` and folds to `312`, a
+    /// reversed/descending comparator folds to `321`, and reading the wrong cmp offset (the
+    /// cell tag instead of its lo payload) breaks the order — each is distinguished from
+    /// `123`. The input is neither already-sorted nor fully-reversed, so it exercises at
+    /// least one swap and the stable no-swap path.
+    #[test]
+    fn usort_callable_sorts_ascending() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $desc i32) (local $src i32) (local $e0 i64) (local $e1 i64) (local $e2 i64)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))            ;; FCC descriptor (rc 1)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp kind 6 (callable)
+  (i64.store (local.get $desc) (i64.const 11))                        ;; descriptor kind = 11 (Function)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0 (FCC slot, no closures)
+  (i32.store offset=12 (local.get $desc) (i32.const 0))              ;; capture_count = 0
+  (i32.store offset=16 (local.get $desc) (i32.const 0))              ;; capture_tags_ptr = 0
+  (local.set $src (call $__rt_array_new (i64.const 3) (i64.const 8)))  ;; fresh uniquely-owned int array
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 3)))  ;; src[0] = 3
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 1)))  ;; src[1] = 1
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 2)))  ;; src[2] = 2
+  (local.set $src (call $__rt_usort_callable (local.get $desc) (local.get $src)))  ;; sort ascending in place
+  (local.set $e0 (call $__rt_array_get_int (local.get $src) (i64.const 0)))  ;; res[0] (expect 1)
+  (local.set $e1 (call $__rt_array_get_int (local.get $src) (i64.const 1)))  ;; res[1] (expect 2)
+  (local.set $e2 (call $__rt_array_get_int (local.get $src) (i64.const 2)))  ;; res[2] (expect 3)
+  (i64.add (i64.add (i64.mul (local.get $e0) (i64.const 100)) (i64.mul (local.get $e1) (i64.const 10))) (local.get $e2)))  ;; 1*100 + 2*10 + 3 = 123
+"#;
+        if let Some(o) = run_fcc_driver(cmp_asc_free_fn(), cmp_asc_free_fn_body_wat(), driver, "t") {
+            assert_eq!(o, "123");
+        }
+    }
+
+    /// usort run twice over freshly built uniquely-owned int arrays, for refcount balance:
+    /// each pass builds `[3, 1, 2]` (rc 1), sorts it in place (`ensure_unique` is a no-op
+    /// on a sole owner, so the returned pointer equals the source), and releases that
+    /// pointer; after the loop the FCC descriptor is released, leaving `_gc_live` at "0".
+    /// A non-return loop, so the per-comparison OWNED result cells are never stored
+    /// anywhere: the runtime's `__rt_decref_any (cmp_cell)` is the only thing that frees
+    /// them. Proven load-bearing: removing that free (or the `args2` free) leaves
+    /// `_gc_live` non-zero (6 leaked comparison cells across the two 3-element passes —
+    /// each pass does `3*2/2 = 3` adjacent comparisons), so this catches the leak the
+    /// GC-blindspot rule warns a return-case balance test would miss.
+    #[test]
+    fn usort_callable_balanced_gc() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $desc i32) (local $src i32) (local $i i32)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))            ;; FCC descriptor (rc 1)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp kind 6 (callable)
+  (i64.store (local.get $desc) (i64.const 11))                        ;; descriptor kind = 11 (Function)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0
+  (i32.store offset=12 (local.get $desc) (i32.const 0))              ;; capture_count = 0
+  (i32.store offset=16 (local.get $desc) (i32.const 0))              ;; capture_tags_ptr = 0
+  (local.set $i (i32.const 0))                                       ;; sort-pass counter
+  (block $end
+    (loop $L
+      (br_if $end (i32.ge_s (local.get $i) (i32.const 2)))           ;; two sort passes
+      (local.set $src (call $__rt_array_new (i64.const 3) (i64.const 8)))  ;; fresh uniquely-owned int array
+      (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 3)))  ;; src[0] = 3
+      (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 1)))  ;; src[1] = 1
+      (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 2)))  ;; src[2] = 2
+      (local.set $src (call $__rt_usort_callable (local.get $desc) (local.get $src)))  ;; sort in place (returns the same ptr)
+      (call $__rt_decref_any (local.get $src))                       ;; release this pass's array (frees it)
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))          ;; i++
+      (br $L)))
+  (call $__rt_decref_any (local.get $desc))                          ;; release the FCC descriptor
+  (global.get $_gc_live))                                             ;; expect 0 (balanced)
+"#;
+        if let Some(o) = run_fcc_driver(cmp_asc_free_fn(), cmp_asc_free_fn_body_wat(), driver, "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// Builds the self-contained EIR `Function` `sort_local() -> array<int>` that exercises
+    /// the full `lower_usort` by-ref writeback path: it stores an `array<int>` `[3, 1, 2]`
+    /// into a `PhpLocal` slot, `LoadLocal`s it as operand 0, creates a first-class callable
+    /// of `cmp_asc` (`FirstClassCallableNew`, Owned kind-6 descriptor) as operand 1, calls
+    /// `usort($a, cmp_asc(...))` as an `Op::BuiltinCall` `[LoadLocal(arr), vf]` (no result),
+    /// releases the FCC temp, then RE-loads the SAME slot and returns it. Because usort
+    /// mutates by reference, `lower_usort` writes the sorted pointer back into the slot via
+    /// `value_source_slot`; returning a fresh `LoadLocal` of that slot proves the caller's
+    /// local was updated — the whole point of usort.
+    fn sort_local_via_builtin_fn(
+        cmp_data: crate::ir::DataId,
+        usort_data: crate::ir::DataId,
+    ) -> Function {
+        let int_arr_ty = PhpType::Array(Box::new(PhpType::Int));
+        let mut f = Function::new(
+            "sort_local".to_string(),
+            IrType::Heap(IrHeapKind::Array),
+            int_arr_ty.clone(),
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            // The PHP local `$a` that holds (and is mutated by usort through) the array.
+            let slot = b.add_local(
+                Some("a".to_string()),
+                IrType::Heap(IrHeapKind::Array),
+                int_arr_ty.clone(),
+                LocalKind::PhpLocal,
+            );
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            // $a = [3, 1, 2]  (array<int>, Owned, capacity 3; ArrayPush shapes it).
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(3)),
+                    IrType::Heap(IrHeapKind::Array),
+                    int_arr_ty.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            for v in [3i64, 1, 2] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![arr, c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            b.emit_store_local(slot, arr);
+            // usort($a, cmp_asc(...)): operand 0 = LoadLocal($a) (by-ref), operand 1 = the
+            // FCC comparator. No result (the bool true is unused).
+            let loaded =
+                b.emit_load_local(slot, IrType::Heap(IrHeapKind::Array), int_arr_ty.clone());
+            let vf = b
+                .emit(
+                    Op::FirstClassCallableNew,
+                    Vec::new(),
+                    Some(Immediate::Data(cmp_data)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::BuiltinCall,
+                vec![loaded, vf],
+                Some(Immediate::Data(usort_data)),
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            // release the FCC descriptor temp (mirrors ir_lower's owned-arg release).
+            let _ = b.emit(
+                Op::Release,
+                vec![vf],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            // Return the sorted array by RE-loading the SAME slot: proves the by-ref
+            // writeback updated the local in place.
+            let after =
+                b.emit_load_local(slot, IrType::Heap(IrHeapKind::Array), int_arr_ty.clone());
+            b.terminate(Terminator::Return { value: Some(after) });
+        }
+        f
+    }
+
+    /// Builds a reactor module with the full runtime surface, the lowered self-contained
+    /// `sort_local` body (via `lower_function`, so the `lower_usort` builtin arm and its
+    /// by-ref `value_source_slot` writeback are under test together with the
+    /// `__rt_usort_callable` runtime), the hand-written `fn_cmp_asc` body, and the unified
+    /// closure/FCC dispatch ladder (single FCC entry `cmp_asc`). Validates with
+    /// `wasmparser` and runs `export` under `wasmer`; `None` if wasmer is absent
+    /// (validation always runs).
+    fn run_usort_lowered_driver(driver: &str, export: &str) -> Option<String> {
+        let mut wm = WatModule::new();
+        wm.set_memory(3, Some("memory"));
+        // The lowered body's prologue references the `$__concat_off` cursor global.
+        super::super::runtime::emit_common_runtime(&mut wm);
+        emit_heap_runtime(&mut wm, 1024, 3 * 65536);
+        emit_refcount_runtime(&mut wm);
+        emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
+        super::super::hashes::emit_hash_runtime(&mut wm);
+        emit_object_runtime(&mut wm);
+        emit_gc_desc_stub(&mut wm);
+        emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
+        emit_closure_runtime(&mut wm);
+        wm.add_raw_func(cmp_asc_free_fn_body_wat());
+        let mut module = Module::new(Target::wasm());
+        let cmp_data = module.data.intern_string("cmp_asc");
+        let usort_data = module.data.intern_function_name("usort");
+        module.functions.push(cmp_asc_free_fn());
+        let body_fn = sort_local_via_builtin_fn(cmp_data, usort_data);
+        let fcc_entries = vec!["cmp_asc".to_string()];
+        let body_fb =
+            super::super::function::lower_function(&module, &body_fn, &[], &[], &fcc_entries)
+                .expect("lower usort body");
+        wm.add_func(body_fb);
+        super::emit_closure_dispatch(&mut wm, &module, &fcc_entries).expect("emit_closure_dispatch");
+        wm.add_raw_func(driver);
+        let wat = wm.render();
+        let bytes = ::wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("WAT did not assemble: {e}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|e| panic!("wasm did not validate: {e}\n{wat}"));
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = unique_tmp_dir();
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg(export)
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer --invoke {export} failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            wat
+        );
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// `sort_local()` lowers `usort($a, cmp_asc(...))` over `$a = [3, 1, 2]` through the real
+    /// `Op::BuiltinCall` -> `lower_usort` dispatch (NOT a hand-written runtime call), then
+    /// RE-loads the SAME slot and returns it. The driver reads `res[0..2]` via
+    /// `__rt_array_get_int` and folds them into `e0*100 + e1*10 + e2` = `123`. Proves the
+    /// by-ref `value_source_slot` writeback updates the caller's local in place: a missing
+    /// writeback would return the UNSORTED `[3, 1, 2]` (fold `312`), the distinguishing
+    /// number from the sorted `123`.
+    #[test]
+    fn usort_lowering_writes_back_to_local() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $res i32) (local $e0 i64) (local $e1 i64) (local $e2 i64)
+  (local.set $res (call $fn_sort_local))                             ;; res = usort([3,1,2], cmp_asc(...)) (writeback -> local -> returned)
+  (local.set $e0 (call $__rt_array_get_int (local.get $res) (i64.const 0)))  ;; res[0] (expect 1)
+  (local.set $e1 (call $__rt_array_get_int (local.get $res) (i64.const 1)))  ;; res[1] (expect 2)
+  (local.set $e2 (call $__rt_array_get_int (local.get $res) (i64.const 2)))  ;; res[2] (expect 3)
+  (i64.add (i64.add (i64.mul (local.get $e0) (i64.const 100)) (i64.mul (local.get $e1) (i64.const 10))) (local.get $e2)))  ;; 1*100 + 2*10 + 3 = 123
+"#;
+        if let Some(o) = run_usort_lowered_driver(driver, "t") {
+            assert_eq!(o, "123");
         }
     }
 }
