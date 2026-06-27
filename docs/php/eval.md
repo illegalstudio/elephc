@@ -473,9 +473,10 @@ returns the declaring class-like symbol for eval method parameters, and
 `ReflectionParameter::getDeclaringFunction()` returns a `ReflectionFunction`
 object for eval free-function parameters or a `ReflectionMethod` object for the
 declaring eval method. Direct `new ReflectionParameter(...)` construction
-accepts eval free-function names, class/interface/trait method arrays, and
-object-method arrays resolved from the evaluated runtime object, including
-inline `new` expressions. `ReflectionFunction::invoke()` and `invokeArgs()`
+accepts eval and registered generated/AOT free-function names, eval-visible and
+generated/AOT class/interface/trait method arrays, and object-method arrays
+resolved from the evaluated runtime object, including inline `new` expressions.
+`ReflectionFunction::invoke()` and `invokeArgs()`
 dispatch eval-declared functions with the same named/default/variadic argument
 binding used by direct eval function calls. Runtime-held generated/AOT
 `ReflectionFunction` objects can invoke registered generated functions through
