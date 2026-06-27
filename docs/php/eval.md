@@ -195,7 +195,9 @@ declaration time.
 Eval validates inherited property redeclarations with PHP-style invariant
 property types, matching static storage, compatible read/write visibility, and
 readonly compatibility: child redeclarations may add `readonly`, but may not
-remove inherited `readonly`.
+remove inherited `readonly`. The same checks apply to generated/AOT parent
+property metadata when the eval bridge exposes reflection flags and declared
+property types.
 Typed eval-declared instance and static properties track PHP initialization
 state: reads before initialization or after `unset()` throw the same catchable
 `Error`, while untyped properties and explicit `= null` defaults are initialized

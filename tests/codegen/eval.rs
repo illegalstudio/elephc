@@ -12570,6 +12570,89 @@ eval('class EvalAotParentSignatureChild extends EvalAotParentSignatureBase {
     );
 }
 
+/// Verifies eval rejects overriding final generated/AOT parent properties.
+#[test]
+fn test_eval_declared_class_rejects_final_aot_parent_property_override() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalAotFinalPropertyBase {
+    final public int $value = 1;
+}
+eval('class EvalAotFinalPropertyChild extends EvalAotFinalPropertyBase {
+    public int $value = 2;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval validates generated/AOT parent property visibility and storage contracts.
+#[test]
+fn test_eval_declared_class_rejects_incompatible_aot_parent_property_contracts() {
+    for source in [
+        r#"<?php
+class EvalAotPublicPropertyBase {
+    public int $value = 1;
+}
+eval('class EvalAotProtectedPropertyChild extends EvalAotPublicPropertyBase {
+    protected int $value = 2;
+}');
+"#,
+        r#"<?php
+class EvalAotStaticPropertyBase {
+    public static int $value = 1;
+}
+eval('class EvalAotInstancePropertyChild extends EvalAotStaticPropertyBase {
+    public int $value = 2;
+}');
+"#,
+        r#"<?php
+class EvalAotReadonlyPropertyBase {
+    public readonly int $value;
+}
+eval('class EvalAotMutablePropertyChild extends EvalAotReadonlyPropertyBase {
+    public int $value = 2;
+}');
+"#,
+        r#"<?php
+class EvalAotPrivateSetPropertyBase {
+    public private(set) int $value = 1;
+}
+eval('class EvalAotPrivateSetPropertyChild extends EvalAotPrivateSetPropertyBase {
+    public private(set) int $value = 2;
+}');
+"#,
+    ] {
+        let err = compile_and_run_expect_failure(source);
+        assert!(
+            err.contains("Fatal error: eval() runtime failed"),
+            "stderr did not contain eval runtime fatal diagnostic: {err}"
+        );
+    }
+}
+
+/// Verifies eval rejects incompatible generated/AOT parent property types.
+#[test]
+fn test_eval_declared_class_rejects_incompatible_aot_parent_property_type() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class EvalAotTypedPropertyBase {
+    public string $value = "base";
+}
+eval('class EvalAotTypedPropertyChild extends EvalAotTypedPropertyBase {
+    public int $value = 2;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval rejects global builtin attributes on unsupported OOP targets.
 #[test]
 fn test_eval_declared_builtin_attribute_target_validation() {
