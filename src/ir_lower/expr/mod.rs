@@ -2589,6 +2589,10 @@ fn lower_static_is_callable(
     if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
         return None;
     }
+    // Eval can declare callable targets after static metadata has been built.
+    if ctx.has_eval_barrier() {
+        return None;
+    }
     match &args[0].kind {
         ExprKind::FirstClassCallable(
             CallableTarget::Function(_) | CallableTarget::StaticMethod { .. },
