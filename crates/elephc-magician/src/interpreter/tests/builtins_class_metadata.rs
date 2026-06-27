@@ -64,11 +64,13 @@ $object = new EvalMetaChild();
 $implements = class_implements($object);
 echo count($implements); echo ":";
 echo $implements["KnownInterface"]; echo ":";
+echo $implements["Traversable"]; echo ":";
 $parents = class_parents("EvalMetaChild");
 echo count($parents); echo ":";
 echo $parents["EvalMetaBase"]; echo ":";
 $call = call_user_func("class_implements", "EvalMetaChild");
 echo $call["KnownInterface"]; echo ":";
+echo $call["Traversable"]; echo ":";
 $named = call_user_func_array("class_parents", ["object_or_class" => $object]);
 echo $named["EvalMetaBase"];
 return true;"#,
@@ -81,7 +83,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "1:KnownInterface:1:EvalMetaBase:KnownInterface:EvalMetaBase"
+        "2:KnownInterface:Traversable:1:EvalMetaBase:KnownInterface:Traversable:EvalMetaBase"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

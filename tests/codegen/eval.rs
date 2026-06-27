@@ -14034,6 +14034,85 @@ echo $ref->implementsInterface("Iterator") ? "I" : "i";');
     assert_eq!(out.stdout, "CBi");
 }
 
+/// Verifies eval-declared children expose interfaces inherited from AOT parents.
+#[test]
+fn test_eval_declared_class_reflects_aot_parent_interfaces() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface EvalAotParentMarkerBase {}
+interface EvalAotParentMarkerChild extends EvalAotParentMarkerBase {}
+class EvalAotParentMarkerRoot implements EvalAotParentMarkerChild {}
+eval('class EvalAotParentMarkerLeaf extends EvalAotParentMarkerRoot {}
+$implements = class_implements("EvalAotParentMarkerLeaf");
+ksort($implements);
+echo implode(",", array_keys($implements)) . ":";
+$ref = new ReflectionClass("EvalAotParentMarkerLeaf");
+$names = $ref->getInterfaceNames();
+sort($names);
+echo implode(",", $names) . ":";
+$objects = $ref->getInterfaces();
+ksort($objects);
+echo implode(",", array_keys($objects)) . ":";
+echo $ref->implementsInterface("EvalAotParentMarkerChild") ? "C" : "c";
+echo $ref->implementsInterface("evalaotparentmarkerbase") ? "B" : "b";
+echo $ref->isSubclassOf("EvalAotParentMarkerChild") ? "S" : "s";
+echo is_subclass_of("EvalAotParentMarkerLeaf", "EvalAotParentMarkerChild") ? "U" : "u";
+$box = new EvalAotParentMarkerLeaf();
+echo $box instanceof EvalAotParentMarkerChild ? "I" : "i";');
+$box = new EvalAotParentMarkerLeaf();
+echo ":";
+echo $box instanceof EvalAotParentMarkerChild ? "N" : "n";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalAotParentMarkerBase,EvalAotParentMarkerChild:EvalAotParentMarkerBase,EvalAotParentMarkerChild:EvalAotParentMarkerBase,EvalAotParentMarkerChild:CBSUI:N"
+    );
+}
+
+/// Verifies eval-declared interfaces expose inherited AOT parent interfaces.
+#[test]
+fn test_eval_declared_interface_reflects_aot_parent_interfaces() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface EvalAotInterfaceMarkerBase {}
+interface EvalAotInterfaceMarkerChild extends EvalAotInterfaceMarkerBase {}
+eval('interface EvalAotInterfaceMarkerLeaf extends EvalAotInterfaceMarkerChild {}
+class EvalAotInterfaceMarkerBox implements EvalAotInterfaceMarkerLeaf {}
+$ifaceParents = class_implements("EvalAotInterfaceMarkerLeaf");
+ksort($ifaceParents);
+echo implode(",", array_keys($ifaceParents)) . ":";
+$classImplements = class_implements("EvalAotInterfaceMarkerBox");
+ksort($classImplements);
+echo implode(",", array_keys($classImplements)) . ":";
+$names = (new ReflectionClass("EvalAotInterfaceMarkerBox"))->getInterfaceNames();
+sort($names);
+echo implode(",", $names) . ":";
+echo (new ReflectionClass("EvalAotInterfaceMarkerLeaf"))->implementsInterface("EvalAotInterfaceMarkerBase") ? "I" : "i";
+echo (new ReflectionClass("EvalAotInterfaceMarkerBox"))->implementsInterface("evalaotinterfacemarkerbase") ? "C" : "c";
+echo (new ReflectionClass("EvalAotInterfaceMarkerLeaf"))->isSubclassOf("EvalAotInterfaceMarkerBase") ? "S" : "s";
+echo is_subclass_of("EvalAotInterfaceMarkerLeaf", "EvalAotInterfaceMarkerBase") ? "U" : "u";
+$box = new EvalAotInterfaceMarkerBox();
+echo $box instanceof EvalAotInterfaceMarkerBase ? "N" : "n";
+echo is_a($box, "EvalAotInterfaceMarkerBase") ? "A" : "a";');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalAotInterfaceMarkerBase,EvalAotInterfaceMarkerChild:EvalAotInterfaceMarkerBase,EvalAotInterfaceMarkerChild,EvalAotInterfaceMarkerLeaf:EvalAotInterfaceMarkerBase,EvalAotInterfaceMarkerChild,EvalAotInterfaceMarkerLeaf:ICSUNA"
+    );
+}
+
 /// Verifies eval `ReflectionClass::implementsInterface()` throws ReflectionException
 /// for missing or non-interface argument names.
 #[test]
@@ -19138,14 +19217,14 @@ interface EvalIterableIface extends Iterator {}
 trait EvalIterableTrait {}
 enum EvalIterableEnum { case Ready; }
 class EvalIterableIterator implements Iterator {
-    public function current() { return null; }
-    public function key() { return null; }
-    public function next() {}
-    public function valid() { return false; }
-    public function rewind() {}
+    public function current(): mixed { return null; }
+    public function key(): mixed { return null; }
+    public function next(): void {}
+    public function valid(): bool { return false; }
+    public function rewind(): void {}
 }
 class EvalIterableAggregate implements IteratorAggregate {
-    public function getIterator() { return $this; }
+    public function getIterator(): Traversable { return new ArrayIterator([]); }
 }
 echo (new ReflectionClass("EvalIterablePlain"))->isIterable() ? "P" : "p";
 $iter = new ReflectionClass("EvalIterableIterator");

@@ -338,7 +338,12 @@ pub(in crate::interpreter) fn eval_reflection_class_implements_interface_result(
         );
     }
     let result = if eval_reflection_class_like_exists(&reflected_name, context) {
-        eval_reflection_class_implements_interface_name(&reflected_name, &interface_name, context)
+        eval_reflection_class_implements_interface_name(
+            &reflected_name,
+            &interface_name,
+            context,
+            values,
+        )?
     } else if eval_runtime_interface_exists(&reflected_name, values)? {
         eval_reflection_same_class_like_name(&reflected_name, &interface_name)
     } else {
@@ -382,7 +387,12 @@ pub(in crate::interpreter) fn eval_reflection_class_is_subclass_of_result(
         );
     }
     let result = if eval_reflection_class_like_exists(&reflected_name, context) {
-        eval_reflection_class_is_subclass_of_name(&reflected_name, &target_name, context)
+        eval_reflection_class_is_subclass_of_name(
+            &reflected_name,
+            &target_name,
+            context,
+            values,
+        )?
     } else {
         let reflected_class = values.string(&reflected_name)?;
         let result = values.object_is_a(reflected_class, &target_name, true)?;
@@ -523,7 +533,9 @@ pub(in crate::interpreter) fn eval_reflection_class_basic_metadata_result(
         }
         "getinterfacenames" => {
             eval_reflection_bind_no_args(evaluated_args)?;
-            eval_reflection_string_array_result(&metadata.interface_names, values).map(Some)
+            let interface_names =
+                eval_reflection_eval_metadata_interface_names(&metadata, context, values)?;
+            eval_reflection_string_array_result(&interface_names, values).map(Some)
         }
         "gettraitnames" => {
             eval_reflection_bind_no_args(evaluated_args)?;
@@ -893,7 +905,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_relation_objects_result(
     let names =
         if let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) {
             if relation_kind == "interfaces" {
-                metadata.interface_names
+                eval_reflection_eval_metadata_interface_names(&metadata, context, values)?
             } else {
                 metadata.trait_names
             }
@@ -2835,11 +2847,13 @@ fn eval_reflection_class_owner_object_result(
         )
         .map(Some);
     };
+    let interface_names =
+        eval_reflection_eval_metadata_interface_names(&metadata, context, values)?;
     eval_reflection_owner_object(
         owner_kind,
         &metadata.resolved_name,
         &metadata.attributes,
-        &metadata.interface_names,
+        &interface_names,
         &metadata.trait_names,
         &metadata.method_names,
         &metadata.property_names,
@@ -5198,11 +5212,13 @@ fn eval_reflection_full_class_object_result(
             values,
         );
     };
+    let interface_names =
+        eval_reflection_eval_metadata_interface_names(&metadata, context, values)?;
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS,
         &metadata.resolved_name,
         &metadata.attributes,
-        &metadata.interface_names,
+        &interface_names,
         &metadata.trait_names,
         &metadata.method_names,
         &metadata.property_names,
@@ -5259,11 +5275,13 @@ fn eval_reflection_shallow_class_object_result(
             values,
         );
     };
+    let interface_names =
+        eval_reflection_eval_metadata_interface_names(&metadata, context, values)?;
     eval_reflection_owner_object_with_members(
         EVAL_REFLECTION_OWNER_CLASS,
         &metadata.resolved_name,
         &metadata.attributes,
-        &metadata.interface_names,
+        &interface_names,
         &metadata.trait_names,
         &[],
         &[],
@@ -6036,6 +6054,75 @@ fn eval_reflection_aot_class_interface_names(
     Ok(names)
 }
 
+/// Returns eval metadata interface names expanded with generated/AOT ancestors.
+fn eval_reflection_eval_metadata_interface_names(
+    metadata: &EvalReflectionClassMetadata,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    if context.has_class(&metadata.resolved_name) || context.has_enum(&metadata.resolved_name) {
+        eval_reflection_eval_class_interface_names(&metadata.resolved_name, context, values)
+    } else if context.has_interface(&metadata.resolved_name) {
+        eval_reflection_eval_interface_parent_names(&metadata.resolved_name, context, values)
+    } else {
+        Ok(metadata.interface_names.clone())
+    }
+}
+
+/// Returns eval class interfaces plus interfaces inherited from generated/AOT parents.
+fn eval_reflection_eval_class_interface_names(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Some(parent) = context.class_native_parent_name(class_name) {
+        for name in eval_reflection_aot_class_interface_names(&parent, values)? {
+            eval_reflection_push_unique_class_name(name, &mut names, &mut seen);
+        }
+    }
+    for name in context.class_interface_names(class_name) {
+        eval_reflection_push_unique_class_name(name.clone(), &mut names, &mut seen);
+        if !context.has_interface(&name) && eval_runtime_interface_exists(&name, values)? {
+            for parent in eval_reflection_aot_class_interface_names(&name, values)? {
+                eval_reflection_push_unique_class_name(parent, &mut names, &mut seen);
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// Returns eval interface parents plus inherited generated/AOT interface parents.
+fn eval_reflection_eval_interface_parent_names(
+    interface_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for name in context.interface_parent_names(interface_name) {
+        eval_reflection_push_unique_class_name(name.clone(), &mut names, &mut seen);
+        if !context.has_interface(&name) && eval_runtime_interface_exists(&name, values)? {
+            for parent in eval_reflection_aot_class_interface_names(&name, values)? {
+                eval_reflection_push_unique_class_name(parent, &mut names, &mut seen);
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// Appends one class-like name while preserving PHP's case-insensitive uniqueness.
+fn eval_reflection_push_unique_class_name(
+    name: String,
+    names: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    if seen.insert(name.to_ascii_lowercase()) {
+        names.push(name);
+    }
+}
+
 /// Returns generated AOT trait names for one reflected class-like symbol.
 fn eval_reflection_aot_class_trait_names(
     class_name: &str,
@@ -6463,7 +6550,9 @@ fn eval_reflection_class_to_string_metadata(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalReflectionClassMetadata>, EvalStatus> {
-    if let Some(metadata) = eval_reflection_class_like_attributes(reflected_name, context) {
+    if let Some(mut metadata) = eval_reflection_class_like_attributes(reflected_name, context) {
+        metadata.interface_names =
+            eval_reflection_eval_metadata_interface_names(&metadata, context, values)?;
         return Ok(Some(metadata));
     }
     let runtime_class_name = reflected_name.trim_start_matches('\\');
@@ -7111,21 +7200,26 @@ fn eval_reflection_class_implements_interface_name(
     reflected_name: &str,
     interface_name: &str,
     context: &ElephcEvalContext,
-) -> bool {
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
     if context.has_interface(reflected_name) {
-        return eval_reflection_same_class_like_name(reflected_name, interface_name)
-            || context
-                .interface_parent_names(reflected_name)
-                .iter()
-                .any(|parent| eval_reflection_same_class_like_name(parent, interface_name));
+        if eval_reflection_same_class_like_name(reflected_name, interface_name) {
+            return Ok(true);
+        }
+        return Ok(eval_reflection_eval_interface_parent_names(
+            reflected_name,
+            context,
+            values,
+        )?
+        .iter()
+        .any(|parent| eval_reflection_same_class_like_name(parent, interface_name)));
     }
     if context.has_class(reflected_name) || context.has_enum(reflected_name) {
-        return context
-            .class_interface_names(reflected_name)
+        return Ok(eval_reflection_eval_class_interface_names(reflected_name, context, values)?
             .iter()
-            .any(|interface| eval_reflection_same_class_like_name(interface, interface_name));
+            .any(|interface| eval_reflection_same_class_like_name(interface, interface_name)));
     }
-    false
+    Ok(false)
 }
 
 /// Returns true when reflected eval metadata is a subclass or subinterface of a target.
@@ -7133,17 +7227,26 @@ fn eval_reflection_class_is_subclass_of_name(
     reflected_name: &str,
     target_name: &str,
     context: &ElephcEvalContext,
-) -> bool {
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
     if context.has_interface(reflected_name) {
-        return context
-            .interface_parent_names(reflected_name)
+        return Ok(eval_reflection_eval_interface_parent_names(
+            reflected_name,
+            context,
+            values,
+        )?
             .iter()
-            .any(|parent| eval_reflection_same_class_like_name(parent, target_name));
+            .any(|parent| eval_reflection_same_class_like_name(parent, target_name)));
     }
     if context.has_class(reflected_name) || context.has_enum(reflected_name) {
-        return context.class_is_a(reflected_name, target_name, true);
+        if context.class_is_a(reflected_name, target_name, true) {
+            return Ok(true);
+        }
+        return Ok(eval_reflection_eval_class_interface_names(reflected_name, context, values)?
+            .iter()
+            .any(|interface| eval_reflection_same_class_like_name(interface, target_name)));
     }
-    false
+    Ok(false)
 }
 
 /// Returns true when two PHP class-like names match case-insensitively.
