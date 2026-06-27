@@ -2581,7 +2581,7 @@ fn validate_eval_class_modifiers(
     }
     validate_eval_declared_properties(class, context)?;
     for property in class.properties() {
-        validate_property_parent_redeclaration(class, property, context)?;
+        validate_property_parent_redeclaration(class, property, context, values)?;
     }
     for method in class.methods() {
         validate_eval_method_attribute_targets(method.attributes())?;
@@ -2627,6 +2627,15 @@ const EVAL_REFLECTION_MEMBER_FLAG_FINAL: u64 = 16;
 
 /// Bridge reflection flag for abstract generated/AOT members.
 const EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT: u64 = 32;
+
+/// Bridge reflection flag for readonly generated/AOT properties.
+const EVAL_REFLECTION_MEMBER_FLAG_READONLY: u64 = 64;
+
+/// Bridge reflection flag for protected-set generated/AOT properties.
+const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET: u64 = 2048;
+
+/// Bridge reflection flag for private-set generated/AOT properties.
+const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET: u64 = 4096;
 
 /// Method requirement discovered from generated/AOT interface metadata.
 struct EvalAotInterfaceMethodRequirement {
@@ -3264,33 +3273,86 @@ fn validate_property_parent_redeclaration(
     class: &EvalClass,
     property: &EvalClassProperty,
     context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let Some(parent) = class.parent() else {
         return Ok(());
     };
-    let Some((parent_declaring_class, parent_property)) =
+    if let Some((parent_declaring_class, parent_property)) =
         context.class_property(parent, property.name())
-    else {
-        return Ok(());
-    };
-    if parent_property.visibility() == EvalVisibility::Private {
+    {
+        if parent_property.visibility() == EvalVisibility::Private {
+            return Ok(());
+        }
+        if parent_property.is_final()
+            || parent_property.set_visibility() == Some(EvalVisibility::Private)
+        {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if parent_property.is_static() != property.is_static()
+            || (parent_property.is_readonly() && !property.is_readonly())
+            || property_visibility_rank(property.visibility())
+                < property_visibility_rank(parent_property.visibility())
+            || property_visibility_rank(property.write_visibility())
+                < property_visibility_rank(parent_property.write_visibility())
+            || !property_type_signature_matches(
+                property.property_type(),
+                class.name(),
+                parent_property.property_type(),
+                &parent_declaring_class,
+                Some(class),
+                context,
+            )
+        {
+            return Err(EvalStatus::RuntimeFatal);
+        }
         return Ok(());
     }
-    if parent_property.is_final()
-        || parent_property.set_visibility() == Some(EvalVisibility::Private)
+    validate_property_aot_parent_redeclaration(parent, class, property, context, values)
+}
+
+/// Validates one property declaration against inherited generated/AOT property metadata.
+fn validate_property_aot_parent_redeclaration(
+    parent: &str,
+    class: &EvalClass,
+    property: &EvalClassProperty,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if context.has_class(parent) || !values.class_exists(parent)? {
+        return Ok(());
+    }
+    let parent = parent.trim_start_matches('\\');
+    let Some(flags) = values.reflection_property_flags(parent, property.name())? else {
+        return Ok(());
+    };
+    if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
+        return Ok(());
+    }
+    if flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL != 0
+        || flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET != 0
     {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if parent_property.is_static() != property.is_static()
-        || (parent_property.is_readonly() && !property.is_readonly())
+    let parent_is_static = flags & EVAL_REFLECTION_MEMBER_FLAG_STATIC != 0;
+    let parent_visibility = eval_aot_property_visibility(flags);
+    let parent_write_visibility = eval_aot_property_write_visibility(flags, parent_visibility);
+    let parent_is_readonly = flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY != 0;
+    let parent_declaring_class =
+        eval_aot_property_declaring_class(parent, property.name(), values)?;
+    let parent_property_type = context
+        .native_property_type(&parent_declaring_class, property.name())
+        .or_else(|| context.native_property_type(parent, property.name()));
+    if parent_is_static != property.is_static()
+        || (parent_is_readonly && !property.is_readonly())
         || property_visibility_rank(property.visibility())
-            < property_visibility_rank(parent_property.visibility())
+            < property_visibility_rank(parent_visibility)
         || property_visibility_rank(property.write_visibility())
-            < property_visibility_rank(parent_property.write_visibility())
+            < property_visibility_rank(parent_write_visibility)
         || !property_type_signature_matches(
             property.property_type(),
             class.name(),
-            parent_property.property_type(),
+            parent_property_type.as_ref(),
             &parent_declaring_class,
             Some(class),
             context,
@@ -3299,6 +3361,42 @@ fn validate_property_parent_redeclaration(
         return Err(EvalStatus::RuntimeFatal);
     }
     Ok(())
+}
+
+/// Returns the eval visibility represented by generated/AOT property reflection flags.
+fn eval_aot_property_visibility(flags: u64) -> EvalVisibility {
+    if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
+        EvalVisibility::Private
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED != 0 {
+        EvalVisibility::Protected
+    } else {
+        EvalVisibility::Public
+    }
+}
+
+/// Returns the eval write visibility represented by generated/AOT property flags.
+fn eval_aot_property_write_visibility(
+    flags: u64,
+    read_visibility: EvalVisibility,
+) -> EvalVisibility {
+    if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET != 0 {
+        EvalVisibility::Private
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET != 0 {
+        EvalVisibility::Protected
+    } else {
+        read_visibility
+    }
+}
+
+/// Returns the generated/AOT declaring class for one reflected property.
+fn eval_aot_property_declaring_class(
+    class_name: &str,
+    property_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    values
+        .reflection_property_declaring_class(class_name, property_name)
+        .map(|declaring_class| declaring_class.unwrap_or_else(|| class_name.to_string()))
 }
 
 /// Validates constant declarations that can be checked before registration.
