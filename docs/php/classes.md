@@ -237,6 +237,19 @@ Property type declarations are checked at compile time for both instance and sta
 
 Property default values are applied both for the normal `new ClassName()` form and for dynamic `new $variable()` instantiation (and therefore for runtime-instantiated stream wrappers and stream filters). When the class name resolves to a known class, dynamic instantiation follows the same allocation path as direct construction, so constructor arguments are evaluated and `__construct` runs normally.
 
+An `array`-typed (or untyped) property may take an associative literal default such as `['a' => 1]`. The property is then stored as an associative array, so string-key reads and writes (`$this->data['a']`, `$this->data[$key]`) type-check and run like any other associative array. A positional literal default (`[1, 2, 3]`) keeps integer-keyed list storage.
+
+```php
+<?php
+class Bag {
+    public array $data = ['a' => 1, 'b' => 2];
+    public function get(string $key): int {
+        return $this->data[$key] ?? 0;
+    }
+}
+echo (new Bag())->get('a'); // 1
+```
+
 ### Asymmetric visibility (`private(set)`)
 
 PHP 8.4 asymmetric visibility lets a property be read more widely than it can be written. A `(set)` modifier after a visibility keyword sets the write visibility independently of the read visibility:

@@ -1996,10 +1996,10 @@ fn emit_property_default(
         }
         LiteralDefaultValue::AssocArray {
             value_type,
-            elements,
+            entries,
         } => {
             abi::emit_push_reg(ctx.emitter, object_reg);
-            emit_assoc_array_literal_default_to_result(ctx, value_type, elements)?;
+            emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
             abi::emit_pop_reg(ctx.emitter, object_reg);
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);

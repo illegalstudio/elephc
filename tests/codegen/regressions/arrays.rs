@@ -798,3 +798,112 @@ echo "|", count($ok), ":", $ok[0], $ok[2];
     );
     assert_eq!(out, "arr:0|3:abab");
 }
+
+/// Regression (issue #407): reading a typed `array` property by a *variable* string key must
+/// type-check and run. The declared `array` hint stored the property as an int-keyed `Array`, so
+/// `$this->data[$key]` was rejected with "Array index must be integer"; an associative literal
+/// default must refine the property to associative (hash) storage so string keys are accepted.
+#[test]
+fn test_typed_array_property_assoc_default_variable_key() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public array $data = ['a' => 1];
+    public function get(string $key): int {
+        return $this->data[$key] ?? 0;
+    }
+}
+$b = new Bag();
+echo $b->get('a');
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Regression (issue #407 companion): the same typed `array` property must also accept a *literal*
+/// string key both from inside a method and through direct external property access. The issue
+/// claimed literal keys already worked, but on 0.25.x they failed identically until the associative
+/// literal default refined the property type.
+#[test]
+fn test_typed_array_property_assoc_default_literal_key() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public array $data = ['a' => 1, 'b' => 2];
+    public function get(): int { return $this->data['a']; }
+}
+$b = new Bag();
+echo $b->get(), $b->data['b'];
+"#,
+    );
+    assert_eq!(out, "12");
+}
+
+/// Regression: an *untyped* property initialized with an associative literal default
+/// (`public $data = ['a' => 1]`) must lower its default through the EIR backend. Previously the
+/// associative literal (`ExprKind::ArrayLiteralAssoc`) was not handled by the property-default
+/// emitter, failing with "unsupported EIR backend feature: object_new for default value".
+#[test]
+fn test_untyped_property_assoc_literal_default() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public $data = ['a' => 1, 'b' => 2];
+    public function get(string $key): int { return $this->data[$key] ?? 0; }
+}
+$b = new Bag();
+echo $b->get('a'), $b->get('b'), $b->get('missing');
+"#,
+    );
+    assert_eq!(out, "120");
+}
+
+/// Regression: an associative literal property default with string keys and string values must
+/// round-trip its keys and values, exercising the string-keyed hash-insert path of the EIR
+/// property-default emitter (key normalization plus persistent string values).
+#[test]
+fn test_typed_array_property_assoc_default_string_values() {
+    let out = compile_and_run(
+        r#"<?php
+class Req {
+    public array $headers = ['Host' => 'example.com', 'Accept' => 'text/html'];
+    public function header(string $name): string { return $this->headers[$name] ?? ''; }
+}
+$r = new Req();
+echo $r->header('Host'), "|", $r->header('Accept');
+"#,
+    );
+    assert_eq!(out, "example.com|text/html");
+}
+
+/// Regression: a child may redeclare an inherited `array` property whose associative literal
+/// default has a different element/value shape than the parent's. Both denote the same PHP `array`
+/// hint, so refining each to its own associative storage type must not trip property-type
+/// invariance (which would spuriously report "must be AssocArray<int>, not AssocArray<string>").
+#[test]
+fn test_redeclared_array_property_assoc_default_different_value_shape() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public array $data = ['a' => 1]; }
+class Child extends Base { public array $data = ['a' => 'x', 'b' => 'y']; }
+$c = new Child();
+echo $c->data['a'], $c->data['b'];
+"#,
+    );
+    assert_eq!(out, "xy");
+}
+
+/// Regression: a static property with an associative literal default must lower through the same
+/// EIR static-property initialization path, so string-key reads work on static array properties.
+#[test]
+fn test_static_array_property_assoc_literal_default() {
+    let out = compile_and_run(
+        r#"<?php
+class Config {
+    public static array $map = ['debug' => 1, 'verbose' => 0];
+}
+echo Config::$map['debug'], Config::$map['verbose'];
+"#,
+    );
+    assert_eq!(out, "10");
+}
