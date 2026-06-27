@@ -56,9 +56,18 @@ impl Emitter {
     }
 
     /// Emit a label that is visible across object files (for two-object linking).
+    /// On Linux, places each global symbol in its own `.text.<name>` section so
+    /// that `--gc-sections` can eliminate unreachable helpers at link time.
     pub fn label_global(&mut self, name: &str) {
-        let _ = writeln!(self.buf, ".globl {}", name);
-        let _ = writeln!(self.buf, "{}:", name);
+        if self.platform == Platform::Linux {
+            let _ = writeln!(self.buf, ".section .text.{},\"ax\",@progbits", name);
+            let _ = writeln!(self.buf, ".globl {}", name);
+            let _ = writeln!(self.buf, ".type {}, %function", name);
+            let _ = writeln!(self.buf, "{}:", name);
+        } else {
+            let _ = writeln!(self.buf, ".globl {}", name);
+            let _ = writeln!(self.buf, "{}:", name);
+        }
     }
 
     /// Emits a line comment using the target's comment prefix.

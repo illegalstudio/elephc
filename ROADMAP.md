@@ -882,7 +882,7 @@ and 0.x validation rather than by speculative pass work.
 - [ ] Control-flow normalization v2 — broader canonicalization of nested block/control shells before CFG-aware optimization passes
 - [ ] Composite conditional include function variants — extend include-graph exclusivity from one direct `if` / `elseif` / `else` chain to nested/composed conditional paths where declarations are pairwise exclusive only after combining multiple branch decisions
 - [ ] Switch-aware conditional include function variants — extend include-graph exclusivity beyond `if` / `elseif` / `else` to `switch` cases once fall-through, `break`, and terminating case bodies are modeled precisely; revisit `match` only if include-like statement lowering ever appears inside match arms
-- [ ] Runtime routine dead stripping — include or link only runtime helpers reachable from the generated program instead of carrying the whole target runtime slice
+- [x] Runtime routine dead stripping — include or link only runtime helpers reachable from the generated program instead of carrying the whole target runtime slice
 - [ ] Tail-call optimization — direct tail self- and mutual-recursion lowering on top of EIR (`Br` to function entry with parameter rebinding)
 - [ ] Performance within 2x of C -O0 on compute benchmarks
 - [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before deleting the frozen legacy backend
