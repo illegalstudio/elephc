@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed associative-array method parameters (issue #406): an `array`-typed parameter of an instance or static method now preserves the associative shape known at the call site, exactly like a free-function `array` parameter. String-key access (`$d['a']`) type-checks instead of failing with "Array index must be integer", and `json_encode()` of the parameter emits a JSON object instead of a JSON list with garbage values. A declared generic `array` parameter is sharpened from the call-site argument type during method-call inference, and the sharpened shape is used when checking the method body.
 - Fixed associative-array property defaults (issue #407): a typed `array` (or untyped) property initialized with an associative literal such as `['a' => 1]` is now stored as associative (hash) storage, so string-key reads and writes (`$this->data['a']`, `$this->data[$key]`) type-check and run instead of failing with "Array index must be integer". The EIR backend also lowers string-keyed associative literal defaults for instance and static properties instead of rejecting them as an unsupported `object_new` feature.
 
 ## [0.25.2] - 2026-06-26

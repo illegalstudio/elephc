@@ -353,6 +353,16 @@ impl Checker {
                 };
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
+                        && declared_flags.get(i).copied().unwrap_or(false)
+                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    {
+                        // Sharpen a declared generic `array` parameter to the call-site array
+                        // shape so method `array` params keep their associative shape, matching
+                        // how free-function `array` parameters are specialized (issue #406).
+                        sig.params[i].1 = Self::specialize_generic_array_hint(&sig.params[i].1, arg_ty);
+                    }
+                    if i < regular_param_count
                         && !declared_flags.get(i).copied().unwrap_or(false)
                         && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
                     {
@@ -747,6 +757,16 @@ impl Checker {
                 };
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
+                        && static_declared_flags.get(i).copied().unwrap_or(false)
+                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    {
+                        // Sharpen a declared generic `array` parameter to the call-site array
+                        // shape so static-method `array` params keep their associative shape,
+                        // matching free-function specialization (issue #406).
+                        sig.params[i].1 = Self::specialize_generic_array_hint(&sig.params[i].1, arg_ty);
+                    }
+                    if i < regular_param_count
                         && !static_declared_flags.get(i).copied().unwrap_or(false)
                         && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
                     {
@@ -799,6 +819,16 @@ impl Checker {
                     sig.params.len()
                 };
                 for (i, arg_ty) in arg_types.iter().enumerate() {
+                    if i < regular_param_count
+                        && instance_declared_flags.get(i).copied().unwrap_or(false)
+                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    {
+                        // Sharpen a declared generic `array` parameter to the call-site array
+                        // shape on `parent::`/`self::` instance dispatch, matching free-function
+                        // specialization (issue #406).
+                        sig.params[i].1 = Self::specialize_generic_array_hint(&sig.params[i].1, arg_ty);
+                    }
                     if i < regular_param_count
                         && !instance_declared_flags.get(i).copied().unwrap_or(false)
                         && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
