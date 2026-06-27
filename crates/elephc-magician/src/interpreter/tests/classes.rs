@@ -941,6 +941,54 @@ echo $box->name() . ":" . $box->label();"#,
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
+/// Verifies eval rejects global builtin attributes on unsupported OOP targets.
+#[test]
+fn execute_program_rejects_invalid_builtin_attribute_targets() {
+    let cases: &[(&[u8], &str)] = &[
+        (
+            br#"#[\AllowDynamicProperties] interface EvalInvalidAttrInterface {}"#,
+            "AllowDynamicProperties interface",
+        ),
+        (
+            br#"#[\AllowDynamicProperties] trait EvalInvalidAttrTrait {}"#,
+            "AllowDynamicProperties trait",
+        ),
+        (
+            br#"#[\AllowDynamicProperties] enum EvalInvalidAttrEnum { case Ready; }"#,
+            "AllowDynamicProperties enum",
+        ),
+        (
+            br#"#[\Override] class EvalInvalidAttrClass {}"#,
+            "Override class",
+        ),
+        (
+            br#"class EvalInvalidAttrProperty { #[\Override] public int $value; }"#,
+            "Override property",
+        ),
+        (
+            br#"class EvalInvalidAttrConstant { #[\AllowDynamicProperties] public const VALUE = 1; }"#,
+            "AllowDynamicProperties constant",
+        ),
+        (
+            br#"class EvalInvalidAttrMethod { #[\AllowDynamicProperties] public function run() {} }"#,
+            "AllowDynamicProperties method",
+        ),
+        (
+            br#"enum EvalInvalidAttrCase { #[\AllowDynamicProperties] case Ready; }"#,
+            "AllowDynamicProperties enum case",
+        ),
+    ];
+
+    for &(source, label) in cases {
+        let program = parse_fragment(source).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let err = execute_program(&program, &mut scope, &mut values).expect_err(label);
+
+        assert_eq!(err, EvalStatus::RuntimeFatal);
+    }
+}
+
 /// Verifies readonly classes leave static properties mutable like ordinary classes.
 #[test]
 fn execute_program_allows_readonly_class_static_property() {

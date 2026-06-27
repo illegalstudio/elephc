@@ -12382,6 +12382,25 @@ eval('class EvalOverrideMissing {
     );
 }
 
+/// Verifies eval rejects global builtin attributes on unsupported OOP targets.
+#[test]
+fn test_eval_declared_builtin_attribute_target_validation() {
+    let cases = [
+        r#"eval('#[\AllowDynamicProperties] interface EvalInvalidAttrInterface {}');"#,
+        r#"eval('class EvalInvalidAttrProperty { #[\Override] public int $value; }');"#,
+        r#"eval('class EvalInvalidAttrMethod { #[\AllowDynamicProperties] public function run() {} }');"#,
+    ];
+
+    for source in cases {
+        let err = compile_and_run_expect_failure(&format!("<?php\n{source}\n"));
+
+        assert!(
+            err.contains("Fatal error: eval() runtime failed"),
+            "stderr did not contain eval runtime fatal diagnostic: {err}"
+        );
+    }
+}
+
 /// Verifies eval object-method callable arrays bind named arguments.
 #[test]
 fn test_eval_declared_object_method_callable_array_named_args() {

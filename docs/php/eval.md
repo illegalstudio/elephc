@@ -179,7 +179,8 @@ Explicit concrete `set` hook parameter types are retained as settable-property
 metadata and must be PHP-compatible supertypes of the property type.
 Eval traits also accept the legacy `var` marker for public properties.
 PHP's global `#[Override]` marker is validated on eval-declared methods against
-non-private parent methods and eval interface method contracts.
+non-private parent methods and eval interface method contracts, and rejected on
+non-method OOP declaration targets.
 Eval validates method override and interface method parameter and return types
 with PHP-style parameter contravariance and return covariance for supported
 declared type metadata, including nullable, union, `mixed`, `self`, `parent`,
@@ -630,8 +631,9 @@ converted to readonly slots. Untyped instance properties in readonly classes are
 still rejected.
 Missing-property writes can still dispatch through `__set()`, but readonly
 classes reject actual dynamic property creation.
-PHP's global `#[AllowDynamicProperties]` marker is rejected on eval-declared
-readonly classes.
+PHP's global `#[AllowDynamicProperties]` marker is accepted only on
+non-readonly eval-declared classes; eval rejects it on readonly classes,
+interfaces, traits, enums, members, and enum cases.
 `self::`, `parent::`, and late-bound `static::` work for supported static
 members, class constants, and class-name literals.
 Attempts to `unset()` static properties parse normally and throw PHP's
