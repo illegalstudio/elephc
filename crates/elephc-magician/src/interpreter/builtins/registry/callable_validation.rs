@@ -243,6 +243,11 @@ fn eval_validate_call_user_func_static_method(
         if eval_call_user_func_static_magic_callable(&class_name, context) {
             return Ok(());
         }
+        if let Some(parent) = context.class_native_parent_name(&class_name) {
+            if eval_call_user_func_native_static_magic_callable(&parent, context, values)? {
+                return Ok(());
+            }
+        }
         return eval_call_user_func_missing_method_type_error(
             function_name,
             &class_name,

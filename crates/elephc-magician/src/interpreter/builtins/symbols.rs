@@ -1082,7 +1082,13 @@ fn eval_static_method_callable_probe(
         || context.has_trait(&class_name)
         || context.has_enum(&class_name)
     {
-        return Ok(eval_static_magic_method_callable_probe(&class_name, context));
+        if eval_static_magic_method_callable_probe(&class_name, context) {
+            return Ok(true);
+        }
+        if let Some(parent) = context.class_native_parent_name(&class_name) {
+            return eval_aot_static_magic_method_callable_probe(&parent, context, values);
+        }
+        return Ok(false);
     }
     eval_aot_static_method_callable_probe(&class_name, method_name, context, values)
 }

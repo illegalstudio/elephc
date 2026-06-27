@@ -12546,6 +12546,36 @@ echo call_user_func(["EvalAotMagicStaticBox", "Hidden"], "K", "L");');
     );
 }
 
+/// Verifies eval-declared subclasses expose inherited AOT `__callStatic` to callback probes.
+#[test]
+fn test_eval_declared_child_inherits_aot_magic_call_static_callbacks() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotMagicStaticParent {
+    public static function __callStatic($method, $args) {
+        return "S:" . $method . ":" . $args[0];
+    }
+}
+eval('class EvalAotMagicStaticChild extends EvalAotMagicStaticParent {}
+echo EvalAotMagicStaticChild::direct("A") . ":";
+$callback = ["EvalAotMagicStaticChild", "dynamic"];
+echo is_callable($callback) ? "C:" : "bad:";
+echo $callback("B") . ":";
+echo call_user_func($callback, "C") . ":";
+echo call_user_func_array($callback, ["D"]);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "S:direct:A:C:S:dynamic:B:S:dynamic:C:S:dynamic:D"
+    );
+}
+
 /// Verifies eval rejects invalid magic method contracts during dynamic class declaration.
 #[test]
 fn test_eval_rejects_invalid_magic_method_contracts() {
