@@ -181,8 +181,8 @@ Eval traits also accept the legacy `var` marker for public properties.
 PHP's global `#[Override]` marker is validated on eval-declared methods against
 non-private parent methods and eval interface method contracts, and rejected on
 non-method OOP declaration targets. On eval-declared interface methods, the
-marker requires a matching method inherited from an eval or builtin parent
-interface.
+marker requires a matching method inherited from an eval, builtin, or
+generated/AOT parent interface.
 Eval validates method override and interface method parameter and return types
 with PHP-style parameter contravariance and return covariance for supported
 declared type metadata, including nullable, union, `mixed`, `self`, `parent`,

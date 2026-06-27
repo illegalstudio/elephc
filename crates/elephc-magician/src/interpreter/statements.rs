@@ -1855,7 +1855,7 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
         }
     }
     validate_eval_interface_attribute_targets(interface)?;
-    validate_eval_interface_override_attributes(interface, context)?;
+    validate_eval_interface_override_attributes(interface, context, values)?;
     validate_eval_declared_constants(interface.constants())?;
     validate_eval_interface_constants(interface.constants())?;
     validate_interface_constant_parent_redeclarations(interface, context)?;
@@ -2604,6 +2604,9 @@ fn eval_class_has_allow_dynamic_properties_attribute(class: &EvalClass) -> bool 
     eval_attributes_have_global_builtin_attribute(class.attributes(), "AllowDynamicProperties")
 }
 
+/// Bridge ReflectionMethod flag for static generated/AOT methods.
+const EVAL_REFLECTION_METHOD_FLAG_STATIC: u64 = 1;
+
 /// Rejects builtin attributes that cannot target an eval-declared class.
 fn validate_eval_class_attribute_targets(
     attributes: &[EvalAttribute],
@@ -2633,18 +2636,23 @@ fn validate_eval_interface_attribute_targets(
 fn validate_eval_interface_override_attributes(
     interface: &EvalInterface,
     context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let parent_requirements = eval_interface_parent_method_requirements(interface, context);
     for method in interface.methods() {
         if !eval_interface_method_has_global_builtin_attribute(method, "Override") {
             continue;
         }
-        if !parent_requirements
+        if parent_requirements
             .iter()
             .any(|(_, requirement)| eval_interface_method_matches_requirement(method, requirement))
         {
-            return Err(EvalStatus::RuntimeFatal);
+            continue;
         }
+        if eval_aot_interface_parent_method_matches(interface, method, values)? {
+            continue;
+        }
+        return Err(EvalStatus::RuntimeFatal);
     }
     Ok(())
 }
@@ -2662,6 +2670,25 @@ fn eval_interface_parent_method_requirements(
         requirements.extend(builtin_interface_method_requirements(parent));
     }
     requirements
+}
+
+/// Returns whether a generated/AOT parent interface exposes a matching method.
+fn eval_aot_interface_parent_method_matches(
+    interface: &EvalInterface,
+    method: &EvalInterfaceMethod,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    for parent in interface.parents() {
+        if !values.interface_exists(parent)? {
+            continue;
+        }
+        let parent = parent.trim_start_matches('\\');
+        if let Some(flags) = values.reflection_method_flags(parent, method.name())? {
+            let parent_method_is_static = flags & EVAL_REFLECTION_METHOD_FLAG_STATIC != 0;
+            return Ok(parent_method_is_static == method.is_static());
+        }
+    }
+    Ok(false)
 }
 
 /// Returns whether an interface method matches one inherited requirement signature kind.

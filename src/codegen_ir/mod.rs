@@ -803,6 +803,9 @@ fn runtime_referenced_interfaces(
     class_names: &HashSet<String>,
 ) -> HashMap<String, InterfaceInfo> {
     let mut names = HashSet::new();
+    if module.required_runtime_features.eval {
+        names.extend(module.interface_infos.keys().cloned());
+    }
     if module_uses_dynamic_instanceof(module) {
         names.extend(dynamic_instanceof_interface_names(module));
     }

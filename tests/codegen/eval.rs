@@ -12417,6 +12417,45 @@ eval('interface EvalIfaceOverrideMissing {
     );
 }
 
+/// Verifies eval reflection exposes methods for AOT interfaces that only eval uses.
+#[test]
+fn test_eval_reflects_unimplemented_aot_interface_methods() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalAotOnlyReflectableContract {
+    public function aotLabel(): string;
+}
+eval('$r = new ReflectionClass("EvalAotOnlyReflectableContract");
+echo $r->hasMethod("aotLabel") ? "H" : "h"; echo ":";
+echo count($r->getMethods()); echo ":";
+echo get_class_methods("EvalAotOnlyReflectableContract")[0] ?? "none";');
+"#,
+    );
+    assert_eq!(out, "H:1:aotlabel");
+}
+
+/// Verifies eval interface `#[Override]` can target a generated/AOT parent interface.
+#[test]
+fn test_eval_declared_interface_override_attribute_accepts_aot_parent() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalAotIfaceOverrideParent {
+    public function aotLabel(): string;
+}
+eval('interface EvalIfaceOverrideAotChild extends EvalAotIfaceOverrideParent {
+    #[\Override]
+    public function aotLabel(): string;
+}
+class EvalIfaceOverrideAotImpl implements EvalIfaceOverrideAotChild {
+    public function aotLabel(): string { return "aot"; }
+}
+$box = new EvalIfaceOverrideAotImpl();
+echo $box->aotLabel();');
+"#,
+    );
+    assert_eq!(out, "aot");
+}
+
 /// Verifies eval rejects global builtin attributes on unsupported OOP targets.
 #[test]
 fn test_eval_declared_builtin_attribute_target_validation() {
