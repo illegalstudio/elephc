@@ -401,6 +401,66 @@ pub(super) fn lower_eval_object_new(
     store_if_result(ctx, inst)
 }
 
+/// Lowers fallback `new $class` construction through eval dynamic metadata.
+pub(super) fn lower_eval_object_new_dynamic_fallback(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    miss_label: &str,
+) -> Result<()> {
+    let constructor_args = inst.operands.get(1..).ok_or_else(|| {
+        CodegenIrError::invalid_module("eval dynamic object new missing class operand")
+    })?;
+    let args_offset = EVAL_STACK_BYTES;
+    let stack_bytes = eval_function_call_stack_bytes(constructor_args.len());
+    let eval_miss_label = ctx.next_label("eval_dynamic_new_missing_class");
+    let done_label = ctx.next_label("eval_dynamic_new_done");
+    let name_ptr_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let name_len_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, name_ptr_reg, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, name_len_reg, 8);
+    abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
+    abi::emit_store_to_sp(ctx.emitter, name_ptr_reg, EVAL_CODE_PTR_OFFSET);
+    abi::emit_store_to_sp(ctx.emitter, name_len_reg, EVAL_CODE_LEN_OFFSET);
+    ensure_eval_context(ctx)?;
+    store_eval_function_call_operands(ctx, constructor_args, args_offset)?;
+    load_eval_context_to_arg(ctx, 0);
+    let name_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, name_ptr_arg, EVAL_CODE_PTR_OFFSET);
+    let name_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, name_len_arg, EVAL_CODE_LEN_OFFSET);
+    let args_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    if constructor_args.is_empty() {
+        abi::emit_load_int_immediate(ctx.emitter, args_arg, 0);
+    } else {
+        abi::emit_temporary_stack_address(ctx.emitter, args_arg, args_offset);
+    }
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        constructor_args.len() as i64,
+    );
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_try_new_object");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_branch_if_eval_c_int_negative(ctx, &eval_miss_label);
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&eval_miss_label);
+    abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
+    abi::emit_jump(ctx.emitter, miss_label);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 /// Lowers a method call that may dispatch to an eval-created dynamic object.
 pub(super) fn lower_eval_method_call(
     ctx: &mut FunctionContext<'_>,
@@ -727,7 +787,7 @@ pub(super) fn lower_eval_object_is_a_dynamic(
         .target
         .extern_symbol("__elephc_eval_object_is_a_dynamic");
     abi::emit_call_label(ctx.emitter, &symbol);
-    emit_branch_if_eval_predicate_negative(ctx, &invalid_label);
+    emit_branch_if_eval_c_int_negative(ctx, &invalid_label);
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&false_label);
@@ -1013,7 +1073,16 @@ fn store_eval_function_call_args(
     inst: &Instruction,
     args_offset: usize,
 ) -> Result<()> {
-    for (index, operand) in inst.operands.iter().enumerate() {
+    store_eval_function_call_operands(ctx, &inst.operands, args_offset)
+}
+
+/// Stores one operand slice as boxed Mixed cells for eval positional-call ABIs.
+fn store_eval_function_call_operands(
+    ctx: &mut FunctionContext<'_>,
+    operands: &[ValueId],
+    args_offset: usize,
+) -> Result<()> {
+    for (index, operand) in operands.iter().enumerate() {
         let ty = ctx.load_value_to_result(*operand)?.codegen_repr();
         if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
             emit_box_current_value_as_mixed(ctx.emitter, &ty);
@@ -1173,8 +1242,8 @@ fn emit_validate_eval_dynamic_instanceof_target(ctx: &mut FunctionContext<'_>, l
     ctx.emitter.label(&ok_label);
 }
 
-/// Branches when an eval predicate returned the negative invalid-target sentinel.
-fn emit_branch_if_eval_predicate_negative(ctx: &mut FunctionContext<'_>, label: &str) {
+/// Branches when an eval C-ABI call returned a negative `int` sentinel.
+fn emit_branch_if_eval_c_int_negative(ctx: &mut FunctionContext<'_>, label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let branch = format!("tbnz w0, #31, {}", label);

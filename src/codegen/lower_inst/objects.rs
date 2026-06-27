@@ -1273,9 +1273,18 @@ pub(super) fn lower_dynamic_object_new_mixed(
     }
 
     ctx.emitter.label(&fallback_label);
-    emit_dynamic_new_mixed_fallback(ctx);
-    ctx.store_result_value(result)?;
-    abi::emit_jump(ctx.emitter, &done_label);
+    if builtins::has_eval_context(ctx) {
+        let eval_miss_label = ctx.next_label("dynamic_new_mixed_eval_miss");
+        builtins::lower_eval_object_new_dynamic_fallback(ctx, inst, &eval_miss_label)?;
+        ctx.store_result_value(result)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&eval_miss_label);
+        emit_dynamic_new_class_not_found_fatal(ctx);
+    } else {
+        emit_dynamic_new_mixed_fallback(ctx);
+        ctx.store_result_value(result)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
 
     ctx.emitter.label(&non_string_label);
     emit_dynamic_new_invalid_class_name_fatal(ctx);

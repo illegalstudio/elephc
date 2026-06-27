@@ -116,6 +116,15 @@ pub(super) fn lower_eval_object_new(
     eval::lower_eval_object_new(ctx, inst)
 }
 
+/// Lowers fallback construction of a runtime class name through eval dynamic metadata.
+pub(super) fn lower_eval_object_new_dynamic_fallback(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    miss_label: &str,
+) -> Result<()> {
+    eval::lower_eval_object_new_dynamic_fallback(ctx, inst, miss_label)
+}
+
 /// Lowers a post-eval method call that may target an eval-created object.
 pub(super) fn lower_eval_method_call(
     ctx: &mut FunctionContext<'_>,

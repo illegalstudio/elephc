@@ -5,6 +5,7 @@
 //!
 //! Called from:
 //! - Generated EIR backend assembly through `__elephc_eval_new_object`.
+//! - Generated EIR backend assembly through `__elephc_eval_try_new_object`.
 //! - Generated EIR backend assembly through `__elephc_eval_method_call`.
 //! - Generated EIR backend assembly through `__elephc_eval_static_method_call`.
 //!
@@ -39,6 +40,29 @@ pub unsafe extern "C" fn __elephc_eval_new_object(
 ) -> i32 {
     std::panic::catch_unwind(|| unsafe {
         eval_new_object_inner(ctx, name_ptr, name_len, args, arg_count, out)
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Attempts to construct an eval-declared class with positional cells.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `name_ptr` must be readable for
+/// `name_len` bytes when `name_len > 0`. `args` must be readable for
+/// `arg_count` runtime-cell pointers when `arg_count > 0`, and `out` may be null.
+/// Returns -1 when the class name is not declared in the eval context.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_try_new_object(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    args: *const *mut RuntimeCell,
+    arg_count: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_try_new_object_inner(ctx, name_ptr, name_len, args, arg_count, out)
     })
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
@@ -129,6 +153,52 @@ unsafe fn eval_new_object_inner(
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_new_object_outcome(context, &name, args, &mut values) {
         Ok(outcome) => write_outcome(outcome, out).code(),
+        Err(status) => status.code(),
+    }
+}
+
+/// Runs the dynamic object-construction probe ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_try_new_object`; callers must provide a valid context,
+/// readable class-name bytes, and readable argument pointer storage.
+#[cfg(not(test))]
+unsafe fn eval_try_new_object_inner(
+    ctx: *mut ElephcEvalContext,
+    name_ptr: *const u8,
+    name_len: u64,
+    args: *const *mut RuntimeCell,
+    arg_count: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    let Ok(arg_count) = usize::try_from(arg_count) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if arg_count > 0 && args.is_null() {
+        return EvalStatus::RuntimeFatal.code();
+    }
+    let args = if arg_count == 0 {
+        Vec::new()
+    } else {
+        slice::from_raw_parts(args, arg_count)
+            .iter()
+            .map(|arg| RuntimeCellHandle::from_raw(*arg))
+            .collect()
+    };
+    clear_result(out);
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    match interpreter::execute_context_try_new_object_outcome(context, &name, args, &mut values) {
+        Ok(Some(outcome)) => write_outcome(outcome, out).code(),
+        Ok(None) => -1,
         Err(status) => status.code(),
     }
 }
