@@ -191,7 +191,8 @@ declared type metadata, including nullable, union, `mixed`, `self`, `parent`,
 metadata retained by the eval bridge.
 Abstract classes may defer missing interface methods and property contracts, but
 declared or inherited members that cover an interface contract are validated at
-declaration time.
+declaration time. Generated/AOT interface method and property-hook contracts are
+validated when their bridge metadata is available.
 Eval validates inherited property redeclarations with PHP-style invariant
 property types, matching static storage, compatible read/write visibility, and
 readonly compatibility: child redeclarations may add `readonly`, but may not

@@ -3614,6 +3614,25 @@ fn validate_declared_class_aot_interface_members(
             return Err(EvalStatus::RuntimeFatal);
         }
     }
+    for (requirement_owner, requirement) in
+        pending_class_aot_interface_property_requirements(class, context, values)?
+    {
+        let Some((declaring_class, property)) =
+            pending_class_property_with_owner(class, requirement.name(), context)
+        else {
+            continue;
+        };
+        if !class_property_can_cover_interface_contract(
+            &property,
+            &declaring_class,
+            &requirement,
+            &requirement_owner,
+            Some(class),
+            context,
+        ) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
     Ok(())
 }
 
@@ -3924,6 +3943,13 @@ fn validate_concrete_class_aot_interface_requirements(
             return Err(EvalStatus::RuntimeFatal);
         }
     }
+    for (requirement_owner, requirement) in
+        pending_class_aot_interface_property_requirements(class, context, values)?
+    {
+        if !class_has_interface_property(class, &requirement_owner, &requirement, context) {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
     Ok(())
 }
 
@@ -4150,6 +4176,22 @@ fn pending_class_aot_interface_method_requirements(
         requirements.extend(eval_aot_interface_method_requirements(
             &interface, context, values,
         )?);
+    }
+    Ok(requirements)
+}
+
+/// Returns generated/AOT interface property requirements inherited by a pending class.
+fn pending_class_aot_interface_property_requirements(
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<(String, EvalInterfaceProperty)>, EvalStatus> {
+    let mut requirements = Vec::new();
+    for interface in pending_class_interface_names(class, context) {
+        if context.has_interface(&interface) || !values.interface_exists(&interface)? {
+            continue;
+        }
+        requirements.extend(context.native_interface_property_requirements(&interface));
     }
     Ok(requirements)
 }

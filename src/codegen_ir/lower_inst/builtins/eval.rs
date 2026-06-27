@@ -23,6 +23,7 @@ use crate::names::{function_symbol, ir_global_symbol, php_symbol_key};
 use crate::parser::ast::{Expr, ExprKind, TypeExpr, Visibility};
 use crate::types::{
     is_php_integer_array_key, AttrArgValue, ClassInfo, FunctionSig, InterfaceInfo, PhpType,
+    PropertyHookContract,
 };
 
 use super::super::super::context::FunctionContext;
@@ -65,6 +66,8 @@ const NATIVE_DEFAULT_BOOL: i64 = 1;
 const NATIVE_DEFAULT_INT: i64 = 2;
 const NATIVE_DEFAULT_FLOAT: i64 = 3;
 const NATIVE_DEFAULT_EMPTY_ARRAY: i64 = 4;
+const NATIVE_INTERFACE_PROPERTY_REQUIRES_GET: i64 = 1;
+const NATIVE_INTERFACE_PROPERTY_REQUIRES_SET: i64 = 2;
 const NATIVE_MEMBER_ATTRIBUTE_METHOD: u8 = 0;
 const NATIVE_MEMBER_ATTRIBUTE_PROPERTY: u8 = 1;
 const NATIVE_MEMBER_ATTRIBUTE_CLASS_CONSTANT: u8 = 2;
@@ -138,6 +141,15 @@ struct EvalNativePropertyTypeRegistration {
     class_name: String,
     property_name: String,
     type_spec: String,
+}
+
+/// A module-local interface property contract that can be registered with the eval context.
+struct EvalNativeInterfacePropertyRegistration {
+    interface_name: String,
+    property_name: String,
+    type_spec: String,
+    requires_get: bool,
+    requires_set: bool,
 }
 
 /// A module-local property default that can be registered with the eval context.
@@ -1333,6 +1345,9 @@ fn register_eval_native_method_signatures(ctx: &mut FunctionContext<'_>, context
     for registration in eval_native_property_type_registrations(ctx) {
         register_eval_native_property_type(ctx, context_offset, &registration);
     }
+    for registration in eval_native_interface_property_registrations(ctx) {
+        register_eval_native_interface_property(ctx, context_offset, &registration);
+    }
     for registration in eval_native_property_default_registrations(ctx) {
         register_eval_native_property_default(ctx, context_offset, &registration);
     }
@@ -1475,6 +1490,67 @@ fn eval_native_property_type_registrations(
         collect_eval_native_static_property_types(class_name, class_info, &mut registrations);
     }
     registrations
+}
+
+/// Collects AOT interface property contracts that eval can validate at declaration time.
+fn eval_native_interface_property_registrations(
+    ctx: &FunctionContext<'_>,
+) -> Vec<EvalNativeInterfacePropertyRegistration> {
+    let mut registrations = Vec::new();
+    let mut interfaces = ctx.module.interface_infos.iter().collect::<Vec<_>>();
+    interfaces.sort_by_key(|(_, interface_info)| interface_info.interface_id);
+    for (interface_name, interface_info) in interfaces {
+        let mut property_names = interface_info.property_order.iter().collect::<Vec<_>>();
+        if property_names.is_empty() {
+            property_names = interface_info.properties.keys().collect();
+            property_names.sort();
+        }
+        for property_name in property_names {
+            let Some(contract) = interface_info.properties.get(property_name) else {
+                continue;
+            };
+            let Some(registration) =
+                eval_native_interface_property_registration(interface_name, property_name, contract)
+            else {
+                continue;
+            };
+            registrations.push(registration);
+        }
+    }
+    registrations
+}
+
+/// Converts one static interface property contract into eval-native metadata.
+fn eval_native_interface_property_registration(
+    interface_name: &str,
+    property_name: &str,
+    contract: &PropertyHookContract,
+) -> Option<EvalNativeInterfacePropertyRegistration> {
+    let requires_get = contract.get_type.is_some();
+    let requires_set = contract.set_type.is_some();
+    if !requires_get && !requires_set {
+        return None;
+    }
+    let type_spec = eval_native_interface_property_type_spec(contract)?;
+    Some(EvalNativeInterfacePropertyRegistration {
+        interface_name: interface_name.to_string(),
+        property_name: property_name.to_string(),
+        type_spec,
+        requires_get,
+        requires_set,
+    })
+}
+
+/// Returns the single property type representation accepted by EvalIR metadata.
+fn eval_native_interface_property_type_spec(contract: &PropertyHookContract) -> Option<String> {
+    match (contract.get_type.as_ref(), contract.set_type.as_ref()) {
+        (Some(get_type), Some(set_type)) if get_type == set_type => {
+            eval_native_php_type_spec(get_type, false)
+        }
+        (Some(get_type), None) => eval_native_php_type_spec(get_type, false),
+        (None, Some(set_type)) => eval_native_php_type_spec(set_type, false),
+        _ => None,
+    }
 }
 
 /// Collects AOT property defaults whose value can be exposed to eval reflection.
@@ -3213,6 +3289,58 @@ fn register_eval_native_property_type(
         .emitter
         .target
         .extern_symbol("__elephc_eval_register_native_property_type");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Emits one native interface-property metadata registration call into the eval context.
+fn register_eval_native_interface_property(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    registration: &EvalNativeInterfacePropertyRegistration,
+) {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    let property_key = format!(
+        "{}::{}",
+        registration.interface_name, registration.property_name
+    );
+    let (property_key_label, property_key_len) = ctx.data.add_string(property_key.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &property_key_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        property_key_len as i64,
+    );
+    let (type_label, type_len) = ctx.data.add_string(registration.type_spec.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        &type_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        type_len as i64,
+    );
+    let mut flags = 0;
+    if registration.requires_get {
+        flags |= NATIVE_INTERFACE_PROPERTY_REQUIRES_GET;
+    }
+    if registration.requires_set {
+        flags |= NATIVE_INTERFACE_PROPERTY_REQUIRES_SET;
+    }
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 5),
+        flags,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_interface_property");
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 

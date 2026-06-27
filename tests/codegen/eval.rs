@@ -12514,6 +12514,80 @@ eval('class EvalAotSignatureBox implements EvalAotSignatureContract {
     );
 }
 
+/// Verifies eval classes can implement generated/AOT interface property contracts.
+#[test]
+fn test_eval_declared_class_implements_aot_interface_properties() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalAotPropertyContract {
+    public string $name { get; set; }
+}
+eval('class EvalAotPropertyBox implements EvalAotPropertyContract {
+    public string $name = "Ada";
+}
+$box = new EvalAotPropertyBox();
+$box->name = "Grace";
+echo $box->name;');
+"#,
+    );
+    assert_eq!(out, "Grace");
+}
+
+/// Verifies eval rejects concrete classes missing generated/AOT interface properties.
+#[test]
+fn test_eval_declared_class_rejects_missing_aot_interface_property() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+interface EvalAotMissingPropertyContract {
+    public string $name { get; }
+}
+eval('class EvalAotMissingPropertyBox implements EvalAotMissingPropertyContract {}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval validates generated/AOT interface property types.
+#[test]
+fn test_eval_declared_class_rejects_incompatible_aot_interface_property_type() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+interface EvalAotPropertyTypeContract {
+    public string $name { get; set; }
+}
+eval('class EvalAotPropertyTypeBox implements EvalAotPropertyTypeContract {
+    public int $name = 1;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval readonly properties cannot satisfy generated/AOT set contracts.
+#[test]
+fn test_eval_declared_class_rejects_readonly_aot_interface_set_property() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+interface EvalAotSetPropertyContract {
+    public string $name { set; }
+}
+eval('class EvalAotReadonlySetPropertyBox implements EvalAotSetPropertyContract {
+    public readonly string $name;
+}');
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime fatal diagnostic: {err}"
+    );
+}
+
 /// Verifies eval `#[Override]` can target generated/AOT parent class methods.
 #[test]
 fn test_eval_declared_class_override_attribute_accepts_aot_parent_method() {

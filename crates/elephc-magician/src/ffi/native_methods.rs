@@ -1,6 +1,7 @@
 //! Purpose:
-//! Exports registration of generated native PHP method signatures into an eval
-//! context so runtime fragments can bind AOT method named arguments.
+//! Exports registration of generated native PHP method signatures and related
+//! metadata into an eval context so runtime fragments can bind AOT calls and
+//! validate generated interface contracts.
 //!
 //! Called from:
 //! - Generated EIR backend assembly before fragments can call AOT methods.
@@ -17,7 +18,8 @@ use crate::context::{
     NativeCallableObjectDefaultArg, NativeCallableSignature,
 };
 use crate::eval_ir::{
-    EvalAttribute, EvalAttributeArg, EvalParameterType, EvalParameterTypeVariant,
+    EvalAttribute, EvalAttributeArg, EvalInterfaceProperty, EvalParameterType,
+    EvalParameterTypeVariant,
 };
 
 const NATIVE_DEFAULT_NULL: u64 = 0;
@@ -46,6 +48,8 @@ const NATIVE_OBJECT_DEFAULT_ARG_ARRAY: u8 = 4;
 const NATIVE_ARRAY_DEFAULT_KEY_AUTO: u8 = 0;
 const NATIVE_ARRAY_DEFAULT_KEY_INT: u8 = 1;
 const NATIVE_ARRAY_DEFAULT_KEY_STRING: u8 = 2;
+const NATIVE_INTERFACE_PROPERTY_REQUIRES_GET: u64 = 1;
+const NATIVE_INTERFACE_PROPERTY_REQUIRES_SET: u64 = 2;
 const MAX_NATIVE_OBJECT_DEFAULT_ARGS: usize = u8::MAX as usize;
 
 #[derive(Clone, Copy)]
@@ -86,6 +90,34 @@ pub unsafe extern "C" fn __elephc_eval_register_native_static_method(
 ) -> i32 {
     std::panic::catch_unwind(|| unsafe {
         register_native_method_inner(ctx, method_key_ptr, method_key_len, true, param_count)
+    })
+    .unwrap_or(0)
+}
+
+/// Registers one generated native PHP interface property contract in an eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `property_key_ptr` must point to a
+/// readable `InterfaceName::propertyName` byte string, and `type_spec_ptr` must
+/// point to a readable generated type-spec byte string.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_interface_property(
+    ctx: *mut ElephcEvalContext,
+    property_key_ptr: *const u8,
+    property_key_len: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+    flags: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        register_native_interface_property_inner(
+            ctx,
+            property_key_ptr,
+            property_key_len,
+            type_spec_ptr,
+            type_spec_len,
+            flags,
+        )
     })
     .unwrap_or(0)
 }
@@ -988,6 +1020,51 @@ unsafe fn register_native_method_inner(
     } else {
         i32::from(context.define_native_method_signature(class_name, method_name, signature))
     }
+}
+
+/// Runs native interface property registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_interface_property`; invalid handles,
+/// names, flags, or type specs fail closed as `false`.
+unsafe fn register_native_interface_property_inner(
+    ctx: *mut ElephcEvalContext,
+    property_key_ptr: *const u8,
+    property_key_len: u64,
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+    flags: u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    let Ok(property_key) = abi_name_to_string(property_key_ptr, property_key_len) else {
+        return 0;
+    };
+    let Some((interface_name, property_name)) = split_property_key(&property_key) else {
+        return 0;
+    };
+    let requires_get = flags & NATIVE_INTERFACE_PROPERTY_REQUIRES_GET != 0;
+    let requires_set = flags & NATIVE_INTERFACE_PROPERTY_REQUIRES_SET != 0;
+    if !requires_get && !requires_set {
+        return 0;
+    }
+    let Some(property_type) = native_callable_type_from_abi(
+        type_spec_ptr,
+        type_spec_len,
+        NativeCallableTypePosition::Parameter,
+    ) else {
+        return 0;
+    };
+    let property = EvalInterfaceProperty::new(property_name, requires_get, requires_set)
+        .with_type(Some(property_type));
+    i32::from(context.define_native_interface_property_requirement(
+        interface_name,
+        property,
+    ))
 }
 
 /// Runs native method parameter registration after installing a panic boundary.
