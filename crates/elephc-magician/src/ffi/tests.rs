@@ -23,7 +23,7 @@ use crate::abi::{
 };
 use crate::context::{
     NativeCallableArrayDefaultElement, NativeCallableArrayDefaultKey, NativeCallableDefault,
-    NativeCallableObjectDefaultArg,
+    NativeCallableObjectDefaultArg, push_native_frame_called_class_override,
 };
 use crate::errors::EvalStatus;
 use crate::eval_ir::{EvalAttributeArg, EvalParameterTypeVariant};
@@ -321,6 +321,61 @@ fn context_push_class_scope_records_self_and_called_class() {
     assert_eq!(pop_status, EvalStatus::Ok.code());
     assert_eq!(ctx.current_class_scope(), None);
     assert_eq!(ctx.current_called_class_scope(), None);
+}
+
+/// Verifies generated frames can query eval late-static overrides without a context handle.
+#[test]
+fn native_frame_called_class_override_reports_thread_local_scope() {
+    let class_name = b"AotBase";
+    let mut out_ptr = std::ptr::null();
+    let mut out_len = 0;
+
+    let missing = unsafe {
+        __elephc_eval_native_frame_called_class_override(
+            class_name.as_ptr(),
+            class_name.len() as u64,
+            &mut out_ptr,
+            &mut out_len,
+        )
+    };
+
+    assert_eq!(missing, 0);
+    assert!(out_ptr.is_null());
+    assert_eq!(out_len, 0);
+
+    {
+        let _guard = push_native_frame_called_class_override(
+            std::ptr::null_mut(),
+            "AotBase",
+            "EvalChild",
+        );
+
+        let found = unsafe {
+            __elephc_eval_native_frame_called_class_override(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(found, 1);
+        let bytes = unsafe { std::slice::from_raw_parts(out_ptr, out_len as usize) };
+        assert_eq!(bytes, b"EvalChild");
+    }
+
+    let after_drop = unsafe {
+        __elephc_eval_native_frame_called_class_override(
+            class_name.as_ptr(),
+            class_name.len() as u64,
+            &mut out_ptr,
+            &mut out_len,
+        )
+    };
+
+    assert_eq!(after_drop, 0);
+    assert!(out_ptr.is_null());
+    assert_eq!(out_len, 0);
 }
 
 /// Verifies generated declaration-name metadata is exposed through eval lists.

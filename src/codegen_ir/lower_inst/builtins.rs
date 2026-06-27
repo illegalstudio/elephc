@@ -554,6 +554,25 @@ pub(super) fn lower_eval_static_method_call(
     eval::lower_eval_static_method_call(ctx, inst, class_name, method_name)
 }
 
+/// Lowers a late-static AOT-frame static method call through an active eval override.
+pub(super) fn lower_eval_native_frame_static_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    frame_class: &str,
+    method_name: &str,
+    no_override_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    eval::lower_eval_native_frame_static_method_call(
+        ctx,
+        inst,
+        frame_class,
+        method_name,
+        no_override_label,
+        done_label,
+    )
+}
+
 /// Lowers post-eval callable-array dispatch against eval dynamic callables.
 pub(super) fn lower_eval_callable_call_array(
     ctx: &mut FunctionContext<'_>,
