@@ -4219,8 +4219,9 @@ fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("lsl x12, x11, #3");                                    // scale class id to an 8-byte descriptor pointer slot
     emitter.instruction("ldr x10, [x10, x12]");                                 // load the class property-tag descriptor pointer
     emitter.instruction("str x10, [sp, #16]");                                  // save descriptor pointer for the property-copy loop
-    emitter.instruction("ldr w12, [x9, #-16]");                                 // load the object payload size from the heap header
-    emitter.instruction("str x12, [sp, #48]");                                  // save payload size for allocation and dyn-prop detection
+    abi::emit_symbol_address(emitter, "x10", "_class_object_payload_sizes");
+    emitter.instruction("ldr x12, [x10, x12]");                                 // load the class-declared object payload size
+    emitter.instruction("str x12, [sp, #48]");                                  // save payload size for allocation and dyn-prop offsets
     emitter.instruction("mov x0, x12");                                         // pass the source payload size to the heap allocator
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate a clone object payload with the same byte size
     emitter.instruction("mov x9, #4");                                          // heap kind 4 marks object instances for ownership helpers
@@ -4230,6 +4231,13 @@ fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #8]");                                    // save the clone object payload pointer
     emitter.instruction("ldr x12, [sp, #48]");                                  // reload the payload size
     emitter.instruction("sub x12, x12, #8");                                    // remove the leading class id field from the clone layout
+    emitter.instruction("ldr x13, [sp, #56]");                                  // reload the source class id for dynamic-property metadata
+    emitter.instruction("lsl x13, x13, #3");                                    // scale class id to an 8-byte dynamic-flag slot
+    abi::emit_symbol_address(emitter, "x10", "_class_object_dynamic_prop_flags");
+    emitter.instruction("ldr x13, [x10, x13]");                                 // load whether this class layout has a dyn-props tail
+    emitter.instruction("cbz x13, __elephc_eval_value_object_clone_shallow_count_ready"); //no dyn-props tail contributes to property count
+    emitter.instruction("sub x12, x12, #8");                                    // remove the dyn-props tail before counting declared slots
+    emitter.label("__elephc_eval_value_object_clone_shallow_count_ready");
     emitter.instruction("lsr x12, x12, #4");                                    // derive declared-property slot count from the payload size
     emitter.instruction("str x12, [sp, #24]");                                  // save property count for the copy loop
     emitter.instruction("str xzr, [sp, #32]");                                  // initialize property-copy index to zero
@@ -4290,12 +4298,13 @@ fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("b __elephc_eval_value_object_clone_shallow_prop_loop"); //continue copying declared properties
 
     emitter.label("__elephc_eval_value_object_clone_shallow_dyn");
-    emitter.instruction("ldr x12, [sp, #48]");                                  // reload clone payload size for dynamic-property detection
-    emitter.instruction("sub x13, x12, #8");                                    // isolate bytes after the leading class id field
-    emitter.instruction("and x14, x13, #15");                                   // check whether an 8-byte dynamic-property tail exists
-    emitter.instruction("cmp x14, #8");                                         // remainder 8 means the layout has a dyn-props hash slot
-    emitter.instruction("b.ne __elephc_eval_value_object_clone_shallow_box");   // no dynamic hash slot: box the copied clone
-    emitter.instruction("sub x13, x12, #8");                                    // compute dyn-props slot offset as payload_size - 8
+    emitter.instruction("ldr x12, [sp, #56]");                                  // reload the source class id for dynamic-property metadata
+    emitter.instruction("lsl x12, x12, #3");                                    // scale class id to an 8-byte dynamic-flag slot
+    abi::emit_symbol_address(emitter, "x10", "_class_object_dynamic_prop_flags");
+    emitter.instruction("ldr x12, [x10, x12]");                                 // load whether this class layout has a dyn-props tail
+    emitter.instruction("cbz x12, __elephc_eval_value_object_clone_shallow_box"); //no dynamic hash slot: box the copied clone
+    emitter.instruction("ldr x13, [sp, #48]");                                  // reload the class-declared payload size
+    emitter.instruction("sub x13, x13, #8");                                    // compute dyn-props slot offset as payload_size - 8
     emitter.instruction("str x13, [sp, #40]");                                  // save dyn-props slot offset across hash cloning
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source object pointer
     emitter.instruction("ldr x10, [x9, x13]");                                  // load the source dynamic-property hash pointer
@@ -4350,7 +4359,8 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_ptrs");
     emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load the class property-tag descriptor pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save descriptor pointer for the property-copy loop
-    emitter.instruction("mov ecx, DWORD PTR [r10 - 16]");                       // load the object payload size from the heap header
+    abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes");
+    emitter.instruction("mov rcx, QWORD PTR [r11 + rax * 8]");                  // load the class-declared object payload size
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save payload size for allocation and dyn-prop detection
     emitter.instruction("mov rax, rcx");                                        // pass the source payload size to the heap allocator
     emitter.instruction("call __rt_heap_alloc");                                // allocate a clone object payload with the same byte size
@@ -4361,6 +4371,13 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the clone object payload pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the payload size
     emitter.instruction("sub r10, 8");                                          // remove the leading class id field from the clone layout
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the source class id for dynamic-property metadata
+    abi::emit_symbol_address(emitter, "r11", "_class_object_dynamic_prop_flags");
+    emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load whether this class layout has a dyn-props tail
+    emitter.instruction("test r11, r11");                                       // check whether dyn-props bytes should be excluded
+    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_count_ready_x86"); //no dyn-props tail contributes to property count
+    emitter.instruction("sub r10, 8");                                          // remove the dyn-props tail before counting declared slots
+    emitter.label("__elephc_eval_value_object_clone_shallow_count_ready_x86");
     emitter.instruction("shr r10, 4");                                          // derive declared-property slot count from the payload size
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save property count for the copy loop
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize property-copy index to zero
@@ -4412,12 +4429,12 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("jmp __elephc_eval_value_object_clone_shallow_prop_loop_x86"); //continue copying declared properties
 
     emitter.label("__elephc_eval_value_object_clone_shallow_dyn_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload clone payload size for dynamic-property detection
-    emitter.instruction("mov r11, r10");                                        // copy payload size before deriving the property region size
-    emitter.instruction("sub r11, 8");                                          // isolate bytes after the leading class id field
-    emitter.instruction("and r11, 15");                                         // check whether an 8-byte dynamic-property tail exists
-    emitter.instruction("cmp r11, 8");                                          // remainder 8 means the layout has a dyn-props hash slot
-    emitter.instruction("jne __elephc_eval_value_object_clone_shallow_box_x86"); //no dynamic hash slot: box the copied clone
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the source class id for dynamic-property metadata
+    abi::emit_symbol_address(emitter, "r11", "_class_object_dynamic_prop_flags");
+    emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load whether this class layout has a dyn-props tail
+    emitter.instruction("test r11, r11");                                       // check whether a dyn-props hash slot exists
+    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_box_x86"); // no dynamic hash slot: box the copied clone
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the class-declared payload size
     emitter.instruction("sub r10, 8");                                          // compute dyn-props slot offset as payload_size - 8
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save dyn-props slot offset across hash cloning
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the source object pointer

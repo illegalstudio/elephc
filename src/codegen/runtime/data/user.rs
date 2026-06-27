@@ -293,6 +293,33 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    out.push_str(".globl _class_object_payload_sizes\n_class_object_payload_sizes:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let payload_size =
+                match (class_info_by_id.get(&class_id), class_name_by_id.get(&class_id)) {
+                    (Some(class_info), Some(class_name)) => {
+                        class_object_payload_size(class_name, class_info)
+                    }
+                    _ => 0,
+                };
+            out.push_str(&format!("    .quad {}\n", payload_size));
+        }
+    }
+
+    out.push_str(".globl _class_object_dynamic_prop_flags\n_class_object_dynamic_prop_flags:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let flag = match (class_info_by_id.get(&class_id), class_name_by_id.get(&class_id)) {
+                (Some(class_info), Some(class_name)) => {
+                    u8::from(class_uses_dynamic_property_tail(class_name, class_info))
+                }
+                _ => 0,
+            };
+            out.push_str(&format!("    .quad {}\n", flag));
+        }
+    }
+
     out.push_str(".globl _class_gc_desc_count\n_class_gc_desc_count:\n");
     out.push_str(&format!(
         "    .quad {}\n",
@@ -1808,13 +1835,7 @@ fn emit_classes_by_name_table(
     out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
     out.push_str(".globl _classes_by_name\n_classes_by_name:\n");
     for (class_name, class_info) in sorted_classes {
-        let num_props = class_info.properties.len();
-        let dyn_props_slot = if class_info.allow_dynamic_properties {
-            8
-        } else {
-            0
-        };
-        let obj_size = 8 + num_props * 16 + dyn_props_slot;
+        let obj_size = class_object_payload_size(class_name, class_info);
         out.push_str(&format!(
             "    .quad _class_by_name_str_{}\n",
             class_info.class_id
@@ -1823,6 +1844,21 @@ fn emit_classes_by_name_table(
         out.push_str(&format!("    .quad {}\n", class_info.class_id));
         out.push_str(&format!("    .quad {}\n", obj_size));
     }
+}
+
+/// Returns the PHP object payload bytes required by one class layout.
+fn class_object_payload_size(class_name: &str, class_info: &ClassInfo) -> usize {
+    let dyn_props_slot = if class_uses_dynamic_property_tail(class_name, class_info) {
+        8
+    } else {
+        0
+    };
+    8 + class_info.properties.len() * 16 + dyn_props_slot
+}
+
+/// Returns whether this class layout stores a dynamic-property hash tail.
+fn class_uses_dynamic_property_tail(class_name: &str, class_info: &ClassInfo) -> bool {
+    class_name == "stdClass" || class_info.allow_dynamic_properties
 }
 
 /// The number of fixed-slot stream-wrapper methods recorded per class in

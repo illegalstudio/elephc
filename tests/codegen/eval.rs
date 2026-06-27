@@ -19221,6 +19221,40 @@ echo $child->name . ":" . $childCopy->name;');
     assert_eq!(out.stdout, "A:A:aot");
 }
 
+/// Verifies an eval `__clone()` override on an AOT-backed subclass owns clone-hook dispatch.
+#[test]
+fn test_eval_clone_dynamic_subclass_override_aot_clone_hook() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalCloneAotOverrideHookParent {
+    public string $name;
+
+    public function __construct(string $name) {
+        $this->name = $name;
+    }
+
+    public function __clone(): void {
+        $this->name = $this->name . ":aot";
+    }
+}
+eval('class EvalCloneAotOverrideHookChild extends EvalCloneAotOverrideHookParent {
+    public function __clone(): void {
+        $this->name = $this->name . ":eval";
+    }
+}
+$child = new EvalCloneAotOverrideHookChild("B");
+$childCopy = clone $child;
+echo $child->name . ":" . $childCopy->name;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "B:B:eval");
+}
+
 /// Verifies eval `clone` invokes private AOT `__clone()` hooks from the declaring scope.
 #[test]
 fn test_eval_clone_aot_object_runs_private_clone_hook_in_scope() {
