@@ -11379,6 +11379,8 @@ try {
 echo ":";
 echo (new EvalInvokableBox("new"))("E", "F") . ":";
 echo call_user_func($box, "G", "H") . ":";
+$first = $box(...);
+echo $first("K", "L") . ":";
 echo call_user_func_array($box, ["right" => "J", "left" => "I"]);');
 "#,
     );
@@ -11389,7 +11391,7 @@ echo call_user_func_array($box, ["right" => "J", "left" => "I"]);');
     );
     assert_eq!(
         out.stdout,
-        "Y:plain:box:CD:Error:Object of type EvalPlainCallableProbe is not callable:new:EF:box:GH:box:IJ"
+        "Y:plain:box:CD:Error:Object of type EvalPlainCallableProbe is not callable:new:EF:box:GH:box:KL:box:IJ"
     );
 }
 
@@ -11416,6 +11418,8 @@ echo is_callable($box) ? "Y:" : "N:";
 echo $box(right: "D", left: "C") . ":";
 echo $box("E") . ":";
 echo call_user_func($box, "F", "G") . ":";
+$first = $box(...);
+echo $first("J", "K") . ":";
 echo call_user_func_array($box, ["right" => "I", "left" => "H"]) . ":";
 try {
     (new EvalAotPlainInvokableProbe())(eval_aot_invokable_side_effect());
@@ -11432,7 +11436,7 @@ try {
     );
     assert_eq!(
         out.stdout,
-        "Y:CD:EB:FG:HI:Error:Object of type EvalAotPlainInvokableProbe is not callable"
+        "Y:CD:EB:FG:JK:HI:Error:Object of type EvalAotPlainInvokableProbe is not callable"
     );
 }
 
