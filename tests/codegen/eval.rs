@@ -19243,6 +19243,23 @@ echo (new ReflectionClass("EvalIterableTrait"))->isIterable() ? "H" : "h";');
     assert_eq!(out, "pIAGbftRseh");
 }
 
+/// Verifies eval ReflectionClass::isIterable sees interfaces inherited from AOT parents.
+#[test]
+fn test_eval_reflection_class_iterable_inherits_aot_parent_interface() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotIterableParent implements IteratorAggregate {
+    public function getIterator(): Traversable { return new ArrayIterator([]); }
+}
+eval('class EvalAotIterableChild extends EvalAotIterableParent {}
+echo (new ReflectionClass("EvalAotIterableChild"))->isIterable() ? "R" : "r";
+$box = new EvalAotIterableChild();
+echo is_iterable($box) ? "I" : "i";');
+"#,
+    );
+    assert_eq!(out, "RI");
+}
+
 /// Verifies eval ReflectionClass origin predicates distinguish eval symbols from built-ins.
 #[test]
 fn test_eval_reflection_class_internal_user_defined_predicates() {

@@ -621,12 +621,15 @@ pub(in crate::interpreter) fn eval_reflection_class_basic_metadata_result(
             evaluated_args,
             values,
         ),
-        "isiterable" | "isiterateable" => eval_reflection_class_flag_result(
-            metadata.flags,
-            EVAL_REFLECTION_CLASS_FLAG_ITERABLE,
-            evaluated_args,
-            values,
-        ),
+        "isiterable" | "isiterateable" => {
+            let flags = eval_reflection_eval_metadata_flags(&metadata, context, values)?;
+            eval_reflection_class_flag_result(
+                flags,
+                EVAL_REFLECTION_CLASS_FLAG_ITERABLE,
+                evaluated_args,
+                values,
+            )
+        }
         "isinternal" => eval_reflection_class_flag_result(
             metadata.flags,
             EVAL_REFLECTION_CLASS_FLAG_INTERNAL,
@@ -2849,6 +2852,7 @@ fn eval_reflection_class_owner_object_result(
     };
     let interface_names =
         eval_reflection_eval_metadata_interface_names(&metadata, context, values)?;
+    let flags = eval_reflection_eval_metadata_flags(&metadata, context, values)?;
     eval_reflection_owner_object(
         owner_kind,
         &metadata.resolved_name,
@@ -2863,7 +2867,7 @@ fn eval_reflection_class_owner_object_result(
         None,
         None,
         None,
-        metadata.flags,
+        flags,
         metadata.modifiers,
         0,
         None,
@@ -5214,6 +5218,7 @@ fn eval_reflection_full_class_object_result(
     };
     let interface_names =
         eval_reflection_eval_metadata_interface_names(&metadata, context, values)?;
+    let flags = eval_reflection_eval_metadata_flags(&metadata, context, values)?;
     eval_reflection_owner_object(
         EVAL_REFLECTION_OWNER_CLASS,
         &metadata.resolved_name,
@@ -5228,7 +5233,7 @@ fn eval_reflection_full_class_object_result(
         None,
         None,
         None,
-        metadata.flags,
+        flags,
         metadata.modifiers,
         0,
         None,
@@ -5277,6 +5282,7 @@ fn eval_reflection_shallow_class_object_result(
     };
     let interface_names =
         eval_reflection_eval_metadata_interface_names(&metadata, context, values)?;
+    let flags = eval_reflection_eval_metadata_flags(&metadata, context, values)?;
     eval_reflection_owner_object_with_members(
         EVAL_REFLECTION_OWNER_CLASS,
         &metadata.resolved_name,
@@ -5291,7 +5297,7 @@ fn eval_reflection_shallow_class_object_result(
         None,
         None,
         None,
-        metadata.flags,
+        flags,
         metadata.modifiers,
         0,
         None,
@@ -6069,6 +6075,25 @@ fn eval_reflection_eval_metadata_interface_names(
     }
 }
 
+/// Returns eval metadata flags corrected for generated/AOT inherited interfaces.
+fn eval_reflection_eval_metadata_flags(
+    metadata: &EvalReflectionClassMetadata,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<u64, EvalStatus> {
+    let mut flags = metadata.flags;
+    if flags & EVAL_REFLECTION_CLASS_FLAG_ITERABLE == 0
+        && flags & EVAL_REFLECTION_CLASS_FLAG_ABSTRACT == 0
+        && context.has_class(&metadata.resolved_name)
+        && eval_reflection_interface_names_include_iterable(
+            &eval_reflection_eval_class_interface_names(&metadata.resolved_name, context, values)?,
+        )
+    {
+        flags |= EVAL_REFLECTION_CLASS_FLAG_ITERABLE;
+    }
+    Ok(flags)
+}
+
 /// Returns eval class interfaces plus interfaces inherited from generated/AOT parents.
 fn eval_reflection_eval_class_interface_names(
     class_name: &str,
@@ -6110,6 +6135,13 @@ fn eval_reflection_eval_interface_parent_names(
         }
     }
     Ok(names)
+}
+
+/// Returns whether one interface list includes PHP iterable marker interfaces.
+fn eval_reflection_interface_names_include_iterable(interface_names: &[String]) -> bool {
+    interface_names.iter().any(|name| {
+        name.eq_ignore_ascii_case("Iterator") || name.eq_ignore_ascii_case("IteratorAggregate")
+    })
 }
 
 /// Appends one class-like name while preserving PHP's case-insensitive uniqueness.
@@ -6553,6 +6585,7 @@ fn eval_reflection_class_to_string_metadata(
     if let Some(mut metadata) = eval_reflection_class_like_attributes(reflected_name, context) {
         metadata.interface_names =
             eval_reflection_eval_metadata_interface_names(&metadata, context, values)?;
+        metadata.flags = eval_reflection_eval_metadata_flags(&metadata, context, values)?;
         return Ok(Some(metadata));
     }
     let runtime_class_name = reflected_name.trim_start_matches('\\');
