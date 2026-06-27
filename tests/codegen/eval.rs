@@ -19069,6 +19069,28 @@ echo class_implements("MissingDynEvalNativeRel") === false ? "F" : "f";
     );
 }
 
+/// Verifies native static member reads see eval-declared metadata after the barrier.
+#[test]
+fn test_eval_declared_class_native_static_members_after_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class DynEvalNativeStaticBase {
+    public const BASE = 3;
+    public static int $count = 5;
+}
+class DynEvalNativeStaticChild extends DynEvalNativeStaticBase {
+    public const SEED = 4;
+    public static int $value = 6;
+}');
+echo DynEvalNativeStaticChild::SEED . ":";
+echo DynEvalNativeStaticChild::BASE . ":";
+echo DynEvalNativeStaticChild::$value . ":";
+echo DynEvalNativeStaticChild::$count;
+"#,
+    );
+    assert_eq!(out, "4:3:6:5");
+}
+
 /// Verifies eval class declarations from a namespace are registered globally.
 #[test]
 fn test_eval_declared_class_in_namespace_is_global() {

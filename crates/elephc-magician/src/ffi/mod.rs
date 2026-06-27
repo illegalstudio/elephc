@@ -24,6 +24,8 @@ pub mod object_construction;
 #[cfg(not(test))]
 pub mod object_introspection;
 pub mod scope;
+#[cfg(not(test))]
+pub mod static_members;
 pub mod symbols;
 pub(crate) mod util;
 
@@ -41,6 +43,8 @@ pub use object_construction::*;
 #[cfg(not(test))]
 pub use object_introspection::*;
 pub use scope::*;
+#[cfg(not(test))]
+pub use static_members::*;
 pub use symbols::*;
 
 #[cfg(test)]

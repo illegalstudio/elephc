@@ -14,27 +14,40 @@ use crate::ir::Instruction;
 use crate::names::enum_case_symbol;
 
 use super::super::context::FunctionContext;
-use super::{expect_data, store_if_result};
+use super::{builtins, expect_data, store_if_result};
 use crate::codegen_ir::{CodegenIrError, Result};
 
 /// Lowers a scoped enum-case read into the current object pointer result register.
-pub(super) fn lower_scoped_constant_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(super) fn lower_scoped_constant_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     let (enum_name, case_name) = scoped_constant_label(ctx, inst)?;
-    let enum_info = ctx
-        .module
-        .enum_infos
-        .get(enum_name)
-        .ok_or_else(|| CodegenIrError::unsupported(format!("scoped constant {}::{}", enum_name, case_name)))?;
-    if !enum_info.cases.iter().any(|case| case.name == case_name) {
-        return Err(CodegenIrError::unsupported(format!(
-            "scoped enum constant {}::{}",
-            enum_name,
-            case_name
-        )));
+    let class_name = enum_name.to_string();
+    let constant_name = case_name.to_string();
+    if let Some(enum_info) = ctx.module.enum_infos.get(class_name.as_str()) {
+        if enum_info
+            .cases
+            .iter()
+            .any(|case| case.name == constant_name.as_str())
+        {
+            let symbol = enum_case_symbol(&class_name, &constant_name);
+            abi::emit_load_symbol_to_reg(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                &symbol,
+                0,
+            );
+            return store_if_result(ctx, inst);
+        }
     }
-    let symbol = enum_case_symbol(enum_name, case_name);
-    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
-    store_if_result(ctx, inst)
+    if builtins::has_eval_context(ctx) {
+        return builtins::lower_eval_class_constant_fetch(ctx, inst, &class_name, &constant_name);
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "scoped constant {}::{}",
+        class_name, constant_name
+    )))
 }
 
 /// Resolves the string immediate `Enum::Case` attached to a scoped constant read.
