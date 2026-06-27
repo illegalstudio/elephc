@@ -2218,6 +2218,40 @@ fn builtin_reflection_class_nullable_object_method(
     }
 }
 
+/// Returns a public object-valued `ReflectionClass` method backed by one private slot.
+fn builtin_reflection_class_object_method(
+    method_name: &str,
+    property: &str,
+    class_name: &str,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified(class_name))),
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::PropertyAccess {
+                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                    property: property.to_string(),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public mixed `ReflectionClass` method backed by one private slot.
 fn builtin_reflection_class_mixed_method(method_name: &str, property: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
@@ -3000,9 +3034,10 @@ fn builtin_reflection_owner_class(
             Some(mixed_type()),
             false_bool(),
         ));
-        methods.push(builtin_reflection_class_mixed_method(
+        methods.push(builtin_reflection_class_object_method(
             "getDeclaringClass",
             "__declaring_class",
+            "ReflectionClass",
         ));
     }
     if matches!(
@@ -4593,6 +4628,21 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
             }
             if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("getExtension")) {
                 sig.return_type = PhpType::Mixed;
+            }
+            if matches!(
+                class_name,
+                "ReflectionMethod"
+                    | "ReflectionProperty"
+                    | "ReflectionClassConstant"
+                    | "ReflectionEnumUnitCase"
+                    | "ReflectionEnumBackedCase"
+            ) {
+                if let Some(sig) = class_info
+                    .methods
+                    .get_mut(&php_symbol_key("getDeclaringClass"))
+                {
+                    sig.return_type = PhpType::Object("ReflectionClass".to_string());
+                }
             }
             if matches!(class_name, "ReflectionClass" | "ReflectionObject") {
                 for (property_name, property_type) in &mut class_info.properties {

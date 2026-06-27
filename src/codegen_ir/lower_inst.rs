@@ -2554,11 +2554,11 @@ fn lower_mixed_method_call(
     object: ValueId,
     method_name: &str,
 ) -> Result<()> {
-    if builtins::has_eval_context(ctx) {
-        return builtins::lower_eval_method_call(ctx, inst, object, method_name);
-    }
     let candidates = mixed_method_candidates(ctx, method_name, inst.operands.len())?;
     if candidates.is_empty() {
+        if builtins::has_eval_context(ctx) {
+            return builtins::lower_eval_method_call(ctx, inst, object, method_name);
+        }
         emit_method_call_on_null_fatal(ctx, method_name);
         return Ok(());
     }
@@ -2589,7 +2589,12 @@ fn lower_mixed_method_call(
     }
 
     ctx.emitter.label(&no_match_label);
-    emit_method_call_on_null_fatal(ctx, method_name);
+    if builtins::has_eval_context(ctx) {
+        builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    } else {
+        emit_method_call_on_null_fatal(ctx, method_name);
+    }
 
     ctx.emitter.label(&non_object_label);
     emit_method_call_on_null_fatal(ctx, method_name);

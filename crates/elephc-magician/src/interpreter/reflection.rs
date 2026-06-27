@@ -1386,12 +1386,6 @@ pub(in crate::interpreter) fn eval_reflection_parameter_legacy_type_predicate_re
         return Ok(None);
     }
     eval_reflection_bind_no_args(evaluated_args)?;
-    if let Some(flag_property) = eval_reflection_parameter_legacy_type_flag_property(method_name) {
-        let flag = values.property_get(object, flag_property)?;
-        if values.type_tag(flag)? == EVAL_TAG_BOOL {
-            return Ok(Some(flag));
-        }
-    }
     let type_value = values.method_call(object, "getType", Vec::new())?;
     if values.is_null(type_value)? {
         return values.bool_value(false).map(Some);
@@ -1655,17 +1649,6 @@ fn eval_reflection_parameter_legacy_type_name(method_name: &str) -> Option<&'sta
         Some("array")
     } else if method_name.eq_ignore_ascii_case("isCallable") {
         Some("callable")
-    } else {
-        None
-    }
-}
-
-/// Maps a legacy ReflectionParameter predicate method to its precomputed flag slot.
-fn eval_reflection_parameter_legacy_type_flag_property(method_name: &str) -> Option<&'static str> {
-    if method_name.eq_ignore_ascii_case("isArray") {
-        Some("__is_array_type")
-    } else if method_name.eq_ignore_ascii_case("isCallable") {
-        Some("__is_callable_type")
     } else {
         None
     }

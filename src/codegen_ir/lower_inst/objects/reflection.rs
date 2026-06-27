@@ -2875,12 +2875,21 @@ fn reflection_property_visible_from_class(
 /// Returns the class that declares one reflected instance or static method.
 fn reflection_method_declaring_class_name(
     info: &crate::types::ClassInfo,
+    reflected_class_name: &str,
     method_key: &str,
 ) -> Option<String> {
     info.method_declaring_classes
         .get(method_key)
         .or_else(|| info.static_method_declaring_classes.get(method_key))
         .cloned()
+        .or_else(|| {
+            reflection_class_has_method_kind(info, method_key, false)
+                .then(|| reflected_class_name.to_string())
+        })
+        .or_else(|| {
+            reflection_class_has_method_kind(info, method_key, true)
+                .then(|| reflected_class_name.to_string())
+        })
 }
 
 /// Returns a prototype method for a reflected generated/AOT class method, if PHP exposes one.
@@ -3124,7 +3133,8 @@ fn reflection_class_method_member(
     let Some(sig) = sig else {
         return Ok(None);
     };
-    let declaring_class_name = reflection_method_declaring_class_name(info, &method_key);
+    let declaring_class_name =
+        reflection_method_declaring_class_name(info, class_name, &method_key);
     let attr_names = info
         .method_attribute_names
         .get(&method_key)
