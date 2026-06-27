@@ -8229,6 +8229,62 @@ $box->run();');
     assert_eq!(out.stdout, "6");
 }
 
+/// Verifies eval-declared children can read and write inherited protected AOT properties.
+#[test]
+fn test_eval_declared_child_accesses_inherited_protected_aot_property() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalRuntimeProtectedPropertyParent {
+    protected int $x = 1;
+}
+
+eval('class EvalRuntimeProtectedPropertyChild extends EvalRuntimeProtectedPropertyParent {
+    public function run(): void {
+        echo isset($this->x) ? "I:" : "i:";
+        $this->x = 7;
+        echo $this->x;
+    }
+}
+$box = new EvalRuntimeProtectedPropertyChild();
+$box->run();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "I:7");
+}
+
+/// Verifies eval-declared children can read and write inherited protected AOT static properties.
+#[test]
+fn test_eval_declared_child_accesses_inherited_protected_aot_static_property() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalRuntimeProtectedStaticPropertyParent {
+    protected static int $x = 1;
+}
+
+eval('class EvalRuntimeProtectedStaticPropertyChild extends EvalRuntimeProtectedStaticPropertyParent {
+    public function run(): void {
+        echo isset(self::$x) ? "S:" : "s:";
+        self::$x = 8;
+        echo self::$x;
+    }
+}
+$box = new EvalRuntimeProtectedStaticPropertyChild();
+$box->run();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "S:8");
+}
+
 /// Verifies eval-declared classes inherit AOT callable object and method behavior.
 #[test]
 fn test_eval_declared_class_inherits_aot_invokable_parent_callables() {
