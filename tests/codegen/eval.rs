@@ -18754,6 +18754,45 @@ echo $inherited->hasPrototype() ? "Y" : "N";
     );
 }
 
+/// Verifies eval ReflectionMethod prototypes include inherited AOT interfaces.
+#[test]
+fn test_eval_reflection_method_reports_inherited_aot_interface_prototypes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface EvalAotProtoRootIface {
+    public function inheritedIface(): string;
+}
+class EvalAotProtoParentWithIface implements EvalAotProtoRootIface {
+    public function inheritedIface(): string { return "parent"; }
+}
+eval('interface EvalProtoLeafIface extends EvalAotProtoRootIface {}
+class EvalProtoLeafImpl implements EvalProtoLeafIface {
+    public function inheritedIface(): string { return "leaf"; }
+}
+class EvalProtoAotParentChild extends EvalAotProtoParentWithIface {
+    public function inheritedIface(): string { return "child"; }
+}
+$leaf = new ReflectionMethod("EvalProtoLeafImpl", "inheritedIface");
+$leafProto = $leaf->getPrototype();
+echo ($leaf->hasPrototype() ? "L" : "l") . ":";
+echo $leafProto->getDeclaringClass()->getName() . "::" . $leafProto->getName() . ":";
+$child = new ReflectionMethod("EvalProtoAotParentChild", "inheritedIface");
+$childProto = $child->getPrototype();
+echo ($child->hasPrototype() ? "C" : "c") . ":";
+echo $childProto->getDeclaringClass()->getName() . "::" . $childProto->getName();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "L:EvalAotProtoRootIface::inheritediface:C:EvalAotProtoParentWithIface::inheritediface"
+    );
+}
+
 /// Verifies eval-declared functions share method-style named/default/ref/variadic binding.
 #[test]
 fn test_eval_declared_function_rich_argument_binding() {
