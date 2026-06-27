@@ -6739,6 +6739,30 @@ echo EvalAotStaticBox::sum4(1, 2, 3, 4);');
     assert_eq!(out.stdout, "AB:CD:EF:7:10");
 }
 
+/// Verifies eval reports PHP's catchable Error for static syntax on non-static AOT methods.
+#[test]
+fn test_eval_fragment_rejects_aot_non_static_method_called_statically() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalAotNonStaticStaticSyntaxBox {
+    public function run(): string {
+        return "bad";
+    }
+}
+
+try {
+    eval('EvalAotNonStaticStaticSyntaxBox::run();');
+} catch (Error $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Non-static method EvalAotNonStaticStaticSyntaxBox::run() cannot be called statically"
+    );
+}
+
 /// Verifies eval fragments can call private AOT static methods from the declaring scope.
 #[test]
 fn test_eval_fragment_can_call_private_aot_static_method_from_declaring_scope() {
