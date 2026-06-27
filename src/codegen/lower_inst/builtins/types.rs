@@ -345,6 +345,9 @@ pub(crate) fn lower_class_name_lookup(
             ctx.load_value_to_result(value)?;
             emit_dynamic_object_class_name(ctx, name);
         }
+        PhpType::Mixed | PhpType::Union(_) if super::has_eval_context(ctx) => {
+            return super::lower_eval_object_class_name(ctx, inst, value, name);
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             ctx.load_value_to_result(value)?;
             emit_mixed_object_class_name(ctx, name);
@@ -376,6 +379,13 @@ pub(crate) fn lower_is_a_relation(
     let object = expect_operand(inst, 0)?;
     let target = expect_operand(inst, 1)?;
     let exclude_self = name == "is_subclass_of";
+    if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_))
+        && super::has_eval_context(ctx)
+    {
+        if let Some(target_class) = optional_const_string_operand(ctx, target)? {
+            return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
+        }
+    }
     let result = static_relation_holds(ctx, object, target, exclude_self)?;
     emit_bool_result(ctx, result);
     store_if_result(ctx, inst)

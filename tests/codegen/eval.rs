@@ -18957,6 +18957,28 @@ echo $box->x;
     assert_eq!(out, "9:9");
 }
 
+/// Verifies native introspection sees eval-declared object metadata after the barrier.
+#[test]
+fn test_eval_declared_class_native_introspection_after_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class DynEvalNativeIntrospectBase {}
+class DynEvalNativeIntrospectChild extends DynEvalNativeIntrospectBase {}');
+$box = new DynEvalNativeIntrospectChild();
+echo get_class($box) . ":";
+echo get_parent_class($box) . ":";
+echo is_a($box, "DynEvalNativeIntrospectChild") ? "C" : "c";
+echo ":";
+echo is_a($box, "DynEvalNativeIntrospectBase") ? "B" : "b";
+echo ":";
+echo is_subclass_of($box, "DynEvalNativeIntrospectChild") ? "S" : "s";
+echo ":";
+echo is_subclass_of($box, "DynEvalNativeIntrospectBase") ? "P" : "p";
+"#,
+    );
+    assert_eq!(out, "DynEvalNativeIntrospectChild:DynEvalNativeIntrospectBase:C:B:s:P");
+}
+
 /// Verifies eval class declarations from a namespace are registered globally.
 #[test]
 fn test_eval_declared_class_in_namespace_is_global() {
