@@ -19039,6 +19039,36 @@ echo function_exists("property_exists") ? "G" : "g";
     assert_eq!(out, "M:C:X:P:S:Y:FG");
 }
 
+/// Verifies native class-relation probes see eval-declared metadata after the barrier.
+#[test]
+fn test_eval_declared_class_native_relations_after_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+eval('interface DynEvalNativeRelIface {}
+trait DynEvalNativeRelTrait {}
+class DynEvalNativeRelBase {}
+class DynEvalNativeRelChild extends DynEvalNativeRelBase implements DynEvalNativeRelIface {
+    use DynEvalNativeRelTrait;
+}');
+$object = new DynEvalNativeRelChild();
+$implements = class_implements($object);
+foreach ($implements as $name) { echo $name . ","; }
+echo ":";
+$parents = class_parents("DynEvalNativeRelChild");
+foreach ($parents as $name) { echo $name . ","; }
+echo ":";
+$uses = class_uses("DynEvalNativeRelChild");
+foreach ($uses as $name) { echo $name . ","; }
+echo ":";
+echo class_implements("MissingDynEvalNativeRel") === false ? "F" : "f";
+"#,
+    );
+    assert_eq!(
+        out,
+        "DynEvalNativeRelIface,:DynEvalNativeRelBase,:DynEvalNativeRelTrait,:F"
+    );
+}
+
 /// Verifies eval class declarations from a namespace are registered globally.
 #[test]
 fn test_eval_declared_class_in_namespace_is_global() {

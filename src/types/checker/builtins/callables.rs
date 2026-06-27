@@ -1317,8 +1317,11 @@ pub(super) fn check_builtin(
                 ));
             }
             let first_ty = checker.infer_type(&args[0], env)?;
+            let dynamic_eval_target = checker.eval_barrier_active
+                && matches!(first_ty.codegen_repr(), PhpType::Mixed | PhpType::Str);
             if !matches!(first_ty, PhpType::Object(_))
                 && !matches!(args[0].kind, ExprKind::StringLiteral(_))
+                && !dynamic_eval_target
             {
                 return Err(CompileError::new(
                     span,

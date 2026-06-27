@@ -304,6 +304,16 @@ pub fn execute_context_object_class_name(
     }
 }
 
+/// Resolves class/interface/trait relation metadata through eval dynamic metadata.
+pub fn execute_context_class_relation(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    target: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_class_relation_result(name, &[target], context, values)
+}
+
 /// Tests an object relation against eval dynamic-object metadata before AOT metadata.
 pub fn execute_context_object_is_a(
     context: &mut ElephcEvalContext,

@@ -565,6 +565,16 @@ pub(super) fn lower_eval_member_exists(
     eval::lower_eval_member_exists(ctx, inst, target, member, name)
 }
 
+/// Lowers post-eval class-relation probes against eval dynamic metadata.
+pub(super) fn lower_eval_class_relation(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: ValueId,
+    name: &str,
+) -> Result<()> {
+    eval::lower_eval_class_relation(ctx, inst, target, name)
+}
+
 /// Lowers post-eval object class-name introspection against eval dynamic metadata.
 pub(super) fn lower_eval_object_class_name(
     ctx: &mut FunctionContext<'_>,

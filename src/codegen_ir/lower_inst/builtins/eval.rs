@@ -55,6 +55,9 @@ const EVAL_CLASS_LOOKUP_GET_CLASS: i64 = 0;
 const EVAL_CLASS_LOOKUP_GET_PARENT_CLASS: i64 = 1;
 const EVAL_MEMBER_LOOKUP_METHOD_EXISTS: i64 = 0;
 const EVAL_MEMBER_LOOKUP_PROPERTY_EXISTS: i64 = 1;
+const EVAL_CLASS_RELATION_IMPLEMENTS: i64 = 0;
+const EVAL_CLASS_RELATION_PARENTS: i64 = 1;
+const EVAL_CLASS_RELATION_USES: i64 = 2;
 const EVAL_CALLABLE_ARG_ARRAY_OFFSET: usize = EVAL_CODE_PTR_OFFSET;
 const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
 const NATIVE_DEFAULT_NULL: i64 = 0;
@@ -519,6 +522,39 @@ pub(super) fn lower_eval_member_exists(
     store_if_result(ctx, inst)
 }
 
+/// Lowers class/interface/trait relation introspection through eval dynamic metadata.
+pub(super) fn lower_eval_class_relation(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: ValueId,
+    name: &str,
+) -> Result<()> {
+    let relation_kind = eval_class_relation_kind(name)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_context(ctx)?;
+    store_eval_mixed_operand_at(ctx, target, EVAL_TEMP_CELL_OFFSET)?;
+    load_eval_context_to_arg(ctx, 0);
+    let target_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, target_arg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        relation_kind,
+    );
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_class_relation");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers object class-name introspection through the eval bridge.
 pub(super) fn lower_eval_object_class_name(
     ctx: &mut FunctionContext<'_>,
@@ -820,6 +856,19 @@ fn eval_member_lookup_kind(name: &str) -> Result<i64> {
         "property_exists" => Ok(EVAL_MEMBER_LOOKUP_PROPERTY_EXISTS),
         _ => Err(CodegenIrError::unsupported(format!(
             "eval member-exists lookup {}",
+            name
+        ))),
+    }
+}
+
+/// Returns the eval ABI discriminator for class/interface/trait relation builtins.
+fn eval_class_relation_kind(name: &str) -> Result<i64> {
+    match name {
+        "class_implements" => Ok(EVAL_CLASS_RELATION_IMPLEMENTS),
+        "class_parents" => Ok(EVAL_CLASS_RELATION_PARENTS),
+        "class_uses" => Ok(EVAL_CLASS_RELATION_USES),
+        _ => Err(CodegenIrError::unsupported(format!(
+            "eval class-relation lookup {}",
             name
         ))),
     }

@@ -7,9 +7,10 @@
 //! - Generated EIR backend assembly through `__elephc_eval_object_class_name`.
 //! - Generated EIR backend assembly through `__elephc_eval_object_is_a`.
 //! - Generated EIR backend assembly through `__elephc_eval_member_exists`.
+//! - Generated EIR backend assembly through `__elephc_eval_class_relation`.
 //!
 //! Key details:
-//! - Class-name lookups return boxed Mixed string cells through `ElephcEvalResult`.
+//! - Class-name and relation lookups return boxed Mixed cells through `ElephcEvalResult`.
 //! - Predicate probes fail closed as false when ABI inputs are invalid.
 
 use super::util::{abi_name_to_string, clear_result, write_outcome};
@@ -23,6 +24,9 @@ const CLASS_LOOKUP_GET_CLASS: u64 = 0;
 const CLASS_LOOKUP_GET_PARENT_CLASS: u64 = 1;
 const MEMBER_LOOKUP_METHOD_EXISTS: u64 = 0;
 const MEMBER_LOOKUP_PROPERTY_EXISTS: u64 = 1;
+const CLASS_RELATION_IMPLEMENTS: u64 = 0;
+const CLASS_RELATION_PARENTS: u64 = 1;
+const CLASS_RELATION_USES: u64 = 2;
 
 /// Resolves `get_class()` or `get_parent_class()` against eval dynamic objects.
 ///
@@ -84,6 +88,26 @@ pub unsafe extern "C" fn __elephc_eval_member_exists(
     .unwrap_or(0)
 }
 
+/// Resolves class/interface/trait relation metadata in the eval context.
+///
+/// # Safety
+/// `ctx` must be a valid eval context handle. `target` must point at a boxed
+/// runtime cell. `relation_kind` must be a supported discriminator, and `out`
+/// may be null.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_class_relation(
+    ctx: *mut ElephcEvalContext,
+    target: *mut RuntimeCell,
+    relation_kind: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        eval_class_relation_inner(ctx, target, relation_kind, out)
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
 /// Runs the eval object class-name ABI body after installing a panic boundary.
 ///
 /// # Safety
@@ -116,6 +140,46 @@ unsafe fn eval_object_class_name_inner(
         context,
         lookup,
         RuntimeCellHandle::from_raw(object_or_class),
+        &mut values,
+    ) {
+        Ok(result) => write_outcome(EvalOutcome::Value(result), out).code(),
+        Err(status) => status.code(),
+    }
+}
+
+/// Runs the eval class-relation ABI body after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_class_relation`; callers must provide a valid context,
+/// a boxed runtime cell target, and optional writable result storage.
+#[cfg(not(test))]
+unsafe fn eval_class_relation_inner(
+    ctx: *mut ElephcEvalContext,
+    target: *mut RuntimeCell,
+    relation_kind: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return EvalStatus::AbiMismatch.code();
+    }
+    if target.is_null() {
+        return EvalStatus::RuntimeFatal.code();
+    }
+    let lookup = match relation_kind {
+        CLASS_RELATION_IMPLEMENTS => "class_implements",
+        CLASS_RELATION_PARENTS => "class_parents",
+        CLASS_RELATION_USES => "class_uses",
+        _ => return EvalStatus::RuntimeFatal.code(),
+    };
+    clear_result(out);
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    match interpreter::execute_context_class_relation(
+        context,
+        lookup,
+        RuntimeCellHandle::from_raw(target),
         &mut values,
     ) {
         Ok(result) => write_outcome(EvalOutcome::Value(result), out).code(),
