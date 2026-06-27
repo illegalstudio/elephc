@@ -1049,8 +1049,78 @@ pub(super) fn emit_closure_dispatch(
         arms.push((entry_index, wrapper_symbol));
     }
     wm.add_raw_func(&build_closure_call_ladder(&arms));
+    // The higher-order `array_map($f, $arr)` runtime (`__rt_array_map_callable`)
+    // dispatches each element through this `__rt_closure_call` ladder, so it is
+    // emitted here — gated on the ladder existing. A module with neither closures nor
+    // FCC entries cannot produce a `Callable` source and never reaches `array_map`'s
+    // callable arm, so skipping it there keeps every call target defined. The helper
+    // references only `__rt_closure_call`, `__rt_array_new`, `__rt_array_push_mixed`,
+    // `__rt_mixed_from_value`, and `__rt_decref_any`, all present in every module.
+    wm.add_raw_func(RT_ARRAY_MAP_CALLABLE);
     Ok(())
 }
+
+/// `__rt_array_map_callable(desc i32, src i32) -> i32`: the runtime behind
+/// `array_map($f, $arr)` with a `Callable` descriptor `$f` and an INDEXED source
+/// array `$arr`. Builds a fresh `value_type`-7 (Mixed-cell) result array of the same
+/// length, then for each source element: boxes it into a 1-slot Mixed-cell arg buffer,
+/// dispatches `__rt_closure_call(desc, args)` (the unified closure/FCC ladder), pushes
+/// the owned result cell into the result array, and deep-frees the per-iteration arg
+/// buffer. Returns the result array. The WASM analogue of native's
+/// `lower_array_map_descriptor_callback` map loop.
+///
+/// REFCOUNT DISCIPLINE (mirrors `lower_closure_call`): each iteration boxes the source
+/// element with `__rt_mixed_from_value` (persisting a string / increfing a nested cell),
+/// pushes the owned cell into a 1-slot arg array (`__rt_array_push_mixed` stores it
+/// BORROWED, so the array owns it), and after the call deep-frees that arg array via
+/// `__rt_decref_any` — exactly balancing the box. The result cell `__rt_closure_call`
+/// returns is OWNED and transferred to the result array (borrowed store), released
+/// later when the result array is freed. Neither `desc` nor `src` is released here:
+/// the EIR owns operands 0 and 1 and releases them at the call site.
+///
+/// Source element typing is read from the array's `value_type` (kind word bits 8..14):
+/// `1` = string (ptr@slot+0, len@slot+8 -> tag 1), `7` = nested Mixed cell
+/// (cell ptr@slot+0 -> tag 7, increfed by `from_value`), anything else = scalar int
+/// (i64@slot+0 -> tag 0). This covers every indexed array WASM can currently build
+/// (int/string/mixed appends); a float/bool source boxes through the scalar arm.
+const RT_ARRAY_MAP_CALLABLE: &str = r#"(func $__rt_array_map_callable (param $desc i32) (param $src i32) (result i32)
+  (local $len i64) (local $esz i64) (local $vt i32) (local $i i64)
+  (local $result i32) (local $slot i32) (local $argcell i32) (local $args1 i32) (local $rcell i32)
+  (local $tag i64) (local $lo i64) (local $hi i64)
+  (local.set $len (i64.load (local.get $src)))                       ;; source length @ src+0
+  (local.set $esz (i64.load (i32.add (local.get $src) (i32.const 16))))  ;; source elem_size @ src+16
+  (local.set $vt (i32.and (i32.wrap_i64 (i64.shr_u (i64.load (i32.sub (local.get $src) (i32.const 8))) (i64.const 8))) (i32.const 127)))  ;; source value_type = kind bits 8..14
+  (local.set $result (call $__rt_array_new (local.get $len) (i64.const 16)))  ;; fresh result (16B Mixed-cell slots; first push stamps value_type 7)
+  (local.set $i (i64.const 0))                                       ;; element index = 0
+  (block $end
+    (loop $L
+      (br_if $end (i64.ge_s (local.get $i) (local.get $len)))        ;; i >= len -> done
+      (local.set $slot (i32.add (i32.add (local.get $src) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $i) (local.get $esz)))))  ;; element slot = src+24+i*esz
+      (if (i32.eq (local.get $vt) (i32.const 1))                     ;; string element (value_type 1)
+        (then
+          (local.set $tag (i64.const 1))                            ;; Mixed tag: string (from_value persists a copy)
+          (local.set $lo (i64.load (local.get $slot)))             ;; zero-extended string ptr @ slot+0
+          (local.set $hi (i64.load (i32.add (local.get $slot) (i32.const 8)))))  ;; string length @ slot+8
+        (else
+          (if (i32.eq (local.get $vt) (i32.const 7))                ;; nested Mixed-cell element (value_type 7)
+            (then
+              (local.set $tag (i64.const 7))                       ;; Mixed tag: nested-mixed (from_value increfs the cell)
+              (local.set $lo (i64.load (local.get $slot)))         ;; zero-extended cell ptr @ slot+0
+              (local.set $hi (i64.const 0)))                       ;; hi unused
+            (else
+              (local.set $tag (i64.const 0))                       ;; Mixed tag: int (scalar element)
+              (local.set $lo (i64.load (local.get $slot)))         ;; raw i64 value @ slot+0
+              (local.set $hi (i64.const 0))))))                    ;; hi unused
+      (local.set $argcell (call $__rt_mixed_from_value (local.get $tag) (local.get $lo) (local.get $hi)))  ;; fresh owned Mixed cell for this element
+      (local.set $args1 (call $__rt_array_new (i64.const 1) (i64.const 16)))  ;; 1-slot Mixed-cell arg buffer
+      (local.set $args1 (call $__rt_array_push_mixed (local.get $args1) (local.get $argcell)))  ;; append the cell (stored borrowed; args1 owns it)
+      (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args1)))  ;; invoke the callback -> owned result cell
+      (local.set $result (call $__rt_array_push_mixed (local.get $result) (local.get $rcell)))  ;; append the result cell (result owns it)
+      (call $__rt_decref_any (local.get $args1))                   ;; deep-free the arg buffer (releases argcell, balancing the box)
+      (local.set $i (i64.add (local.get $i) (i64.const 1)))        ;; i++
+      (br $L)))                                                    ;; loop back
+  (local.get $result))                                              ;; return the mapped array<mixed>
+"#;
 
 /// Derives the unified-ladder wrapper symbol for an FCC-of-free-function target
 /// `name`: `__fcc_wrap_<name>`, sanitized through `wasm_fn_symbol`. Distinct from
@@ -2987,6 +3057,271 @@ mod tests {
   (global.get $_gc_live))                                              ;; expect 0 (balanced)
 "#;
         if let Some(o) = run_descriptor_invoke_driver(driver, "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // array_map with a callable descriptor (`__rt_array_map_callable`).
+    // The first two tests drive the runtime helper directly with a hand-stamped FCC
+    // descriptor for `dbl`; the last two lower a real EIR body through `lower_function`
+    // so the `lower_array_map` dispatch + builtin arm are exercised end-to-end.
+    // -------------------------------------------------------------------------
+
+    /// `__rt_array_map_callable` maps `dbl(int)->int` over a value_type-0 source array
+    /// `[21, 10]` and returns a value_type-7 result whose elements are 42 and 20. The
+    /// driver reads BOTH result cells (`res[0]` @ res+24, `res[1]` @ res+40) and folds
+    /// them into `42*100 + 20 = 4220`, so a refcount/aliasing bug that duplicated or
+    /// corrupted a mapped value (the wasm-closure GC test's blind spot) shows as a wrong
+    /// fold, not just a leak. The CORRECTNESS pin for the map loop (analogous to the
+    /// P7d2b "200"!="121" descriptor-invoke pin).
+    #[test]
+    fn array_map_callable_doubles_each_element() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $desc i32) (local $src i32) (local $res i32) (local $c0 i32) (local $c1 i32) (local $v0 i64) (local $v1 i64)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))            ;; FCC descriptor (rc 1)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp kind 6 (callable)
+  (i64.store (local.get $desc) (i64.const 11))                        ;; descriptor kind = 11 (Function)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0 (FCC slot, no closures)
+  (i32.store offset=12 (local.get $desc) (i32.const 0))              ;; capture_count = 0
+  (i32.store offset=16 (local.get $desc) (i32.const 0))              ;; capture_tags_ptr = 0
+  (local.set $src (call $__rt_array_new (i64.const 2) (i64.const 8)))  ;; fresh scalar source array
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 21)))  ;; src[0] = 21
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 10)))  ;; src[1] = 10
+  (local.set $res (call $__rt_array_map_callable (local.get $desc) (local.get $src)))  ;; map dbl over src
+  (local.set $c0 (i32.wrap_i64 (i64.load offset=24 (local.get $res))))  ;; res[0] Mixed cell @ res+24
+  (local.set $v0 (call $__rt_mixed_cast_int (local.get $c0)))         ;; res[0] -> int (expect 42)
+  (local.set $c1 (i32.wrap_i64 (i64.load offset=40 (local.get $res))))  ;; res[1] Mixed cell @ res+40
+  (local.set $v1 (call $__rt_mixed_cast_int (local.get $c1)))         ;; res[1] -> int (expect 20)
+  (i64.add (i64.mul (local.get $v0) (i64.const 100)) (local.get $v1)))  ;; 42*100 + 20 = 4220
+"#;
+        if let Some(o) = run_fcc_driver(dbl_free_fn(), dbl_free_fn_body_wat(), driver, "t") {
+            assert_eq!(o, "4220");
+        }
+    }
+
+    /// The same map, run for refcount balance: after mapping `dbl` over `[21, 10]` the
+    /// driver releases the result array (whose value_type-7 deep free releases each
+    /// mapped cell), the source array, and the FCC descriptor, leaving `_gc_live` at
+    /// "0". A leak guard for the map loop: the per-iteration arg buffer's deep free must
+    /// balance the per-element box, and each result cell must be owned by exactly the
+    /// result array.
+    #[test]
+    fn array_map_callable_balanced_gc() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $desc i32) (local $src i32) (local $res i32)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))            ;; FCC descriptor (rc 1)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp kind 6 (callable)
+  (i64.store (local.get $desc) (i64.const 11))                        ;; descriptor kind = 11 (Function)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0
+  (i32.store offset=12 (local.get $desc) (i32.const 0))              ;; capture_count = 0
+  (i32.store offset=16 (local.get $desc) (i32.const 0))              ;; capture_tags_ptr = 0
+  (local.set $src (call $__rt_array_new (i64.const 2) (i64.const 8)))  ;; fresh scalar source array
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 21)))  ;; src[0] = 21
+  (local.set $src (call $__rt_array_push_int (local.get $src) (i64.const 10)))  ;; src[1] = 10
+  (local.set $res (call $__rt_array_map_callable (local.get $desc) (local.get $src)))  ;; map dbl over src
+  (call $__rt_decref_any (local.get $res))                           ;; release the mapped result (frees each cell)
+  (call $__rt_decref_any (local.get $src))                           ;; release the source array
+  (call $__rt_decref_any (local.get $desc))                          ;; release the FCC descriptor
+  (global.get $_gc_live))                                             ;; expect 0 (balanced)
+"#;
+        if let Some(o) = run_fcc_driver(dbl_free_fn(), dbl_free_fn_body_wat(), driver, "t") {
+            assert_eq!(o, "0");
+        }
+    }
+
+    /// Builds the self-contained EIR `Function` `map_dbl() -> array<mixed>` that
+    /// exercises the full `lower_array_map` path: it creates a first-class callable of
+    /// `dbl` (`FirstClassCallableNew`, Owned kind-6 descriptor), builds an indexed
+    /// `array<int>` `[21, 10]` (`ArrayNew` + `ArrayPush` of int constants), maps it with
+    /// `array_map($f, $arr)` (`Op::BuiltinCall` -> the new `lower_array_map` arm), then
+    /// releases the source array and the descriptor (mirroring `ir_lower`: `array_map`
+    /// borrows the array and releases the FCC temp) and returns the Owned result array.
+    fn map_dbl_via_builtin_fn(
+        dbl_data: crate::ir::DataId,
+        array_map_data: crate::ir::DataId,
+    ) -> Function {
+        let int_arr_ty = PhpType::Array(Box::new(PhpType::Int));
+        let mixed_arr_ty = PhpType::Array(Box::new(PhpType::Mixed));
+        let mut f = Function::new(
+            "map_dbl".to_string(),
+            IrType::Heap(IrHeapKind::Array),
+            mixed_arr_ty.clone(),
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            // $f = dbl(...)  -> kind-6 Function descriptor (Owned).
+            let vf = b
+                .emit(
+                    Op::FirstClassCallableNew,
+                    Vec::new(),
+                    Some(Immediate::Data(dbl_data)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            // $arr = [21, 10]  (array<int>, Owned, capacity 2; ArrayPush shapes it).
+            let arr = b
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(2)),
+                    IrType::Heap(IrHeapKind::Array),
+                    int_arr_ty.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            for v in [21i64, 10i64] {
+                let c = b.emit_const_i64(v);
+                let _ = b.emit(
+                    Op::ArrayPush,
+                    vec![arr, c],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            // $res = array_map($f, $arr)  -> array<mixed> (Owned). The new builtin arm.
+            let res = b
+                .emit(
+                    Op::BuiltinCall,
+                    vec![vf, arr],
+                    Some(Immediate::Data(array_map_data)),
+                    IrType::Heap(IrHeapKind::Array),
+                    mixed_arr_ty.clone(),
+                    Ownership::Owned,
+                )
+                .unwrap();
+            // array_map borrows the source array, so release it after the call; then
+            // release the FCC descriptor temp (mirrors ir_lower's owned-arg releases).
+            let _ = b.emit(
+                Op::Release,
+                vec![arr],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let _ = b.emit(
+                Op::Release,
+                vec![vf],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: Some(res) });
+        }
+        f
+    }
+
+    /// Builds a reactor module with the full runtime surface, the lowered self-contained
+    /// `map_dbl` body (via `lower_function`, so the `lower_array_map` builtin arm and the
+    /// `__rt_array_map_callable` runtime are under test together), the hand-written
+    /// `fn_dbl` body, and the unified closure/FCC dispatch ladder (single FCC entry
+    /// `dbl`). Validates with `wasmparser` and runs `export` under `wasmer`; `None` if
+    /// wasmer is absent (validation always runs).
+    fn run_array_map_lowered_driver(driver: &str, export: &str) -> Option<String> {
+        let mut wm = WatModule::new();
+        wm.set_memory(3, Some("memory"));
+        // The lowered body's prologue references the `$__concat_off` cursor global.
+        super::super::runtime::emit_common_runtime(&mut wm);
+        emit_heap_runtime(&mut wm, 1024, 3 * 65536);
+        emit_refcount_runtime(&mut wm);
+        emit_array_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm);
+        super::super::float::emit_float_runtime(&mut wm, 0x20000);
+        super::super::hashes::emit_hash_runtime(&mut wm);
+        emit_object_runtime(&mut wm);
+        emit_gc_desc_stub(&mut wm);
+        emit_destructor_dispatch_stub(&mut wm);
+        emit_class_metadata_stub(&mut wm);
+        emit_class_runtime(&mut wm);
+        emit_closure_runtime(&mut wm);
+        wm.add_raw_func(dbl_free_fn_body_wat());
+        let mut module = Module::new(Target::wasm());
+        let dbl_data = module.data.intern_string("dbl");
+        let array_map_data = module.data.intern_function_name("array_map");
+        module.functions.push(dbl_free_fn());
+        let body_fn = map_dbl_via_builtin_fn(dbl_data, array_map_data);
+        let fcc_entries = vec!["dbl".to_string()];
+        let body_fb =
+            super::super::function::lower_function(&module, &body_fn, &[], &[], &fcc_entries)
+                .expect("lower array_map body");
+        wm.add_func(body_fb);
+        super::emit_closure_dispatch(&mut wm, &module, &fcc_entries).expect("emit_closure_dispatch");
+        wm.add_raw_func(driver);
+        let wat = wm.render();
+        let bytes = ::wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("WAT did not assemble: {e}\n{wat}"));
+        wasmparser::validate(&bytes)
+            .unwrap_or_else(|e| panic!("wasm did not validate: {e}\n{wat}"));
+        if !wasmer_available() {
+            return None;
+        }
+        let dir = unique_tmp_dir();
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("m.wasm");
+        std::fs::write(&path, &bytes).expect("write wasm");
+        let out = std::process::Command::new("wasmer")
+            .arg("run")
+            .arg("--invoke")
+            .arg(export)
+            .arg(&path)
+            .output()
+            .expect("run wasmer");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "wasmer --invoke {export} failed: {}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            wat
+        );
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// `map_dbl()` lowers `array_map(dbl(...), [21, 10])` through the real
+    /// `Op::BuiltinCall` -> `lower_array_map` dispatch (NOT a hand-written runtime call),
+    /// returning a value_type-7 `array<mixed>` whose cells are 42 and 20. The driver
+    /// reads both cells and folds them into `42*100 + 20 = 4220`. Proves the whole-module
+    /// abort is removed: before this slice, the `array_map` callable arm hit the
+    /// `lower_builtin_call` catch-all -> `WasmError::Unsupported`, which aborts the entire
+    /// WASM module at `function.rs`. The fold pins per-element correctness end-to-end.
+    #[test]
+    fn array_map_lowering_via_builtin_call_returns_4220() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $res i32) (local $c0 i32) (local $c1 i32) (local $v0 i64) (local $v1 i64)
+  (local.set $res (call $fn_map_dbl))                                 ;; res = array_map(dbl(...), [21, 10])
+  (local.set $c0 (i32.wrap_i64 (i64.load offset=24 (local.get $res))))  ;; res[0] Mixed cell @ res+24
+  (local.set $v0 (call $__rt_mixed_cast_int (local.get $c0)))         ;; res[0] -> int (expect 42)
+  (local.set $c1 (i32.wrap_i64 (i64.load offset=40 (local.get $res))))  ;; res[1] Mixed cell @ res+40
+  (local.set $v1 (call $__rt_mixed_cast_int (local.get $c1)))         ;; res[1] -> int (expect 20)
+  (i64.add (i64.mul (local.get $v0) (i64.const 100)) (local.get $v1)))  ;; 42*100 + 20 = 4220
+"#;
+        if let Some(o) = run_array_map_lowered_driver(driver, "t") {
+            assert_eq!(o, "4220");
+        }
+    }
+
+    /// The same lowered `array_map`, run for refcount balance: the body releases the
+    /// source array and the FCC descriptor internally, so the caller owns only the
+    /// result array; releasing it leaves `_gc_live` at "0". A leak guard for the full
+    /// `lower_array_map` + `__rt_array_map_callable` path (no source/descriptor/cell
+    /// leak across the real builtin lowering).
+    #[test]
+    fn array_map_lowering_balanced_gc() {
+        let driver = r#"(func $t (export "t") (result i64)
+  (local $res i32)
+  (local.set $res (call $fn_map_dbl))                                 ;; res = array_map(dbl(...), [21, 10])
+  (call $__rt_decref_any (local.get $res))                           ;; release the mapped result array
+  (global.get $_gc_live))                                             ;; expect 0 (balanced)
+"#;
+        if let Some(o) = run_array_map_lowered_driver(driver, "t") {
             assert_eq!(o, "0");
         }
     }

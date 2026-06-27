@@ -888,8 +888,83 @@ fn lower_builtin_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     match name.as_str() {
         "exit" | "die" => lower_exit(ctx, inst),
         "get_class" => super::classes::lower_get_class(ctx, inst),
+        "array_map" => lower_array_map(ctx, inst),
         other => Err(WasmError::Unsupported(format!("builtin {}", other))),
     }
+}
+
+/// Lowers `array_map($f, $arr)` where operand 0 `$f` is a `Callable` descriptor
+/// (a closure or a free-function first-class callable) and operand 1 `$arr` is an
+/// INDEXED `array<int|str|mixed>`, into a `__rt_array_map_callable` runtime call
+/// returning a fresh `array<mixed>` of the mapped results. The WASM analogue of the
+/// native `lower_array_map_descriptor_callback`.
+///
+/// Both operands are materialized BORROWED: neither is released here. The EIR owns
+/// operands 0 and 1 and releases them at the call site (the source array is borrowed
+/// by `array_map`, the descriptor is released after). The runtime returns an Owned
+/// array pointer, stored via `store_result`.
+///
+/// Deferred (returns `Unsupported`, never miscompiled — mirroring the deferral
+/// pattern in `closures::lower_callable_descriptor_invoke`): a string/array/object
+/// callback (operand 0 not `Callable`); a hash/assoc or otherwise non-indexed source
+/// (operand 1 not `Heap(Array)`); and the multi-array zip / 3-arg `array_map(null, …)`
+/// shapes (operand count != 2), which need a different runtime contract.
+fn lower_array_map(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    // Single callback + single source only. A 3+-operand array_map (multi-array zip
+    // or array_map(null, ...)) needs a different runtime contract and is deferred.
+    if inst.operands.len() != 2 {
+        return Err(WasmError::Unsupported(format!(
+            "array_map with {} operands on wasm32-wasi (only single callback + single \
+             indexed array supported; multi-array/null-callback deferred)",
+            inst.operands.len()
+        )));
+    }
+    let callable = operand(inst, 0)?;
+    let array = operand(inst, 1)?;
+
+    // GUARD: operand 0 must be a Callable descriptor (closure or free-fn FCC). A
+    // string/array/object callback would not be an i64 descriptor and needs its own
+    // runtime callback selection (deferred slice).
+    let callable_php = ctx.value_php_type(callable)?.codegen_repr();
+    if !matches!(callable_php, PhpType::Callable) {
+        return Err(WasmError::Unsupported(format!(
+            "array_map with a {:?} callback on wasm32-wasi (only Callable descriptors \
+             supported; string/array/object callbacks deferred)",
+            callable_php
+        )));
+    }
+    // GUARD: operand 1 must be an INDEXED array (value_type 0/1/7 = int/string/mixed-cell).
+    // A HashNew assoc source has a different layout the runtime helper cannot read.
+    let array_ir = ctx.function.value(array).map(|v| v.ir_type);
+    if !matches!(array_ir, Some(IrType::Heap(IrHeapKind::Array))) {
+        return Err(WasmError::Unsupported(format!(
+            "array_map over a {:?} source on wasm32-wasi (only indexed array<int|str|mixed> \
+             supported; hash/assoc sources deferred)",
+            array_ir
+        )));
+    }
+
+    // operand 0: callable descriptor (i64) -> i32 for __rt_array_map_callable.
+    let desc = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(callable)?;
+    ctx.fb.ins("i32.wrap_i64", "callable descriptor i64 -> i32");
+    ctx.fb.ins(&format!("local.set {}", desc), "save descriptor pointer");
+
+    // operand 1: the indexed source array (a single i32 pointer).
+    let src = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(array)?;
+    ctx.fb.ins(&format!("local.set {}", src), "save source array pointer");
+
+    // __rt_array_map_callable(desc, src) -> i32 result array pointer (Owned). Neither
+    // operand is released here: the EIR owns/releases operands 0 and 1 at the call site.
+    ctx.fb.ins(
+        &format!(
+            "(call $__rt_array_map_callable (local.get {}) (local.get {}))",
+            desc, src
+        ),
+        "map each element through the callback into a fresh array<mixed>",
+    );
+    store_result(ctx, inst)
 }
 
 /// Lowers `exit`/`die`: an integer argument becomes the WASI exit status; any
