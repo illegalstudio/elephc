@@ -158,6 +158,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
     static_methods.insert("sm".to_string(), method_sig);
     ClassInfo {
         class_id: 1,
+        declaration_span: crate::span::Span::dummy(),
         parent: None,
         is_abstract: false,
         is_final: false,

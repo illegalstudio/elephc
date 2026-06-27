@@ -69,6 +69,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionAttribute".to_string(),
         FlattenedClass {
             name: "ReflectionAttribute".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: Vec::new(),
             is_abstract: false,
@@ -729,6 +730,7 @@ fn builtin_reflection_class_new_instance_without_constructor_method() -> ClassMe
 fn builtin_reflection_class() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionClass".to_string(),
+        span: crate::span::Span::dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -3150,6 +3152,7 @@ fn builtin_reflection_owner_class(
     methods.push(builtin_reflection_owner_get_attributes_method());
     FlattenedClass {
         name: name.to_string(),
+        span: crate::span::Span::dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -3835,6 +3838,7 @@ fn builtin_reflection_parameter_class() -> FlattenedClass {
     ];
     FlattenedClass {
         name: "ReflectionParameter".to_string(),
+        span: crate::span::Span::dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -4164,6 +4168,7 @@ fn builtin_reflection_named_type_class() -> FlattenedClass {
     ];
     FlattenedClass {
         name: "ReflectionNamedType".to_string(),
+        span: crate::span::Span::dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -4212,6 +4217,7 @@ fn builtin_reflection_union_type_class() -> FlattenedClass {
     ];
     FlattenedClass {
         name: "ReflectionUnionType".to_string(),
+        span: crate::span::Span::dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,
@@ -4260,6 +4266,7 @@ fn builtin_reflection_intersection_type_class() -> FlattenedClass {
     ];
     FlattenedClass {
         name: "ReflectionIntersectionType".to_string(),
+        span: crate::span::Span::dummy(),
         extends: None,
         implements: Vec::new(),
         is_abstract: false,

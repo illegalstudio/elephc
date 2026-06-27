@@ -257,6 +257,7 @@ pub(crate) fn build_enum_info(
         user_constants,
         used_traits,
         trait_aliases,
+        span,
         checker,
         next_class_id,
     )
@@ -279,6 +280,7 @@ pub(crate) fn insert_enum_metadata(
     user_constants: &[crate::parser::ast::ClassConst],
     used_traits: &[String],
     trait_aliases: &[(String, String)],
+    declaration_span: crate::span::Span,
     checker: &mut Checker,
     next_class_id: &mut u64,
 ) -> Result<(), CompileError> {
@@ -442,6 +444,7 @@ pub(crate) fn insert_enum_metadata(
         name.to_string(),
         ClassInfo {
             class_id: *next_class_id,
+            declaration_span,
             parent: None,
             is_abstract: false,
             is_final: true,

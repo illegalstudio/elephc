@@ -37,6 +37,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "RegexIterator".to_string(),
         FlattenedClass {
             name: "RegexIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("FilterIterator".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -55,6 +56,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "RecursiveRegexIterator".to_string(),
         FlattenedClass {
             name: "RecursiveRegexIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("RegexIterator".to_string()),
             implements: vec!["RecursiveIterator".to_string()],
             is_abstract: false,

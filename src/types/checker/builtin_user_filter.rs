@@ -37,6 +37,7 @@ pub(crate) fn inject_builtin_user_filter(
         "php_user_filter".to_string(),
         FlattenedClass {
             name: "php_user_filter".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: Vec::new(),
             is_abstract: false,

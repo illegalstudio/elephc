@@ -127,6 +127,7 @@ impl ClassBuildState {
             .collect();
         Ok(ClassInfo {
             class_id,
+            declaration_span: class.span,
             parent: class.extends.clone(),
             is_abstract: class.is_abstract,
             is_final: class.is_final,

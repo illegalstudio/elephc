@@ -29,6 +29,9 @@ const EVAL_REFLECTION_CLASS_FLAG_INTERNAL: u64 = 256;
 const EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED: u64 = 512;
 const EVAL_REFLECTION_CLASS_FLAG_ITERABLE: u64 = 1024;
 const EVAL_REFLECTION_CLASS_FLAG_ANONYMOUS: u64 = 2048;
+const EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK: u64 = 0x00ff_ffff;
+const EVAL_REFLECTION_CLASS_SOURCE_START_SHIFT: u64 = 16;
+const EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT: u64 = 40;
 const EVAL_REFLECTION_MEMBER_FLAG_STATIC: u64 = 1;
 const EVAL_REFLECTION_MEMBER_FLAG_PUBLIC: u64 = 2;
 const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED: u64 = 4;
@@ -433,16 +436,47 @@ pub(in crate::interpreter) fn eval_reflection_class_source_location_result(
     let Some(reflected_name) = context.eval_reflection_class_name(identity) else {
         return Ok(None);
     };
-    let source_location = eval_reflection_class_like_attributes(reflected_name, context)
-        .and_then(|metadata| metadata.source_location);
+    let (source_file, source_location) =
+        if let Some(metadata) = eval_reflection_class_like_attributes(reflected_name, context) {
+            (None, metadata.source_location)
+        } else {
+            eval_reflection_aot_class_source_metadata(reflected_name, values)?
+        };
     eval_reflection_source_location_result(
         method_key.as_str(),
-        None,
+        source_file.as_deref(),
         source_location,
         evaluated_args,
         context,
         values,
     )
+}
+
+/// Returns AOT source-file and line metadata for a generated ReflectionClass.
+fn eval_reflection_aot_class_source_metadata(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(Option<String>, Option<EvalSourceLocation>), EvalStatus> {
+    let Some(flags) = values.reflection_class_flags(class_name.trim_start_matches('\\'))? else {
+        return Ok((None, None));
+    };
+    let Some(source_location) = eval_reflection_aot_class_source_location_from_flags(flags) else {
+        return Ok((None, None));
+    };
+    let Some(source_file) = values.reflection_source_file()? else {
+        return Ok((None, None));
+    };
+    Ok((Some(source_file), Some(source_location)))
+}
+
+/// Decodes AOT ReflectionClass source lines packed into high flag bits.
+fn eval_reflection_aot_class_source_location_from_flags(flags: u64) -> Option<EvalSourceLocation> {
+    let start_line = ((flags >> EVAL_REFLECTION_CLASS_SOURCE_START_SHIFT)
+        & EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK) as i64;
+    let end_line = ((flags >> EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT)
+        & EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK) as i64;
+    (start_line > 0 && end_line >= start_line)
+        .then(|| EvalSourceLocation::new(start_line, end_line))
 }
 
 /// Handles eval-backed `ReflectionClass` scalar metadata methods.

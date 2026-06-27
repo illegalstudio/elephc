@@ -22,6 +22,9 @@ use super::instanceof::{escaped_ascii, escaped_bytes};
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
 const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
 const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
+const EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK: u64 = 0x00ff_ffff;
+const EVAL_REFLECTION_CLASS_SOURCE_START_SHIFT: u64 = 16;
+const EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT: u64 = 40;
 const EVAL_REFLECTION_PROPERTY_FLAG_STATIC: u64 = 1;
 const EVAL_REFLECTION_PROPERTY_FLAG_PUBLIC: u64 = 2;
 const EVAL_REFLECTION_PROPERTY_FLAG_PROTECTED: u64 = 4;
@@ -1253,6 +1256,14 @@ fn eval_reflection_class_flags(class_info: &ClassInfo) -> u64 {
     if class_info.is_readonly_class {
         flags |= EVAL_REFLECTION_CLASS_FLAG_READONLY;
     }
+    let Ok(start_line) = u64::try_from(class_info.declaration_span.line) else {
+        return flags;
+    };
+    if start_line == 0 || start_line > EVAL_REFLECTION_CLASS_SOURCE_LINE_MASK {
+        return flags;
+    }
+    flags |= (start_line << EVAL_REFLECTION_CLASS_SOURCE_START_SHIFT)
+        | (start_line << EVAL_REFLECTION_CLASS_SOURCE_END_SHIFT);
     flags
 }
 
@@ -2080,6 +2091,7 @@ mod tests {
 
         ClassInfo {
             class_id,
+            declaration_span: crate::span::Span::dummy(),
             parent: None,
             is_abstract: false,
             is_final: false,

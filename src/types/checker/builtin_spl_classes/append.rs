@@ -25,6 +25,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "AppendIterator".to_string(),
         FlattenedClass {
             name: "AppendIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("IteratorIterator".to_string()),
             implements: Vec::new(),
             is_abstract: false,

@@ -30,6 +30,7 @@ fn insert_phar_like_class(class_map: &mut HashMap<String, FlattenedClass>, name:
         name.to_string(),
         FlattenedClass {
             name: name.to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec![
                 "ArrayAccess".to_string(),
@@ -55,6 +56,7 @@ fn insert_phar_file_info_class(class_map: &mut HashMap<String, FlattenedClass>) 
         "PharFileInfo".to_string(),
         FlattenedClass {
             name: "PharFileInfo".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("SplFileInfo".to_string()),
             implements: Vec::new(),
             is_abstract: false,

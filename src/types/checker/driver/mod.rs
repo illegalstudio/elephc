@@ -457,6 +457,7 @@ fn flatten_enum_methods(
             }
             let mut flattened = FlattenedClass {
                 name: name.clone(),
+                span: stmt.span,
                 extends: None,
                 implements: implements
                     .iter()

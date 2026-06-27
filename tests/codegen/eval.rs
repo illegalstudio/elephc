@@ -12322,6 +12322,31 @@ echo $function->getStartLine(); echo ":"; echo $function->getEndLine();');
     assert_eq!(out, "F:1:5:2:4:6:8");
 }
 
+/// Verifies eval ReflectionClass exposes generated/AOT source-location metadata.
+#[test]
+fn test_eval_reflection_aot_class_source_locations() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotReflectClassSourceE2E {
+    public function run() { return 1; }
+}
+enum EvalAotReflectEnumSourceE2E { case One; }
+echo eval('$class = new ReflectionClass("EvalAotReflectClassSourceE2E");
+echo $class->getFileName() === false ? "f" : "F"; echo ":";
+echo $class->getStartLine(); echo ":"; echo $class->getEndLine(); echo ":";
+$enum = new ReflectionClass("EvalAotReflectEnumSourceE2E");
+echo $enum->getFileName() === false ? "f" : "F"; echo ":";
+echo $enum->getStartLine(); echo ":"; echo $enum->getEndLine();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "F:2:2:F:5:5");
+}
+
 /// Verifies eval ReflectionMethod exposes generated/AOT source-location metadata.
 #[test]
 fn test_eval_reflection_aot_method_source_locations() {

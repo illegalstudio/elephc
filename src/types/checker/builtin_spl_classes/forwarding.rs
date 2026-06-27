@@ -23,6 +23,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "IteratorIterator".to_string(),
         FlattenedClass {
             name: "IteratorIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: None,
             implements: vec!["OuterIterator".to_string()],
             is_abstract: false,
@@ -41,6 +42,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "LimitIterator".to_string(),
         FlattenedClass {
             name: "LimitIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("IteratorIterator".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -59,6 +61,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "NoRewindIterator".to_string(),
         FlattenedClass {
             name: "NoRewindIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("IteratorIterator".to_string()),
             implements: Vec::new(),
             is_abstract: false,
@@ -77,6 +80,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "InfiniteIterator".to_string(),
         FlattenedClass {
             name: "InfiniteIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("IteratorIterator".to_string()),
             implements: Vec::new(),
             is_abstract: false,

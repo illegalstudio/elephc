@@ -23,6 +23,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "FilterIterator".to_string(),
         FlattenedClass {
             name: "FilterIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("IteratorIterator".to_string()),
             implements: Vec::new(),
             is_abstract: true,
@@ -41,6 +42,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         "CallbackFilterIterator".to_string(),
         FlattenedClass {
             name: "CallbackFilterIterator".to_string(),
+            span: crate::span::Span::dummy(),
             extends: Some("FilterIterator".to_string()),
             implements: Vec::new(),
             is_abstract: false,
