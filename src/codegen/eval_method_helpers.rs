@@ -29,6 +29,7 @@ use super::eval_ref_arg_helpers::{
     eval_normalized_ref_params, eval_ref_arg_slots, eval_signature_ref_params_supported,
     emit_aarch64_write_back_ref_args, emit_x86_64_write_back_ref_args,
 };
+use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 
 /// Method metadata needed by eval method-call bridge dispatch.
 #[derive(Clone)]
@@ -90,6 +91,7 @@ pub(super) fn emit_eval_method_helpers(
     module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     if !module_uses_eval(module) {
         return;
@@ -97,8 +99,15 @@ pub(super) fn emit_eval_method_helpers(
     let slots = collect_eval_method_slots(module);
     let static_slots = collect_eval_static_method_slots(module);
     let builtin_throwable_class_ids = collect_builtin_throwable_method_class_ids(module);
-    emit_method_call_helper(module, emitter, data, &slots, &builtin_throwable_class_ids);
-    emit_static_method_call_helper(module, emitter, data, &static_slots);
+    emit_method_call_helper(
+        module,
+        emitter,
+        data,
+        &slots,
+        &builtin_throwable_class_ids,
+        callable_support,
+    );
+    emit_static_method_call_helper(module, emitter, data, &static_slots, callable_support);
 }
 
 /// Returns true when the EIR module contains a function that can call eval.
@@ -378,6 +387,7 @@ fn method_param_supported(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
+            | PhpType::Callable
             | PhpType::TaggedScalar
             | PhpType::Mixed
             | PhpType::Iterable
@@ -396,6 +406,7 @@ fn method_return_supported(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
+            | PhpType::Callable
             | PhpType::TaggedScalar
             | PhpType::Mixed
             | PhpType::Union(_)
@@ -413,16 +424,31 @@ fn emit_method_call_helper(
     data: &mut DataSection,
     slots: &[EvalMethodSlot],
     builtin_throwable_class_ids: &[u64],
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     emitter.blank();
     emitter.comment("--- eval bridge: user method call ---");
     label_c_global(module, emitter, "__elephc_eval_value_method_call");
     match module.target.arch {
         Arch::AArch64 => {
-            emit_method_call_aarch64(module, emitter, data, slots, builtin_throwable_class_ids)
+            emit_method_call_aarch64(
+                module,
+                emitter,
+                data,
+                slots,
+                builtin_throwable_class_ids,
+                callable_support,
+            )
         }
         Arch::X86_64 => {
-            emit_method_call_x86_64(module, emitter, data, slots, builtin_throwable_class_ids)
+            emit_method_call_x86_64(
+                module,
+                emitter,
+                data,
+                slots,
+                builtin_throwable_class_ids,
+                callable_support,
+            )
         }
     }
 }
@@ -433,13 +459,18 @@ fn emit_static_method_call_helper(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalStaticMethodSlot],
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     emitter.blank();
     emitter.comment("--- eval bridge: user static method call ---");
     label_c_global(module, emitter, "__elephc_eval_value_static_method_call");
     match module.target.arch {
-        Arch::AArch64 => emit_static_method_call_aarch64(module, emitter, data, slots),
-        Arch::X86_64 => emit_static_method_call_x86_64(module, emitter, data, slots),
+        Arch::AArch64 => {
+            emit_static_method_call_aarch64(module, emitter, data, slots, callable_support)
+        }
+        Arch::X86_64 => {
+            emit_static_method_call_x86_64(module, emitter, data, slots, callable_support)
+        }
     }
 }
 
@@ -449,6 +480,7 @@ fn emit_static_method_call_aarch64(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalStaticMethodSlot],
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     let fail_label = "__elephc_eval_value_static_method_call_fail";
     let done_label = "__elephc_eval_value_static_method_call_done";
@@ -464,7 +496,15 @@ fn emit_static_method_call_aarch64(
     emitter.instruction("str x6, [sp, #48]");                                   // save the active eval class-scope length
     emit_aarch64_static_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("b {}", fail_label));                          // no supported static method matched the request
-    emit_aarch64_static_method_bodies(module, emitter, data, slots, done_label, fail_label);
+    emit_aarch64_static_method_bodies(
+        module,
+        emitter,
+        data,
+        slots,
+        done_label,
+        fail_label,
+        callable_support,
+    );
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
@@ -479,6 +519,7 @@ fn emit_static_method_call_x86_64(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalStaticMethodSlot],
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     let fail_label = "__elephc_eval_value_static_method_call_fail_x";
     let done_label = "__elephc_eval_value_static_method_call_done_x";
@@ -495,7 +536,15 @@ fn emit_static_method_call_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the active eval class-scope length
     emit_x86_64_static_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported static method matched the request
-    emit_x86_64_static_method_bodies(module, emitter, data, slots, done_label, fail_label);
+    emit_x86_64_static_method_bodies(
+        module,
+        emitter,
+        data,
+        slots,
+        done_label,
+        fail_label,
+        callable_support,
+    );
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
@@ -511,6 +560,7 @@ fn emit_method_call_aarch64(
     data: &mut DataSection,
     slots: &[EvalMethodSlot],
     builtin_throwable_class_ids: &[u64],
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     let fail_label = "__elephc_eval_value_method_call_fail";
     let done_label = "__elephc_eval_value_method_call_done";
@@ -536,7 +586,15 @@ fn emit_method_call_aarch64(
     emit_aarch64_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("b {}", fail_label));                          // no supported method matched the request
     emit_aarch64_builtin_throwable_method_bodies(module, emitter, done_label, fail_label);
-    emit_aarch64_method_bodies(module, emitter, data, slots, done_label, fail_label);
+    emit_aarch64_method_bodies(
+        module,
+        emitter,
+        data,
+        slots,
+        done_label,
+        fail_label,
+        callable_support,
+    );
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
@@ -552,6 +610,7 @@ fn emit_method_call_x86_64(
     data: &mut DataSection,
     slots: &[EvalMethodSlot],
     builtin_throwable_class_ids: &[u64],
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     let fail_label = "__elephc_eval_value_method_call_fail_x";
     let done_label = "__elephc_eval_value_method_call_done_x";
@@ -579,7 +638,15 @@ fn emit_method_call_x86_64(
     emit_x86_64_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported method matched the request
     emit_x86_64_builtin_throwable_method_bodies(module, emitter, done_label, fail_label);
-    emit_x86_64_method_bodies(module, emitter, data, slots, done_label, fail_label);
+    emit_x86_64_method_bodies(
+        module,
+        emitter,
+        data,
+        slots,
+        done_label,
+        fail_label,
+        callable_support,
+    );
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
@@ -1088,12 +1155,20 @@ fn emit_aarch64_method_bodies(
     slots: &[EvalMethodSlot],
     done_label: &str,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     for slot in slots {
         emitter.label(&method_body_label(module, slot));
         emit_aarch64_validate_method_arg_count(module, emitter, slot, fail_label);
         let (overflow_bytes, ref_slots) =
-            emit_aarch64_prepare_method_args(module, emitter, data, slot, fail_label);
+            emit_aarch64_prepare_method_args(
+                module,
+                emitter,
+                data,
+                slot,
+                fail_label,
+                callable_support,
+            );
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
@@ -1122,12 +1197,20 @@ fn emit_x86_64_method_bodies(
     slots: &[EvalMethodSlot],
     done_label: &str,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     for slot in slots {
         emitter.label(&method_body_label(module, slot));
         emit_x86_64_validate_method_arg_count(module, emitter, slot, fail_label);
         let (overflow_bytes, ref_slots) =
-            emit_x86_64_prepare_method_args(module, emitter, data, slot, fail_label);
+            emit_x86_64_prepare_method_args(
+                module,
+                emitter,
+                data,
+                slot,
+                fail_label,
+                callable_support,
+            );
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
@@ -1156,12 +1239,20 @@ fn emit_aarch64_static_method_bodies(
     slots: &[EvalStaticMethodSlot],
     done_label: &str,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     for slot in slots {
         emitter.label(&static_method_body_label(module, slot));
         emit_aarch64_validate_static_method_arg_count(module, emitter, slot, fail_label);
         let (overflow_bytes, ref_slots) =
-            emit_aarch64_prepare_static_method_args(module, emitter, data, slot, fail_label);
+            emit_aarch64_prepare_static_method_args(
+                module,
+                emitter,
+                data,
+                slot,
+                fail_label,
+                callable_support,
+            );
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
@@ -1189,12 +1280,20 @@ fn emit_x86_64_static_method_bodies(
     slots: &[EvalStaticMethodSlot],
     done_label: &str,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     for slot in slots {
         emitter.label(&static_method_body_label(module, slot));
         emit_x86_64_validate_static_method_arg_count(module, emitter, slot, fail_label);
         let (overflow_bytes, ref_slots) =
-            emit_x86_64_prepare_static_method_args(module, emitter, data, slot, fail_label);
+            emit_x86_64_prepare_static_method_args(
+                module,
+                emitter,
+                data,
+                slot,
+                fail_label,
+                callable_support,
+            );
         let caller_stack_pad_bytes =
             abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
         abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
@@ -1281,6 +1380,7 @@ fn emit_aarch64_prepare_method_args(
     data: &mut DataSection,
     slot: &EvalMethodSlot,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) -> (usize, Vec<EvalRefArgSlot>) {
     let body_label = method_body_label(module, slot);
     let ref_slots = emit_aarch64_ref_arg_cells(
@@ -1292,6 +1392,7 @@ fn emit_aarch64_prepare_method_args(
         24,
         &body_label,
         fail_label,
+        callable_support,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
@@ -1309,7 +1410,15 @@ fn emit_aarch64_prepare_method_args(
         } else {
             emit_aarch64_load_eval_arg(module, emitter, index, 24);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_aarch64_cast_eval_arg(module, emitter, data, param_ty, &label_prefix, fail_label);
+            emit_aarch64_cast_eval_arg(
+                module,
+                emitter,
+                data,
+                param_ty,
+                &label_prefix,
+                fail_label,
+                callable_support,
+            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1333,6 +1442,7 @@ fn emit_aarch64_prepare_static_method_args(
     data: &mut DataSection,
     slot: &EvalStaticMethodSlot,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) -> (usize, Vec<EvalRefArgSlot>) {
     let body_label = static_method_body_label(module, slot);
     let ref_slots = emit_aarch64_ref_arg_cells(
@@ -1344,6 +1454,7 @@ fn emit_aarch64_prepare_static_method_args(
         40,
         &body_label,
         fail_label,
+        callable_support,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     abi::emit_load_int_immediate(emitter, "x0", slot.class_id as i64);
@@ -1360,7 +1471,15 @@ fn emit_aarch64_prepare_static_method_args(
         } else {
             emit_aarch64_load_eval_arg(module, emitter, index, 40);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_aarch64_cast_eval_arg(module, emitter, data, param_ty, &label_prefix, fail_label);
+            emit_aarch64_cast_eval_arg(
+                module,
+                emitter,
+                data,
+                param_ty,
+                &label_prefix,
+                fail_label,
+                callable_support,
+            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1375,6 +1494,7 @@ fn emit_x86_64_prepare_method_args(
     data: &mut DataSection,
     slot: &EvalMethodSlot,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) -> (usize, Vec<EvalRefArgSlot>) {
     let body_label = method_body_label(module, slot);
     let ref_slots = emit_x86_64_ref_arg_cells(
@@ -1385,6 +1505,7 @@ fn emit_x86_64_prepare_method_args(
         &slot.ref_params,
         &body_label,
         fail_label,
+        callable_support,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
@@ -1402,7 +1523,15 @@ fn emit_x86_64_prepare_method_args(
         } else {
             emit_x86_64_load_eval_arg(module, emitter, index);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_x86_64_cast_eval_arg(module, emitter, data, param_ty, &label_prefix, fail_label);
+            emit_x86_64_cast_eval_arg(
+                module,
+                emitter,
+                data,
+                param_ty,
+                &label_prefix,
+                fail_label,
+                callable_support,
+            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1426,6 +1555,7 @@ fn emit_x86_64_prepare_static_method_args(
     data: &mut DataSection,
     slot: &EvalStaticMethodSlot,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) -> (usize, Vec<EvalRefArgSlot>) {
     let body_label = static_method_body_label(module, slot);
     let ref_slots = emit_x86_64_ref_arg_cells(
@@ -1436,6 +1566,7 @@ fn emit_x86_64_prepare_static_method_args(
         &slot.ref_params,
         &body_label,
         fail_label,
+        callable_support,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     abi::emit_load_int_immediate(emitter, "rax", slot.class_id as i64);
@@ -1452,7 +1583,15 @@ fn emit_x86_64_prepare_static_method_args(
         } else {
             emit_x86_64_load_eval_arg(module, emitter, index);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_x86_64_cast_eval_arg(module, emitter, data, param_ty, &label_prefix, fail_label);
+            emit_x86_64_cast_eval_arg(
+                module,
+                emitter,
+                data,
+                param_ty,
+                &label_prefix,
+                fail_label,
+                callable_support,
+            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1498,6 +1637,7 @@ fn emit_aarch64_ref_arg_cells(
     arg_array_frame_offset: usize,
     label_prefix: &str,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) -> Vec<EvalRefArgSlot> {
     let ref_slots = eval_ref_arg_slots(param_types, ref_params, false);
     for slot in &ref_slots {
@@ -1516,6 +1656,7 @@ fn emit_aarch64_ref_arg_cells(
                 &slot.param_ty,
                 &arg_label,
                 fail_label,
+                callable_support,
             );
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
@@ -1532,6 +1673,7 @@ fn emit_x86_64_ref_arg_cells(
     ref_params: &[bool],
     label_prefix: &str,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) -> Vec<EvalRefArgSlot> {
     let ref_slots = eval_ref_arg_slots(param_types, ref_params, false);
     for slot in &ref_slots {
@@ -1550,6 +1692,7 @@ fn emit_x86_64_ref_arg_cells(
                 &slot.param_ty,
                 &arg_label,
                 fail_label,
+                callable_support,
             );
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
@@ -1626,6 +1769,7 @@ fn emit_aarch64_cast_eval_arg(
     param_ty: &PhpType,
     label_prefix: &str,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     match param_ty.codegen_repr() {
         PhpType::Int => {
@@ -1643,6 +1787,16 @@ fn emit_aarch64_cast_eval_arg(
         PhpType::Str => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for string coercion
             emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval argument to a PHP string pair in x1/x2
+        }
+        PhpType::Callable => {
+            super::eval_callable_helpers::emit_aarch64_cast_eval_callable_arg(
+                module,
+                emitter,
+                data,
+                callable_support,
+                label_prefix,
+                fail_label,
+            );
         }
         PhpType::TaggedScalar => {
             emit_aarch64_cast_eval_tagged_scalar_arg(emitter, label_prefix);
@@ -1781,6 +1935,7 @@ fn emit_x86_64_cast_eval_arg(
     param_ty: &PhpType,
     label_prefix: &str,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     match param_ty.codegen_repr() {
         PhpType::Int => {
@@ -1798,6 +1953,16 @@ fn emit_x86_64_cast_eval_arg(
         PhpType::Str => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for string coercion
             emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval argument to a PHP string pair
+        }
+        PhpType::Callable => {
+            super::eval_callable_helpers::emit_x86_64_cast_eval_callable_arg(
+                module,
+                emitter,
+                data,
+                callable_support,
+                label_prefix,
+                fail_label,
+            );
         }
         PhpType::TaggedScalar => {
             emit_x86_64_cast_eval_tagged_scalar_arg(emitter, label_prefix);

@@ -15,6 +15,7 @@ use crate::codegen::{
     emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, runtime,
     runtime_value_tag,
 };
+use crate::codegen::context::Context as LegacyContext;
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
 };
@@ -26,7 +27,9 @@ use crate::ir::{
 use crate::names::{
     function_symbol, ir_global_symbol, method_symbol, php_symbol_key, static_method_symbol,
 };
-use crate::types::{callable_wrapper_sig, first_class_callable_builtin_sig, FunctionSig, PhpType};
+use crate::types::{
+    callable_wrapper_sig, first_class_callable_builtin_sig, ExternFunctionSig, FunctionSig, PhpType,
+};
 
 use super::context::FunctionContext;
 use super::function_variants;
@@ -1577,6 +1580,52 @@ fn emit_runtime_call_wrapper_inline(
     )?;
     ctx.emitter.label(&done_label);
     Ok(label)
+}
+
+/// Builds the legacy metadata context needed by reused descriptor-invoker emitters.
+pub(crate) fn legacy_context_from_eir_module(module: &crate::ir::Module) -> LegacyContext {
+    let mut ctx = LegacyContext::new();
+    for function in module
+        .functions
+        .iter()
+        .filter(|function| !is_property_init_thunk_function(function))
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+    {
+        ctx.functions
+            .insert(function.name.clone(), function_signature_from_eir(function));
+    }
+    ctx.function_variant_groups = super::function_variants::collect_dispatch_groups(module)
+        .into_iter()
+        .map(|group| group.name)
+        .collect();
+    ctx.callable_param_sigs = module.callable_param_sigs.clone();
+    for decl in &module.extern_decls {
+        ctx.extern_functions.insert(
+            decl.name.clone(),
+            ExternFunctionSig {
+                name: decl.name.clone(),
+                params: decl
+                    .params
+                    .iter()
+                    .map(|param| (param.name.clone(), param.php_type.clone()))
+                    .collect(),
+                return_type: decl.return_php_type.clone(),
+                library: decl.link_libs.first().cloned(),
+            },
+        );
+    }
+    ctx.classes = module.class_infos.clone();
+    ctx.interfaces = module.interface_infos.clone();
+    ctx.enums = module.enum_infos.clone();
+    ctx.packed_classes = module.packed_class_infos.clone();
+    ctx.extern_classes = module.extern_class_infos.clone();
+    ctx
+}
+
+/// Returns true for synthetic property-default init thunks, which are not PHP callables.
+fn is_property_init_thunk_function(function: &crate::ir::Function) -> bool {
+    function.name.starts_with("_class_propinit_")
 }
 
 /// Builds the EIR body for a PHP-ABI wrapper around a builtin or extern call.

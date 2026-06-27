@@ -31,6 +31,7 @@ use super::eval_ref_arg_helpers::{
     eval_normalized_ref_params, eval_ref_arg_slots, eval_signature_ref_params_supported,
     emit_aarch64_write_back_ref_args, emit_x86_64_write_back_ref_args,
 };
+use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 
 const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "Error",
@@ -75,13 +76,21 @@ pub(super) fn emit_eval_constructor_helpers(
     module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     if !module_uses_eval(module) {
         return;
     }
     let slots = collect_eval_constructor_slots(module);
     let builtin_throwable_class_ids = collect_builtin_throwable_constructor_class_ids(module);
-    emit_constructor_helper(module, emitter, data, &slots, &builtin_throwable_class_ids);
+    emit_constructor_helper(
+        module,
+        emitter,
+        data,
+        &slots,
+        &builtin_throwable_class_ids,
+        callable_support,
+    );
 }
 
 /// Returns true when the EIR module contains a function that can call eval.
@@ -252,6 +261,7 @@ fn constructor_param_supported(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
+            | PhpType::Callable
             | PhpType::TaggedScalar
             | PhpType::Mixed
             | PhpType::Iterable
@@ -268,16 +278,31 @@ fn emit_constructor_helper(
     data: &mut DataSection,
     slots: &[EvalConstructorSlot],
     builtin_throwable_class_ids: &[u64],
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     emitter.blank();
     emitter.comment("--- eval bridge: user constructor call ---");
     label_c_global(module, emitter, "__elephc_eval_value_construct_object");
     match module.target.arch {
         Arch::AArch64 => {
-            emit_constructor_aarch64(module, emitter, data, slots, builtin_throwable_class_ids)
+            emit_constructor_aarch64(
+                module,
+                emitter,
+                data,
+                slots,
+                builtin_throwable_class_ids,
+                callable_support,
+            )
         }
         Arch::X86_64 => {
-            emit_constructor_x86_64(module, emitter, data, slots, builtin_throwable_class_ids)
+            emit_constructor_x86_64(
+                module,
+                emitter,
+                data,
+                slots,
+                builtin_throwable_class_ids,
+                callable_support,
+            )
         }
     }
 }
@@ -289,6 +314,7 @@ fn emit_constructor_aarch64(
     data: &mut DataSection,
     slots: &[EvalConstructorSlot],
     builtin_throwable_class_ids: &[u64],
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     let success_label = "__elephc_eval_value_construct_success";
     let fail_label = "__elephc_eval_value_construct_fail";
@@ -307,11 +333,21 @@ fn emit_constructor_aarch64(
     emit_aarch64_builtin_throwable_constructor_dispatch(
         module,
         emitter,
+        data,
         builtin_throwable_class_ids,
         fail_label,
         success_label,
+        callable_support,
     );
-    emit_aarch64_constructor_dispatch(module, emitter, data, slots, fail_label, success_label);
+    emit_aarch64_constructor_dispatch(
+        module,
+        emitter,
+        data,
+        slots,
+        fail_label,
+        success_label,
+        callable_support,
+    );
     emitter.instruction(&format!("b {}", success_label));                       // no constructor metadata matched this class id
     emitter.label(fail_label);
     emitter.instruction("mov x0, #0");                                          // report constructor dispatch failure to Rust
@@ -331,6 +367,7 @@ fn emit_constructor_x86_64(
     data: &mut DataSection,
     slots: &[EvalConstructorSlot],
     builtin_throwable_class_ids: &[u64],
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     let success_label = "__elephc_eval_value_construct_success_x";
     let fail_label = "__elephc_eval_value_construct_fail_x";
@@ -351,11 +388,21 @@ fn emit_constructor_x86_64(
     emit_x86_64_builtin_throwable_constructor_dispatch(
         module,
         emitter,
+        data,
         builtin_throwable_class_ids,
         fail_label,
         success_label,
+        callable_support,
     );
-    emit_x86_64_constructor_dispatch(module, emitter, data, slots, fail_label, success_label);
+    emit_x86_64_constructor_dispatch(
+        module,
+        emitter,
+        data,
+        slots,
+        fail_label,
+        success_label,
+        callable_support,
+    );
     emitter.instruction(&format!("jmp {}", success_label));                     // no constructor metadata matched this class id
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // report constructor dispatch failure to Rust
@@ -372,9 +419,11 @@ fn emit_constructor_x86_64(
 fn emit_aarch64_builtin_throwable_constructor_dispatch(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     class_ids: &[u64],
     fail_label: &str,
     success_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     for class_id in class_ids {
         let next_label = format!("__elephc_eval_builtin_throwable_next_{}", class_id);
@@ -383,7 +432,14 @@ fn emit_aarch64_builtin_throwable_constructor_dispatch(
         abi::emit_load_int_immediate(emitter, "x10", *class_id as i64);
         emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this builtin Throwable class
         emitter.instruction(&format!("b.ne {}", next_label));                   // try the next builtin Throwable class when ids differ
-        emit_aarch64_builtin_throwable_constructor_body(module, emitter, fail_label, success_label);
+        emit_aarch64_builtin_throwable_constructor_body(
+            module,
+            emitter,
+            data,
+            fail_label,
+            success_label,
+            callable_support,
+        );
         emitter.label(&next_label);
     }
 }
@@ -392,9 +448,11 @@ fn emit_aarch64_builtin_throwable_constructor_dispatch(
 fn emit_x86_64_builtin_throwable_constructor_dispatch(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     class_ids: &[u64],
     fail_label: &str,
     success_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     for class_id in class_ids {
         let next_label = format!("__elephc_eval_builtin_throwable_next_{}_x", class_id);
@@ -403,7 +461,14 @@ fn emit_x86_64_builtin_throwable_constructor_dispatch(
         abi::emit_load_int_immediate(emitter, "r10", *class_id as i64);
         emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this builtin Throwable class
         emitter.instruction(&format!("jne {}", next_label));                    // try the next builtin Throwable class when ids differ
-        emit_x86_64_builtin_throwable_constructor_body(module, emitter, fail_label, success_label);
+        emit_x86_64_builtin_throwable_constructor_body(
+            module,
+            emitter,
+            data,
+            fail_label,
+            success_label,
+            callable_support,
+        );
         emitter.label(&next_label);
     }
 }
@@ -412,8 +477,10 @@ fn emit_x86_64_builtin_throwable_constructor_dispatch(
 fn emit_aarch64_builtin_throwable_constructor_body(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     fail_label: &str,
     success_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     emit_aarch64_validate_builtin_throwable_arg_count(module, emitter, fail_label);
     emit_aarch64_default_builtin_throwable_fields(emitter);
@@ -427,6 +494,8 @@ fn emit_aarch64_builtin_throwable_constructor_body(
         &PhpType::Str,
         "__elephc_eval_builtin_throwable_message",
         fail_label,
+        data,
+        callable_support,
     );
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for message initialization
     emitter.instruction("str x1, [x9, #8]");                                    // store the message pointer in the compact Throwable payload
@@ -441,6 +510,8 @@ fn emit_aarch64_builtin_throwable_constructor_body(
         &PhpType::Int,
         "__elephc_eval_builtin_throwable_code",
         fail_label,
+        data,
+        callable_support,
     );
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for code initialization
     emitter.instruction("str x0, [x9, #24]");                                   // store the integer exception code
@@ -451,8 +522,10 @@ fn emit_aarch64_builtin_throwable_constructor_body(
 fn emit_x86_64_builtin_throwable_constructor_body(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     fail_label: &str,
     success_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     emit_x86_64_validate_builtin_throwable_arg_count(module, emitter, fail_label);
     emit_x86_64_default_builtin_throwable_fields(emitter);
@@ -466,6 +539,8 @@ fn emit_x86_64_builtin_throwable_constructor_body(
         &PhpType::Str,
         "__elephc_eval_builtin_throwable_message_x",
         fail_label,
+        data,
+        callable_support,
     );
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for message initialization
     emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // store the message pointer in the compact Throwable payload
@@ -480,6 +555,8 @@ fn emit_x86_64_builtin_throwable_constructor_body(
         &PhpType::Int,
         "__elephc_eval_builtin_throwable_code_x",
         fail_label,
+        data,
+        callable_support,
     );
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for code initialization
     emitter.instruction("mov QWORD PTR [r11 + 24], rax");                       // store the integer exception code
@@ -538,6 +615,7 @@ fn emit_aarch64_constructor_dispatch(
     slots: &[EvalConstructorSlot],
     fail_label: &str,
     success_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     for (class_id, class_slots) in grouped_slots(slots) {
         let next_label = format!("__elephc_eval_constructor_next_{}", class_id);
@@ -547,7 +625,15 @@ fn emit_aarch64_constructor_dispatch(
         emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this constructor class
         emitter.instruction(&format!("b.ne {}", next_label));                   // try the next constructor class when ids differ
         for slot in class_slots {
-            emit_aarch64_constructor_body(module, emitter, data, slot, fail_label, success_label);
+            emit_aarch64_constructor_body(
+                module,
+                emitter,
+                data,
+                slot,
+                fail_label,
+                success_label,
+                callable_support,
+            );
         }
         emitter.label(&next_label);
     }
@@ -561,6 +647,7 @@ fn emit_x86_64_constructor_dispatch(
     slots: &[EvalConstructorSlot],
     fail_label: &str,
     success_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     for (class_id, class_slots) in grouped_slots(slots) {
         let next_label = format!("__elephc_eval_constructor_next_{}_x", class_id);
@@ -570,7 +657,15 @@ fn emit_x86_64_constructor_dispatch(
         emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this constructor class
         emitter.instruction(&format!("jne {}", next_label));                    // try the next constructor class when ids differ
         for slot in class_slots {
-            emit_x86_64_constructor_body(module, emitter, data, slot, fail_label, success_label);
+            emit_x86_64_constructor_body(
+                module,
+                emitter,
+                data,
+                slot,
+                fail_label,
+                success_label,
+                callable_support,
+            );
         }
         emitter.label(&next_label);
     }
@@ -584,6 +679,7 @@ fn emit_aarch64_constructor_body(
     slot: &EvalConstructorSlot,
     fail_label: &str,
     success_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     if !slot.supported {
         emitter.instruction(&format!("b {}", fail_label));                      // reject constructors outside this bridge's supported ABI slice
@@ -596,7 +692,14 @@ fn emit_aarch64_constructor_body(
     }
     emit_aarch64_validate_constructor_arg_count(module, emitter, slot, fail_label);
     let (overflow_bytes, ref_slots) =
-        emit_aarch64_prepare_constructor_args(module, emitter, slot, fail_label);
+        emit_aarch64_prepare_constructor_args(
+            module,
+            emitter,
+            data,
+            slot,
+            fail_label,
+            callable_support,
+        );
     let caller_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
     abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
     let callee = slot
@@ -624,6 +727,7 @@ fn emit_x86_64_constructor_body(
     slot: &EvalConstructorSlot,
     fail_label: &str,
     success_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     if !slot.supported {
         emitter.instruction(&format!("jmp {}", fail_label));                    // reject constructors outside this bridge's supported ABI slice
@@ -636,7 +740,14 @@ fn emit_x86_64_constructor_body(
     }
     emit_x86_64_validate_constructor_arg_count(module, emitter, slot, fail_label);
     let (overflow_bytes, ref_slots) =
-        emit_x86_64_prepare_constructor_args(module, emitter, slot, fail_label);
+        emit_x86_64_prepare_constructor_args(
+            module,
+            emitter,
+            data,
+            slot,
+            fail_label,
+            callable_support,
+        );
     let caller_stack_pad_bytes = abi::outgoing_call_stack_pad_bytes(module.target, overflow_bytes);
     abi::emit_reserve_temporary_stack(emitter, caller_stack_pad_bytes);
     let callee = slot
@@ -758,17 +869,21 @@ fn emit_x86_64_validate_constructor_arg_count(
 fn emit_aarch64_prepare_constructor_args(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slot: &EvalConstructorSlot,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) -> (usize, Vec<EvalRefArgSlot>) {
     let body_label = constructor_body_label(module, slot);
     let ref_slots = emit_aarch64_constructor_ref_arg_cells(
         module,
         emitter,
+        data,
         &slot.params,
         &slot.ref_params,
         &body_label,
         fail_label,
+        callable_support,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
@@ -783,7 +898,15 @@ fn emit_aarch64_prepare_constructor_args(
             emitter.instruction(&format!("cbz x9, {}", default_label));         // omitted SplFixedArray size uses PHP's zero default
             emit_aarch64_load_eval_arg(module, emitter, index);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_aarch64_cast_eval_arg(module, emitter, param_ty, &label_prefix, fail_label);
+            emit_aarch64_cast_eval_arg(
+                module,
+                emitter,
+                param_ty,
+                &label_prefix,
+                fail_label,
+                data,
+                callable_support,
+            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
             emitter.instruction(&format!("b {}", done_label));                  // skip default materialization after an explicit argument
             emitter.label(&default_label);
@@ -800,7 +923,15 @@ fn emit_aarch64_prepare_constructor_args(
         } else {
             emit_aarch64_load_eval_arg(module, emitter, index);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_aarch64_cast_eval_arg(module, emitter, param_ty, &label_prefix, fail_label);
+            emit_aarch64_cast_eval_arg(
+                module,
+                emitter,
+                param_ty,
+                &label_prefix,
+                fail_label,
+                data,
+                callable_support,
+            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -821,17 +952,21 @@ fn emit_aarch64_prepare_constructor_args(
 fn emit_x86_64_prepare_constructor_args(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     slot: &EvalConstructorSlot,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) -> (usize, Vec<EvalRefArgSlot>) {
     let body_label = constructor_body_label(module, slot);
     let ref_slots = emit_x86_64_constructor_ref_arg_cells(
         module,
         emitter,
+        data,
         &slot.params,
         &slot.ref_params,
         &body_label,
         fail_label,
+        callable_support,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
@@ -847,7 +982,15 @@ fn emit_x86_64_prepare_constructor_args(
             emitter.instruction(&format!("jz {}", default_label));              // omitted SplFixedArray size uses PHP's zero default
             emit_x86_64_load_eval_arg(module, emitter, index);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_x86_64_cast_eval_arg(module, emitter, param_ty, &label_prefix, fail_label);
+            emit_x86_64_cast_eval_arg(
+                module,
+                emitter,
+                param_ty,
+                &label_prefix,
+                fail_label,
+                data,
+                callable_support,
+            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
             emitter.instruction(&format!("jmp {}", done_label));                // skip default materialization after an explicit argument
             emitter.label(&default_label);
@@ -864,7 +1007,15 @@ fn emit_x86_64_prepare_constructor_args(
         } else {
             emit_x86_64_load_eval_arg(module, emitter, index);
             let label_prefix = format!("{}_arg_{}", body_label, index);
-            emit_x86_64_cast_eval_arg(module, emitter, param_ty, &label_prefix, fail_label);
+            emit_x86_64_cast_eval_arg(
+                module,
+                emitter,
+                param_ty,
+                &label_prefix,
+                fail_label,
+                data,
+                callable_support,
+            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -900,10 +1051,12 @@ fn materialize_constructor_args(
 fn emit_aarch64_constructor_ref_arg_cells(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     param_types: &[PhpType],
     ref_params: &[bool],
     label_prefix: &str,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) -> Vec<EvalRefArgSlot> {
     let ref_slots = eval_ref_arg_slots(param_types, ref_params, true);
     for slot in &ref_slots {
@@ -915,7 +1068,15 @@ fn emit_aarch64_constructor_ref_arg_cells(
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
-            emit_aarch64_cast_eval_arg(module, emitter, &slot.param_ty, &arg_label, fail_label);
+            emit_aarch64_cast_eval_arg(
+                module,
+                emitter,
+                &slot.param_ty,
+                &arg_label,
+                fail_label,
+                data,
+                callable_support,
+            );
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
     }
@@ -926,10 +1087,12 @@ fn emit_aarch64_constructor_ref_arg_cells(
 fn emit_x86_64_constructor_ref_arg_cells(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     param_types: &[PhpType],
     ref_params: &[bool],
     label_prefix: &str,
     fail_label: &str,
+    callable_support: &EvalCallableDescriptorSupport,
 ) -> Vec<EvalRefArgSlot> {
     let ref_slots = eval_ref_arg_slots(param_types, ref_params, true);
     for slot in &ref_slots {
@@ -941,7 +1104,15 @@ fn emit_x86_64_constructor_ref_arg_cells(
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
-            emit_x86_64_cast_eval_arg(module, emitter, &slot.param_ty, &arg_label, fail_label);
+            emit_x86_64_cast_eval_arg(
+                module,
+                emitter,
+                &slot.param_ty,
+                &arg_label,
+                fail_label,
+                data,
+                callable_support,
+            );
             abi::emit_push_result_value(emitter, &slot.param_ty);
         }
     }
@@ -981,6 +1152,8 @@ fn emit_aarch64_cast_eval_arg(
     param_ty: &PhpType,
     label_prefix: &str,
     fail_label: &str,
+    data: &mut DataSection,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     match param_ty.codegen_repr() {
         PhpType::Int => {
@@ -998,6 +1171,16 @@ fn emit_aarch64_cast_eval_arg(
         PhpType::Str => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for string coercion
             emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval argument to a PHP string pair in x1/x2
+        }
+        PhpType::Callable => {
+            super::eval_callable_helpers::emit_aarch64_cast_eval_callable_arg(
+                module,
+                emitter,
+                data,
+                callable_support,
+                label_prefix,
+                fail_label,
+            );
         }
         PhpType::TaggedScalar => {
             emit_aarch64_cast_eval_tagged_scalar_arg(emitter, label_prefix);
@@ -1125,6 +1308,8 @@ fn emit_x86_64_cast_eval_arg(
     param_ty: &PhpType,
     label_prefix: &str,
     fail_label: &str,
+    data: &mut DataSection,
+    callable_support: &EvalCallableDescriptorSupport,
 ) {
     match param_ty.codegen_repr() {
         PhpType::Int => {
@@ -1142,6 +1327,16 @@ fn emit_x86_64_cast_eval_arg(
         PhpType::Str => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // reload the boxed eval argument for string coercion
             emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval argument to a PHP string pair
+        }
+        PhpType::Callable => {
+            super::eval_callable_helpers::emit_x86_64_cast_eval_callable_arg(
+                module,
+                emitter,
+                data,
+                callable_support,
+                label_prefix,
+                fail_label,
+            );
         }
         PhpType::TaggedScalar => {
             emit_x86_64_cast_eval_tagged_scalar_arg(emitter, label_prefix);
