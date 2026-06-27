@@ -19328,6 +19328,40 @@ $child->copyInParent();');
     );
 }
 
+/// Verifies eval subclasses can invoke inherited protected AOT `__clone()` hooks in child scope.
+#[test]
+fn test_eval_clone_dynamic_subclass_runs_protected_aot_clone_hook_in_child_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalCloneAotInheritedProtectedParent {
+    public string $name;
+
+    public function __construct(string $name) {
+        $this->name = $name;
+    }
+
+    protected function __clone(): void {
+        $this->name = $this->name . ":protected";
+    }
+}
+eval('class EvalCloneAotInheritedProtectedChild extends EvalCloneAotInheritedProtectedParent {
+    public function copySelf(): void {
+        $copy = clone $this;
+        echo $this->name . ":" . $copy->name;
+    }
+}
+$child = new EvalCloneAotInheritedProtectedChild("B");
+$child->copySelf();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "B:B:protected");
+}
+
 /// Verifies eval `clone` invokes protected AOT `__clone()` hooks from child scopes.
 #[test]
 fn test_eval_clone_aot_object_runs_protected_clone_hook_in_child_scope() {
