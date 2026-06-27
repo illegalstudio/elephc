@@ -9797,6 +9797,8 @@ fn eval_reflection_method_prototype_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<(String, String)>, EvalStatus> {
     if context.has_class(declaring_class) || context.has_enum(declaring_class) {
+        let want_static = eval_reflection_method_metadata(declaring_class, method_name, context)
+            .map_or(false, |metadata| metadata.is_static);
         if let Some(prototype) =
             eval_reflection_parent_method_prototype_target(declaring_class, method_name, context)
         {
@@ -9806,6 +9808,7 @@ fn eval_reflection_method_prototype_target(
             declaring_class,
             method_name,
             context,
+            want_static,
             values,
         )? {
             return Ok(Some(prototype));
@@ -9819,6 +9822,7 @@ fn eval_reflection_method_prototype_target(
             declaring_class,
             method_name,
             context,
+            want_static,
             values,
         );
     }
@@ -9931,12 +9935,13 @@ fn eval_reflection_eval_aot_parent_method_prototype_target(
     declaring_class: &str,
     method_name: &str,
     context: &ElephcEvalContext,
+    want_static: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<(String, String)>, EvalStatus> {
     let Some(parent_class) = context.class_native_parent_name(declaring_class) else {
         return Ok(None);
     };
-    eval_reflection_aot_method_candidate(&parent_class, method_name, false, values)
+    eval_reflection_aot_method_candidate(&parent_class, method_name, want_static, values)
 }
 
 /// Finds the interface method prototype for an eval-declared class method.
@@ -9964,6 +9969,7 @@ fn eval_reflection_aot_interface_method_prototype_target_for_eval(
     declaring_class: &str,
     method_name: &str,
     context: &ElephcEvalContext,
+    want_static: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<(String, String)>, EvalStatus> {
     for interface_name in eval_reflection_eval_class_interface_names(
@@ -9975,7 +9981,7 @@ fn eval_reflection_aot_interface_method_prototype_target_for_eval(
             continue;
         }
         if let Some(prototype) =
-            eval_reflection_aot_method_candidate(&interface_name, method_name, false, values)?
+            eval_reflection_aot_method_candidate(&interface_name, method_name, want_static, values)?
         {
             return Ok(Some(prototype));
         }
