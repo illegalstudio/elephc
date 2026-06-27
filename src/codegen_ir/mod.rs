@@ -14,6 +14,7 @@
 
 mod block_emit;
 mod context;
+mod eval_callable_helpers;
 mod eval_class_constant_helpers;
 mod eval_constructor_helpers;
 mod eval_method_helpers;
@@ -163,8 +164,26 @@ fn finalize_user_asm(
         &mut emitter,
         &mut data,
     );
-    eval_constructor_helpers::emit_eval_constructor_helpers(module, &mut emitter, &mut data);
-    eval_method_helpers::emit_eval_method_helpers(module, &mut emitter, &mut data);
+    let eval_callable_support_needed =
+        eval_callable_helpers::module_needs_eval_callable_descriptor_support(module);
+    let eval_callable_support = eval_callable_helpers::emit_eval_callable_descriptor_support(
+        module,
+        &mut emitter,
+        &mut data,
+        eval_callable_support_needed,
+    );
+    eval_constructor_helpers::emit_eval_constructor_helpers(
+        module,
+        &mut emitter,
+        &mut data,
+        &eval_callable_support,
+    );
+    eval_method_helpers::emit_eval_method_helpers(
+        module,
+        &mut emitter,
+        &mut data,
+        &eval_callable_support,
+    );
     eval_reflection_helpers::emit_eval_reflection_helpers(module, &mut emitter);
     eval_reflection_owner_helpers::emit_eval_reflection_owner_helpers(module, &mut emitter);
     let data_output = data.emit();

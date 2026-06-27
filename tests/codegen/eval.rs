@@ -6631,6 +6631,45 @@ echo (new EvalAotCallableArrayNamedBox())->run();
     assert_eq!(out.stdout, "AB:CD:EF");
 }
 
+/// Verifies eval can pass runtime PHP callbacks to generated/AOT callable-typed methods.
+#[test]
+fn test_eval_fragment_passes_callable_args_to_aot_methods() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function eval_aot_callable_arg_suffix(string $value): string {
+    return $value . "!";
+}
+
+class EvalAotCallableArgBox {
+    public $value = "";
+
+    public function __construct(callable $callback) {
+        $this->value = $callback("C");
+    }
+
+    public function apply(callable $callback) {
+        return $callback("M");
+    }
+
+    public static function applyStatic(callable $callback) {
+        return $callback("S");
+    }
+}
+
+echo eval('$box = new EvalAotCallableArgBox("eval_aot_callable_arg_suffix");
+return $box->value . ":" .
+    $box->apply("eval_aot_callable_arg_suffix") . ":" .
+    EvalAotCallableArgBox::applyStatic("eval_aot_callable_arg_suffix");');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "C!:M!:S!");
+}
+
 /// Verifies eval static calls and static callables dispatch public AOT static methods.
 #[test]
 fn test_eval_fragment_dispatches_aot_static_methods() {

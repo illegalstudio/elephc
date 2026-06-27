@@ -1310,7 +1310,7 @@ fn emit_legacy_deferred_callable_support_inline(
 }
 
 /// Builds the legacy metadata context needed by reused descriptor-invoker emitters.
-fn legacy_context_from_eir_module(module: &crate::ir::Module) -> LegacyContext {
+pub(crate) fn legacy_context_from_eir_module(module: &crate::ir::Module) -> LegacyContext {
     let mut ctx = LegacyContext::new();
     for function in module
         .functions

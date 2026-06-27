@@ -1246,11 +1246,11 @@ fn emit_branch_if_eval_c_int_negative(ctx: &mut FunctionContext<'_>, label: &str
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let branch = format!("tbnz w0, #31, {}", label);
-            ctx.emitter.instruction(&branch);                                     // branch when the C int result is the invalid-target sentinel
+            ctx.emitter.instruction(&branch);                                   // branch when the C int result is the invalid-target sentinel
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("test eax, eax");                            // set flags from the C int result
-            ctx.emitter.instruction(&format!("js {}", label));                   // branch when the C int result is the invalid-target sentinel
+            ctx.emitter.instruction("test eax, eax");                           // set flags from the C int result
+            ctx.emitter.instruction(&format!("js {}", label));                  // branch when the C int result is the invalid-target sentinel
         }
     }
 }
@@ -1999,6 +1999,7 @@ fn eval_native_method_param_supported(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
+            | PhpType::Callable
             | PhpType::TaggedScalar
             | PhpType::Mixed
             | PhpType::Iterable
@@ -2016,6 +2017,7 @@ fn eval_native_constructor_param_supported(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
+            | PhpType::Callable
             | PhpType::TaggedScalar
             | PhpType::Mixed
             | PhpType::Iterable
@@ -2034,6 +2036,7 @@ fn eval_native_method_return_supported(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
+            | PhpType::Callable
             | PhpType::TaggedScalar
             | PhpType::Mixed
             | PhpType::Union(_)
