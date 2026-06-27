@@ -167,8 +167,9 @@ including asymmetric write visibility, property-level `readonly`, `readonly clas
 `__construct()`, abstract classes and methods, final classes, methods, and
 properties, trait composition with `insteadof` conflict resolution and `as`
 aliases/visibility adaptations, interface implementation checks, static
-properties, static methods, static interface method contracts, class, interface,
-trait, and enum constants including `final` constants, class-level attributes,
+properties, static methods, static interface method contracts, single and
+comma-separated class, interface, trait, and enum constants including `final`
+constants, class-level attributes,
 `ClassName::class` literals, magic method fallback through `__call()` and
 `__callStatic()`, and magic property fallback through `__get()` and `__set()`.
 Eval traits also accept the legacy `var` marker for public properties.

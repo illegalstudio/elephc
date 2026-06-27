@@ -144,6 +144,86 @@ fn parse_fragment_rejects_reserved_class_constant_name() {
     }
 }
 
+/// Verifies comma-separated class-like constants lower to individual eval constants.
+#[test]
+fn parse_fragment_accepts_comma_separated_class_like_constants() {
+    let program = parse_fragment(
+        br#"class DynEvalMultiConstClass {
+    public const A = 1, B = 2;
+}
+interface DynEvalMultiConstIface {
+    final public const C = 3, D = 4;
+}
+trait DynEvalMultiConstTrait {
+    protected const E = 5, F = 6;
+}
+enum DynEvalMultiConstEnum {
+    public const G = 7, H = 8;
+    case Ready;
+}"#,
+    )
+    .expect("fragment should parse");
+    let statements = program.statements();
+    let EvalStmt::ClassDecl(class) = &statements[0] else {
+        panic!("expected class declaration");
+    };
+    assert_eq!(
+        class.constants(),
+        &[
+            EvalClassConstant::new("A", EvalExpr::Const(EvalConst::Int(1))),
+            EvalClassConstant::new("B", EvalExpr::Const(EvalConst::Int(2))),
+        ],
+    );
+    let EvalStmt::InterfaceDecl(interface) = &statements[1] else {
+        panic!("expected interface declaration");
+    };
+    assert_eq!(
+        interface.constants(),
+        &[
+            EvalClassConstant::with_visibility_and_final(
+                "C",
+                EvalVisibility::Public,
+                true,
+                EvalExpr::Const(EvalConst::Int(3)),
+            ),
+            EvalClassConstant::with_visibility_and_final(
+                "D",
+                EvalVisibility::Public,
+                true,
+                EvalExpr::Const(EvalConst::Int(4)),
+            ),
+        ],
+    );
+    let EvalStmt::TraitDecl(trait_decl) = &statements[2] else {
+        panic!("expected trait declaration");
+    };
+    assert_eq!(
+        trait_decl.constants(),
+        &[
+            EvalClassConstant::with_visibility(
+                "E",
+                EvalVisibility::Protected,
+                EvalExpr::Const(EvalConst::Int(5)),
+            ),
+            EvalClassConstant::with_visibility(
+                "F",
+                EvalVisibility::Protected,
+                EvalExpr::Const(EvalConst::Int(6)),
+            ),
+        ],
+    );
+    let EvalStmt::EnumDecl(enum_decl) = &statements[3] else {
+        panic!("expected enum declaration");
+    };
+    assert_eq!(
+        enum_decl.constants(),
+        &[
+            EvalClassConstant::new("G", EvalExpr::Const(EvalConst::Int(7))),
+            EvalClassConstant::new("H", EvalExpr::Const(EvalConst::Int(8))),
+        ],
+    );
+}
+
 /// Verifies class attributes lower to eval class metadata with supported literal args.
 #[test]
 fn parse_fragment_accepts_class_attribute_metadata() {
