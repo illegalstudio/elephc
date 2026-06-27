@@ -5246,6 +5246,40 @@ pub(in crate::interpreter) fn eval_property_get_result(
         return values.property_get(object, property_name);
     }
     if !declared_property_found {
+        if let Some((declaring_class, visibility, _, is_static)) =
+            eval_dynamic_class_native_property_metadata(
+                &object_class_name,
+                property_name,
+                context,
+                values,
+            )?
+        {
+            if !is_static {
+                if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+                    if let Some(result) = eval_magic_property_get(
+                        object,
+                        &object_class_name,
+                        property_name,
+                        context,
+                        values,
+                    )? {
+                        return Ok(result);
+                    }
+                    return eval_throw_property_access_error(
+                        &declaring_class,
+                        property_name,
+                        visibility,
+                        context,
+                        values,
+                    );
+                }
+                return eval_with_native_bridge_scope(&declaring_class, context, || {
+                    values.property_get(object, property_name)
+                });
+            }
+        }
+    }
+    if !declared_property_found {
         if let Some(result) =
             eval_magic_property_get(object, &object_class_name, property_name, context, values)?
         {
@@ -5374,6 +5408,43 @@ pub(in crate::interpreter) fn eval_property_set_result(
                 context,
                 values,
             );
+        }
+    }
+    if !declared_property_found {
+        if let Some((declaring_class, _, write_visibility, is_static)) =
+            eval_dynamic_class_native_property_metadata(
+                &object_class_name,
+                property_name,
+                context,
+                values,
+            )?
+        {
+            if !is_static {
+                if validate_eval_member_access(&declaring_class, write_visibility, context)
+                    .is_err()
+                {
+                    if eval_magic_property_set(
+                        object,
+                        &object_class_name,
+                        property_name,
+                        value,
+                        context,
+                        values,
+                    )? {
+                        return Ok(());
+                    }
+                    return eval_throw_property_access_error(
+                        &declaring_class,
+                        property_name,
+                        write_visibility,
+                        context,
+                        values,
+                    );
+                }
+                return eval_with_native_bridge_scope(&declaring_class, context, || {
+                    values.property_set(object, property_name, value)
+                });
+            }
         }
     }
     if !declared_property_found
@@ -5606,6 +5677,36 @@ pub(in crate::interpreter) fn eval_property_isset_result(
     if eval_object_public_property_exists(object, property_name, values)? {
         let value = values.property_get(object, property_name)?;
         return Ok(!values.is_null(value)?);
+    }
+    if let Some((declaring_class, visibility, _, is_static)) =
+        eval_dynamic_class_native_property_metadata(
+            &object_class_name,
+            property_name,
+            context,
+            values,
+        )?
+    {
+        if !is_static {
+            if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+                return eval_magic_property_isset(
+                    object,
+                    &object_class_name,
+                    property_name,
+                    context,
+                    values,
+                )
+                .map(|result| result.unwrap_or(false));
+            }
+            if !eval_with_native_bridge_scope(&declaring_class, context, || {
+                values.property_is_initialized(object, property_name)
+            })? {
+                return Ok(false);
+            }
+            let value = eval_with_native_bridge_scope(&declaring_class, context, || {
+                values.property_get(object, property_name)
+            })?;
+            return Ok(!values.is_null(value)?);
+        }
     }
     eval_magic_property_isset(object, &object_class_name, property_name, context, values)
         .map(|result| result.unwrap_or(false))
@@ -6327,6 +6428,57 @@ pub(in crate::interpreter) fn eval_static_property_get_result(
         );
     }
     if eval_static_member_context_owns_class(&class_name, context) {
+        if let Some(parent) = context.class_native_parent_name(&class_name) {
+            if let Some((declaring_class, visibility, _, is_static)) =
+                eval_reflection_aot_static_property_access_metadata(
+                    &parent,
+                    property_name,
+                    context,
+                    values,
+                )?
+            {
+                if !is_static {
+                    return eval_throw_undeclared_static_property_error(
+                        &class_name,
+                        property_name,
+                        context,
+                        values,
+                    );
+                }
+                if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+                    return eval_throw_property_access_error(
+                        &declaring_class,
+                        property_name,
+                        visibility,
+                        context,
+                        values,
+                    );
+                }
+                if let Some(target) = context
+                    .static_property_alias(&declaring_class, property_name)
+                    .cloned()
+                {
+                    return eval_reference_target_value(&target, context, values);
+                }
+                if !eval_with_native_bridge_scope(&declaring_class, context, || {
+                    values.static_property_is_initialized(&declaring_class, property_name)
+                })? {
+                    return eval_throw_uninitialized_static_property_error(
+                        &declaring_class,
+                        property_name,
+                        context,
+                        values,
+                    );
+                }
+                if let Some(value) = eval_with_native_bridge_scope(
+                    &declaring_class,
+                    context,
+                    || values.static_property_get(&declaring_class, property_name),
+                )? {
+                    return Ok(value);
+                }
+            }
+        }
         return eval_throw_undeclared_static_property_error(
             &class_name,
             property_name,
@@ -6407,6 +6559,42 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
         return Ok(!values.is_null(value)?);
     }
     if eval_static_member_context_owns_class(&class_name, context) {
+        if let Some(parent) = context.class_native_parent_name(&class_name) {
+            if let Some((declaring_class, visibility, _, is_static)) =
+                eval_reflection_aot_static_property_access_metadata(
+                    &parent,
+                    property_name,
+                    context,
+                    values,
+                )?
+            {
+                if !is_static {
+                    return Ok(false);
+                }
+                if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+                    return Ok(false);
+                }
+                if let Some(target) = context
+                    .static_property_alias(&declaring_class, property_name)
+                    .cloned()
+                {
+                    let value = eval_reference_target_value(&target, context, values)?;
+                    return Ok(!values.is_null(value)?);
+                }
+                if !eval_with_native_bridge_scope(&declaring_class, context, || {
+                    values.static_property_is_initialized(&declaring_class, property_name)
+                })? {
+                    return Ok(false);
+                }
+                if let Some(value) = eval_with_native_bridge_scope(
+                    &declaring_class,
+                    context,
+                    || values.static_property_get(&declaring_class, property_name),
+                )? {
+                    return Ok(!values.is_null(value)?);
+                }
+            }
+        }
         return Ok(false);
     }
     if let Some((declaring_class, visibility, _, is_static)) =
@@ -6678,6 +6866,51 @@ fn eval_static_property_reference_bind_result(
         return Ok(());
     }
     if eval_static_member_context_owns_class(&class_name, context) {
+        if let Some(parent) = context.class_native_parent_name(&class_name) {
+            if let Some((declaring_class, _, write_visibility, is_static)) =
+                eval_reflection_aot_static_property_access_metadata(
+                    &parent,
+                    property_name,
+                    context,
+                    values,
+                )?
+            {
+                if !is_static {
+                    return eval_throw_undeclared_static_property_error(
+                        &class_name,
+                        property_name,
+                        context,
+                        values,
+                    );
+                }
+                if validate_eval_member_access(&declaring_class, write_visibility, context)
+                    .is_err()
+                {
+                    return eval_throw_property_access_error(
+                        &declaring_class,
+                        property_name,
+                        write_visibility,
+                        context,
+                        values,
+                    );
+                }
+                let target = eval_static_property_reference_target(
+                    &declaring_class,
+                    property_name,
+                    source_name,
+                    context,
+                    scope,
+                    values,
+                )?;
+                let value = eval_reference_target_value(&target, context, values)?;
+                context.bind_static_property_alias(&declaring_class, property_name, target);
+                if eval_with_native_bridge_scope(&declaring_class, context, || {
+                    values.static_property_set(&declaring_class, property_name, value)
+                })? {
+                    return Ok(());
+                }
+            }
+        }
         return eval_throw_undeclared_static_property_error(
             &class_name,
             property_name,
@@ -6844,6 +7077,54 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
         return Ok(());
     }
     if eval_static_member_context_owns_class(&class_name, context) {
+        if let Some(parent) = context.class_native_parent_name(&class_name) {
+            if let Some((declaring_class, _, write_visibility, is_static)) =
+                eval_reflection_aot_static_property_access_metadata(
+                    &parent,
+                    property_name,
+                    context,
+                    values,
+                )?
+            {
+                if !is_static {
+                    return eval_throw_undeclared_static_property_error(
+                        &class_name,
+                        property_name,
+                        context,
+                        values,
+                    );
+                }
+                if validate_eval_member_access(&declaring_class, write_visibility, context)
+                    .is_err()
+                {
+                    return eval_throw_property_access_error(
+                        &declaring_class,
+                        property_name,
+                        write_visibility,
+                        context,
+                        values,
+                    );
+                }
+                if let Some(target) = context
+                    .static_property_alias(&declaring_class, property_name)
+                    .cloned()
+                {
+                    eval_static_reference_target_write(
+                        &declaring_class,
+                        property_name,
+                        target,
+                        value,
+                        context,
+                        values,
+                    )?;
+                }
+                if eval_with_native_bridge_scope(&declaring_class, context, || {
+                    values.static_property_set(&declaring_class, property_name, value)
+                })? {
+                    return Ok(());
+                }
+            }
+        }
         return eval_throw_undeclared_static_property_error(
             &class_name,
             property_name,
@@ -7661,6 +7942,31 @@ fn eval_native_static_method_call_with_scope(
     let result = values.static_method_call(class_name, method_name, evaluated_args);
     context.pop_class_scope();
     result
+}
+
+/// Runs one generated/AOT bridge operation while exposing an explicit PHP class scope.
+fn eval_with_native_bridge_scope<T>(
+    scope: &str,
+    context: &mut ElephcEvalContext,
+    call: impl FnOnce() -> Result<T, EvalStatus>,
+) -> Result<T, EvalStatus> {
+    context.push_class_scope(scope.to_string());
+    let result = call();
+    context.pop_class_scope();
+    result
+}
+
+/// Returns generated/AOT property metadata inherited by an eval-declared class.
+fn eval_dynamic_class_native_property_metadata(
+    called_class_name: &str,
+    property_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, EvalVisibility, EvalVisibility, bool)>, EvalStatus> {
+    let Some(parent) = context.class_native_parent_name(called_class_name) else {
+        return Ok(None);
+    };
+    eval_reflection_aot_property_access_metadata(&parent, property_name, values)
 }
 
 /// Returns whether an accessible instance AOT `__clone()` hook should run.
