@@ -8229,6 +8229,62 @@ $box->run();');
     assert_eq!(out.stdout, "6");
 }
 
+/// Verifies `parent::` in eval children can call inherited non-static AOT methods on `$this`.
+#[test]
+fn test_eval_declared_child_parent_static_syntax_calls_aot_instance_method() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalRuntimeParentSyntaxInstanceParent {
+    protected function label(): string {
+        return "parent";
+    }
+}
+
+eval('class EvalRuntimeParentSyntaxInstanceChild extends EvalRuntimeParentSyntaxInstanceParent {
+    public function run(): void {
+        echo parent::label();
+    }
+}
+$box = new EvalRuntimeParentSyntaxInstanceChild();
+$box->run();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "parent");
+}
+
+/// Verifies `parent::` in eval children bridges protected static AOT method scope.
+#[test]
+fn test_eval_declared_child_parent_static_syntax_calls_aot_static_method() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalRuntimeParentSyntaxStaticParent {
+    protected static function label(): string {
+        return "parent-static";
+    }
+}
+
+eval('class EvalRuntimeParentSyntaxStaticChild extends EvalRuntimeParentSyntaxStaticParent {
+    public function run(): void {
+        echo parent::label();
+    }
+}
+$box = new EvalRuntimeParentSyntaxStaticChild();
+$box->run();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "parent-static");
+}
+
 /// Verifies eval-declared children can read and write inherited protected AOT properties.
 #[test]
 fn test_eval_declared_child_accesses_inherited_protected_aot_property() {

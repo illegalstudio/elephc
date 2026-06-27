@@ -84,7 +84,14 @@ pub(in crate::interpreter) fn eval_expr(
             let class_name = eval_dynamic_class_name(class_name, context, values)?;
             let method = eval_dynamic_member_name(method, context, scope, values)?;
             let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_static_method_call_result(&class_name, &method, evaluated_args, context, values)
+            eval_static_method_call_result_from_scope(
+                &class_name,
+                &method,
+                evaluated_args,
+                scope,
+                context,
+                values,
+            )
         }
         EvalExpr::DynamicStaticPropertyGet {
             class_name,
@@ -174,7 +181,14 @@ pub(in crate::interpreter) fn eval_expr(
             args,
         } => {
             let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_static_method_call_result(class_name, method, evaluated_args, context, values)
+            eval_static_method_call_result_from_scope(
+                class_name,
+                method,
+                evaluated_args,
+                scope,
+                context,
+                values,
+            )
         }
         EvalExpr::StaticPropertyGet {
             class_name,

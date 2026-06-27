@@ -7216,6 +7216,28 @@ pub(in crate::interpreter) fn eval_static_method_call_result(
         receiver.called_class,
         method_name,
         evaluated_args,
+        None,
+        context,
+        values,
+    )
+}
+
+/// Dispatches a static-syntax method call from an expression scope that may hold `$this`.
+pub(in crate::interpreter) fn eval_static_method_call_result_from_scope(
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    scope: &ElephcEvalScope,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let receiver = resolve_eval_static_method_receiver(class_name, context)?;
+    eval_static_method_call_result_resolved(
+        receiver.dispatch_class,
+        receiver.called_class,
+        method_name,
+        evaluated_args,
+        Some(scope),
         context,
         values,
     )
@@ -7239,6 +7261,7 @@ pub(in crate::interpreter) fn eval_static_method_call_result_with_called_class(
         called_class_name,
         method_name,
         evaluated_args,
+        None,
         context,
         values,
     )
@@ -7250,6 +7273,7 @@ fn eval_static_method_call_result_resolved(
     called_class_name: String,
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
+    lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -7283,14 +7307,6 @@ fn eval_static_method_call_result_resolved(
     if let Some((declaring_class, method)) =
         eval_dynamic_static_method_for_call(&class_name, method_name, context)
     {
-        if !method.is_static() {
-            return eval_throw_non_static_method_call_error(
-                &declaring_class,
-                method.name(),
-                context,
-                values,
-            );
-        }
         if method.is_abstract() {
             return eval_throw_abstract_method_call_error(
                 &declaring_class,
@@ -7318,6 +7334,27 @@ fn eval_static_method_call_result_resolved(
                 values,
             );
         }
+        if !method.is_static() {
+            if let Some(object) =
+                eval_static_syntax_instance_receiver(&class_name, lexical_scope, context, values)?
+            {
+                return eval_dynamic_method_with_values(
+                    &declaring_class,
+                    &called_class_name,
+                    &method,
+                    object,
+                    evaluated_args,
+                    context,
+                    values,
+                );
+            }
+            return eval_throw_non_static_method_call_error(
+                &declaring_class,
+                method.name(),
+                context,
+                values,
+            );
+        }
         return eval_dynamic_static_method_with_values(
             &declaring_class,
             &called_class_name,
@@ -7328,26 +7365,16 @@ fn eval_static_method_call_result_resolved(
         );
     }
     if let Some(parent) = context.class_native_parent_name(&class_name) {
-        if let Some((declaring_class, _, _, _)) =
-            eval_aot_method_dispatch_metadata_in_hierarchy(&parent, method_name, context, values)?
+        if let Some(result) = eval_native_static_syntax_method_result(
+            &parent,
+            method_name,
+            evaluated_args.clone(),
+            lexical_scope,
+            context,
+            values,
+        )?
         {
-            return eval_native_static_method_with_evaluated_args_bridge_scope(
-                &parent,
-                method_name,
-                evaluated_args,
-                Some(&declaring_class),
-                context,
-                values,
-            );
-        }
-        if eval_native_static_magic_method_available(&parent, context, values)? {
-            return eval_native_static_method_with_evaluated_args(
-                &parent,
-                method_name,
-                evaluated_args,
-                context,
-                values,
-            );
+            return Ok(result);
         }
     }
     if context.has_class(&class_name)
@@ -7372,6 +7399,16 @@ fn eval_static_method_call_result_resolved(
             values,
         );
     }
+    if let Some(result) = eval_native_static_syntax_method_result(
+        &class_name,
+        method_name,
+        evaluated_args.clone(),
+        lexical_scope,
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
     eval_native_static_method_with_evaluated_args(
         &class_name,
         method_name,
@@ -7379,6 +7416,139 @@ fn eval_static_method_call_result_resolved(
         context,
         values,
     )
+}
+
+/// Dispatches one generated/AOT method reached through PHP static-call syntax.
+fn eval_native_static_syntax_method_result(
+    class_name: &str,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some((declaring_class, visibility, is_static, is_abstract)) =
+        eval_aot_method_dispatch_metadata_in_hierarchy(class_name, method_name, context, values)?
+    else {
+        if eval_native_static_magic_method_available(class_name, context, values)? {
+            return eval_native_static_method_with_evaluated_args(
+                class_name,
+                method_name,
+                evaluated_args,
+                context,
+                values,
+            )
+            .map(Some);
+        }
+        return Ok(None);
+    };
+    if is_abstract {
+        return eval_throw_abstract_method_call_error(
+            &declaring_class,
+            method_name,
+            context,
+            values,
+        );
+    }
+    if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+        if eval_native_static_magic_method_available(class_name, context, values)? {
+            return eval_native_magic_static_method_call(
+                class_name,
+                method_name,
+                evaluated_args,
+                context,
+                values,
+            )
+            .map(Some);
+        }
+        return eval_throw_method_access_error(
+            &declaring_class,
+            method_name,
+            visibility,
+            context,
+            values,
+        );
+    }
+    if !is_static {
+        if let Some(object) =
+            eval_static_syntax_instance_receiver(class_name, lexical_scope, context, values)?
+        {
+            return eval_native_method_with_evaluated_args_bridge_scope(
+                object,
+                class_name,
+                method_name,
+                evaluated_args,
+                Some(&declaring_class),
+                context,
+                values,
+            )
+            .map(Some);
+        }
+        return eval_throw_non_static_method_call_error(
+            &declaring_class,
+            method_name,
+            context,
+            values,
+        );
+    }
+    eval_native_static_method_with_evaluated_args_bridge_scope(
+        class_name,
+        method_name,
+        evaluated_args,
+        Some(&declaring_class),
+        context,
+        values,
+    )
+    .map(Some)
+}
+
+/// Returns `$this` when PHP permits static-call syntax to target an instance method.
+fn eval_static_syntax_instance_receiver(
+    class_name: &str,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(scope) = lexical_scope else {
+        return Ok(None);
+    };
+    let Some(object) = visible_scope_cell(context, scope, "this") else {
+        return Ok(None);
+    };
+    if values.type_tag(object)? != EVAL_TAG_OBJECT {
+        return Ok(None);
+    }
+    let object_class_name = eval_static_syntax_object_class_name(object, context, values)?;
+    if eval_static_syntax_object_matches_class(&object_class_name, class_name, context) {
+        Ok(Some(object))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Resolves the PHP-visible class name for the current static-syntax `$this` object.
+fn eval_static_syntax_object_class_name(
+    object: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    if let Ok(identity) = values.object_identity(object) {
+        if let Some(class) = context.dynamic_object_class(identity) {
+            return Ok(class.name().to_string());
+        }
+    }
+    runtime_object_class_name(object, values)
+}
+
+/// Returns whether `$this` is an instance of the class named by static-call syntax.
+fn eval_static_syntax_object_matches_class(
+    object_class_name: &str,
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> bool {
+    same_eval_class_name(object_class_name, class_name)
+        || context.class_is_a(object_class_name, class_name, false)
+        || native_class_is_a(object_class_name, class_name, context)
 }
 
 /// Dispatches static methods for eval's builtin `PropertyHookType` enum slice.
