@@ -35,6 +35,8 @@ const TEST_NATIVE_DEFAULT_BOOL: u64 = 1;
 const TEST_NATIVE_DEFAULT_INT: u64 = 2;
 const TEST_NATIVE_DEFAULT_FLOAT: u64 = 3;
 const TEST_NATIVE_DEFAULT_EMPTY_ARRAY: u64 = 4;
+const TEST_NATIVE_INTERFACE_PROPERTY_REQUIRES_GET: u64 = 1;
+const TEST_NATIVE_INTERFACE_PROPERTY_REQUIRES_SET: u64 = 2;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
 const TEST_NATIVE_OBJECT_DEFAULT_ARG_OBJECT: u8 = 2;
@@ -1154,6 +1156,55 @@ fn register_native_property_type_records_metadata() {
     );
     assert_eq!(invalid_registered, 0);
     assert!(ctx.native_property_type("KnownClass", "bad").is_none());
+}
+
+/// Verifies native AOT interface property contracts are available to eval validation.
+#[test]
+fn register_native_interface_property_records_metadata() {
+    let mut ctx = ElephcEvalContext::new();
+    let property = b"KnownContract::name";
+    let property_type = b"string";
+    let invalid_property = b"KnownContract::bad";
+    let invalid_type = b"void";
+
+    let registered = unsafe {
+        __elephc_eval_register_native_interface_property(
+            &mut ctx,
+            property.as_ptr(),
+            property.len() as u64,
+            property_type.as_ptr(),
+            property_type.len() as u64,
+            TEST_NATIVE_INTERFACE_PROPERTY_REQUIRES_GET
+                | TEST_NATIVE_INTERFACE_PROPERTY_REQUIRES_SET,
+        )
+    };
+    let invalid_registered = unsafe {
+        __elephc_eval_register_native_interface_property(
+            &mut ctx,
+            invalid_property.as_ptr(),
+            invalid_property.len() as u64,
+            invalid_type.as_ptr(),
+            invalid_type.len() as u64,
+            TEST_NATIVE_INTERFACE_PROPERTY_REQUIRES_GET,
+        )
+    };
+
+    let requirements = ctx.native_interface_property_requirements("knowncontract");
+    assert_eq!(registered, 1);
+    assert_eq!(requirements.len(), 1);
+    assert_eq!(requirements[0].0, "KnownContract");
+    assert_eq!(requirements[0].1.name(), "name");
+    assert!(requirements[0].1.requires_get());
+    assert!(requirements[0].1.requires_set());
+    assert_eq!(
+        requirements[0].1.property_type().map(|ty| ty.variants()),
+        Some(&[EvalParameterTypeVariant::String][..])
+    );
+    assert_eq!(invalid_registered, 0);
+    assert!(ctx
+        .native_interface_property_requirements("KnownContract")
+        .iter()
+        .all(|(_, property)| property.name() != "bad"));
 }
 
 /// Verifies native AOT property default metadata is available to eval reflection.

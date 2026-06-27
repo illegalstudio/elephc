@@ -645,6 +645,7 @@ pub struct ElephcEvalContext {
     native_class_attributes: HashMap<String, Vec<EvalAttribute>>,
     native_method_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
     native_constant_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
+    native_interface_properties: HashMap<String, Vec<(String, EvalInterfaceProperty)>>,
     native_property_types: HashMap<(String, String), EvalParameterType>,
     native_property_defaults: HashMap<(String, String), NativeCallableDefault>,
     native_property_attributes: HashMap<(String, String), Vec<EvalAttribute>>,
@@ -708,6 +709,7 @@ impl ElephcEvalContext {
             native_class_attributes: HashMap::new(),
             native_method_attributes: HashMap::new(),
             native_constant_attributes: HashMap::new(),
+            native_interface_properties: HashMap::new(),
             native_property_types: HashMap::new(),
             native_property_defaults: HashMap::new(),
             native_property_attributes: HashMap::new(),
@@ -772,6 +774,7 @@ impl ElephcEvalContext {
             native_class_attributes: HashMap::new(),
             native_method_attributes: HashMap::new(),
             native_constant_attributes: HashMap::new(),
+            native_interface_properties: HashMap::new(),
             native_property_types: HashMap::new(),
             native_property_defaults: HashMap::new(),
             native_property_attributes: HashMap::new(),
@@ -2988,6 +2991,36 @@ impl ElephcEvalContext {
     ) -> Vec<EvalAttribute> {
         self.native_constant_attributes
             .get(&native_constant_key(class_name, constant_name))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Defines generated AOT interface property-hook metadata for eval validation.
+    pub fn define_native_interface_property_requirement(
+        &mut self,
+        interface_name: &str,
+        property: EvalInterfaceProperty,
+    ) -> bool {
+        let key = normalize_class_name(interface_name);
+        if key.is_empty() || property.name().is_empty() {
+            return false;
+        }
+        let owner = interface_name.trim_start_matches('\\').to_string();
+        let requirements = self.native_interface_properties.entry(key).or_default();
+        if requirements.iter().any(|(_, existing)| existing.name() == property.name()) {
+            return false;
+        }
+        requirements.push((owner, property));
+        true
+    }
+
+    /// Returns generated AOT interface property-hook metadata by interface name.
+    pub fn native_interface_property_requirements(
+        &self,
+        interface_name: &str,
+    ) -> Vec<(String, EvalInterfaceProperty)> {
+        self.native_interface_properties
+            .get(&normalize_class_name(interface_name))
             .cloned()
             .unwrap_or_default()
     }
