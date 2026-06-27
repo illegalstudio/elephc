@@ -12337,6 +12337,41 @@ echo EvalConstChild::hidden();');
     assert_eq!(out.stdout, "2:7:9:2:5");
 }
 
+/// Verifies eval-declared class-like constants support PHP comma-separated declarations.
+#[test]
+fn test_eval_declared_comma_separated_class_like_constants() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo eval('class EvalMultiConstClass {
+    public const A = 1, B = 2;
+}
+interface EvalMultiConstIface {
+    public const C = 3, D = 4;
+}
+trait EvalMultiConstTrait {
+    public const E = 5, F = 6;
+}
+class EvalMultiConstTraitBox {
+    use EvalMultiConstTrait;
+}
+enum EvalMultiConstEnum {
+    public const G = 7, H = 8;
+    case Ready;
+}
+echo EvalMultiConstClass::A . EvalMultiConstClass::B . ":";
+echo EvalMultiConstIface::C . EvalMultiConstIface::D . ":";
+echo EvalMultiConstTraitBox::E . EvalMultiConstTraitBox::F . ":";
+return EvalMultiConstEnum::G + EvalMultiConstEnum::H;');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "12:34:56:15");
+}
+
 /// Verifies eval rejects PHP's reserved `class` class-constant name.
 #[test]
 fn test_eval_declared_reserved_class_constant_name_fails() {

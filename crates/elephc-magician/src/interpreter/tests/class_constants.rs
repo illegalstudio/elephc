@@ -46,6 +46,41 @@ return EvalConstChild::hidden();"#,
     assert_eq!(values.get(result), FakeValue::Int(5));
 }
 
+/// Verifies comma-separated class-like constants are registered and fetchable.
+#[test]
+fn execute_program_reads_comma_separated_eval_class_like_constants() {
+    let program = parse_fragment(
+        br#"class EvalMultiConstClass {
+    public const A = 1, B = 2;
+}
+interface EvalMultiConstIface {
+    public const C = 3, D = 4;
+}
+trait EvalMultiConstTrait {
+    public const E = 5, F = 6;
+}
+class EvalMultiConstTraitBox {
+    use EvalMultiConstTrait;
+}
+enum EvalMultiConstEnum {
+    public const G = 7, H = 8;
+    case Ready;
+}
+echo EvalMultiConstClass::A; echo EvalMultiConstClass::B; echo ":";
+echo EvalMultiConstIface::C; echo EvalMultiConstIface::D; echo ":";
+echo EvalMultiConstTraitBox::E; echo EvalMultiConstTraitBox::F; echo ":";
+return EvalMultiConstEnum::G + EvalMultiConstEnum::H;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "12:34:56:");
+    assert_eq!(values.get(result), FakeValue::Int(15));
+}
+
 /// Verifies protected class constant access from global eval scope throws Error.
 #[test]
 fn execute_program_protected_eval_class_constant_from_global_scope_throws_error() {

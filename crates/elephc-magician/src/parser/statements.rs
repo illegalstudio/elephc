@@ -718,12 +718,12 @@ impl Parser {
             if is_static || is_abstract || is_readonly || set_visibility.is_some() {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            constants.push(
+            constants.extend(
                 self.parse_class_const_decl(
                     visibility.unwrap_or(EvalVisibility::Public),
                     is_final,
-                )?
-                .with_attributes(attributes),
+                    &attributes,
+                )?,
             );
             return Ok(());
         }
@@ -796,27 +796,36 @@ impl Parser {
         }
     }
 
-    /// Parses one eval class constant declaration.
+    /// Parses one eval class constant declaration, including comma-separated constants.
     pub(super) fn parse_class_const_decl(
         &mut self,
         visibility: EvalVisibility,
         is_final: bool,
-    ) -> Result<EvalClassConstant, EvalParseError> {
+        attributes: &[EvalAttribute],
+    ) -> Result<Vec<EvalClassConstant>, EvalParseError> {
         self.advance();
-        let TokenKind::Ident(name) = self.current() else {
-            return Err(EvalParseError::UnexpectedToken);
-        };
-        if ident_eq(name, "class") {
-            return Err(EvalParseError::UnsupportedConstruct);
+        let mut constants = Vec::new();
+        loop {
+            let TokenKind::Ident(name) = self.current() else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            if ident_eq(name, "class") {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            let name = name.clone();
+            self.advance();
+            self.expect(TokenKind::Equal)?;
+            let value = self.parse_expr()?;
+            constants.push(
+                EvalClassConstant::with_visibility_and_final(name, visibility, is_final, value)
+                    .with_attributes(attributes.to_vec()),
+            );
+            if !self.consume(TokenKind::Comma) {
+                break;
+            }
         }
-        let name = name.clone();
-        self.advance();
-        self.expect(TokenKind::Equal)?;
-        let value = self.parse_expr()?;
         self.expect_semicolon()?;
-        Ok(EvalClassConstant::with_visibility_and_final(
-            name, visibility, is_final, value,
-        ))
+        Ok(constants)
     }
 
     /// Parses `use TraitName, OtherTrait;` or an adaptation block inside an eval class body.
@@ -1444,12 +1453,12 @@ impl Parser {
             if is_static || is_abstract || is_readonly || set_visibility.is_some() {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            constants.push(
+            constants.extend(
                 self.parse_class_const_decl(
                     visibility.unwrap_or(EvalVisibility::Public),
                     is_final,
-                )?
-                .with_attributes(attributes),
+                    &attributes,
+                )?,
             );
             return Ok(());
         }
@@ -1611,12 +1620,12 @@ impl Parser {
             if is_static {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            constants.push(
+            constants.extend(
                 self.parse_class_const_decl(
                     visibility.unwrap_or(EvalVisibility::Public),
                     is_final,
-                )?
-                .with_attributes(attributes),
+                    &attributes,
+                )?,
             );
             return Ok(());
         }
@@ -1778,10 +1787,11 @@ impl Parser {
             if is_static || set_visibility.is_some() {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            constants.push(
-                self.parse_class_const_decl(EvalVisibility::Public, is_final)?
-                    .with_attributes(attributes),
-            );
+            constants.extend(self.parse_class_const_decl(
+                EvalVisibility::Public,
+                is_final,
+                &attributes,
+            )?);
             return Ok(());
         }
         if matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "function")) {
