@@ -67,7 +67,9 @@ pub(in crate::interpreter) fn eval_class_relation_target_result(
     if context.class(&target).is_some() {
         return match name {
             "class_implements" => {
-                eval_class_relation_names_result(context.class_interface_names(&target), values)
+                let names =
+                    eval_class_relation_eval_class_interface_names(&target, context, values)?;
+                eval_class_relation_names_result(names, values)
             }
             "class_parents" => {
                 eval_class_relation_names_result(context.class_parent_names(&target), values)
@@ -81,7 +83,9 @@ pub(in crate::interpreter) fn eval_class_relation_target_result(
     if context.interface(&target).is_some() {
         return match name {
             "class_implements" => {
-                eval_class_relation_names_result(context.interface_parent_names(&target), values)
+                let names =
+                    eval_class_relation_eval_interface_parent_names(&target, context, values)?;
+                eval_class_relation_names_result(names, values)
             }
             "class_parents" | "class_uses" => values.assoc_new(0),
             _ => Err(EvalStatus::RuntimeFatal),
@@ -114,10 +118,19 @@ fn eval_runtime_class_interface_names_result(
     class_name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let names = eval_runtime_class_interface_names(class_name, values)?;
+    eval_class_relation_names_result(names, values)
+}
+
+/// Returns generated/AOT interface names visible for one class-like symbol.
+fn eval_runtime_class_interface_names(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
     let names_array = values.reflection_class_interface_names(class_name)?;
     let names = eval_class_relation_runtime_string_array_to_vec(names_array, values)?;
     values.release(names_array)?;
-    eval_class_relation_names_result(names, values)
+    Ok(names)
 }
 
 /// Builds `class_uses()` data for generated/AOT direct trait-use metadata.
@@ -148,6 +161,60 @@ fn eval_runtime_class_parent_names(
         names.push(parent);
     }
     names
+}
+
+/// Returns eval class interfaces plus interfaces inherited from generated/AOT parents.
+fn eval_class_relation_eval_class_interface_names(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Some(parent) = context.class_native_parent_name(class_name) {
+        for name in eval_runtime_class_interface_names(&parent, values)? {
+            eval_class_relation_push_unique_name(name, &mut names, &mut seen);
+        }
+    }
+    for name in context.class_interface_names(class_name) {
+        eval_class_relation_push_unique_name(name.clone(), &mut names, &mut seen);
+        if !context.has_interface(&name) && eval_runtime_interface_exists(&name, values)? {
+            for parent in eval_runtime_class_interface_names(&name, values)? {
+                eval_class_relation_push_unique_name(parent, &mut names, &mut seen);
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// Returns eval interface parents plus inherited generated/AOT interface parents.
+fn eval_class_relation_eval_interface_parent_names(
+    interface_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for name in context.interface_parent_names(interface_name) {
+        eval_class_relation_push_unique_name(name.clone(), &mut names, &mut seen);
+        if !context.has_interface(&name) && eval_runtime_interface_exists(&name, values)? {
+            for parent in eval_runtime_class_interface_names(&name, values)? {
+                eval_class_relation_push_unique_name(parent, &mut names, &mut seen);
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// Appends one class-like name while preserving PHP's case-insensitive uniqueness.
+fn eval_class_relation_push_unique_name(
+    name: String,
+    names: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    if seen.insert(name.to_ascii_lowercase()) {
+        names.push(name);
+    }
 }
 
 /// Copies a runtime string array into Rust-owned class/interface names.

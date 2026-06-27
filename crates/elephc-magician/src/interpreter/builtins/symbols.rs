@@ -471,14 +471,21 @@ pub(in crate::interpreter) fn eval_is_a_relation_result(
             .resolve_class_like_name(&source_class)
             .unwrap_or_else(|| source_class.trim_start_matches('\\').to_string());
         if context.class(&resolved_source_class).is_some() {
-            context.class_is_a(&resolved_source_class, &resolved_target_class, exclude_self)
+            eval_class_string_is_a(
+                &resolved_source_class,
+                &resolved_target_class,
+                exclude_self,
+                context,
+                values,
+            )?
         } else if context.interface(&resolved_source_class).is_some() {
             eval_interface_string_is_a(
                 &resolved_source_class,
                 &resolved_target_class,
                 exclude_self,
                 context,
-            )
+                values,
+            )?
         } else if context.trait_decl(&resolved_source_class).is_some() {
             !exclude_self
                 && eval_class_like_name_matches(&resolved_source_class, &resolved_target_class)
@@ -499,14 +506,111 @@ fn eval_interface_string_is_a(
     target_class: &str,
     exclude_self: bool,
     context: &ElephcEvalContext,
-) -> bool {
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
     if !exclude_self && eval_class_like_name_matches(source_class, target_class) {
-        return true;
+        return Ok(true);
     }
-    context
-        .interface_parent_names(source_class)
+    Ok(eval_interface_runtime_parent_names(source_class, context, values)?
         .iter()
-        .any(|parent| eval_class_like_name_matches(parent, target_class))
+        .any(|parent| eval_class_like_name_matches(parent, target_class)))
+}
+
+/// Returns whether an eval class-string source satisfies a class-like target.
+fn eval_class_string_is_a(
+    source_class: &str,
+    target_class: &str,
+    exclude_self: bool,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if context.class_is_a(source_class, target_class, exclude_self) {
+        return Ok(true);
+    }
+    Ok(eval_class_runtime_interface_names(source_class, context, values)?
+        .iter()
+        .any(|interface| eval_class_like_name_matches(interface, target_class)))
+}
+
+/// Returns eval class interfaces plus generated/AOT inherited interface names.
+fn eval_class_runtime_interface_names(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Some(parent) = context.class_native_parent_name(class_name) {
+        for name in eval_runtime_class_interface_names(&parent, values)? {
+            eval_push_unique_class_name(name, &mut names, &mut seen);
+        }
+    }
+    for name in context.class_interface_names(class_name) {
+        eval_push_unique_class_name(name.clone(), &mut names, &mut seen);
+        if !context.has_interface(&name) && eval_runtime_interface_exists(&name, values)? {
+            for parent in eval_runtime_class_interface_names(&name, values)? {
+                eval_push_unique_class_name(parent, &mut names, &mut seen);
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// Returns eval interface parents plus generated/AOT inherited interface names.
+fn eval_interface_runtime_parent_names(
+    interface_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let mut names = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for name in context.interface_parent_names(interface_name) {
+        eval_push_unique_class_name(name.clone(), &mut names, &mut seen);
+        if !context.has_interface(&name) && eval_runtime_interface_exists(&name, values)? {
+            for parent in eval_runtime_class_interface_names(&name, values)? {
+                eval_push_unique_class_name(parent, &mut names, &mut seen);
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// Returns generated/AOT interface names visible for one class-like symbol.
+fn eval_runtime_class_interface_names(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let names_array = values.reflection_class_interface_names(class_name)?;
+    let names = eval_string_array_to_vec(names_array, values)?;
+    values.release(names_array)?;
+    Ok(names)
+}
+
+/// Copies a runtime string array into Rust-owned names.
+fn eval_string_array_to_vec(
+    array: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<String>, EvalStatus> {
+    let len = values.array_len(array)?;
+    let mut result = Vec::with_capacity(len);
+    for position in 0..len {
+        let key = values.int(position as i64)?;
+        let value = values.array_get(array, key)?;
+        let bytes = values.string_bytes(value)?;
+        result.push(String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?);
+    }
+    Ok(result)
+}
+
+/// Appends one class-like name while preserving PHP's case-insensitive uniqueness.
+fn eval_push_unique_class_name(
+    name: String,
+    names: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    if seen.insert(name.to_ascii_lowercase()) {
+        names.push(name);
+    }
 }
 
 /// Returns whether two class-like names match PHP's case-insensitive class-name rules.
@@ -527,7 +631,7 @@ pub(in crate::interpreter) fn dynamic_object_is_a(
     let Some(class) = context.dynamic_object_class(identity) else {
         return Ok(None);
     };
-    if context.class_is_a(class.name(), target_class, exclude_self) {
+    if eval_class_string_is_a(class.name(), target_class, exclude_self, context, values)? {
         return Ok(Some(true));
     }
     if context.class_native_parent_name(class.name()).is_some() {
