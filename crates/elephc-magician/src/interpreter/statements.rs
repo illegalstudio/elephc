@@ -6687,6 +6687,31 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
             .ok_or(EvalStatus::RuntimeFatal);
     }
     if eval_static_member_context_owns_class(&class_name, context) {
+        if let Some((declaring_class, visibility)) =
+            eval_dynamic_class_native_constant_metadata(
+                &class_name,
+                constant_name,
+                context,
+                values,
+            )?
+        {
+            if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
+                return eval_throw_constant_access_error(
+                    &declaring_class,
+                    constant_name,
+                    visibility,
+                    context,
+                    values,
+                );
+            }
+            if let Some(value) = eval_with_native_bridge_scope(
+                &declaring_class,
+                context,
+                || values.class_constant_get(&declaring_class, constant_name),
+            )? {
+                return Ok(value);
+            }
+        }
         return Err(EvalStatus::RuntimeFatal);
     }
     if let Some(value) = values.class_constant_get(&class_name, constant_name)? {
@@ -7967,6 +7992,32 @@ fn eval_dynamic_class_native_property_metadata(
         return Ok(None);
     };
     eval_reflection_aot_property_access_metadata(&parent, property_name, values)
+}
+
+/// Returns generated/AOT class-constant metadata inherited by an eval-declared class.
+fn eval_dynamic_class_native_constant_metadata(
+    called_class_name: &str,
+    constant_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, EvalVisibility)>, EvalStatus> {
+    let Some(parent) = context.class_native_parent_name(called_class_name) else {
+        return Ok(None);
+    };
+    let Some(flags) = values.reflection_constant_flags(&parent, constant_name)? else {
+        return Ok(None);
+    };
+    let declaring_class = values
+        .reflection_constant_declaring_class(&parent, constant_name)?
+        .unwrap_or(parent);
+    let visibility = if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
+        EvalVisibility::Private
+    } else if flags & EVAL_REFLECTION_MEMBER_FLAG_PROTECTED != 0 {
+        EvalVisibility::Protected
+    } else {
+        EvalVisibility::Public
+    };
+    Ok(Some((declaring_class, visibility)))
 }
 
 /// Returns whether an accessible instance AOT `__clone()` hook should run.
