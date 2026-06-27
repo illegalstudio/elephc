@@ -11,6 +11,7 @@
 //! - The handle is intentionally opaque to generated code.
 //! - No Rust-owned layout is promised across the C ABI.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 #[cfg(not(test))]
@@ -28,6 +29,66 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 #[cfg(not(test))]
 static GLOBAL_EVAL_CLASSES: OnceLock<Mutex<GlobalEvalClassRegistry>> = OnceLock::new();
+
+thread_local! {
+    static NATIVE_FRAME_CALLED_CLASS_OVERRIDES: RefCell<Vec<NativeFrameCalledClassOverride>> =
+        RefCell::new(Vec::new());
+}
+
+/// Late-static override installed while eval dispatches into a generated/AOT frame.
+#[derive(Clone)]
+struct NativeFrameCalledClassOverride {
+    frame_class: String,
+    called_class: String,
+}
+
+/// Scoped guard that removes one native-frame called-class override on drop.
+pub(crate) struct NativeFrameCalledClassOverrideGuard;
+
+/// Installs a late-static called-class override for a generated/AOT frame call.
+pub(crate) fn push_native_frame_called_class_override(
+    frame_class: &str,
+    called_class: &str,
+) -> NativeFrameCalledClassOverrideGuard {
+    NATIVE_FRAME_CALLED_CLASS_OVERRIDES.with(|overrides| {
+        overrides
+            .borrow_mut()
+            .push(NativeFrameCalledClassOverride {
+                frame_class: frame_class.trim_start_matches('\\').to_string(),
+                called_class: called_class.trim_start_matches('\\').to_string(),
+            });
+    });
+    NativeFrameCalledClassOverrideGuard
+}
+
+impl Drop for NativeFrameCalledClassOverrideGuard {
+    /// Removes the most recent native-frame called-class override.
+    fn drop(&mut self) {
+        NATIVE_FRAME_CALLED_CLASS_OVERRIDES.with(|overrides| {
+            overrides.borrow_mut().pop();
+        });
+    }
+}
+
+/// Returns the active thread-local late-static override for one generated/AOT frame.
+fn native_frame_called_class_override(
+    frame_class: &str,
+    called_class: &str,
+) -> Option<String> {
+    let frame_class = frame_class.trim_start_matches('\\');
+    let called_class = called_class.trim_start_matches('\\');
+    if frame_class.is_empty() || !called_class.eq_ignore_ascii_case(frame_class) {
+        return None;
+    }
+    NATIVE_FRAME_CALLED_CLASS_OVERRIDES.with(|overrides| {
+        overrides
+            .borrow()
+            .iter()
+            .rev()
+            .find(|entry| entry.frame_class.eq_ignore_ascii_case(frame_class))
+            .map(|entry| entry.called_class.clone())
+    })
+}
 
 #[cfg(not(test))]
 #[derive(Default)]
@@ -179,6 +240,7 @@ struct EvalStaticCallableMetadata {
 struct EvalObjectCallableMetadata {
     object: usize,
     method: String,
+    called_class: String,
     native_class: String,
     bridge_scope: String,
 }
@@ -1055,6 +1117,7 @@ impl ElephcEvalContext {
         callable: RuntimeCellHandle,
         object: RuntimeCellHandle,
         method: &str,
+        called_class: &str,
         native_class: &str,
         bridge_scope: &str,
     ) {
@@ -1063,6 +1126,7 @@ impl ElephcEvalContext {
             EvalObjectCallableMetadata {
                 object: object.as_ptr() as usize,
                 method: method.to_string(),
+                called_class: called_class.trim_start_matches('\\').to_string(),
                 native_class: native_class.trim_start_matches('\\').to_string(),
                 bridge_scope: bridge_scope.trim_start_matches('\\').to_string(),
             },
@@ -1075,13 +1139,17 @@ impl ElephcEvalContext {
         callable: RuntimeCellHandle,
         object: RuntimeCellHandle,
         method: &str,
-    ) -> Option<(&str, &str)> {
+    ) -> Option<(&str, &str, &str)> {
         let metadata = self
             .eval_object_callables
             .get(&(callable.as_ptr() as usize))?;
         (metadata.object == object.as_ptr() as usize
             && metadata.method.eq_ignore_ascii_case(method))
-        .then_some((metadata.native_class.as_str(), metadata.bridge_scope.as_str()))
+        .then_some((
+            metadata.native_class.as_str(),
+            metadata.bridge_scope.as_str(),
+            metadata.called_class.as_str(),
+        ))
     }
 
     /// Resolves a PHP class-like name to eval class, interface, trait, or alias spelling.
@@ -3380,6 +3448,35 @@ impl ElephcEvalContext {
     /// Returns the current late-static-bound eval class scope, if execution is inside a method.
     pub fn current_called_class_scope(&self) -> Option<&str> {
         self.called_class_stack.last().map(String::as_str)
+    }
+
+    /// Returns a dynamic called-class override for a generated/AOT frame entering eval.
+    pub fn native_frame_called_class_override(
+        &self,
+        class_name: &str,
+        called_class_name: &str,
+    ) -> Option<String> {
+        let class_name = class_name.trim_start_matches('\\');
+        let called_class_name = called_class_name.trim_start_matches('\\');
+        if class_name.is_empty() || !called_class_name.eq_ignore_ascii_case(class_name) {
+            return None;
+        }
+        if let Some(called_class) =
+            native_frame_called_class_override(class_name, called_class_name)
+        {
+            return Some(called_class);
+        }
+        let active = self.current_called_class_scope()?.trim_start_matches('\\');
+        if active.is_empty() || active.eq_ignore_ascii_case(class_name) {
+            return None;
+        }
+        let active = self
+            .resolve_class_name(active)
+            .unwrap_or_else(|| active.to_string());
+        self.class_parent_names(&active)
+            .iter()
+            .any(|parent| parent.eq_ignore_ascii_case(class_name))
+            .then_some(active)
     }
 
     /// Pushes PHP-visible method magic constants for the current eval method frame.

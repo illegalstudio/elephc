@@ -167,15 +167,22 @@ pub(in crate::interpreter) fn eval_array_callable(
         EVAL_TAG_OBJECT => {
             let native_dispatch = context
                 .eval_object_callable_native_dispatch(callback, receiver, &method)
-                .map(|(native_class, bridge_scope)| {
-                    (native_class.to_string(), bridge_scope.to_string())
+                .map(|(native_class, bridge_scope, called_class)| {
+                    (
+                        native_class.to_string(),
+                        bridge_scope.to_string(),
+                        called_class.to_string(),
+                    )
                 });
-            let (native_class, bridge_scope) = native_dispatch
-                .map(|(native_class, bridge_scope)| (Some(native_class), Some(bridge_scope)))
-                .unwrap_or((None, None));
+            let (native_class, bridge_scope, called_class) = native_dispatch
+                .map(|(native_class, bridge_scope, called_class)| {
+                    (Some(native_class), Some(bridge_scope), Some(called_class))
+                })
+                .unwrap_or((None, None, None));
             Ok(EvaluatedCallable::ObjectMethod {
                 object: receiver,
                 method,
+                called_class,
                 native_class,
                 bridge_scope,
             })
@@ -266,6 +273,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
         EvaluatedCallable::ObjectMethod {
             object,
             method,
+            called_class,
             native_class,
             bridge_scope,
         } => match native_class {
@@ -275,6 +283,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
                 method,
                 positional_args(evaluated_args),
                 bridge_scope.as_deref(),
+                called_class.as_deref(),
                 context,
                 values,
             ),
@@ -293,6 +302,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
                     method,
                     positional_args(evaluated_args),
                     bridge_scope.as_deref(),
+                    called_class.as_deref(),
                     context,
                     values,
                 )
@@ -335,6 +345,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
         EvaluatedCallable::ObjectMethod {
             object,
             method,
+            called_class,
             native_class,
             bridge_scope,
         } => match native_class {
@@ -344,6 +355,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                 method,
                 evaluated_args,
                 bridge_scope.as_deref(),
+                called_class.as_deref(),
                 context,
                 values,
             ),
@@ -368,6 +380,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                     method,
                     evaluated_args,
                     bridge_scope.as_deref(),
+                    called_class.as_deref(),
                     context,
                     values,
                 )

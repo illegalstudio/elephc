@@ -12,6 +12,7 @@ use super::*;
 use crate::context::{
     NativeCallableArrayDefaultElement, NativeCallableArrayDefaultKey,
     NativeCallableObjectDefaultArg, NativeCallableSignature,
+    push_native_frame_called_class_override,
 };
 
 /// Executes statements in source order and propagates the first eval `return`.
@@ -7364,17 +7365,20 @@ fn eval_static_method_call_result_resolved(
             values,
         );
     }
-    if let Some(parent) = context.class_native_parent_name(&class_name) {
-        if let Some(result) = eval_native_static_syntax_method_result(
-            &parent,
-            method_name,
-            evaluated_args.clone(),
-            lexical_scope,
-            context,
-            values,
-        )?
-        {
-            return Ok(result);
+    if context.has_class(&class_name) {
+        if let Some(parent) = context.class_native_parent_name(&class_name) {
+            if let Some(result) = eval_native_static_syntax_method_result(
+                &parent,
+                Some(&called_class_name),
+                method_name,
+                evaluated_args.clone(),
+                lexical_scope,
+                context,
+                values,
+            )?
+            {
+                return Ok(result);
+            }
         }
     }
     if context.has_class(&class_name)
@@ -7401,6 +7405,7 @@ fn eval_static_method_call_result_resolved(
     }
     if let Some(result) = eval_native_static_syntax_method_result(
         &class_name,
+        None,
         method_name,
         evaluated_args.clone(),
         lexical_scope,
@@ -7421,6 +7426,7 @@ fn eval_static_method_call_result_resolved(
 /// Dispatches one generated/AOT method reached through PHP static-call syntax.
 fn eval_native_static_syntax_method_result(
     class_name: &str,
+    called_class_scope: Option<&str>,
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
     lexical_scope: Option<&ElephcEvalScope>,
@@ -7479,6 +7485,7 @@ fn eval_native_static_syntax_method_result(
                 method_name,
                 evaluated_args,
                 Some(&declaring_class),
+                called_class_scope,
                 context,
                 values,
             )
@@ -7496,6 +7503,7 @@ fn eval_native_static_syntax_method_result(
         method_name,
         evaluated_args,
         Some(&declaring_class),
+        called_class_scope,
         context,
         values,
     )
@@ -8078,8 +8086,15 @@ pub(in crate::interpreter) fn eval_object_clone_result(
             )?;
             eval_release_value(context, values, result)?;
         } else if let Some(scope) = dynamic_native_clone_hook_scope {
-            let result =
-                eval_native_method_call_with_scope(&scope, clone, "__clone", Vec::new(), context, values)?;
+            let result = eval_native_method_call_with_scope(
+                &scope,
+                None,
+                clone,
+                "__clone",
+                Vec::new(),
+                context,
+                values,
+            )?;
             values.release(result)?;
         }
     } else if should_call_aot_clone_hook {
@@ -8112,6 +8127,7 @@ fn eval_dynamic_native_clone_hook_is_callable(
 /// Calls one generated/AOT method while presenting an explicit PHP class scope to the bridge.
 fn eval_native_method_call_with_scope(
     scope: &str,
+    called_class_scope: Option<&str>,
     object: RuntimeCellHandle,
     method_name: &str,
     evaluated_args: Vec<RuntimeCellHandle>,
@@ -8119,7 +8135,15 @@ fn eval_native_method_call_with_scope(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     context.push_class_scope(scope.to_string());
+    if let Some(called_class) = called_class_scope {
+        context.push_called_class_scope(called_class.to_string());
+    }
+    let _called_class_override = called_class_scope
+        .map(|called_class| push_native_frame_called_class_override(scope, called_class));
     let result = values.method_call(object, method_name, evaluated_args);
+    if called_class_scope.is_some() {
+        context.pop_called_class_scope();
+    }
     context.pop_class_scope();
     result
 }
@@ -8127,6 +8151,7 @@ fn eval_native_method_call_with_scope(
 /// Calls one generated/AOT static method while presenting an explicit PHP class scope.
 fn eval_native_static_method_call_with_scope(
     scope: &str,
+    called_class_scope: Option<&str>,
     class_name: &str,
     method_name: &str,
     evaluated_args: Vec<RuntimeCellHandle>,
@@ -8134,7 +8159,15 @@ fn eval_native_static_method_call_with_scope(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     context.push_class_scope(scope.to_string());
+    if let Some(called_class) = called_class_scope {
+        context.push_called_class_scope(called_class.to_string());
+    }
+    let _called_class_override = called_class_scope
+        .map(|called_class| push_native_frame_called_class_override(scope, called_class));
     let result = values.static_method_call(class_name, method_name, evaluated_args);
+    if called_class_scope.is_some() {
+        context.pop_called_class_scope();
+    }
     context.pop_class_scope();
     result
 }
@@ -8786,6 +8819,7 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
                     method_name,
                     evaluated_args,
                     Some(&declaring_class),
+                    Some(&called_class_name),
                     context,
                     values,
                 );
@@ -8871,6 +8905,7 @@ pub(in crate::interpreter) fn eval_invokable_object_call_result(
                 "__invoke",
                 evaluated_args,
                 Some(&native_class_name),
+                Some(&called_class_name),
                 context,
                 values,
             );
@@ -10275,6 +10310,7 @@ pub(in crate::interpreter) fn eval_native_method_with_evaluated_args(
         method_name,
         evaluated_args,
         None,
+        None,
         context,
         values,
     )
@@ -10287,6 +10323,7 @@ fn eval_native_method_with_evaluated_args_bridge_scope(
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
     bridge_scope: Option<&str>,
+    called_class_scope: Option<&str>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -10330,6 +10367,7 @@ fn eval_native_method_with_evaluated_args_bridge_scope(
         method_name,
         evaluated_args,
         bridge_scope,
+        called_class_scope,
         context,
         values,
     )
@@ -10350,6 +10388,7 @@ fn eval_native_method_with_evaluated_args_unchecked(
         method_name,
         evaluated_args,
         None,
+        None,
         context,
         values,
     )
@@ -10362,6 +10401,7 @@ pub(in crate::interpreter) fn eval_native_method_with_evaluated_args_unchecked_b
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
     bridge_scope: Option<&str>,
+    called_class_scope: Option<&str>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -10375,6 +10415,7 @@ pub(in crate::interpreter) fn eval_native_method_with_evaluated_args_unchecked_b
     let result = if let Some(scope) = bridge_scope {
         eval_native_method_call_with_scope(
             scope,
+            called_class_scope,
             object,
             method_name,
             native_bound_arg_values(&bound_args),
@@ -10404,6 +10445,7 @@ pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args(
         method_name,
         evaluated_args,
         None,
+        None,
         context,
         values,
     )
@@ -10415,6 +10457,7 @@ fn eval_native_static_method_with_evaluated_args_bridge_scope(
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
     bridge_scope: Option<&str>,
+    called_class_scope: Option<&str>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -10456,6 +10499,7 @@ fn eval_native_static_method_with_evaluated_args_bridge_scope(
         method_name,
         evaluated_args,
         bridge_scope,
+        called_class_scope,
         context,
         values,
     )
@@ -10474,6 +10518,7 @@ fn eval_native_static_method_with_evaluated_args_unchecked(
         method_name,
         evaluated_args,
         None,
+        None,
         context,
         values,
     )
@@ -10485,6 +10530,7 @@ pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args_unch
     method_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
     bridge_scope: Option<&str>,
+    called_class_scope: Option<&str>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -10498,6 +10544,7 @@ pub(in crate::interpreter) fn eval_native_static_method_with_evaluated_args_unch
     let result = if let Some(scope) = bridge_scope {
         eval_native_static_method_call_with_scope(
             scope,
+            called_class_scope,
             class_name,
             method_name,
             native_bound_arg_values(&bound_args),

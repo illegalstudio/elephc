@@ -6356,6 +6356,38 @@ class EvalAotScopeStaticChild extends EvalAotScopeStaticBase {
     assert_eq!(out, "EvalAotScopeStaticBase:EvalAotScopeStaticChild:child");
 }
 
+/// Verifies eval classes keep late-static scope inside inherited AOT eval fragments.
+#[test]
+fn test_eval_declared_child_inherited_aot_eval_fragment_preserves_late_static_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotEvalScopeParent {
+    public function instanceProbe() {
+        return eval('return self::class . ":" . static::class . ":" . get_called_class();');
+    }
+
+    public static function staticProbe() {
+        return eval('return self::class . ":" . static::class . ":" . get_called_class();');
+    }
+}
+
+eval('class EvalAotEvalScopeChild extends EvalAotEvalScopeParent {}
+echo (new EvalAotEvalScopeChild())->instanceProbe() . "|";
+echo EvalAotEvalScopeChild::staticProbe();');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalAotEvalScopeParent:EvalAotEvalScopeChild:EvalAotEvalScopeChild|\
+EvalAotEvalScopeParent:EvalAotEvalScopeChild:EvalAotEvalScopeChild"
+    );
+}
+
 /// Verifies eval fragments resolve `parent::` through AOT parent metadata.
 #[test]
 fn test_eval_fragment_in_aot_method_resolves_parent_scope() {
@@ -8492,6 +8524,40 @@ echo $hidden("C");');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "P:A:callable:H:B:H:C");
+}
+
+/// Verifies first-class AOT object callables keep eval-child late-static scope.
+#[test]
+fn test_eval_declared_child_first_class_aot_method_callable_preserves_late_static_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class EvalAotCallableScopeParent {
+    protected function hiddenScope() {
+        return eval('return self::class . ":" . static::class . ":" . get_called_class();');
+    }
+}
+
+eval('class EvalAotCallableScopeChild extends EvalAotCallableScopeParent {
+    public function makeHidden() {
+        return $this->hiddenScope(...);
+    }
+}
+$box = new EvalAotCallableScopeChild();
+$hidden = $box->makeHidden();
+echo $hidden() . "|";
+echo call_user_func($hidden);');
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalAotCallableScopeParent:EvalAotCallableScopeChild:EvalAotCallableScopeChild|\
+EvalAotCallableScopeParent:EvalAotCallableScopeChild:EvalAotCallableScopeChild"
+    );
 }
 
 /// Verifies eval-declared classes expose inherited AOT members to OOP introspection.

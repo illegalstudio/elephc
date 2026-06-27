@@ -203,6 +203,9 @@ unsafe fn eval_context_push_class_scope_inner(
     } else {
         called_class_name.to_string()
     };
+    let called_class_name = context
+        .native_frame_called_class_override(&class_name, &called_class_name)
+        .unwrap_or(called_class_name);
     context.push_class_scope(class_name);
     context.push_called_class_scope(called_class_name);
     EvalStatus::Ok.code()

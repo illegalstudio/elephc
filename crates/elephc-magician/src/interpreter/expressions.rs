@@ -804,13 +804,14 @@ fn eval_method_callable_expr(
     let method_value = values.string(&method)?;
     array = values.array_set(array, zero, object)?;
     array = values.array_set(array, one, method_value)?;
-    if let Some((native_class, bridge_scope)) =
+    if let Some((native_class, bridge_scope, called_class)) =
         eval_method_callable_native_dispatch(object, &method, context, values)?
     {
         context.register_eval_object_callable(
             array,
             object,
             &method,
+            &called_class,
             &native_class,
             &bridge_scope,
         );
@@ -824,7 +825,7 @@ fn eval_method_callable_native_dispatch(
     method_name: &str,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<(String, String)>, EvalStatus> {
+) -> Result<Option<(String, String, String)>, EvalStatus> {
     let Ok(identity) = values.object_identity(object) else {
         return Ok(None);
     };
@@ -850,7 +851,7 @@ fn eval_method_callable_native_dispatch(
     if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
         return Ok(None);
     }
-    Ok(Some((parent, declaring_class)))
+    Ok(Some((parent, declaring_class, called_class_name.to_string())))
 }
 
 /// Materializes a first-class static method callable while retaining late-static metadata.
