@@ -42,6 +42,7 @@ pub(crate) struct EvalStreamResources {
     streams: HashMap<i64, EvalFileStream>,
     user_stream_wrapper_classes: HashMap<String, String>,
     user_stream_wrappers: Vec<String>,
+    user_wrapper_directories: HashMap<i64, EvalUserWrapperDirectory>,
     user_wrapper_streams: HashMap<i64, EvalUserWrapperStream>,
 }
 
@@ -340,6 +341,24 @@ impl EvalStreamResources {
         id
     }
 
+    /// Opens a userspace wrapper directory around an eval-created wrapper object.
+    pub(crate) fn open_user_wrapper_directory(
+        &mut self,
+        object: RuntimeCellHandle,
+        class_name: &str,
+    ) -> i64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.user_wrapper_directories.insert(
+            id,
+            EvalUserWrapperDirectory {
+                object,
+                class_name: class_name.to_string(),
+            },
+        );
+        id
+    }
+
     /// Returns a copied userspace-wrapper stream descriptor for dispatch.
     pub(crate) fn user_wrapper_stream_info(
         &self,
@@ -348,6 +367,26 @@ impl EvalStreamResources {
         self.user_wrapper_streams
             .get(&id)
             .map(EvalUserWrapperStream::info)
+    }
+
+    /// Returns a copied userspace-wrapper directory descriptor for dispatch.
+    pub(crate) fn user_wrapper_directory_info(
+        &self,
+        id: i64,
+    ) -> Option<EvalUserWrapperDirectoryInfo> {
+        self.user_wrapper_directories
+            .get(&id)
+            .map(EvalUserWrapperDirectory::info)
+    }
+
+    /// Removes a userspace-wrapper directory and returns its descriptor.
+    pub(crate) fn close_user_wrapper_directory(
+        &mut self,
+        id: i64,
+    ) -> Option<EvalUserWrapperDirectoryInfo> {
+        self.user_wrapper_directories
+            .remove(&id)
+            .map(|directory| directory.info())
     }
 
     /// Updates the cached EOF state for a userspace-wrapper stream.
@@ -1012,6 +1051,28 @@ pub(crate) struct EvalUserWrapperStreamInfo {
     pub(crate) object: RuntimeCellHandle,
     pub(crate) class_name: String,
     pub(crate) eof: bool,
+}
+
+/// Userspace-wrapper directory stored behind one eval resource id.
+struct EvalUserWrapperDirectory {
+    object: RuntimeCellHandle,
+    class_name: String,
+}
+
+impl EvalUserWrapperDirectory {
+    /// Copies the dispatch fields needed while invoking wrapper directory methods.
+    fn info(&self) -> EvalUserWrapperDirectoryInfo {
+        EvalUserWrapperDirectoryInfo {
+            object: self.object,
+            class_name: self.class_name.clone(),
+        }
+    }
+}
+
+/// Copied userspace-wrapper directory fields used while dispatching PHP methods.
+pub(crate) struct EvalUserWrapperDirectoryInfo {
+    pub(crate) object: RuntimeCellHandle,
+    pub(crate) class_name: String,
 }
 
 /// Wrapper targets that need a write-back step when their stream closes.

@@ -33,6 +33,9 @@ pub(in crate::interpreter) fn eval_opendir_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let directory = eval_path_string(directory, values)?;
+    if let Some(result) = eval_user_wrapper_opendir_result(&directory, context, values)? {
+        return Ok(result);
+    }
     match context.stream_resources_mut().open_directory(&directory) {
         Some(id) => values.resource(id),
         None => values.bool_value(false),
@@ -64,14 +67,25 @@ pub(in crate::interpreter) fn eval_unary_directory_result(
     let id = eval_directory_resource_id(dir_handle, values)?;
     match name {
         "closedir" => {
+            if let Some(result) = eval_user_wrapper_closedir_result(id, context, values)? {
+                return Ok(result);
+            }
             context.stream_resources_mut().close_directory(id);
             values.null()
         }
-        "readdir" => match context.stream_resources_mut().read_directory(id) {
-            Some(name) => values.string(&name),
-            None => values.bool_value(false),
-        },
+        "readdir" => {
+            if let Some(result) = eval_user_wrapper_readdir_result(id, context, values)? {
+                return Ok(result);
+            }
+            match context.stream_resources_mut().read_directory(id) {
+                Some(name) => values.string(&name),
+                None => values.bool_value(false),
+            }
+        }
         "rewinddir" => {
+            if let Some(result) = eval_user_wrapper_rewinddir_result(id, context, values)? {
+                return Ok(result);
+            }
             context.stream_resources_mut().rewind_directory(id);
             values.null()
         }
