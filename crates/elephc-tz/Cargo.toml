@@ -1,0 +1,22 @@
+[package]
+name = "elephc-tz"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pure-Rust IANA timezone-introspection bridge staticlib (transitions/location/abbreviations) for the elephc PHP-to-native compiler's DateTimeZone introspection family"
+publish = false
+
+# Built as a C-callable staticlib (linked into compiled PHP programs that use
+# DateTimeZone::getLocation/getTransitions/listAbbreviations or their procedural
+# aliases) and an rlib (so the bridge is unit-testable via
+# `cargo test -p elephc-tz`). Mirrors crates/elephc-crypto / elephc-tls / elephc-pdo.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+# No dependencies: the IANA tables are baked from the PHP interpreter at
+# generation time (see data/generate.php) and embedded with include_str!, so the
+# bridge is byte-for-byte identical to PHP and needs nothing at runtime but std.
+# (A computed approach via tzdb/tz-rs cannot match PHP: those crates ship slim
+# TZif without the fat recurring-transition expansion, and Ramadan zones are not
+# POSIX-expressible.)
+[dependencies]

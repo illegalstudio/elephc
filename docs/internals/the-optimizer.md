@@ -431,6 +431,19 @@ fixed-point pass driver (`src/ir_passes/driver.rs`) after lowering, starting wit
 identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …) and local peephole
 patterns (box/unbox cancellation, scalar load/store forwarding, paired
 acquire/release cancellation, string-literal concat folding, redundant
-`move`/`borrow` cleanup). These are rewrites the AST optimizer cannot express
-well because they need value identity, basic blocks, or dominance; see
+`move`/`borrow` cleanup), then per-block constant folding that collapses
+operations whose operands are all compile-time constants (`5 * 5` → `25`,
+`0 < 5` → `true`) into a single constant — which, composed with the peephole's
+scalar load/store forwarding, propagates constants through EIR value ids and
+local slots — then dominance-aware common-subexpression elimination that reuses a
+pure computation already available on every path (per-block and cross-block via a
+dominator-tree value numbering), then loop-invariant code motion that hoists pure
+loop-invariant computations into loop preheaders, followed by CFG-aware dead
+instruction elimination for unused pure result-producing EIR instructions, CFG-aware dead
+store elimination
+for `store_local` writes to scalar PHP local slots that are never read before
+being overwritten, and branch simplification (constant-condition `cond_br`/`switch`
+folding, empty-block jump threading, and unreachable-block neutralization). These
+are rewrites the AST optimizer cannot express well because they need value
+identity, basic blocks, liveness, or dominance; see
 [Optimization Passes](the-ir.md#optimization-passes).

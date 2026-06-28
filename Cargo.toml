@@ -1,6 +1,6 @@
 [package]
 name = "elephc"
-version = "0.24.3"
+version = "0.25.2"
 edition = "2021"
 description = "A PHP-to-native AOT compiler"
 license = "MIT"
@@ -13,12 +13,15 @@ categories = ["compilers", "command-line-utilities"]
 # The bridge staticlibs are default workspace members so plain `cargo build` /
 # `cargo test` materialize libelephc_tls.a (https:// wrapper),
 # libelephc_pdo.a (PDO: SQLite + PostgreSQL), libelephc_crypto.a
-# (hash/HMAC family), libelephc_phar.a (runtime phar:// archive reads), and
-# libelephc_magician.a (optional eval runtime) into target/<profile>/, where
-# linker.rs locates them for programs that use those features.
+# (hash/HMAC family), libelephc_phar.a (runtime phar:// archive reads),
+# libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
+# listAbbreviations), libelephc_image.a (GD/Exif/Imagick/Gmagick/Cairo),
+# libelephc_web.a (--web prefork HTTP server), and libelephc_magician.a
+# (optional eval runtime) into target/<profile>/, where linker.rs locates them
+# for programs that use those features.
 [workspace]
-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-magician"]
-default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-magician"]
+members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
+default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
 resolver = "2"
 
 [[bin]]
@@ -36,19 +39,20 @@ flate2 = "1"
 bzip2-rs = "0.1"
 elephc-phar = { path = "crates/elephc-phar" }
 
-# elephc-tls / elephc-pdo are runtime staticlibs, not used by the Rust compiler
-# itself — but the codegen test runner links libelephc_tls.a (https:// wrapper)
-# and libelephc_pdo.a (PDO) into test binaries, so they ship as dev-dependencies
-# to make `cargo test` / `cargo nextest run` build them automatically. (Without
-# this the staticlibs are only built by `cargo build` of the default-members,
-# which a sharded nextest run does not perform — `ld: library 'elephc_pdo' not
-# found`.)
+# Bridge crates are runtime staticlibs, not used by the Rust compiler itself,
+# but codegen tests link their libelephc_*.a artifacts into compiled PHP
+# programs. They ship as dev-dependencies so `cargo test` / `cargo nextest run`
+# build them automatically. Without this, staticlibs are only built by `cargo
+# build` of the default-members, which a sharded nextest run does not perform.
 [dev-dependencies]
 elephc-tls = { path = "crates/elephc-tls" }
 elephc-pdo = { path = "crates/elephc-pdo" }
 elephc-crypto = { path = "crates/elephc-crypto" }
 elephc-phar = { path = "crates/elephc-phar" }
 elephc-magician = { path = "crates/elephc-magician" }
+elephc-tz = { path = "crates/elephc-tz" }
+elephc-image = { path = "crates/elephc-image" }
+elephc-web = { path = "crates/elephc-web" }
 # flate2 lets the phar:// codegen tests build gzip (raw-DEFLATE) fixture entries
 # with the same encoder the compiler decodes, guaranteeing a version-stable
 # round-trip without shelling out to php.

@@ -139,13 +139,15 @@ pub(crate) use driver_support::{
     emit_release_pushed_refcounted_temp_after_array_push, emit_write_current_string_stderr,
     emit_write_literal_stderr, runtime_value_tag,
 };
+pub(crate) use expr::arrays::emit_array_value_type_stamp;
+pub(crate) use functions::emit_fiber_wrapper;
+pub(crate) use sentinels::{NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL};
+pub use sentinels::{set_null_repr, NullRepr};
 #[allow(unused_imports)]
 pub use driver_support::{
     generate_runtime, generate_runtime_with_features, generate_runtime_with_features_pic,
 };
 use emit::Emitter;
-pub(crate) use expr::arrays::emit_array_value_type_stamp;
-pub(crate) use functions::{emit_fiber_wrapper, emit_generator_with_label};
 use interface_wrappers::emit_interface_return_wrappers;
 use main_emission::emit_main_and_finalize;
 use platform::Target;
@@ -155,8 +157,6 @@ pub use runtime_features::RuntimeFeatures;
 pub use runtime_features::{
     required_libraries_for_runtime_features, runtime_features_for_program_and_classes,
 };
-pub use sentinels::{set_null_repr, NullRepr};
-pub(crate) use sentinels::{NULL_SENTINEL, UNINITIALIZED_TYPED_PROPERTY_SENTINEL};
 
 /// Output artifact kind selected by the compiler's `--emit` flag.
 ///

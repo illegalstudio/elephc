@@ -26,6 +26,7 @@ mod array_fill_assoc;
 mod array_fill_keys;
 mod array_fill_keys_refcounted;
 mod array_fill_refcounted;
+mod array_fill_str;
 mod array_filter;
 mod array_filter_refcounted;
 mod array_flip;
@@ -174,6 +175,8 @@ pub use array_fill_keys_refcounted::emit_array_fill_keys_refcounted;
 /// Emit refcounted array fill with keys helper.
 pub use array_fill_refcounted::emit_array_fill_refcounted;
 /// Emit refcounted array fill helper.
+pub use array_fill_str::emit_array_fill_str;
+/// Emit string array fill helper.
 pub use array_filter::emit_array_filter;
 /// Emit array filter helper.
 pub use array_filter_refcounted::emit_array_filter_refcounted;

@@ -182,6 +182,17 @@ fn test_intval_float_form_and_partial_strings() {
     assert_eq!(out, "1000|3|12|-5|0");
 }
 
+/// Regression: `intval()` of a runtime float must truncate toward zero (like the `(int)` cast), not
+/// reinterpret the raw IEEE-754 bits. A non-constant float (`$x`, and a division result) exercises
+/// the runtime codegen path rather than constant folding.
+#[test]
+fn test_intval_float_truncates() {
+    let out = compile_and_run(
+        "<?php $x = 830000.0; $y = -8.9; echo intval($x), '|', intval($y), '|', intval(9.0 / 2.0), '|', intval(0.0);",
+    );
+    assert_eq!(out, "830000|-8|4|0");
+}
+
 /// Compiles `<?php echo "before"; exit(0); echo "after";` and asserts stdout is `before`.
 /// Verifies `exit` stops execution and prevents output of subsequent statements.
 #[test]

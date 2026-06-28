@@ -46,6 +46,23 @@ echo "mixed:", (int)$map["exp"], ":", (int)$map["plus"];
     );
 }
 
+/// Regression: a cast binds tighter than the following binary operator (PHP precedence).
+/// `(int)$x + 3` is `((int)$x) + 3` (not `(int)($x + 3)`), `(int)$x * 2` likewise, and
+/// `(int)$n . "x"` concatenates the cast result. Before the parser fix the cast operand was
+/// parsed at too-low a binding power and swallowed the trailing operator: arithmetic forms were
+/// rejected as "non-numeric operands" and the concat form silently dropped the suffix.
+#[test]
+fn test_cast_precedence_binds_tighter_than_binary_ops() {
+    let out = compile_and_run(
+        r#"<?php
+$x = "5";
+$n = 5;
+echo (int)$x + 3, "|", (int)$x * 2, "|", (float)"2.5" + 1, "|", (int)$n . "x";
+"#,
+    );
+    assert_eq!(out, "8|10|3.5|5x");
+}
+
 /// Compiles `<?php echo (int)true;` and asserts stdout is `"1"` — true becomes 1.
 #[test]
 fn test_cast_int_from_bool() {

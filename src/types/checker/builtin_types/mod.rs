@@ -8,11 +8,15 @@
 //! Key details:
 //! - Injected declarations must be present before schema validation and method signature checks run.
 
+mod calendar;
+mod date_period;
+mod datetime;
 mod declarations;
 mod exception;
 mod fiber;
 mod magic_methods;
 mod reflection;
+mod timezone_ids;
 
 /// Metadata for a builtin PHP interface declaration.
 ///
@@ -50,3 +54,9 @@ pub(crate) use fiber::patch_builtin_fiber_signatures;
 /// Does nothing for classes that do not declare these methods.
 pub(crate) use magic_methods::{patch_magic_method_signatures, validate_magic_method_contracts};
 pub(crate) use reflection::{inject_builtin_reflection, patch_builtin_reflection_signatures};
+
+/// Injects the builtin `DateTimeInterface`, `DateTimeZone`, and `DateTimeImmutable` declarations.
+pub(crate) use datetime::inject_builtin_datetime;
+
+/// Injects the builtin `DatePeriod` Iterator class (the `(start, interval, end)` form).
+pub(crate) use date_period::inject_builtin_date_period;

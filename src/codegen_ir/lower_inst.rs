@@ -21,7 +21,7 @@ use crate::codegen::context::{
 use crate::codegen::platform::Arch;
 use crate::intrinsics::{IntrinsicCall, IntrinsicCallKind};
 use crate::ir::{
-    BlockId, CmpPredicate, Function, Immediate, InstId, Instruction, LocalSlotId, Op, Ownership,
+    BlockId, CmpPredicate, Function, Immediate, InstId, Instruction, LocalKind, LocalSlotId, Op, Ownership,
     Terminator, ValueDef, ValueId,
 };
 use crate::names::{
@@ -107,6 +107,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ICmp => lower_int_compare(ctx, &inst),
         Op::FCmp => floats::lower_float_compare(ctx, &inst),
         Op::Spaceship => comparisons::lower_spaceship(ctx, &inst),
+        Op::StrCmp => comparisons::lower_str_cmp(ctx, &inst),
         Op::StrictEq => comparisons::lower_strict_eq(ctx, &inst, true),
         Op::StrictNotEq => comparisons::lower_strict_eq(ctx, &inst, false),
         Op::LooseEq => comparisons::lower_loose_eq(ctx, &inst, true),
@@ -133,6 +134,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayNew => arrays::lower_array_new(ctx, &inst),
         Op::ArrayLen => arrays::lower_array_len(ctx, &inst),
         Op::ArrayGet => arrays::lower_array_get(ctx, &inst),
+        Op::ArrayIsset => builtins::lower_array_isset(ctx, &inst),
         Op::ArraySet => arrays::lower_array_set(ctx, &inst),
         Op::ArrayPush => arrays::lower_array_push(ctx, &inst),
         Op::MixedArrayAppend => arrays::lower_mixed_array_append(ctx, &inst),
@@ -142,6 +144,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashNew => hashes::lower_hash_new(ctx, &inst),
         Op::HashLen => hashes::lower_hash_len(ctx, &inst),
         Op::HashGet => hashes::lower_hash_get(ctx, &inst),
+        Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
         Op::HashUnion => hashes::lower_hash_union(ctx, &inst),
         Op::HashArrayUnion => hashes::lower_hash_array_union(ctx, &inst),
@@ -208,6 +211,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
         Op::Release => ownership::lower_release(ctx, &inst),
+        Op::GcCollect => lower_gc_collect(ctx),
         Op::Move | Op::Borrow => ownership::lower_forward(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),
@@ -223,6 +227,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FunctionVariantDispatch => Ok(()),
         Op::FunctionVariantMark => lower_function_variant_mark(ctx, &inst),
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),
+        Op::GeneratorYield => lower_generator_yield(ctx, &inst),
+        Op::GeneratorYieldFrom => lower_generator_yield_from(ctx, &inst),
         Op::ConcatReset => lower_concat_reset(ctx),
         Op::Nop => lower_nop(ctx, &inst),
         _ => Err(CodegenIrError::unsupported(format!("opcode {}", inst.op.name()))),
@@ -1059,6 +1065,12 @@ fn descriptor_entry_stack_offsets(assignments: &[abi::OutgoingArgAssignment]) ->
         next_offset += descriptor_entry_arg_slot_size(&assignment.ty);
     }
     (offsets, next_offset)
+}
+
+/// Lowers an explicit cycle-collection safe point.
+fn lower_gc_collect(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");
+    Ok(())
 }
 
 /// Converts a descriptor overflow offset into a caller-stack frame offset.
@@ -3133,6 +3145,104 @@ fn lower_callback_filter_accept_intrinsic(
         &inst.operands[1..],
         "callback_filter_accept",
     )
+}
+
+/// Lowers a `yield` / `yield <k> => <v>` suspension to the `__rt_gen_suspend`
+/// coroutine primitive.
+///
+/// Operand layout from `ir_lower::lower_yield`: `[]` for `yield;`, `[value]`
+/// for `yield $v`, `[key, value]` for `yield $k => $v`. The yielded value (and
+/// explicit key, if any) are boxed into owned Mixed cells and passed as
+/// `__rt_gen_suspend(key, value)`; a NULL key requests an auto-increment
+/// integer key. The helper's result register holds the value delivered by the
+/// next `send()`/`next()`, which becomes the SSA result of the yield.
+fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let target = ctx.emitter.target;
+    let key_arg = abi::int_arg_reg_name(target, 0);
+    let value_arg = abi::int_arg_reg_name(target, 1);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+
+    let n = inst.operands.len();
+    let value_operand = if n >= 1 { Some(inst.operands[n - 1]) } else { None };
+    let key_operand = if n >= 2 { Some(inst.operands[0]) } else { None };
+
+    // -- materialize the yielded value as an owned Mixed cell and park it --
+    match value_operand {
+        Some(value) => emit_value_as_owned_mixed(ctx, value)?,
+        None => emit_owned_null_mixed(ctx),
+    }
+    abi::emit_push_reg(ctx.emitter, result_reg);
+
+    // -- materialize the key: explicit owned Mixed cell, or NULL for auto-key --
+    match key_operand {
+        Some(key) => {
+            emit_value_as_owned_mixed(ctx, key)?;
+            if key_arg != result_reg {
+                ctx.emitter
+                    .instruction(&format!("mov {}, {}", key_arg, result_reg)); // move the boxed key into the first argument register
+            }
+        }
+        None => {
+            abi::emit_load_int_immediate(ctx.emitter, key_arg, 0); // NULL key requests the auto-increment integer key path
+        }
+    }
+    abi::emit_pop_reg(ctx.emitter, value_arg);
+
+    abi::emit_call_label(ctx.emitter, "__rt_gen_suspend");
+    store_call_result(ctx, inst, &PhpType::Mixed)
+}
+
+/// Lowers `yield from <generator>` by delegating to the `__rt_gen_delegate`
+/// runtime helper, which drives the inner generator on the current coroutine
+/// stack and returns its `return` value (the value of the `yield from`
+/// expression). `yield from <array>` is desugared into an iterator loop before
+/// reaching the backend, so the operand here is always a Generator/Traversable.
+fn lower_generator_yield_from(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let operand = expect_operand(inst, 0)?;
+    let target = ctx.emitter.target;
+    let arg0 = abi::int_arg_reg_name(target, 0);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_result(operand)?; // inner generator pointer (borrowed)
+    if arg0 != result_reg {
+        ctx.emitter
+            .instruction(&format!("mov {}, {}", arg0, result_reg)); // pass the inner generator as delegate argument 0
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_gen_delegate");
+    store_call_result(ctx, inst, &PhpType::Mixed)
+}
+
+/// Loads `value` and boxes it into an *owned* Mixed cell in the result register.
+///
+/// Scalars, strings, arrays, objects, and callables box into a freshly retained
+/// Mixed cell. An already-`Mixed` operand is left borrowed by the boxer, so it
+/// is increfed to give the callee its own reference (the generator stores the
+/// cell into a persistent slot).
+fn emit_value_as_owned_mixed(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let ty = ctx.load_value_to_result(value)?;
+    let repr = ty.codegen_repr();
+    emit_box_current_value_as_mixed(ctx.emitter, &ty);
+    if matches!(repr, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(ctx.emitter, "__rt_incref"); // own the borrowed Mixed cell handed to the generator
+    }
+    Ok(())
+}
+
+/// Boxes PHP null into an owned Mixed cell in the result register.
+fn emit_owned_null_mixed(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #8");                              // runtime tag 8 = PHP null
+            ctx.emitter.instruction("mov x1, #0");                              // null has no low payload word
+            ctx.emitter.instruction("mov x2, #0");                              // null has no high payload word
+            ctx.emitter.instruction("bl __rt_mixed_from_value");                // allocate a boxed Mixed null cell
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, 8");                              // runtime tag 8 = PHP null
+            ctx.emitter.instruction("xor edi, edi");                            // null has no low payload word
+            ctx.emitter.instruction("xor esi, esi");                            // null has no high payload word
+            ctx.emitter.instruction("call __rt_mixed_from_value");              // allocate a boxed Mixed null cell
+        }
+    }
 }
 
 /// Lowers built-in `Generator` methods to their runtime helpers.
@@ -5429,6 +5539,71 @@ pub(super) fn load_value_to_first_int_arg(
     Ok(ty)
 }
 
+/// Casts a Mixed source in the first integer arg into one owned string copy.
+pub(super) fn emit_mixed_string_for_persistent_store(ctx: &mut FunctionContext<'_>) {
+    let non_string = ctx.next_label("mixed_string_persist_non_string");
+    let done = ctx.next_label("mixed_string_persist_done");
+    let mixed_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_push_reg(ctx.emitter, mixed_arg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // check whether the Mixed payload already holds a string
+            ctx.emitter.instruction(&format!("b.ne {}", non_string));           // non-string casts need scratch conversion before persistence
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the generic cast path after the direct string persist
+            ctx.emitter.label(&non_string);
+            abi::emit_pop_reg(ctx.emitter, mixed_arg);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // check whether the Mixed payload already holds a string
+            ctx.emitter.instruction(&format!("jne {}", non_string));            // non-string casts need scratch conversion before persistence
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed string pointer into str_persist's input register
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the generic cast path after the direct string persist
+            ctx.emitter.label(&non_string);
+            abi::emit_pop_reg(ctx.emitter, mixed_arg);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+        }
+    }
+    ctx.emitter.label(&done);
+}
+
+/// Resolves `value` into the canonical integer result register, unboxing a boxed `Mixed`/`Union`
+/// payload through `__rt_mixed_cast_int`.
+///
+/// `Int`/`Bool` load directly; every other type is an `unsupported` diagnostic. The `Mixed` path
+/// emits a call that clobbers the caller-saved argument registers, so a caller that has already
+/// staged other arguments in those registers must spill across this resolution (the integer is left
+/// in the int result register on return).
+pub(super) fn resolve_int_operand_to_result(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    context: &str,
+) -> Result<()> {
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Int | PhpType::Bool => {
+            ctx.load_value_to_result(value)?;
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+        }
+        ty => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} for PHP type {:?}",
+                context, ty
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Moves the canonical integer result register into the target's first argument register.
 fn move_int_result_to_first_arg(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -5753,6 +5928,10 @@ fn lower_unset_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     let slot = expect_local_slot(inst)?;
     let offset = ctx.local_offset(slot)?;
     ctx.unmark_promoted_ref_cell(slot);
+    if ctx.local_kind(slot)? == LocalKind::OwnedTemp {
+        clear_local_slot_storage(ctx, slot, offset)?;
+        return Ok(());
+    }
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
@@ -5762,6 +5941,24 @@ fn lower_unset_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     if matches!(ctx.local_php_type(slot)?.codegen_repr(), PhpType::Str) {
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset - 8);
+    }
+    Ok(())
+}
+
+/// Zeroes a local slot after an owned hidden temp has been moved into SSA.
+fn clear_local_slot_storage(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    offset: usize,
+) -> Result<()> {
+    match ctx.local_php_type(slot)?.codegen_repr() {
+        PhpType::Str | PhpType::TaggedScalar => {
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset - 8);
+        }
+        _ => {
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        }
     }
     Ok(())
 }

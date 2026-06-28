@@ -173,9 +173,10 @@ fn emit_tempnam_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r8 + 6], 0");                            // append the trailing null terminator required by libc mkstemp()
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // pass the mutable template buffer to libc mkstemp(), which rewrites the trailing XXXXXX in place
     emitter.instruction("call mkstemp");                                        // create a unique temp file and rewrite the mutable template buffer into the final temp path
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the returned file descriptor so the temp file can be closed before returning the path
-    emitter.instruction("cmp rax, 0");                                          // detect mkstemp() failure before trying to close the returned file descriptor
+    emitter.instruction("cmp eax, 0");                                          // detect a negative C int fd before trying to close it
     emitter.instruction("jl __rt_tempnam_fail_x86");                            // release the allocated template buffer and return the empty string when mkstemp() fails
+    emitter.instruction("cdqe");                                                // normalize the successful C int fd into the runtime's 64-bit descriptor value
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the returned file descriptor so the temp file can be closed before returning the path
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the mkstemp() file descriptor before closing the newly created temp file
     emitter.instruction("call close");                                          // close the temp file immediately because tempnam() returns only the path, not an open descriptor
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // return the owned mutable template buffer, now rewritten into the final temp path, in the x86_64 string result register

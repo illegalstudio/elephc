@@ -18,7 +18,7 @@ mod tests;
 mod values;
 
 pub use bootstrap::{
-    emit_copy_frame_pointer, emit_enable_heap_debug_flag, emit_exit,
+    emit_copy_frame_pointer, emit_enable_heap_debug_flag, emit_exit, emit_exit_with_result_reg,
     emit_store_process_args_to_globals,
 };
 pub use calls::{

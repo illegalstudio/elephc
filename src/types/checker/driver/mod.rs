@@ -30,8 +30,9 @@ use super::builtin_spl_classes::{
 use super::builtin_spl_exceptions::inject_builtin_spl_exceptions;
 use super::builtin_stdclass::inject_builtin_stdclass;
 use super::builtin_types::{
-    inject_builtin_reflection, inject_builtin_throwables, patch_builtin_exception_signatures,
-    patch_builtin_fiber_signatures, patch_builtin_reflection_signatures,
+    inject_builtin_date_period, inject_builtin_datetime, inject_builtin_reflection,
+    inject_builtin_throwables, patch_builtin_exception_signatures, patch_builtin_fiber_signatures,
+    patch_builtin_reflection_signatures,
     patch_magic_method_signatures, InterfaceDeclInfo,
 };
 use super::builtin_user_filter::inject_builtin_user_filter;
@@ -143,9 +144,17 @@ pub(super) fn check_types_impl(
     if let Err(error) = inject_builtin_throwables(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
+    // The tz_prelude (injected upstream only when the program uses timezone
+    // introspection) declares `timezone_location_get`. Its presence gates the
+    // three `DateTimeZone` introspection methods, which reference the elephc_tz
+    // bridge and must not be added — and linked — for every DateTimeZone program.
+    let uses_tz_introspection = checker.has_function_decl_folded("timezone_location_get");
+    inject_builtin_datetime(&mut interface_map, &mut class_map, uses_tz_introspection);
     if let Err(error) = inject_builtin_interfaces(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
+    // DatePeriod implements Iterator (registered just above) and references DateTime/DateInterval.
+    inject_builtin_date_period(&mut class_map);
     if let Err(error) = inject_builtin_spl_exceptions(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }

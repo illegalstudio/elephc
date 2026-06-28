@@ -84,6 +84,14 @@ fn resolve_static_local_slot(
     let init_symbol = format!("{}_init", symbol);
     ctx.data.add_comm(symbol.clone(), 16);
     ctx.data.add_comm(init_symbol.clone(), 8);
+    // Record this static so the `--web` `__rt_web_reset` routine can release and
+    // zero it between requests. Deduped by symbol inside the recorder, so the
+    // repeated resolves on every load/store/init of this static cost nothing.
+    ctx.data.record_static_local(crate::codegen::data_section::StaticLocalRecord {
+        symbol: symbol.clone(),
+        init_symbol: init_symbol.clone(),
+        php_type: php_type.clone(),
+    });
     Ok(StaticLocalSlot {
         name,
         php_type,

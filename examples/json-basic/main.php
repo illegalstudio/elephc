@@ -11,6 +11,17 @@ echo json_encode(null) . "\n";
 echo json_encode([1, 2, 3]) . "\n";
 echo json_encode(["name" => "Alice", "age" => 30]) . "\n";
 
+// Floats use PHP's serialize_precision = -1: the shortest decimal string that
+// round-trips back to the same double. So 1/3 keeps 16 significant digits
+// (not the 14 of echo/(string)), integer-valued floats drop the fraction
+// (100, not 100.0), and very large/small magnitudes use lowercase scientific
+// notation with no leading zero in the exponent.
+echo json_encode(1.0 / 3.0) . "\n";   // 0.3333333333333333
+echo json_encode(0.1 + 0.2) . "\n";   // 0.30000000000000004
+echo json_encode(100.0) . "\n";       // 100
+echo json_encode(1.0e17) . "\n";      // 1.0e+17
+echo json_encode(0.000001) . "\n";    // 1.0e-6
+
 // Objects are encoded via their public properties (private/protected are
 // skipped, mirroring PHP). See examples/json-jsonserializable for opting in
 // to a custom shape via JsonSerializable.

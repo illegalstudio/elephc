@@ -52,6 +52,17 @@ pub(crate) fn release_if_owned(ctx: &mut LoweringContext<'_, '_>, value: Lowered
     }
 }
 
+/// Emits an explicit cycle-collection safe point after PHP roots were updated.
+pub(crate) fn collect_cycles(ctx: &mut LoweringContext<'_, '_>, span: Option<Span>) {
+    ctx.emit_void(
+        Op::GcCollect,
+        Vec::new(),
+        None,
+        Op::GcCollect.default_effects(),
+        span,
+    );
+}
+
 /// Returns whether an ownership state means the value is potentially released by this path.
 pub(crate) fn may_require_release(ownership: Ownership) -> bool {
     matches!(ownership, Ownership::Owned | Ownership::MaybeOwned)

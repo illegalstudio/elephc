@@ -96,8 +96,9 @@ fn emit_protoent_load_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "rdi", "_etc_protocols_path");            // path argument for libc open()
     emitter.instruction("xor esi, esi");                                        // O_RDONLY flags for libc open()
     emitter.instruction("call open");                                           // open the protocols file for reading
-    emitter.instruction("cmp rax, 0");                                          // did libc open() fail?
+    emitter.instruction("cmp eax, 0");                                          // did libc open() return a negative C int descriptor?
     emitter.instruction("jl __rt_protoent_load_fail");                          // a missing file returns an empty buffer
+    emitter.instruction("cdqe");                                                // normalize the successful C int fd into the runtime's 64-bit descriptor value
     emitter.instruction("mov rbx, rax");                                        // rbx = open file descriptor
     emitter.instruction("xor r12d, r12d");                                      // r12 = running byte total
 

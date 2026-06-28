@@ -118,17 +118,19 @@ pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId)
 fn emit_tagged_scalar_null_bool(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!(
+            let cmp_inst = format!(
                 "cmp x1, #{}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
-            ));                                                                 // compare the tagged scalar tag against PHP null
+            );
+            ctx.emitter.instruction(&cmp_inst);                                 // compare the tagged scalar tag against PHP null
             ctx.emitter.instruction("cset x0, eq");                             // materialize true when the tagged scalar is null
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!(
+            let cmp_inst = format!(
                 "cmp rdx, {}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
-            ));                                                                 // compare the tagged scalar tag against PHP null
+            );
+            ctx.emitter.instruction(&cmp_inst);                                 // compare the tagged scalar tag against PHP null
             ctx.emitter.instruction("sete al");                                 // materialize true when the tagged scalar is null
             ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }
@@ -177,6 +179,44 @@ pub(super) fn emit_mixed_tag_eq(
             ctx.emitter.instruction("movzx rax, al");                           // widen the Mixed tag predicate byte into the integer result register
         }
     }
+    Ok(())
+}
+
+/// Emits a boolean result that is 1 when a boxed Mixed value's unboxed runtime tag is one
+/// of `true_tags`, else 0. Backs the `is_array`/`is_object`/`is_scalar` kind predicates over
+/// boxed Mixed/Union cells, where the concrete kind is only known at runtime.
+pub(super) fn emit_mixed_tag_membership(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    true_tags: &[u8],
+) -> Result<()> {
+    let ty = ctx.load_value_to_result(value)?;
+    if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "mixed kind predicate for PHP type {:?}",
+            ty
+        )));
+    }
+    let true_label = ctx.next_label("mixed_kind_true");
+    let done_label = ctx.next_label("mixed_kind_done");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    for &tag in true_tags {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp x0, #{}", tag));          // compare the unboxed Mixed runtime tag against an accepted kind
+                ctx.emitter.instruction(&format!("b.eq {}", true_label));       // accept the value when its runtime tag matches this kind
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp rax, {}", tag));          // compare the unboxed Mixed runtime tag against an accepted kind
+                ctx.emitter.instruction(&format!("je {}", true_label));         // accept the value when its runtime tag matches this kind
+            }
+        }
+    }
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&true_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 

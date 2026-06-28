@@ -12,7 +12,7 @@ use crate::codegen::abi;
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::{coerce_to_int, emit_expr};
 use crate::codegen::platform::Arch;
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
@@ -47,7 +47,8 @@ pub fn emit(
         matches!(&arr_ty, PhpType::Array(inner) if inner.is_refcounted());
     if emitter.target.arch == Arch::X86_64 {
         abi::emit_push_reg(emitter, "rax");                                     // preserve the source scalar indexed-array pointer while evaluating the target size expression
-        emit_expr(&args[1], emitter, ctx, data);
+        let size_ty = emit_expr(&args[1], emitter, ctx, data);
+        coerce_to_int(emitter, &size_ty);                                       // unbox a Mixed/Union target size into a raw integer
         abi::emit_push_reg(emitter, "rax");                                     // preserve the requested target size while evaluating the scalar pad value
         emit_expr(&args[2], emitter, ctx, data);
         emitter.instruction("mov rdx, rax");                                    // move the scalar pad value into the third x86_64 runtime argument register
@@ -67,7 +68,8 @@ pub fn emit(
 
     // -- save array pointer, evaluate target size --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push array pointer onto stack
-    emit_expr(&args[1], emitter, ctx, data);
+    let size_ty = emit_expr(&args[1], emitter, ctx, data);
+    coerce_to_int(emitter, &size_ty);                                           // unbox a Mixed/Union target size into a raw integer
     // -- save target size, evaluate pad value --
     emitter.instruction("str x0, [sp, #-16]!");                                 // push target size onto stack
     emit_expr(&args[2], emitter, ctx, data);

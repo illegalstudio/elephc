@@ -1764,8 +1764,6 @@ fn value_string_coercion_needs_temp_cleanup(
             | PhpType::Float
             | PhpType::Bool
             | PhpType::TaggedScalar
-            | PhpType::Mixed
-            | PhpType::Union(_)
             | PhpType::Resource(_)
     ))
 }
@@ -1866,8 +1864,7 @@ pub(super) fn load_value_as_string_to_regs(
             Ok(())
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            load_value_to_first_int_arg(ctx, value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            emit_mixed_borrowed_string_to_regs(ctx, value)?;
             move_string_result_to_regs(ctx, ptr_reg, len_reg);
             Ok(())
         }
@@ -1876,6 +1873,118 @@ pub(super) fn load_value_as_string_to_regs(
             name, other
         ))),
     }
+}
+
+/// Materializes a `Mixed`/union value as a borrowed PHP string for builtin arguments.
+///
+/// String payloads are borrowed directly from the boxed cell instead of being
+/// persisted. Scalar payloads stringify into concat scratch storage, which is
+/// reset by the usual request/function concat-base cleanup.
+fn emit_mixed_borrowed_string_to_regs(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => emit_mixed_borrowed_string_aarch64(ctx, value),
+        Arch::X86_64 => emit_mixed_borrowed_string_x86_64(ctx, value),
+    }
+}
+
+/// Emits AArch64 borrowed string coercion for a boxed `Mixed` value.
+fn emit_mixed_borrowed_string_aarch64(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let from_int = ctx.next_label("mixed_arg_string_from_int");
+    let from_string = ctx.next_label("mixed_arg_string_from_string");
+    let from_float = ctx.next_label("mixed_arg_string_from_float");
+    let from_bool = ctx.next_label("mixed_arg_string_from_bool");
+    let false_bool = ctx.next_label("mixed_arg_string_false_bool");
+    let done = ctx.next_label("mixed_arg_string_done");
+    load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("cmp x0, #0");                                      // check whether the boxed argument is an integer payload
+    ctx.emitter.instruction(&format!("b.eq {}", from_int));                     // stringify integer payloads through the concat-backed itoa helper
+    ctx.emitter.instruction("cmp x0, #1");                                      // check whether the boxed argument already holds a string payload
+    ctx.emitter.instruction(&format!("b.eq {}", from_string));                  // borrow string payloads directly from the boxed cell
+    ctx.emitter.instruction("cmp x0, #2");                                      // check whether the boxed argument is a float payload
+    ctx.emitter.instruction(&format!("b.eq {}", from_float));                   // stringify float payloads through the concat-backed ftoa helper
+    ctx.emitter.instruction("cmp x0, #3");                                      // check whether the boxed argument is a boolean payload
+    ctx.emitter.instruction(&format!("b.eq {}", from_bool));                    // stringify boolean payloads using PHP scalar rules
+    ctx.emitter.instruction("mov x1, xzr");                                     // use an empty string pointer for null or unsupported boxed payloads
+    ctx.emitter.instruction("mov x2, xzr");                                     // use zero length for null or unsupported boxed payloads
+    ctx.emitter.instruction(&format!("b {}", done));                            // finish with the normalized empty string
+
+    ctx.emitter.label(&from_int);
+    ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed integer payload to itoa
+    abi::emit_call_label(ctx.emitter, "__rt_itoa");
+    ctx.emitter.instruction(&format!("b {}", done));                            // finish with the concat-backed integer string
+
+    ctx.emitter.label(&from_string);
+    ctx.emitter.instruction(&format!("b {}", done));                            // x1/x2 already hold the borrowed string payload
+
+    ctx.emitter.label(&from_float);
+    ctx.emitter.instruction("fmov d0, x1");                                     // move unboxed float bits into the FP argument register
+    abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+    ctx.emitter.instruction(&format!("b {}", done));                            // finish with the concat-backed float string
+
+    ctx.emitter.label(&from_bool);
+    ctx.emitter.instruction(&format!("cbz x1, {}", false_bool));                // false stringifies to an empty string
+    ctx.emitter.instruction("mov x0, x1");                                      // pass true as integer 1 to itoa
+    abi::emit_call_label(ctx.emitter, "__rt_itoa");
+    ctx.emitter.instruction(&format!("b {}", done));                            // finish with the concat-backed true string
+
+    ctx.emitter.label(&false_bool);
+    ctx.emitter.instruction("mov x1, xzr");                                     // false uses an empty string pointer
+    ctx.emitter.instruction("mov x2, xzr");                                     // false uses zero string length
+
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Emits x86_64 borrowed string coercion for a boxed `Mixed` value.
+fn emit_mixed_borrowed_string_x86_64(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let from_int = ctx.next_label("mixed_arg_string_from_int");
+    let from_string = ctx.next_label("mixed_arg_string_from_string");
+    let from_float = ctx.next_label("mixed_arg_string_from_float");
+    let from_bool = ctx.next_label("mixed_arg_string_from_bool");
+    let false_bool = ctx.next_label("mixed_arg_string_false_bool");
+    let done = ctx.next_label("mixed_arg_string_done");
+    load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    ctx.emitter.instruction("cmp rax, 0");                                      // check whether the boxed argument is an integer payload
+    ctx.emitter.instruction(&format!("je {}", from_int));                       // stringify integer payloads through the concat-backed itoa helper
+    ctx.emitter.instruction("cmp rax, 1");                                      // check whether the boxed argument already holds a string payload
+    ctx.emitter.instruction(&format!("je {}", from_string));                    // borrow string payloads directly from the boxed cell
+    ctx.emitter.instruction("cmp rax, 2");                                      // check whether the boxed argument is a float payload
+    ctx.emitter.instruction(&format!("je {}", from_float));                     // stringify float payloads through the concat-backed ftoa helper
+    ctx.emitter.instruction("cmp rax, 3");                                      // check whether the boxed argument is a boolean payload
+    ctx.emitter.instruction(&format!("je {}", from_bool));                      // stringify boolean payloads using PHP scalar rules
+    ctx.emitter.instruction("xor eax, eax");                                    // use an empty string pointer for null or unsupported boxed payloads
+    ctx.emitter.instruction("xor edx, edx");                                    // use zero length for null or unsupported boxed payloads
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // finish with the normalized empty string
+
+    ctx.emitter.label(&from_int);
+    ctx.emitter.instruction("mov rax, rdi");                                    // pass the unboxed integer payload to itoa
+    abi::emit_call_label(ctx.emitter, "__rt_itoa");
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // finish with the concat-backed integer string
+
+    ctx.emitter.label(&from_string);
+    ctx.emitter.instruction("mov rax, rdi");                                    // return the borrowed string pointer from the boxed payload
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // rdx already holds the borrowed string length
+
+    ctx.emitter.label(&from_float);
+    ctx.emitter.instruction("movq xmm0, rdi");                                  // move unboxed float bits into the FP argument register
+    abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // finish with the concat-backed float string
+
+    ctx.emitter.label(&from_bool);
+    ctx.emitter.instruction("test rdi, rdi");                                   // false stringifies to an empty string
+    ctx.emitter.instruction(&format!("je {}", false_bool));                     // branch to the empty-string result for false
+    ctx.emitter.instruction("mov rax, rdi");                                    // pass true as integer 1 to itoa
+    abi::emit_call_label(ctx.emitter, "__rt_itoa");
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // finish with the concat-backed true string
+
+    ctx.emitter.label(&false_bool);
+    ctx.emitter.instruction("xor eax, eax");                                    // false uses an empty string pointer
+    ctx.emitter.instruction("xor edx, edx");                                    // false uses zero string length
+
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Converts the loaded boolean result to PHP string ABI registers.

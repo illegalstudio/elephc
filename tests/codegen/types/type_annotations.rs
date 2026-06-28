@@ -647,3 +647,35 @@ fn test_union_multi_member_with_null() {
     );
     assert_eq!(out, "int(7)\n");
 }
+
+/// Regression: union return types containing the literal types `false`/`true`/`null` now parse
+/// and compile. `int|false` returns the value, `int|null` returns null correctly, and a method
+/// returning `A|null` (equivalent to `?A`) supports normal use of the returned object.
+#[test]
+fn test_union_return_types_with_literal_types() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(bool $b): int|false {
+    return $b ? 42 : false;
+}
+function maybe(int $x): int|null {
+    return $x > 0 ? $x : null;
+}
+class Box {
+    public int $v = 9;
+    function self_or_null(bool $b): Box|null {
+        return $b ? $this : null;
+    }
+}
+echo pick(true);
+echo "|";
+echo is_int(maybe(5)) ? "int" : "no";
+echo "|";
+echo is_null(maybe(-1)) ? "null" : "no";
+echo "|";
+$box = new Box();
+echo $box->self_or_null(true)->v;
+"#,
+    );
+    assert_eq!(out, "42|int|null|9");
+}

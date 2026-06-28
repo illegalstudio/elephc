@@ -98,7 +98,7 @@ pub fn generate_runtime_with_features_pic(
     runtime::emit_runtime(&mut emitter, features);
     let mut output = emitter.output();
     output.push('\n');
-    output.push_str(&runtime::emit_runtime_data_fixed(heap_size));
+    output.push_str(&runtime::emit_runtime_data_fixed(heap_size, target));
     // The PIC runtime object only ever links into an ELF cdylib, where every
     // runtime global must bind locally: hidden visibility prevents dynamic
     // preemption (two loaded elephc modules aliasing one runtime state) and
@@ -236,16 +236,27 @@ fn emit_enum_backing_value(
 }
 
 /// Emits initialization for static properties, including uninitialized sentinels.
+///
+/// `allowed_class_names` must match the filter used when emitting static-property *storage*
+/// (`emit_runtime_data_user`): classes outside that set get no `.comm` slot, so initializing their
+/// statics here would reference an undefined symbol. This matters for builtin/synthetic classes,
+/// which are only emitted when actually used (unlike declared user classes); without the filter, a
+/// declared-but-unused synthetic class carrying a static property (e.g. `DateTime`/`DateTimeImmutable`
+/// sharing one) would emit an initializer for a slot that was never defined.
 pub(super) fn emit_static_property_initializers(
     emitter: &mut Emitter,
     data: &mut DataSection,
     ctx: &mut Context,
+    allowed_class_names: Option<&std::collections::HashSet<String>>,
 ) {
     let mut initializers = Vec::new();
     let mut uninitialized_static_properties = Vec::new();
     let mut sorted_classes: Vec<(&String, &ClassInfo)> = ctx.classes.iter().collect();
     sorted_classes.sort_by_key(|(class_name, _)| class_name.as_str());
     for (class_name, class_info) in sorted_classes {
+        if allowed_class_names.is_some_and(|allowed| !allowed.contains(class_name.as_str())) {
+            continue;
+        }
         for (index, (property_name, prop_ty)) in class_info.static_properties.iter().enumerate() {
             let declaring_class = class_info
                 .static_property_declaring_classes
@@ -611,7 +622,7 @@ pub(crate) fn emit_box_current_expr_value_as_mixed_for_container(
     }
 
     match ty {
-        PhpType::Str => emit_box_current_owned_string_as_mixed_for_container(emitter, ty),
+        PhpType::Str => emit_box_current_owned_string_as_mixed(emitter),
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable => {
             emit_box_current_owned_refcounted_as_mixed_for_container(emitter, ty);
         }
@@ -650,7 +661,7 @@ pub(crate) fn emit_release_pushed_refcounted_temp_after_array_push(
 /// Boxes an owned current result into Mixed and releases the original owner afterward.
 pub(crate) fn emit_box_current_owned_value_as_mixed(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
-        PhpType::Str => emit_box_current_owned_string_as_mixed_for_container(emitter, ty),
+        PhpType::Str => emit_box_current_owned_string_as_mixed(emitter),
         PhpType::Array(_)
         | PhpType::AssocArray { .. }
         | PhpType::Iterable
@@ -662,29 +673,38 @@ pub(crate) fn emit_box_current_owned_value_as_mixed(emitter: &mut Emitter, ty: &
     }
 }
 
-/// Boxes an owned string from x1/x2 (AArch64) or rax/rdx (x86_64) into a Mixed cell
-/// while preserving and releasing the original string pointer/length after the Mixed
-/// helper copies the payload. The original string is released via `__rt_heap_free_safe`
-/// after the boxed copy is made.
-fn emit_box_current_owned_string_as_mixed_for_container(emitter: &mut Emitter, ty: &PhpType) {
+/// Transfers the owned string result into a freshly allocated Mixed string cell.
+///
+/// Unlike `__rt_mixed_from_value`, this path does not persist another copy of
+/// the payload. The caller has already proven the string is heap-owned and that
+/// the Mixed box is the new owner.
+fn emit_box_current_owned_string_as_mixed(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the owned source string while boxing an owned copy into Mixed
-            emit_box_current_value_as_mixed(emitter, ty);
-            emitter.instruction("str x0, [sp, #-16]!");                         // preserve the boxed Mixed result while releasing the original string
-            emitter.instruction("ldr x0, [sp, #16]");                           // reload the original string pointer for safe heap release
-            abi::emit_call_label(emitter, "__rt_heap_free_safe");               // release the original owned string after Mixed copied it
-            emitter.instruction("ldr x0, [sp], #16");                           // restore the boxed Mixed result
-            emitter.instruction("add sp, sp, #16");                             // discard the saved original string pointer and length
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the owned string payload while allocating the Mixed cell
+            emitter.instruction("mov x0, #24");                                 // mixed cells store tag plus two payload words
+            emitter.instruction("bl __rt_heap_alloc");                          // allocate a fresh Mixed cell payload
+            emitter.instruction("mov x9, #5");                                  // heap kind 5 = boxed Mixed cell
+            emitter.instruction("str x9, [x0, #-8]");                           // stamp the Mixed heap header
+            emitter.instruction("mov x10, #1");                                 // runtime tag 1 = string
+            emitter.instruction("str x10, [x0]");                               // store the string runtime tag
+            emitter.instruction("ldp x11, x12, [sp], #16");                     // restore the transferred string pointer and length
+            emitter.instruction("stp x11, x12, [x0, #8]");                      // move the string payload into the Mixed cell
         }
         Arch::X86_64 => {
-            abi::emit_push_reg_pair(emitter, "rax", "rdx");
-            emit_box_current_value_as_mixed(emitter, ty);
-            abi::emit_push_reg(emitter, "rax");
-            emitter.instruction("mov rax, QWORD PTR [rsp + 16]");               // reload the original string pointer for safe heap release
-            abi::emit_call_label(emitter, "__rt_heap_free_safe");               // release the original owned string after Mixed copied it
-            abi::emit_pop_reg(emitter, "rax");
-            emitter.instruction("add rsp, 16");                                 // discard the saved original string pointer and length
+            emitter.instruction("sub rsp, 16");                                 // reserve spill space for the owned string payload
+            emitter.instruction("mov QWORD PTR [rsp], rax");                    // preserve the owned string pointer while allocating the Mixed cell
+            emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                // preserve the owned string length while allocating the Mixed cell
+            emitter.instruction("mov rax, 24");                                 // mixed cells store tag plus two payload words
+            emitter.instruction("call __rt_heap_alloc");                        // allocate a fresh Mixed cell payload
+            emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)); // materialize the Mixed heap marker
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the Mixed heap header
+            emitter.instruction("mov QWORD PTR [rax], 1");                      // store runtime tag 1 = string
+            emitter.instruction("mov r10, QWORD PTR [rsp]");                    // reload the transferred string pointer
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // move the string pointer into the Mixed payload
+            emitter.instruction("mov r10, QWORD PTR [rsp + 8]");                // reload the transferred string length
+            emitter.instruction("mov QWORD PTR [rax + 16], r10");               // move the string length into the Mixed payload
+            emitter.instruction("add rsp, 16");                                 // discard the temporary string payload spill
         }
     }
 }

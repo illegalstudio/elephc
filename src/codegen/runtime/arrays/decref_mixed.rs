@@ -6,7 +6,8 @@
 //! - `crate::codegen::runtime::emitters::emit_runtime()` via `crate::codegen::runtime::arrays`.
 //!
 //! Key details:
-//! - Decrement helpers are release paths for refcounted values and must balance recursive frees with GC cycle collection.
+//! - Decrement helpers are release paths for refcounted values; cycle collection
+//!   runs only from explicit safe points after PHP-visible roots are updated.
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -20,11 +21,10 @@ const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 ///
 /// # Behavior
 /// - On ARM64: validates the pointer lies within the managed heap, decrements the refcount
-///   from the mixed cell header, and triggers GC cycle collection for boxed arrays/objects/mixed
-///   when the refcount reaches zero. Calls `__rt_mixed_free_deep` to release the payload.
+///   from the mixed cell header, and calls `__rt_mixed_free_deep` to release the payload
+///   when the refcount reaches zero.
 /// - On x86_64: validates the pointer is in-bounds with the correct heap magic header,
-///   decrements the refcount, triggers cycle collection for heap-backed children (tags 4–7),
-///   and tail-calls `__rt_mixed_free_deep` on zero refcount.
+///   decrements the refcount, and tail-calls `__rt_mixed_free_deep` on zero refcount.
 ///
 /// # ABI
 /// - ARM64: input pointer in `x0`; clobbers `x9`, `x10`; preserves `x30` (link register).
@@ -62,26 +62,7 @@ pub fn emit_decref_mixed(emitter: &mut Emitter) {
     emitter.instruction("str w9, [x0, #-12]");                                  // store the decremented mixed cell refcount
     emitter.instruction("b.eq __rt_decref_mixed_free");                         // zero refcount means the boxed payload can be released now
 
-    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_release_suppressed");
-    emitter.instruction("ldr x9, [x9]");                                        // load the release-suppression flag
-    emitter.instruction("cbnz x9, __rt_decref_mixed_skip");                     // ordinary deep-free walks suppress nested collector runs
-    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
-    emitter.instruction("ldr x9, [x9]");                                        // load the collector-active flag
-    emitter.instruction("cbnz x9, __rt_decref_mixed_skip");                     // nested decref calls during collection must not restart the collector
-    emitter.instruction("ldr x9, [x0]");                                        // load the boxed runtime payload tag
-    emitter.instruction("cmp x9, #4");                                          // does the mixed cell point to an indexed array?
-    emitter.instruction("b.eq __rt_decref_mixed_collect");                      // refcounted boxed children can participate in cycles
-    emitter.instruction("cmp x9, #5");                                          // does the mixed cell point to an associative array?
-    emitter.instruction("b.eq __rt_decref_mixed_collect");                      // refcounted boxed children can participate in cycles
-    emitter.instruction("cmp x9, #6");                                          // does the mixed cell point to an object?
-    emitter.instruction("b.eq __rt_decref_mixed_collect");                      // refcounted boxed children can participate in cycles
-    emitter.instruction("cmp x9, #7");                                          // does the mixed cell point to another mixed cell?
-    emitter.instruction("b.ne __rt_decref_mixed_skip");                         // scalar/string children cannot participate in heap cycles
-    emitter.label("__rt_decref_mixed_collect");
-    emitter.instruction("str x30, [sp, #-16]!");                                // preserve return address across the collector call
-    emitter.instruction("bl __rt_gc_collect_cycles");                           // reclaim any newly-unrooted graph components
-    emitter.instruction("ldr x30, [sp], #16");                                  // restore return address after the collector call
-    emitter.instruction("b __rt_decref_mixed_skip");                            // return after the optional collection pass
+    emitter.instruction("b __rt_decref_mixed_skip");                            // non-zero refcount stays alive until an explicit GC safe point
 
     emitter.label("__rt_decref_mixed_free");
     emitter.instruction("b __rt_mixed_free_deep");                              // tail-call to deep free the mixed cell and its boxed child
@@ -99,8 +80,7 @@ pub fn emit_decref_mixed(emitter: &mut Emitter) {
 /// - Skips null pointers and values below the managed heap base.
 /// - Validates the pointer is within the live heap window and carries the
 ///   x86_64 heap magic marker in the high 32 bits of the header word.
-/// - Decrements the refcount and performs GC cycle collection for heap-backed
-///   boxed children (tags 4–7) when the refcount reaches zero.
+/// - Decrements the refcount and leaves cycle collection to explicit safe points.
 /// - Tail-calls `__rt_mixed_free_deep` on zero refcount.
 ///
 /// # ABI
@@ -130,21 +110,7 @@ fn emit_decref_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10d, 1");                                         // decrement the mixed-box refcount for the releasing x86_64 owner
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented mixed-box refcount back into the uniform heap header
     emitter.instruction("jz __rt_decref_mixed_free");                           // zero refcount means the boxed payload can be released now
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_release_suppressed");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the release-suppression flag before considering a targeted cycle-collector run
-    emitter.instruction("test r11, r11");                                       // is this decref happening inside an ordinary deep-free walk?
-    emitter.instruction("jnz __rt_decref_mixed_skip");                          // yes — nested collector runs stay suppressed during deep frees
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_collecting");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the collector-active flag before attempting another collection pass
-    emitter.instruction("test r11, r11");                                       // is the collector already running?
-    emitter.instruction("jnz __rt_decref_mixed_skip");                          // yes — nested decref calls during collection must not restart the collector
-    emitter.instruction("mov r11, QWORD PTR [rax]");                            // load the boxed mixed runtime value_tag before deciding whether it can participate in cycles
-    emitter.instruction("cmp r11, 4");                                          // does this mixed box currently hold a heap-backed child?
-    emitter.instruction("jb __rt_decref_mixed_skip");                           // scalar, string, and null boxed values cannot participate in heap cycles
-    emitter.instruction("cmp r11, 7");                                          // is the boxed runtime tag within the supported heap-backed range?
-    emitter.instruction("ja __rt_decref_mixed_skip");                           // unknown boxed runtime tags are ignored by the x86_64 collector trigger
-    emitter.instruction("call __rt_gc_collect_cycles");                         // reclaim any newly unrooted graph components reachable through boxed mixed values
-    emitter.instruction("jmp __rt_decref_mixed_skip");                          // return after the optional x86_64 collector pass
+    emitter.instruction("jmp __rt_decref_mixed_skip");                          // non-zero refcount stays alive until an explicit GC safe point
     emitter.label("__rt_decref_mixed_skip");
     emitter.instruction("ret");                                                 // nothing else needs to happen for non-zero refcounts or foreign pointers
 

@@ -16,7 +16,7 @@ use crate::codegen::platform::Arch;
 /// Dispatches to the target-specific implementation after a blank line and global label.
 /// For ARM64: input x1=string_ptr, x2=string_len; output x1=key_lo, x2=key_hi where
 /// key_hi=-1 indicates an integer key and key_hi=0 signals a string key (x1/x2 unchanged).
-/// For x86_64 Linux: input rdi=string_ptr, rsi=string_len; output rax=key_lo, rdx=key_hi
+/// For x86_64 Linux: input rax=string_ptr, rdx=string_len; output rax=key_lo, rdx=key_hi
 /// with the same conventions. String keys return with rax/rdx (x1/x2) untouched.
 pub fn emit_hash_normalize_key(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -104,7 +104,7 @@ pub fn emit_hash_normalize_key(emitter: &mut Emitter) {
 
 /// Emits the x86_64 Linux variant of `__rt_hash_normalize_key`.
 ///
-/// Input registers: rdi=string_ptr, rsi=string_len.
+/// Input registers: rax=string_ptr, rdx=string_len (rdi/rsi/rcx/r8/r9/r10 are used as scratch).
 /// Output: rax=key_lo, rdx=key_hi where key_hi=-1 marks an integer key and key_hi=0
 /// means the original string pointer/length are returned unchanged (string key).
 /// The function validates numeric strings against PHP array-key semantics:

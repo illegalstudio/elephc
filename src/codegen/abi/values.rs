@@ -364,24 +364,29 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
-/// Writes the current string result registers to stdout via the `write` syscall.
+/// Writes the current string result registers to stdout through `__rt_stdout_write`.
 ///
-/// AArch64: sets `x0=1` (stdout fd) and invokes syscall 4.
-/// x86_64: loads `string_result_regs` into `rsi`/`rdx`, sets `edi=1`, `eax=1`, and invokes `syscall`.
-/// The string pointer and length are expected to already reside in the platform's string result registers.
+/// Moves the string pointer/length out of the platform string result registers and
+/// into the `__rt_stdout_write` calling convention (byte pointer in `x0`/`rdi`,
+/// length in `x1`/`rsi`), then calls the runtime indirection. That routine performs
+/// the actual `write(1, ptr, len)` syscall (or, in `--web` builds with capture
+/// enabled, hands the bytes to `elephc_web_write`).
+///
+/// AArch64: string result regs are `(x1, x2)` → set `x0=x1`, `x1=x2`.
+/// x86_64: string result regs are `(rax, rdx)` → set `rdi=rax`, `rsi=rdx`.
 fn emit_write_current_string_stdout(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #1");                                  // fd = stdout
-            emitter.syscall(4);
+            let (ptr_reg, len_reg) = string_result_regs(emitter);
+            emitter.instruction(&format!("mov x0, {}", ptr_reg));               // stdout_write ptr arg = current string pointer (copy before x1 is overwritten with the length, since ptr lives in x1)
+            emitter.instruction(&format!("mov x1, {}", len_reg));               // stdout_write len arg = current string length
+            emit_call_label(emitter, "__rt_stdout_write");                              // route the terminal write through the stdout-write indirection
         }
         Arch::X86_64 => {
             let (ptr_reg, len_reg) = string_result_regs(emitter);
-            emitter.instruction(&format!("mov rsi, {}", ptr_reg));              // move the current string pointer into the Linux write buffer register
-            emitter.instruction(&format!("mov rdx, {}", len_reg));              // move the current string length into the Linux write length register
-            emitter.instruction("mov edi, 1");                                  // fd = stdout
-            emitter.instruction("mov eax, 1");                                  // Linux x86_64 syscall 1 = write
-            emitter.instruction("syscall");                                     // write the current string payload to stdout
+            emitter.instruction(&format!("mov rsi, {}", len_reg));              // stdout_write len arg = current string length
+            emitter.instruction(&format!("mov rdi, {}", ptr_reg));              // stdout_write ptr arg = current string pointer
+            emit_call_label(emitter, "__rt_stdout_write");                              // route the terminal write through the stdout-write indirection
         }
     }
 }

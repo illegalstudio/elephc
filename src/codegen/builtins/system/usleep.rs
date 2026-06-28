@@ -11,7 +11,7 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::{coerce_to_int, emit_expr};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
@@ -38,7 +38,8 @@ pub fn emit(
 ) -> Option<PhpType> {
     emitter.comment("usleep()");
     // -- evaluate microseconds argument --
-    emit_expr(&args[0], emitter, ctx, data);
+    let micros_ty = emit_expr(&args[0], emitter, ctx, data);
+    coerce_to_int(emitter, &micros_ty);                                         // unbox a Mixed/Union microseconds argument into a raw integer
     // -- call libc usleep (x0 = microseconds) --
     emitter.bl_c("usleep");                                          // sleep for x0 microseconds
     Some(PhpType::Void)

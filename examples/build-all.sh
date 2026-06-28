@@ -36,6 +36,9 @@ for dir in "$SCRIPT_DIR"/*/; do
                 continue
             fi
             example_args=("${sdl_link_args[@]}")
+        elif [[ "$name" == web-* ]]; then
+            # web-* examples compile into a prefork HTTP server binary via --web
+            example_args=(--web)
         fi
 
         if $ELEPHC "${example_args[@]}" "$dir/main.php" >/dev/null 2>&1; then

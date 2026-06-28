@@ -263,6 +263,88 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
+/// Regression: `explode()` on a string with an empty segment (leading/trailing/double
+/// delimiter) used to store that segment as a borrowed pointer INTO the subject string,
+/// because `str_persist` returned zero-length strings as-is rather than copying them to
+/// an owned block. Reading such an empty element into a local and then releasing it
+/// (loop reassignment / scope exit) freed into the subject's live heap block, double-
+/// freeing it and corrupting the heap under churn — a deterministic SIGSEGV here without
+/// the fix. `str_persist` now gives empty strings their own owned block, and the release
+/// paths free owned empties through the validating `__rt_heap_free_safe` helper.
+/// Fixture: explodes an absolute path (leading empty segment) and reads it 200 times.
+#[test]
+fn test_explode_empty_segment_not_borrowed_from_subject() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+function run(): string {
+    $acc = 0;
+    for ($i = 0; $i < 200; $i++) {
+        $s = "/seg/" . $i . "/end";
+        $parts = explode("/", $s);   // ["", "seg", "$i", "end"] -- leading empty segment
+        $first = $parts[0];          // "" -- must be owned, not a pointer into $s
+        $acc = $acc + strlen($first) + count($parts);
+    }
+    return "ok:" . $acc;
+}
+echo run();
+"#,
+        65_536,
+    );
+    assert_eq!(out, "ok:800");
+}
+
+/// Verifies the empty owned blocks `str_persist` now allocates for zero-length strings
+/// are released — exploding an absolute path (leading empty segment) and reading every
+/// element leaves a clean heap (allocs == frees). On v0.24.2 the reassign and scope-exit
+/// release paths skipped len-0 strings and leaked one owned empty block per call.
+#[test]
+fn test_explode_empty_segment_leaves_clean_heap() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+function parse(string $s): int {
+    $parts = explode("/", $s);       // leading empty segment from the leading "/"
+    $a = $parts[0];                  // ""
+    $b = $parts[1];
+    return strlen($a) + strlen($b);
+}
+$t = 0;
+for ($i = 0; $i < 5; $i++) {
+    $t = $t + parse("/alpha/beta/gamma");
+}
+echo $t;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+    assert_eq!(out.stdout, "25");
+}
+
+/// Regression for the v0.24.2 release-on-reassign leak of owned empty strings.
+/// Reassigning an empty string local in a loop must free the previous owned block:
+/// `__rt_str_persist` now allocates one for `""`, and both the reassign release path
+/// and the scope-exit cleanup must free it through `__rt_heap_free_safe` (which skips
+/// null/.rodata/out-of-range pointers). The heap must stay clean.
+#[test]
+fn test_empty_string_reassignment_loop_leaves_clean_heap() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+function run(): void {
+    $s = "";
+    for ($i = 0; $i < 50; $i++) {
+        $s = "";
+    }
+    echo strlen($s);
+}
+run();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
+    assert_eq!(out.stdout, "0");
+}
+
 /// Verifies echo of property concat log line leaves no live heap blocks after 3 iterations.
 /// Fixture: Req/Res objects, echo "  " . method . " " . path . " -> " . status . "\n".
 /// Uses compile_and_run_with_gc_stats to assert allocs == frees.

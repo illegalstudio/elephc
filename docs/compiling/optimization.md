@@ -25,7 +25,12 @@ trade-offs.
 
 After the AST is lowered to EIR and validated, a fixed-point pass driver runs the
 registered transformation passes over each function until none reports a change.
-The passes are **on by default**.
+The whole pipeline runs to a **module-level fixed point**: each round runs the
+cross-function [small-function inliner](#small-function-inlining) and then drives the
+per-function passes to convergence on every function, repeating until neither the
+inliner nor any function pass changes anything. Interleaving lets the two layers feed
+each other — inlined bodies expose new constants and dead code, and the simplified
+functions expose new (smaller) inline candidates. The passes are **on by default**.
 
 ```bash
 # Default: EIR optimization passes enabled
@@ -99,9 +104,168 @@ You can see the effect with [`--emit-ir`](output-and-diagnostics.md#--emit-ir):
 `$x = $argc; echo $x;` forwards the load so the `echo` reads the stored value and
 the `load_local` becomes a `nop`.
 
-Later releases add more EIR passes (dead-store elimination, branch
-simplification, common-subexpression elimination, loop-invariant code motion,
-small-function inlining) to this same driver.
+### Constant folding
+
+The third registered pass folds operations whose operands are all compile-time
+constants into a single constant, in place. It covers integer arithmetic
+(`iadd`, `isub`, `imul`), bitwise ops, in-range shifts, unary `ineg`/`ibit_not`,
+float `fadd`/`fsub`/`fmul`/`fneg`, signed integer comparisons (`icmp`), and the
+`is_null`/`is_truthy` predicates. A constant value in EIR is the same constant at
+every use, so a single forward scan discovers constant operands and collapses
+chains like `(2 + 3) * 4` in one sweep.
+
+Each fold reproduces exactly what the op's lowering computes at runtime, so the
+compiled result never changes: integers wrap at 64 bits (matching the native
+`add`/`sub`/`mul`), shifts fold only for counts in `0..=63`, and the trapping
+integer division/modulo and `NaN`-sensitive float division are left untouched.
+
+Together with the peephole's scalar load/store forwarding — which moves a
+constant assigned to a local onto its later uses — this realizes per-block
+constant propagation over EIR value ids *and* local slots: the peephole carries
+the constant through the slot, and this pass folds the constant-operand
+operation built on it. Constants surfaced by identity arithmetic feed it too:
+`($argc * 0 + 5) * ($argc * 0 + 5)` reduces to `$argc * 0` → `const_i64 0`
+(identity), then `0 + 5` → `5`, then `5 * 5` → `const_i64 25` (this pass), with
+the three `imul`s eliminated.
+
+### Common subexpression elimination
+
+The fourth registered pass removes a pure computation when an identical one is
+already available on every path to it, redirecting its uses to the earlier
+value. It does both per-block and cross-block elimination in one dominator-tree
+value-numbering traversal: a scoped table maps each pure instruction's
+`(op, result type, immediate, operands)` to the value that first computed it, and
+because blocks are visited in dominator-tree order the table holds exactly the
+definitions that dominate the current block. A match is therefore an earlier,
+dominating value, so the redirection is safe; the redundant instruction becomes a
+`nop`.
+
+Only pure (side-effect-free) instructions that have at least one operand and a
+`NonHeap` or `Persistent` result are eligible — their value depends on their
+operands alone and they carry no owned-heap cleanup, so the rewrite is
+refcount-neutral. SSA operands are equal-by-value, so identical pure ops on
+identical operands compute identical results. Bare constant and address
+materializations (`const_*`, `data_addr`) are *not* deduplicated: they are
+cheaper to rematerialize than to keep live, so CSE only targets computations.
+Functions that use exception handling are skipped, because a dominator over the
+terminator graph can be bypassed at runtime by a throw to a handler.
+
+Combined with the peephole's load forwarding, `($n + 1) * ($n + 1)` loads `$n`
+once and computes `$n + 1` once. The redundant instructions it neutralizes leave
+dead operands that dead-instruction elimination then removes.
+
+### Loop-invariant code motion
+
+The fifth registered pass moves a pure computation whose operands do not change
+across a loop out of the loop body and into the loop's preheader, so it runs once
+instead of every iteration. It builds the loop forest on the dominator tree, then
+for each loop grows an invariant set to a fixed point: an instruction is invariant
+when each operand is either defined outside the loop (its definition dominates the
+preheader) or is itself being hoisted.
+
+Only pure instructions with at least one operand and a `NonHeap`/`Persistent`
+result are hoisted — purity means the result depends only on the operands and the
+op neither reads mutable state nor faults, so evaluating it once in the preheader
+(unconditionally, even if its original block ran only on some iterations) is safe.
+Loops are processed innermost-first, so a value invariant in several nested loops
+moves all the way to the outermost preheader. Loops without a detected preheader,
+and functions using exception handling, are skipped.
+
+Because PHP loop variables live in local slots and are reloaded through impure
+`load_local` each iteration, an invariant *source* expression is not yet a
+pure-operand computation this pass can hoist; its reach grows as more values flow
+as SSA across loops.
+
+### Dead instruction elimination
+
+The sixth registered pass computes CFG liveness and neutralizes unused
+result-producing instructions whose effect metadata says they are pure. This
+cleans up dead values exposed by earlier EIR rewrites. For example, identity
+folding can turn `$argc + 0` into `$argc`; dead-instruction elimination then
+drops the now-unused `const_i64 0` from optimized EIR.
+
+The pass is deliberately conservative. It keeps read-only, allocation,
+mutation, refcounting, output, warning, fatal, throw, and deopt-capable
+instructions even when their results are unused. The goal is to remove dead pure
+arithmetic and literal scaffolding without changing PHP-visible behavior or
+ownership cleanup.
+
+You can compare the shape directly:
+
+```bash
+elephc --emit-ir app.php
+elephc --emit-ir --no-ir-opt app.php
+```
+
+### Dead store elimination
+
+The seventh registered pass removes `store_local` writes whose value is never read
+before the slot is overwritten or the function exits. It computes backward,
+CFG-aware liveness over local slots (a `load_local` makes a slot live, a
+`store_local` kills it) so a dead store is dropped even when the overwrite is in a
+later block. Unlike the peephole's per-block, value-equality store drop, this pass
+is liveness-based and crosses block boundaries, so it removes a store of a
+*different* value whose result is never observed.
+
+It is restricted to non-refcounted scalar locals that are accessed only through
+plain `load_local`/`store_local` and never escape by reference. Refcounted slots
+are wrapped by separate `acquire`/`release` ownership ops, and by-reference call
+arguments or closure captures alias the slot through its `load_local`, so both are
+left untouched to keep reference counting and aliasing semantics intact.
+
+### Branch simplification
+
+The eighth registered pass prunes the control-flow graph three ways:
+
+- **Constant-condition folding** — a `cond_br` whose condition is a constant
+  (`const_bool`, non-zero `const_i64`, or `const_null`) becomes an unconditional
+  `br` to the taken edge; a `switch` on a constant scrutinee folds to its matching
+  case. A `while (true)` loop, for instance, lowers to a constant `cond_br` that
+  this fold collapses.
+- **Empty-block jump threading** — predecessors of an empty, parameterless
+  forwarding block (one that only branches onward) are redirected to the end of
+  the forwarding chain.
+- **Unreachable-block removal** — blocks no longer reachable from the entry are
+  neutralized (terminator set to `unreachable`, instructions to `nop`).
+
+Functions that use exception handling are skipped, because their handler blocks
+are reachable through implicit edges that the terminator graph does not show.
+
+### Small-function inlining
+
+As part of the module-level fixed point, a cross-function pass inlines calls to small
+user functions directly into their callers; the per-function passes then optimize the
+expanded bodies, and because the pipeline iterates, a callee that only becomes small
+enough after that optimization is inlined on a later round. A callee is inlined only
+when **all** of the following hold:
+
+- its body is at most **24** non-`nop` instructions;
+- it is **non-recursive**, directly *or* mutually — a call-graph cycle analysis
+  excludes any function that can reach itself, and a per-caller fuel cap backstops
+  termination;
+- it contains no exception-handling ops and is not a generator or fiber wrapper;
+- it exposes a **destructor-free boundary and body**: no by-reference or variadic
+  parameters, and every parameter, the return value and every local slot has a
+  destructor-free type — scalars (`int`/`float`/`bool`/`string`) and arrays/unions
+  whose elements are themselves destructor-free. Objects, packed classes, closures,
+  resources, generic `iterable`/`mixed`, buffers, and ref-cell/static/global/capture
+  locals are excluded.
+
+The last rule is a correctness requirement, not just a heuristic. The splice replaces
+the callee's `return` with a jump, bypassing the callee's implicit epilogue cleanup, so
+the inliner reproduces that cleanup's per-slot decisions: parameter slots and
+directly-returned slots (which the callee excludes — the argument is borrowed and the
+return value's ownership moves to the caller) are transplanted so the host epilogue
+ignores them, while ordinary refcounted internal locals are still freed by the host
+epilogue. The only residual difference is *when* those internal locals are freed
+(deferred to the host epilogue), which is unobservable precisely because the types are
+destructor-free — no `__destruct` runs and arrays carry no observable identity. Types
+that can run a destructor (objects, or arrays/mixed that may hold them) and by-reference
+parameters (which alias caller storage) are therefore excluded, because a value-copy
+splice cannot reproduce their cleanup timing or aliasing. As with all EIR passes,
+inlining is gated by `--ir-opt` and changes only performance, never observable behavior.
+
+Later releases extend this driver with further EIR passes.
 
 ## Register allocation
 

@@ -16,7 +16,9 @@ use super::target::{
     emit_float_compare, emit_pop_left_float_for_comparison, emit_promote_int_to_float,
     emit_set_bool_from_flags, emit_set_float_bool_from_flags,
 };
-use super::super::{coerce_null_to_zero, coerce_to_truthiness, emit_expr, BinOp, Expr, PhpType};
+use super::super::{
+    coerce_null_to_zero, coerce_to_int, coerce_to_truthiness, emit_expr, BinOp, Expr, PhpType,
+};
 
 /// Converts `ty` to integer for loose comparison.
 /// Handles null, bool, int, float, str, and Mixed/Union types.
@@ -488,7 +490,7 @@ pub(super) fn emit_order_compare_binop(
     data: &mut DataSection,
 ) -> PhpType {
     let left_ty = emit_expr(left, emitter, ctx, data);
-    coerce_numeric_mixed_to_int(emitter, &left_ty);
+    coerce_to_int(emitter, &left_ty);
     let use_float = left_ty == PhpType::Float;
     if use_float {
         abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));
@@ -496,7 +498,7 @@ pub(super) fn emit_order_compare_binop(
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     }
     let right_ty = emit_expr(right, emitter, ctx, data);
-    coerce_numeric_mixed_to_int(emitter, &right_ty);
+    coerce_to_int(emitter, &right_ty);
 
     if left_ty == PhpType::Float || right_ty == PhpType::Float {
         if right_ty != PhpType::Float {
@@ -540,7 +542,7 @@ pub(super) fn emit_spaceship_binop(
     data: &mut DataSection,
 ) -> PhpType {
     let left_ty = emit_expr(left, emitter, ctx, data);
-    coerce_numeric_mixed_to_int(emitter, &left_ty);
+    coerce_to_int(emitter, &left_ty);
     let use_float = left_ty == PhpType::Float;
     if use_float {
         abi::emit_push_float_reg(emitter, abi::float_result_reg(emitter));
@@ -548,7 +550,7 @@ pub(super) fn emit_spaceship_binop(
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     }
     let right_ty = emit_expr(right, emitter, ctx, data);
-    coerce_numeric_mixed_to_int(emitter, &right_ty);
+    coerce_to_int(emitter, &right_ty);
 
     if left_ty == PhpType::Float || right_ty == PhpType::Float {
         if right_ty != PhpType::Float {
@@ -608,14 +610,4 @@ pub(super) fn emit_spaceship_binop(
         }
     }
     PhpType::Int
-}
-
-/// Coerces null to zero, then for Mixed/Union types calls `__rt_mixed_cast_int`
-/// to normalize boxed int|bool|string before ordering comparisons.
-/// Other numeric types are left as-is.
-fn coerce_numeric_mixed_to_int(emitter: &mut Emitter, ty: &PhpType) {
-    coerce_null_to_zero(emitter, ty);
-    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-        abi::emit_call_label(emitter, "__rt_mixed_cast_int");                   // normalize boxed int|bool|string values before numeric comparisons
-    }
 }

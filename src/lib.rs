@@ -31,6 +31,8 @@ pub mod ir_lower;
 pub mod ir_passes;
 /// Lexer for tokenizing PHP source.
 pub mod lexer;
+/// Conditionally-injected `DateTimeZone::listIdentifiers` filtering prelude.
+pub mod list_id_prelude;
 /// Magic constant substitution.
 pub mod magic_constants;
 /// Name resolution and mangling.
@@ -43,12 +45,22 @@ pub mod optimize;
 pub mod parser;
 /// PDO (SQLite) standard-library prelude injection.
 pub mod pdo_prelude;
+/// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
+pub mod image_prelude;
 /// Resolution of includes.
 pub mod resolver;
 /// Source span tracking.
 pub mod span;
 mod string_bytes;
+/// Canonical HTTP-request superglobal set and shared type helper.
+pub mod superglobals;
 /// Termination and exit handling.
 pub mod termination;
 /// Type system and checking.
 pub mod types;
+/// Conditionally-injected timezone-introspection prelude (extern + marshalling).
+pub mod tz_prelude;
+/// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
+pub mod var_export_prelude;
+/// Conditionally-injected `--web` request prelude (extern declarations for bridge getters).
+pub mod web_prelude;

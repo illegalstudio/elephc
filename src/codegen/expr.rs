@@ -39,7 +39,8 @@ pub(crate) use ownership::{
     string_result_uses_transient_concat_buffer,
 };
 pub use coerce::{
-    coerce_null_to_zero, coerce_to_string, coerce_to_string_releasing_owned, coerce_to_truthiness,
+    coerce_null_to_zero, coerce_to_int, coerce_to_string, coerce_to_string_releasing_owned,
+    coerce_to_truthiness,
 };
 use helpers::{retain_borrowed_heap_arg, widen_codegen_type};
 

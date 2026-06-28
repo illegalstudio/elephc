@@ -29,6 +29,14 @@ use super::value_placement::{self, ValuePlacement};
 
 const FRAME_FOOTER_BYTES: usize = 16;
 
+/// Symbol name for the C-callable `--web` top-level handler.
+///
+/// Emitted as a global label on the handler body and referenced by the
+/// process-entry stub when it materializes the handler address for
+/// `elephc_web_run`. Keeping it as one constant guarantees the label and the
+/// reference never drift.
+const WEB_HANDLER_SYMBOL: &str = "_elephc_web_handler";
+
 /// Complete fixed frame layout for spill slots, addressable locals, and the
 /// callee-saved registers the register allocator decided to use.
 pub(super) struct FrameLayout {
@@ -214,10 +222,14 @@ fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits frame teardown and exits the process with status 0.
+///
+/// The top-level body emits this epilogue INLINE at every `return` terminator
+/// (it has no shared epilogue label to jump to, unlike user functions). It must
+/// therefore emit a full self-contained epilogue on EVERY call — a one-shot guard
+/// would leave all but the first `return` falling through into later blocks. The
+/// trailing caller in `block_emit` is already gated on `!epilogue_emitted`, so the
+/// final epilogue is still emitted at most once when the body has no `return`.
 pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
-    if ctx.epilogue_emitted {
-        return;
-    }
     ctx.emitter.blank();
     ctx.emitter.comment("epilogue + exit(0)");
     emit_main_local_epilogue_cleanup(ctx);
@@ -233,6 +245,83 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     }
     abi::emit_exit(ctx.emitter, 0);
     ctx.epilogue_emitted = true;
+}
+
+/// Emits the C-callable `--web` top-level handler prologue.
+///
+/// Mirrors `emit_main_prologue` but labels the body `_elephc_web_handler` (a
+/// C-ABI `extern "C" fn()`) and never stores argc/argv. At `handler()` entry
+/// those registers are not the OS-provided values — the process-entry stub
+/// stores them to `_global_argc`/`_global_argv` once before calling the bridge,
+/// so the handler must not overwrite them. Consequently `$argc`/`$argv` are not
+/// populated inside a `--web` top-level body in Phase 1 (acceptable for echo).
+pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.arch == Arch::AArch64 {
+        ctx.emitter.raw(".align 2");
+    }
+    ctx.emitter.blank();
+    ctx.emitter.label_global(WEB_HANDLER_SYMBOL);
+    abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    // Reset all process-persistent state (function static locals, refcounted
+    // static property values, and `_concat_off`) BEFORE this frame captures the
+    // concat base and BEFORE the body's re-run static/enum initializers, so each
+    // request sees clean state. `__rt_web_reset` is generated per program after
+    // every function is emitted; the call here forward-references its label.
+    ctx.emitter.comment("reset per-request persistent state");
+    abi::emit_call_label(ctx.emitter, "__rt_web_reset");
+    capture_concat_base(ctx);
+    emit_callee_saved_saves(ctx);
+    zero_initialize_main_cleanup_locals(ctx);
+    zero_initialize_ref_cell_owner_locals(ctx);
+}
+
+/// Emits the `--web` top-level handler epilogue and returns to the bridge.
+///
+/// Like `emit_main_epilogue` it runs the per-request main local cleanup (so
+/// owned refcounted top-level locals are released each request) and restores the
+/// frame, but it `ret`s instead of exiting and skips the process-end gc-stats and
+/// heap-debug diagnostics, which are wrong to report per request.
+pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter.blank();
+    ctx.emitter.comment("web handler epilogue + ret");
+    emit_main_local_epilogue_cleanup(ctx);
+    emit_callee_saved_restores(ctx);
+    abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
+    abi::emit_return(ctx.emitter);
+    ctx.epilogue_emitted = true;
+}
+
+/// Emits the `--web` process-entry stub that drives the bridge server entry.
+///
+/// The stub is the real process entry (`_main`/`main`). It stores the OS argc/argv
+/// to globals once, loads them plus the handler address into the first three
+/// C-ABI integer argument registers, calls `elephc_web_run(argc, argv, &handler)`,
+/// and exits the process with the bridge's integer return value. The handler
+/// address (arg 2) is materialized last so a destination-register page load on
+/// AArch64 cannot clobber the already-loaded argc/argv argument registers.
+pub(super) fn emit_web_entry_stub(ctx: &mut FunctionContext<'_>) {
+    let target = ctx.emitter.target;
+    if target.arch == Arch::AArch64 {
+        ctx.emitter.raw(".align 2");
+    }
+    ctx.emitter.blank();
+    ctx.emitter.comment("--web process entry: call elephc_web_run(argc, argv, &handler)");
+    ctx.emitter.entry_label();
+    abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    ctx.emitter.comment("save argc/argv to globals for the bridge and handler");
+    abi::emit_store_process_args_to_globals(ctx.emitter);
+    let argc_reg = abi::int_arg_reg_name(target, 0);
+    let argv_reg = abi::int_arg_reg_name(target, 1);
+    let handler_reg = abi::int_arg_reg_name(target, 2);
+    abi::emit_load_symbol_to_reg(ctx.emitter, argc_reg, "_global_argc", 0);
+    abi::emit_load_symbol_to_reg(ctx.emitter, argv_reg, "_global_argv", 0);
+    abi::emit_symbol_address(ctx.emitter, handler_reg, WEB_HANDLER_SYMBOL);
+    // `elephc_web_run` is a `#[no_mangle] extern "C"` Rust symbol in the bridge
+    // staticlib, so it carries the platform's C-ABI underscore: resolve it through
+    // `extern_symbol` (`_elephc_web_run` on macOS, `elephc_web_run` on Linux).
+    let bridge_entry = target.extern_symbol("elephc_web_run");
+    abi::emit_call_label(ctx.emitter, &bridge_entry);
+    abi::emit_exit_with_result_reg(ctx.emitter);
 }
 
 /// Zero-initializes cleanup-tracked locals so skipped assignments stay safe at epilogue.
@@ -278,7 +367,7 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
         .function
         .locals
         .iter()
-        .filter(|local| local.kind == LocalKind::PhpLocal)
+        .filter(|local| local_kind_needs_epilogue_cleanup(local.kind))
         .filter(|local| !promoted_ref_cell_local_slots(ctx.function).contains(&local.id))
         .filter(|local| {
             local
@@ -519,33 +608,28 @@ fn promoted_ref_cell_local_slots(function: &Function) -> HashSet<LocalSlotId> {
         .collect()
 }
 
-/// Releases a string local when its length proves it owns heap-backed storage.
+/// Releases a string local through the validating heap-free helper.
+///
+/// `__rt_heap_free_safe` skips non-heap pointers (null for uninitialized locals,
+/// .rodata, out-of-range) and frees plausible live heap blocks, so it safely handles
+/// the zero-length owned strings that `__rt_str_persist` now allocates. The previous
+/// `cbz len` guard skipped them and leaked every owned empty string at scope exit.
 fn emit_main_string_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let done = ctx.next_label("main_string_cleanup_done");
     abi::load_at_offset(ctx.emitter, ptr_reg, offset);
-    abi::load_at_offset(ctx.emitter, len_reg, offset - 8);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("cbz {}, {}", len_reg, done));            // skip empty or uninitialized string locals
-            ctx.emitter
-                .instruction(&format!("mov {}, {}", result_reg, ptr_reg));      // pass the owned string pointer to the heap-free helper
+            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the local string pointer to the validating heap-free helper
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
         Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("test {}, {}", len_reg, len_reg));        // check whether this string local has owned bytes
-            ctx.emitter.instruction(&format!("je {}", done));                   // skip empty or uninitialized string locals
             if ptr_reg != result_reg {
-                ctx.emitter
-                    .instruction(&format!("mov {}, {}", result_reg, ptr_reg));  // pass the owned string pointer to the heap-free helper
+                ctx.emitter.instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the local string pointer to the validating heap-free helper
             }
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
     }
-    ctx.emitter.label(&done);
 }
 
 /// Releases a refcounted local when the slot contains a non-null heap pointer.
@@ -570,7 +654,7 @@ fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty
 
 /// Zero-initializes function locals that may be released by the shared epilogue.
 fn zero_initialize_function_cleanup_locals(ctx: &mut FunctionContext<'_>) {
-    for (_, _, ty, offset) in function_cleanup_locals(ctx) {
+    for (_, _, ty, offset) in function_cleanup_locals(ctx, true) {
         match ty {
             PhpType::Str => {
                 abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
@@ -585,7 +669,7 @@ fn zero_initialize_function_cleanup_locals(ctx: &mut FunctionContext<'_>) {
 
 /// Releases owned function locals that do not directly provide the return value.
 fn emit_function_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
-    let cleanup_locals = function_cleanup_locals(ctx);
+    let cleanup_locals = function_cleanup_locals(ctx, false);
     let ref_cell_owners = ref_cell_owner_locals(ctx);
     if cleanup_locals.is_empty() && ref_cell_owners.is_empty() {
         return;
@@ -613,8 +697,16 @@ fn emit_function_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Returns function local slots that receive owned refcounted values through `StoreLocal`.
+///
+/// `include_returned` controls whether slots directly returned by a `Return` terminator are
+/// part of the set. The zero-initialization pass requests them (`true`) so a returned slot
+/// that is first assigned inside a loop body is null before its first store — the loop-store
+/// old-release path (`store_local` Path 2) then safely releases a null pointer on iteration 1.
+/// The epilogue cleanup pass excludes them (`false`) because the return path already owns the
+/// value; cleaning them at epilogue would double-free.
 fn function_cleanup_locals(
     ctx: &FunctionContext<'_>,
+    include_returned: bool,
 ) -> Vec<(String, LocalSlotId, PhpType, usize)> {
     let param_names = ctx
         .function
@@ -627,7 +719,7 @@ fn function_cleanup_locals(
         .function
         .locals
         .iter()
-        .filter(|local| local.kind == LocalKind::PhpLocal)
+        .filter(|local| local_kind_needs_epilogue_cleanup(local.kind))
         .filter(|local| !promoted_ref_cell_local_slots(ctx.function).contains(&local.id))
         .filter(|local| {
             local
@@ -635,7 +727,7 @@ fn function_cleanup_locals(
                 .as_deref()
                 .is_none_or(|name| !param_names.contains(name))
         })
-        .filter(|local| !returned_slots.contains(&local.id))
+        .filter(|local| include_returned || !returned_slots.contains(&local.id))
         .filter(|local| {
             local_slot_has_store(ctx.function, local.id) || function_has_eval_scope(ctx.function)
         })
@@ -654,6 +746,14 @@ fn function_cleanup_locals(
         .collect::<Vec<_>>();
     locals.sort_by_key(|(_, _, _, offset)| *offset);
     locals
+}
+
+/// Returns whether a local kind can own values through ordinary `StoreLocal`.
+fn local_kind_needs_epilogue_cleanup(kind: LocalKind) -> bool {
+    matches!(
+        kind,
+        LocalKind::PhpLocal | LocalKind::HiddenTemp | LocalKind::OwnedTemp | LocalKind::NamedArgTemp
+    )
 }
 
 /// Returns local slots whose loaded value is returned directly by any terminator.

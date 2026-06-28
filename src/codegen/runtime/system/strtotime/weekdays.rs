@@ -134,7 +134,7 @@ fn emit_weekdays_arm64(emitter: &mut Emitter) {
     emitter.instruction("add w9, w9, w14");                                     // tm_mday += delta
     emitter.instruction("str w9, [sp, #12]");                                   // store
     emitter.instruction("mov x0, sp");                                          // x0 = &tm
-    emitter.bl_c("mktime");                                                     // → x0 = ts
+    emitter.instruction("bl __rt_mktime_shifted");                              // → x0 = ts
     emitter.instruction("b __rt_strtotime_ret");                                // return
 }
 
@@ -259,6 +259,6 @@ fn emit_weekdays_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add eax, r14d");                                       // tm_mday += delta
     emitter.instruction("mov DWORD PTR [rsp + 12], eax");                       // store
     emitter.instruction("mov rdi, rsp");                                        // rdi = &tm
-    emitter.instruction("call mktime");                                         // → rax = ts
+    emitter.instruction("call __rt_mktime_shifted");                            // → rax = ts
     emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                 // return
 }

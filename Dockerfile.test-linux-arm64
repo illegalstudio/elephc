@@ -1,6 +1,6 @@
 FROM rust:1.95-alpine
 
-RUN apk add --no-cache gcc musl-dev openssl-dev zlib-dev bzip2-dev pcre2-dev gdb strace binutils file
+RUN apk add --no-cache gcc musl-dev openssl-dev zlib-dev bzip2-dev pcre2-dev gdb strace binutils file tzdata
 
 ENV PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 

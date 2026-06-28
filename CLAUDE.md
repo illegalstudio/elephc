@@ -26,51 +26,55 @@ The compiler outputs a native binary next to the source file (e.g., `file.php` �
 
 **Every feature must have tests before it's considered done.** The test suite is the primary quality gate.
 
+Local agent runs should stay focused. By default, run only the build checks and tests needed to validate the implementation or regression you touched, then rely on CI for the complete matrix. Do **not** run the full local suite (`cargo test`, `cargo test -- --include-ignored`, or full Linux Docker scripts) unless the user explicitly asks for it, you are doing a release/pre-release verification, CI is unavailable for the needed signal, or a broad/high-risk change cannot be validated responsibly with focused tests.
+
 ### Running tests
 
 ```bash
-cargo test                          # run all tests (slow — ~9 min due to as+ld per codegen test)
-cargo test -- --include-ignored     # run ALL tests including those requiring external libs
-cargo test --test codegen_tests     # run only end-to-end tests
-cargo test test_fizzbuzz            # run a specific test
+cargo test test_fizzbuzz                     # run a focused test by name
+cargo test --test codegen_tests test_name    # run a focused end-to-end codegen test
+cargo nextest run --profile ci test_name     # run a focused nextest test with per-test timeout
+cargo test                                  # full local suite; only when explicitly requested/necessary
+cargo test -- --include-ignored             # ignored tests; only when relevant or requested
 ```
 
 Linux target-specific regressions can be checked through the Docker scripts in
-`scripts/`. They support both full suites and normal `cargo test` filters:
+`scripts/`. Prefer filters during implementation; the unfiltered commands run
+full Linux suites and should be reserved for explicit requests or genuinely
+necessary local target validation.
 
 ```bash
-./scripts/test-linux-x86_64.sh                     # run all tests on Linux x86_64
-./scripts/test-linux-arm64.sh                      # run all tests on Linux ARM64
 ./scripts/test-linux-x86_64.sh iterable            # run tests matching a filter
 ./scripts/test-linux-arm64.sh test_my_feature      # run tests matching a filter
+./scripts/test-linux-x86_64.sh                     # full Linux x86_64 suite; only when necessary/requested
+./scripts/test-linux-arm64.sh                      # full Linux ARM64 suite; only when necessary/requested
 ./scripts/test-linux-x86_64.sh --rebuild           # rebuild the Docker image first
 ./scripts/test-linux-arm64.sh --rebuild            # rebuild the Docker image first
 ```
 
-Some tests are marked `#[ignore]` because they require external libraries (e.g., SDL2) not available in CI. **Before committing, always run `cargo test -- --include-ignored` locally** to verify nothing is broken — including ignored tests.
+Some tests are marked `#[ignore]` because they require external libraries (e.g., SDL2) not available in CI. Run ignored tests only when the change touches that surface, during explicit release verification, or when the user asks for them.
 
 ### Test strategy during development
 
-The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. To avoid waiting several minutes on every change:
+The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. CI runs the complete supported matrix (`macos-aarch64`, `linux-x86_64`, and `linux-aarch64`) with sharded codegen tests, so local implementation work should optimize for fast, relevant signal:
 
-1. **While developing a feature**: run only the tests for that feature (`cargo test test_my_feature`)
+1. **While developing a feature**: run only the tests for that feature or regression (`cargo test test_my_feature`).
 2. **Scope to a single test binary**: prefer `cargo test --test codegen_tests <filter>` over a bare `cargo test <filter>`. A bare filter rebuilds and links all six test binaries every cycle (~2.5s of wasted link time); `--test <binary>` links only the one you need. Most codegen work lives in `codegen_tests`.
-3. **When the feature is complete**: run the full suite once (`cargo test`) to check for regressions
-4. **PHP cross-check**: opt-in via `ELEPHC_PHP_CHECK=1 cargo test` — verifies output matches PHP interpreter
+3. **For target-sensitive changes**: run the smallest relevant macOS/Linux focused tests locally when they materially reduce risk; otherwise let CI provide complete target coverage.
+4. **For broad infrastructure changes**: validate the edited workflow/config directly (YAML parse, `cargo metadata`, `nextest` config checks, etc.) instead of running unrelated Rust suites.
+5. **PHP cross-check**: opt in narrowly with `ELEPHC_PHP_CHECK=1 cargo test <filter>` when PHP equivalence is the question.
 
 ### Pre-commit verification
 
-Before committing code changes, run the smallest useful focused tests first, then the full gates:
+Before committing code changes, run the smallest useful focused tests and hygiene checks that cover the implementation. Do not run full local suites by default; CI is responsible for the complete sharded matrix after push/PR.
 
 ```bash
-cargo build
-cargo test <feature_or_regression_filter>
-cargo test
-cargo test -- --include-ignored
+cargo build                                    # for code changes that should compile warning-free
+cargo test <feature_or_regression_filter>      # or the narrower --test <binary> form
 git diff --check
 ```
 
-For codegen changes, also verify assembly-comment coverage/alignment for any files you touched. If the change can affect generated assembly, runtime helpers, ABI behavior, linking, ownership/GC, or target-specific libraries, run focused tests for each affected supported target. Use the Docker Linux scripts for Linux x86_64 and Linux ARM64 coverage; keep macOS ARM64 covered with local `cargo test` or focused local codegen tests as appropriate.
+For docs-only, workflow-only, or configuration-only changes, replace Rust test runs with the relevant syntax/metadata checks. For codegen changes, also verify assembly-comment coverage/alignment for any files you touched. If the change can affect generated assembly, runtime helpers, ABI behavior, linking, ownership/GC, or target-specific libraries, run focused tests for affected supported targets when local evidence is needed; otherwise rely on CI for full Linux x86_64/Linux ARM64/macOS ARM64 coverage.
 
 ### Test structure
 
@@ -358,7 +362,7 @@ Adding or updating function docblocks must not change code behavior. Do not alte
 - New feature emitters must support every supported target through `emitter.target` or clearly isolate target-specific code behind existing target helpers with explicit tests and diagnostics.
 - Avoid hardcoding ARM64 register names, x86_64 register names, syscall numbers, object formats, or stack alignment rules in shared lowering code.
 - Do not add an ARM64-only runtime helper, builtin emitter, ABI path, or ownership cleanup path unless the feature is intentionally target-gated and documented as unsupported elsewhere.
-- Test target-sensitive changes on every supported target they can affect. Use the Docker Linux scripts when the change can affect Linux x86_64 or Linux ARM64.
+- Target-sensitive changes need coverage for every supported target they can affect. During local implementation, run focused target checks only when they are needed for confidence; rely on CI for the complete supported-target matrix unless the user requests local Docker runs or CI cannot provide the needed signal.
 
 ### ARM64 quick reference
 
@@ -543,13 +547,13 @@ When cutting a release:
   ```
 
   The first-ever release uses the `releases/tag/v0.1.0` form instead of a compare range. Every version section must have its link; do not leave the link out.
-- The changelog version, the `[X.Y.Z]` link, and `version` in `Cargo.toml` must agree. The `Cargo.toml` bump is a separate `chore: bump version to X.Y.Z` commit.
+- Never change elephc's Cargo package version in `Cargo.toml` or `Cargo.lock`. Release automation in CI owns Cargo version bumps; agent changes should leave those files' version numbers untouched unless the user explicitly overrides this policy.
 
 ## Conventions
 
 - No `Co-Authored-By` lines in commits
 - Use commit message prefixes such as `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, or `test:`
 - Keep commit messages concise
-- Run the pre-commit verification above before committing code changes — all tests must pass
+- Run the focused pre-commit verification above before committing code changes. Do not knowingly commit with relevant focused tests failing; the full suite must pass in CI.
 - Zero compiler warnings policy (`cargo build` must be clean)
 - Never run `cargo fmt` in this repo. Use targeted manual edits only; global formatting creates noisy churn here.

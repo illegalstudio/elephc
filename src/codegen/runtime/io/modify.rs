@@ -88,7 +88,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return predicate
 
     // ================================================================
-    // __rt_chown_user: resolve a user name via getpwnam(), then chown(path, uid, -1)
+    // __rt_chown_user: resolve a local user name, then chown(path, uid, -1)
     // Input:  x1/x2 = path, x3/x4 = user name
     // Output: x0 = 1 on success, 0 on failure
     // ================================================================
@@ -104,9 +104,11 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save C path pointer
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload user-name ptr/len
     emitter.instruction("bl __rt_cstr2");                                       // user name → secondary C string in x0
-    emitter.bl_c("getpwnam");                                                   // libc getpwnam(name)
-    emitter.instruction("cbz x0, __rt_chown_user_fail");                        // unknown user name → false
-    emitter.instruction("ldr w1, [x0, #16]");                                   // load passwd.pw_uid
+    emitter.instruction("ldr x1, [sp, #24]");                                   // second lookup arg = user-name length
+    emitter.instruction("bl __rt_lookup_passwd_uid");                           // resolve uid from /etc/passwd without NSS
+    emitter.instruction("cmn x0, #1");                                          // was the user name absent?
+    emitter.instruction("b.eq __rt_chown_user_fail");                           // unknown user name → false
+    emitter.instruction("mov x1, x0");                                          // second chown arg = resolved uid
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload C path pointer
     emitter.instruction("mov x2, #-1");                                         // gid = -1 (leave group unchanged)
     emitter.bl_c("chown");                                                      // libc chown(path, uid, -1)
@@ -121,7 +123,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return predicate
 
     // ================================================================
-    // __rt_lchown_user: resolve a user name via getpwnam(), then lchown(path, uid, -1)
+    // __rt_lchown_user: resolve a local user name, then lchown(path, uid, -1)
     // Input:  x1/x2 = path, x3/x4 = user name
     // Output: x0 = 1 on success, 0 on failure
     // ================================================================
@@ -137,9 +139,11 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save C path pointer
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload user-name ptr/len
     emitter.instruction("bl __rt_cstr2");                                       // user name → secondary C string in x0
-    emitter.bl_c("getpwnam");                                                   // libc getpwnam(name)
-    emitter.instruction("cbz x0, __rt_lchown_user_fail");                       // unknown user name → false
-    emitter.instruction("ldr w1, [x0, #16]");                                   // load passwd.pw_uid
+    emitter.instruction("ldr x1, [sp, #24]");                                   // second lookup arg = user-name length
+    emitter.instruction("bl __rt_lookup_passwd_uid");                           // resolve uid from /etc/passwd without NSS
+    emitter.instruction("cmn x0, #1");                                          // was the user name absent?
+    emitter.instruction("b.eq __rt_lchown_user_fail");                          // unknown user name → false
+    emitter.instruction("mov x1, x0");                                          // second lchown arg = resolved uid
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload C path pointer
     emitter.instruction("mov x2, #-1");                                         // gid = -1 (leave group unchanged)
     emitter.bl_c("lchown");                                                     // libc lchown(path, uid, -1) without following symlinks
@@ -154,7 +158,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return predicate
 
     // ================================================================
-    // __rt_chgrp_group: resolve a group name via getgrnam(), then chown(path, -1, gid)
+    // __rt_chgrp_group: resolve a local group name, then chown(path, -1, gid)
     // Input:  x1/x2 = path, x3/x4 = group name
     // Output: x0 = 1 on success, 0 on failure
     // ================================================================
@@ -170,9 +174,11 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save C path pointer
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload group-name ptr/len
     emitter.instruction("bl __rt_cstr2");                                       // group name → secondary C string in x0
-    emitter.bl_c("getgrnam");                                                   // libc getgrnam(name)
-    emitter.instruction("cbz x0, __rt_chgrp_group_fail");                       // unknown group name → false
-    emitter.instruction("ldr w2, [x0, #16]");                                   // load group.gr_gid
+    emitter.instruction("ldr x1, [sp, #24]");                                   // second lookup arg = group-name length
+    emitter.instruction("bl __rt_lookup_group_gid");                            // resolve gid from /etc/group without NSS
+    emitter.instruction("cmn x0, #1");                                          // was the group name absent?
+    emitter.instruction("b.eq __rt_chgrp_group_fail");                          // unknown group name → false
+    emitter.instruction("mov x2, x0");                                          // third chown arg = resolved gid
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload C path pointer
     emitter.instruction("mov x1, #-1");                                         // uid = -1 (leave owner unchanged)
     emitter.bl_c("chown");                                                      // libc chown(path, -1, gid)
@@ -187,7 +193,7 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return predicate
 
     // ================================================================
-    // __rt_lchgrp_group: resolve a group name via getgrnam(), then lchown(path, -1, gid)
+    // __rt_lchgrp_group: resolve a local group name, then lchown(path, -1, gid)
     // Input:  x1/x2 = path, x3/x4 = group name
     // Output: x0 = 1 on success, 0 on failure
     // ================================================================
@@ -203,9 +209,11 @@ pub fn emit_modify(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save C path pointer
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload group-name ptr/len
     emitter.instruction("bl __rt_cstr2");                                       // group name → secondary C string in x0
-    emitter.bl_c("getgrnam");                                                   // libc getgrnam(name)
-    emitter.instruction("cbz x0, __rt_lchgrp_group_fail");                      // unknown group name → false
-    emitter.instruction("ldr w2, [x0, #16]");                                   // load group.gr_gid
+    emitter.instruction("ldr x1, [sp, #24]");                                   // second lookup arg = group-name length
+    emitter.instruction("bl __rt_lookup_group_gid");                            // resolve gid from /etc/group without NSS
+    emitter.instruction("cmn x0, #1");                                          // was the group name absent?
+    emitter.instruction("b.eq __rt_lchgrp_group_fail");                         // unknown group name → false
+    emitter.instruction("mov x2, x0");                                          // third lchown arg = resolved gid
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload C path pointer
     emitter.instruction("mov x1, #-1");                                         // uid = -1 (leave owner unchanged)
     emitter.bl_c("lchown");                                                     // libc lchown(path, -1, gid) without following symlinks

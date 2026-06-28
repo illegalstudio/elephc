@@ -421,3 +421,79 @@ fn test_exception_finally_allows_local_loop_break() {
     );
     assert_eq!(out, "1234");
 }
+
+/// Regression: a `try`/`catch` whose body calls a function that can throw, nested inside a
+/// `foreach` loop, must compile and run. The catch handler is reachable only through an implicit
+/// exception edge; without modelling that edge in the IR validator's predecessor graph the
+/// handler looked unreachable, and the foreach back-edge then stripped the entry block out of the
+/// loop header's dominators, so the iterator value (defined in the entry block) was rejected with
+/// a spurious `UseNotDominated` error at compile time. Each iteration must observe whether its
+/// element threw.
+#[test]
+fn test_try_catch_in_foreach_with_throwing_callee() {
+    let out = compile_and_run(
+        r#"<?php
+function mayThrow($s) {
+    if ($s === "bad") { throw new Exception("boom"); }
+    return $s;
+}
+$log = "";
+foreach (["ok", "bad", "ok"] as $item) {
+    try { mayThrow($item); $log .= "0"; }
+    catch (Exception $e) { $log .= "1"; }
+}
+echo $log;
+"#,
+    );
+    assert_eq!(out, "010");
+}
+
+/// Regression companion: the same implicit-handler-edge fix must keep a `try`/`catch` that catches
+/// a thrown exception inside a `while` loop working, with the catch body mutating a loop-carried
+/// accumulator. Confirms the dominator fix is not specific to `foreach`'s iterator lowering.
+#[test]
+fn test_try_catch_in_while_loop_accumulates() {
+    let out = compile_and_run(
+        r#"<?php
+function check($n) {
+    if ($n % 2 === 0) { throw new Exception("even"); }
+    return $n;
+}
+$out = "";
+$i = 0;
+while ($i < 4) {
+    try { check($i); $out .= "o"; }
+    catch (Exception $e) { $out .= "x"; }
+    $i++;
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "xoxo");
+}
+
+/// Regression for a DCE tail-sinking blowup: many sequential `try`/`catch`
+/// blocks (each with a may-throw method call in the try body and a
+/// fall-through, empty catch body) in one function used to make the optimizer
+/// clone the tail into every fall-through path, compounding exponentially
+/// (2^n copies) so that ~8 such blocks overflowed the AArch64 conditional-
+/// branch range and the assembler was killed (`fixup value out of range`).
+/// After the fix the tail is kept as a sibling (lowered into a single shared
+/// after-block), so the emitted code grows linearly. This compiles 16 of them
+/// and checks the fall-through continuation runs exactly once, which would not
+/// assemble before the fix.
+#[test]
+fn test_sequential_try_catch_does_not_blow_up_codegen() {
+    let mut php = String::from("<?php class G { public function f($n) { echo $n; } } $g = new G(); ");
+    let mut expected = String::new();
+    for i in 1..=16 {
+        php.push_str("try { $g->f(");
+        php.push_str(&i.to_string());
+        php.push_str("); } catch (Exception $e) {} ");
+        expected.push_str(&i.to_string());
+    }
+    php.push_str("echo \"Z\";");
+    expected.push('Z');
+    let out = compile_and_run(&php);
+    assert_eq!(out, expected);
+}

@@ -11,33 +11,37 @@
 use crate::codegen::context::Context;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
-use crate::codegen::expr::emit_expr;
+use crate::codegen::expr::{coerce_to_int, emit_expr};
 use crate::codegen::{abi, platform::Arch};
 use crate::parser::ast::Expr;
 use crate::types::PhpType;
 
 /// Lowers a PHP `mktime(hour, min, sec, month, day, year)` call.
 ///
-/// Evaluates all six integer arguments in source order, pushes them onto the
-/// temporary stack in reverse order, then pops them into the target ABI integer
-/// registers (AArch64: x0–x5; x86_64: rdi, rsi, rdx, rcx, r8, r9).  Calls the
-/// `__rt_mktime` runtime helper, which builds a libc `struct tm` from the six
-/// fields and invokes `mktime(3)`.  Returns the Unix timestamp as `PhpType::Int`.
+/// Evaluates all six integer arguments in source order, coercing each to a raw
+/// integer via `coerce_to_int` (so a `Mixed`/`Union` argument — e.g. a value
+/// produced by boxed arithmetic — is unboxed instead of being pushed as a heap
+/// pointer), pushes them onto the temporary stack in reverse order, then pops
+/// them into the target ABI integer registers (AArch64: x0–x5; x86_64: rdi, rsi,
+/// rdx, rcx, r8, r9).  Calls the `__rt_mktime` runtime helper, which builds a
+/// libc `struct tm` from the six fields and invokes `mktime(3)`.  Returns the
+/// Unix timestamp as `PhpType::Int`.
 pub fn emit(
-    _name: &str,
+    name: &str,
     args: &[Expr],
     emitter: &mut Emitter,
     ctx: &mut Context,
     data: &mut DataSection,
 ) -> Option<PhpType> {
-    emitter.comment("mktime()");
+    emitter.comment(name);
 
     match emitter.target.arch {
         Arch::AArch64 => {
             // -- evaluate all 6 arguments: hour, min, sec, month, day, year --
             // Push them on stack in reverse order so they come off in order
             for i in (0..6).rev() {
-                emit_expr(&args[i], emitter, ctx, data);
+                let arg_ty = emit_expr(&args[i], emitter, ctx, data);
+                coerce_to_int(emitter, &arg_ty);                                // unbox a Mixed/Union argument into a raw integer before pushing it
                 emitter.instruction("str x0, [sp, #-16]!");                     // push the evaluated integer argument onto the temporary stack
             }
 
@@ -53,7 +57,8 @@ pub fn emit(
             // -- evaluate all 6 arguments: hour, min, sec, month, day, year --
             // Push them on stack in reverse order so they come off in order
             for i in (0..6).rev() {
-                emit_expr(&args[i], emitter, ctx, data);
+                let arg_ty = emit_expr(&args[i], emitter, ctx, data);
+                coerce_to_int(emitter, &arg_ty);                                // unbox a Mixed/Union argument into a raw integer before pushing it
                 abi::emit_push_reg(emitter, "rax");                             // push the evaluated integer argument onto the temporary x86_64 stack slot
             }
 
@@ -67,8 +72,9 @@ pub fn emit(
         }
     }
 
-    // -- call runtime to build struct tm and call mktime --
-    abi::emit_call_label(emitter, "__rt_mktime");                               // build a libc struct tm and return the resulting Unix timestamp through the active target ABI
+    // -- call the runtime to build struct tm and convert it: mktime() local, timegm() (gmmktime) UTC --
+    let rt = if name == "gmmktime" { "__rt_gmmktime" } else { "__rt_mktime" };
+    abi::emit_call_label(emitter, rt);                                          // build a libc struct tm and return the resulting Unix timestamp through the active target ABI
 
     Some(PhpType::Int)
 }

@@ -20,6 +20,8 @@ pub(crate) mod array_constants;
 pub(crate) mod call_args;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
+/// `ext/date` integer constants (e.g. `SUNFUNCS_RET_*`).
+pub(crate) mod date_constants;
 /// C FFI type mapping utilities.
 mod ffi;
 /// JSON literal constant type inference.

@@ -190,7 +190,7 @@ fn emit_symlink_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // first libc symlink arg = target
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // second libc symlink arg = link
     emitter.instruction("call symlink");                                        // libc symlink(target, link)
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc symlink() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
     emitter.instruction("add rsp, 32");                                         // release frame
@@ -216,7 +216,7 @@ fn emit_symlink_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // first libc link arg = old path
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // second arg = new path
     emitter.instruction("call link");                                           // libc link(oldpath, newpath)
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc link() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen
     emitter.instruction("add rsp, 32");                                         // release frame
@@ -274,7 +274,7 @@ fn emit_symlink_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // first libc lstat arg = path
     emitter.instruction("lea rsi, [rsp]");                                      // stat buffer
     emitter.instruction("call lstat");                                          // libc lstat()
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc lstat() return success as a C int?
     emitter.instruction("jne __rt_linkinfo_fail_x86");                          // failure → PHP -1
     emitter.instruction("mov rax, QWORD PTR [rsp]");                            // load 64-bit Linux st_dev from offset 0
     emitter.instruction(&format!("add rsp, {}", frame));                        // release frame

@@ -15,7 +15,7 @@ use crate::ir::{
     BlockId, CmpPredicate, Immediate, IrType, LocalKind, LocalSlotId, Op, Ownership, SwitchCase,
     Terminator,
 };
-use crate::ir_lower::context::{FinallyFrame, LoopFrame, LoweredValue, LoweringContext};
+use crate::ir_lower::context::{FinallyFrame, LoopCleanup, LoopFrame, LoweredValue, LoweringContext};
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
     coerce_to_int_at_span, lower_callable_array_for_assignment, lower_closure_for_assignment,
@@ -170,69 +170,9 @@ fn release_expr_statement_result(
     value: LoweredValue,
     span: Span,
 ) {
-    if !value.ir_type.is_refcounted_storage() {
-        return;
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
-    if !expr_statement_result_can_own_storage(ctx, value) {
-        return;
-    }
-    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
-}
-
-/// Returns true when a discarded expression result is produced by an owning opcode.
-fn expr_statement_result_can_own_storage(
-    ctx: &LoweringContext<'_, '_>,
-    value: LoweredValue,
-) -> bool {
-    matches!(
-        ctx.builder.value_defining_op(value.value),
-        Some(
-            Op::IToStr
-                | Op::FToStr
-                | Op::BoolToStr
-                | Op::ResourceToStr
-                | Op::MixedBox
-                | Op::ArrayToMixed
-                | Op::HashToMixed
-                | Op::MixedCastString
-                | Op::StrConcat
-                | Op::StrPersist
-                | Op::StrCharAt
-                | Op::StrInterpolate
-                | Op::ArrayNew
-                | Op::HashNew
-                | Op::ArrayCloneShallow
-                | Op::HashCloneShallow
-                | Op::ArrayUnion
-                | Op::HashUnion
-                | Op::ArrayHashUnion
-                | Op::HashArrayUnion
-                | Op::ArrayToHash
-                | Op::ObjectNew
-                | Op::DynamicObjectNew
-                | Op::DynamicObjectNewMixed
-                | Op::DynamicObjectNewWithoutConstructorMixed
-                | Op::ClosureNew
-                | Op::FirstClassCallableNew
-                | Op::CallableArrayNew
-                | Op::BufferNew
-                | Op::GeneratorNew
-                | Op::Call
-                | Op::FunctionVariantCall
-                | Op::BuiltinCall
-                | Op::RuntimeCall
-                | Op::ExternCall
-                | Op::MethodCall
-                | Op::NullsafeMethodCall
-                | Op::StaticMethodCall
-                | Op::ClosureCall
-                | Op::ExprCall
-                | Op::PipeCall
-                | Op::IteratorMethodCall
-                | Op::SplRuntimeCall
-                | Op::FiberRuntimeCall
-        )
-    )
 }
 
 /// Emits the statement-boundary concat-buffer reset expected by the ASM backend.
@@ -510,7 +450,11 @@ fn lower_while(ctx: &mut LoweringContext<'_, '_>, condition: &Expr, body: &[Stmt
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(body_block);
-    ctx.loop_stack.push(LoopFrame { break_block: exit, continue_block: header });
+    ctx.loop_stack.push(LoopFrame {
+        break_block: exit,
+        continue_block: header,
+        cleanup: None,
+    });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
     branch_to(ctx, header);
@@ -526,7 +470,11 @@ fn lower_do_while(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt], condition: &
     branch_to(ctx, body_block);
 
     ctx.builder.position_at_end(body_block);
-    ctx.loop_stack.push(LoopFrame { break_block: exit, continue_block: cond_block });
+    ctx.loop_stack.push(LoopFrame {
+        break_block: exit,
+        continue_block: cond_block,
+        cleanup: None,
+    });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
     branch_to(ctx, cond_block);
@@ -584,7 +532,11 @@ fn lower_for(
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(body_block);
-    ctx.loop_stack.push(LoopFrame { break_block: exit, continue_block: update_block });
+    ctx.loop_stack.push(LoopFrame {
+        break_block: exit,
+        continue_block: update_block,
+        cleanup: None,
+    });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
     branch_to(ctx, update_block);
@@ -596,6 +548,60 @@ fn lower_for(
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
+}
+
+/// Releases the value operand of an array/hash element write when it is an owned
+/// string. These writes PERSIST (copy) a string value into the container instead
+/// of moving it (`__rt_str_persist`), so an owned string operand — e.g. a function
+/// or extern call result like `$_ENV[$k] = getenv_value()` — would otherwise never
+/// be freed (a per-write heap leak that exhausts the heap under `--web`). Non-string
+/// refcounted values (objects, arrays) are moved, or retained only when borrowed,
+/// by the write itself, so they must not be released here.
+fn release_persisted_string_operand(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) {
+    let ty = ctx.builder.value_php_type(value.value);
+    // Only release a FRESH owning string temporary (a call/concat result, etc.).
+    // A borrowed load of a variable that still owns the string (e.g. the prelude's
+    // `$_GET[$k] = $v`) must NOT be released here, or the container's stored copy
+    // would be freed out from under it.
+    if matches!(ty.codegen_repr(), PhpType::Str) && ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+}
+
+/// Releases an indexed-array write operand when the backend retained or copied it.
+pub(super) fn release_indexed_array_write_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    container_elem_ty: Option<&PhpType>,
+    value: LoweredValue,
+    span: Span,
+) {
+    if !ctx.value_is_owning_temporary(value) {
+        return;
+    }
+    let value_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if matches!(
+        container_elem_ty.map(PhpType::codegen_repr),
+        Some(PhpType::Mixed)
+    ) && !matches!(value_ty, PhpType::Mixed | PhpType::Union(_))
+    {
+        return;
+    }
+    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+}
+
+/// Returns the indexed-array element type in effect for a write.
+pub(super) fn indexed_array_write_element_type(
+    ctx: &LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    updated_ty: Option<&PhpType>,
+) -> Option<PhpType> {
+    let array_ty = updated_ty
+        .cloned()
+        .unwrap_or_else(|| ctx.builder.value_php_type(array_value.value));
+    match array_ty.codegen_repr() {
+        PhpType::Array(elem_ty) => Some(elem_ty.codegen_repr()),
+        _ => None,
+    }
 }
 
 /// Lowers an indexed array assignment.
@@ -629,10 +635,14 @@ fn lower_array_assign(
             op.default_effects(),
             Some(span),
         );
+        let elem_ty = indexed_array_write_element_type(ctx, array_value, updated_ty.as_ref());
         finish_indexed_array_local_write(ctx, array, array_value, updated_ty, needs_storeback, span);
+        release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value_value, span);
         return;
     }
     ctx.emit_void(op, vec![array_value.value, index_value.value, value_value.value], None, op.default_effects(), Some(span));
+    release_persisted_string_operand(ctx, index_value, span);
+    release_persisted_string_operand(ctx, value_value, span);
 }
 
 /// Promotes an indexed local array to a Mixed-valued associative array for string-key writes.
@@ -662,6 +672,8 @@ fn lower_string_key_array_promotion(
         Op::HashSet.default_effects(),
         Some(span),
     );
+    release_persisted_string_operand(ctx, index, span);
+    release_persisted_string_operand(ctx, value, span);
     ctx.store_mutated_local(array, hash, assoc_ty, Some(span));
 }
 
@@ -719,10 +731,13 @@ fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr
             prepare_indexed_array_local_write(ctx, array_value, value, span)
         };
         ctx.emit_void(op, vec![array_value.value, value.value], None, op.default_effects(), Some(span));
+        let elem_ty = indexed_array_write_element_type(ctx, array_value, updated_ty.as_ref());
         finish_indexed_array_local_write(ctx, array, array_value, updated_ty, needs_storeback, span);
+        release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
     ctx.emit_void(op, vec![array_value.value, value.value], None, op.default_effects(), Some(span));
+    release_persisted_string_operand(ctx, value, span);
 }
 
 /// Prepares an indexed-array local for an offset assignment.
@@ -1028,6 +1043,14 @@ fn lower_foreach(
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(body_block);
+    let cleanup = ctx
+        .value_is_owning_temporary(source)
+        .then_some(LoopCleanup { value: source, span: array.span });
+    ctx.loop_stack.push(LoopFrame {
+        break_block: exit,
+        continue_block: header,
+        cleanup,
+    });
     if let Some(key_var) = key_var {
         let key = ctx.emit_value(
             Op::IterCurrentKey,
@@ -1063,12 +1086,19 @@ fn lower_foreach(
         );
         ctx.store_local(value_var, value, value_ty, Some(array.span));
     }
-    ctx.loop_stack.push(LoopFrame { break_block: exit, continue_block: header });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
+    // Release the source when it is a fresh owning temporary (e.g. `foreach
+    // (explode(...) as $p)` or a literal array): the iterator borrows it for the
+    // duration of the loop, so nothing else frees it once iteration ends. (For an
+    // array the iterator aliases the source, so it must NOT be released separately
+    // — that would double-free.)
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(array.span));
+    }
 }
 
 /// Returns the by-value foreach local type when Phase 04 can keep a concrete element.
@@ -1105,6 +1135,11 @@ fn initialize_foreach_mixed_local_if_needed(
     if !needs_init {
         return;
     }
+    // This setup can run once per outer-loop iteration at runtime, overwriting
+    // the loop variable. `store_local` owns the carried release: it frees the
+    // previous runtime occupant when this synthetic store is loop-carried.
+    ctx.declare_local(name, PhpType::Mixed);
+    ctx.set_local_type(name, PhpType::Mixed);
     let null = emit_null_value(ctx, Some(span));
     let boxed = ctx.emit_value(
         Op::MixedBox,
@@ -1125,7 +1160,6 @@ fn lower_switch(
     default: Option<&[Stmt]>,
 ) {
     let subject = lower_expr(ctx, subject);
-    let subject = coerce_to_int(ctx, subject, None);
     let exit = ctx.builder.create_named_block("switch.exit", Vec::new());
     let default_block = ctx.builder.create_named_block("switch.default", Vec::new());
     let blocks = cases
@@ -1133,7 +1167,12 @@ fn lower_switch(
         .map(|_| ctx.builder.create_named_block("switch.case", Vec::new()))
         .collect::<Vec<_>>();
 
-    if can_lower_static_switch(cases) {
+    // The compact integer jump table is valid only for an integer scrutinee with
+    // integer case labels. Any other subject (string, float, mixed) takes the
+    // source-ordered dynamic path — see `lower_dynamic_switch_dispatch` for how it
+    // picks PHP loose-equality vs the integer fast path per subject/case pair.
+    if subject.ir_type == IrType::I64 && can_lower_static_switch(cases) {
+        let subject = coerce_to_int(ctx, subject, None);
         lower_static_switch_dispatch(ctx, subject, cases, &blocks, default_block);
     } else {
         lower_dynamic_switch_dispatch(ctx, subject, cases, &blocks, default_block);
@@ -1177,6 +1216,12 @@ fn lower_static_switch_dispatch(
 }
 
 /// Emits source-ordered dynamic switch pattern checks for non-literal case expressions.
+///
+/// PHP `switch` compares the subject against each case with loose equality (`==`).
+/// String subjects/labels and float/numeric pairs are dispatched through `Op::LooseEq`
+/// so the comparison honors PHP string/numeric coercion rules (`switch (1.5)` matching
+/// `case 1.5`, not `case 1`); purely integer-like subject-and-case pairs keep the
+/// cheaper `coerce_to_int` + `ICmp` fast path.
 fn lower_dynamic_switch_dispatch(
     ctx: &mut LoweringContext<'_, '_>,
     subject: LoweredValue,
@@ -1184,18 +1229,42 @@ fn lower_dynamic_switch_dispatch(
     blocks: &[BlockId],
     default_block: BlockId,
 ) {
+    let subject_is_str = subject.ir_type == IrType::Str;
+    // Non-string subjects are coerced to an integer once and reused by the ICmp path.
+    let int_subject =
+        if subject_is_str { None } else { Some(coerce_to_int(ctx, subject, None)) };
     for ((case_exprs, _), case_block) in cases.iter().zip(blocks) {
         for case_expr in case_exprs {
             let case_value = lower_expr(ctx, case_expr);
-            let case_value = coerce_to_int(ctx, case_value, Some(case_expr.span));
-            let matched = ctx.emit_value(
-                Op::ICmp,
-                vec![subject.value, case_value.value],
-                Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
-                PhpType::Bool,
-                Op::ICmp.default_effects(),
-                Some(case_expr.span),
-            );
+            // Strings and floats must use loose equality: coercing a string to int
+            // collapses every case to `0 == 0`, and coercing a float to int would
+            // truncate the subject (so `switch (1.5) { case 1.5; }` would wrongly
+            // match `case 1`). The cheap ICmp fast path stays for integer-like pairs.
+            let use_loose_eq = subject_is_str
+                || case_value.ir_type == IrType::Str
+                || float_loose_eq_pair(subject.ir_type, case_value.ir_type);
+            let matched = if use_loose_eq {
+                // Loose equality handles string/string, string/scalar, float/numeric,
+                // and mixed cases exactly as PHP's `==` would inside an if/elseif chain.
+                ctx.emit_value(
+                    Op::LooseEq,
+                    vec![subject.value, case_value.value],
+                    None,
+                    PhpType::Bool,
+                    Op::LooseEq.default_effects(),
+                    Some(case_expr.span),
+                )
+            } else {
+                let case_value = coerce_to_int(ctx, case_value, Some(case_expr.span));
+                ctx.emit_value(
+                    Op::ICmp,
+                    vec![int_subject.expect("non-string subject is pre-coerced").value, case_value.value],
+                    Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
+                    PhpType::Bool,
+                    Op::ICmp.default_effects(),
+                    Some(case_expr.span),
+                )
+            };
             let miss_block = ctx.builder.create_named_block("switch.next", Vec::new());
             ctx.builder.terminate(Terminator::CondBr {
                 cond: matched.value,
@@ -1211,6 +1280,19 @@ fn lower_dynamic_switch_dispatch(
     ctx.clear_static_callable_locals();
 }
 
+/// Returns true when a switch subject/case pair must compare via float loose equality:
+/// at least one side is a statically-typed float and both are numeric (`int`/`float`).
+/// These pairs route through `Op::LooseEq`, which promotes both operands to float, so the
+/// subject is not truncated to int (the backend supports float-vs-int loose equality).
+///
+/// An untyped (`Mixed`) subject holding a float is not covered here: it still takes the
+/// integer fast path and truncates, a separate pre-existing loose-equality limitation that
+/// needs a tag-aware runtime comparison helper (tracked in issue #397).
+fn float_loose_eq_pair(subject_ty: IrType, case_ty: IrType) -> bool {
+    let numeric = |ty: IrType| matches!(ty, IrType::I64 | IrType::F64);
+    (subject_ty == IrType::F64 || case_ty == IrType::F64) && numeric(subject_ty) && numeric(case_ty)
+}
+
 /// Lowers switch case/default bodies and preserves PHP fallthrough between adjacent bodies.
 fn lower_switch_bodies(
     ctx: &mut LoweringContext<'_, '_>,
@@ -1221,7 +1303,11 @@ fn lower_switch_bodies(
     exit: BlockId,
 ) {
     ctx.clear_static_callable_locals();
-    ctx.loop_stack.push(LoopFrame { break_block: exit, continue_block: exit });
+    ctx.loop_stack.push(LoopFrame {
+        break_block: exit,
+        continue_block: exit,
+        cleanup: None,
+    });
     for (index, ((_, body), block)) in cases.iter().zip(blocks).enumerate() {
         ctx.builder.position_at_end(*block);
         lower_block(ctx, body);
@@ -1581,7 +1667,7 @@ fn lower_break(ctx: &mut LoweringContext<'_, '_>, level: usize) {
         ctx.builder.terminate(Terminator::Unreachable);
         return;
     };
-    terminate_branch(ctx, frame.break_block);
+    terminate_branch(ctx, frame.break_block, loop_cleanup_count_for_branch(level));
 }
 
 /// Lowers a `continue` terminator.
@@ -1590,27 +1676,48 @@ fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
         ctx.builder.terminate(Terminator::Unreachable);
         return;
     };
-    terminate_branch(ctx, frame.continue_block);
+    terminate_branch(ctx, frame.continue_block, loop_cleanup_count_for_branch(level));
 }
 
 /// Lowers a return statement using the current function return contract.
-fn lower_return(ctx: &mut LoweringContext<'_, '_>, value: Option<&Expr>, span: Span) {
+fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, span: Span) {
     if ctx.return_type == IrType::Void {
-        if let Some(value) = value {
-            lower_expr(ctx, value);
+        if let Some(value_expr) = value_expr {
+            lower_expr(ctx, value_expr);
         }
         terminate_return(ctx, None);
         return;
     }
-    let value = if let Some(value) = value {
-        lower_expr(ctx, value)
+    let value = if let Some(value_expr) = value_expr {
+        lower_expr(ctx, value_expr)
     } else {
         emit_null_value(ctx, Some(span))
     };
     let value = coerce_to_return_type(ctx, value, Some(span));
     let value = acquire_borrowed_return_value(ctx, value, span);
+    let value = acquire_returned_this(ctx, value_expr, value, span);
     let value = persist_scratch_return_string(ctx, value, span);
     terminate_return(ctx, Some(value.value));
+}
+
+/// Acquires the receiver when a method does `return $this`.
+///
+/// `$this` is a borrowed reference to the receiver the caller still owns. A return
+/// value is handed to the caller as owned, so without an extra reference the
+/// caller's release of the (often discarded, as in fluent `$obj->setX(...)->setY()`)
+/// result drops the object's refcount to zero and runs its destructor while the
+/// original binding is still live — a use-after-free for any class with a
+/// destructor. Incrementing the refcount here balances that release.
+fn acquire_returned_this(
+    ctx: &mut LoweringContext<'_, '_>,
+    value_expr: Option<&Expr>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if !matches!(value_expr.map(|expr| &expr.kind), Some(ExprKind::This)) {
+        return value;
+    }
+    crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
 }
 
 /// Copies scratch-backed string results before they cross a function boundary.
@@ -1674,17 +1781,19 @@ fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::
         }
         return;
     }
+    emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
     ctx.builder.terminate(Terminator::Return { value });
 }
 
 /// Terminates with a branch after running active finally bodies from inner to outer.
-fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockId) {
+fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockId, loop_cleanup_count: usize) {
     if run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
-            terminate_branch(ctx, target);
+            terminate_branch(ctx, target, loop_cleanup_count);
         }
         return;
     }
+    emit_innermost_loop_cleanups(ctx, loop_cleanup_count);
     ctx.builder.terminate(Terminator::Br { target, args: Vec::new() });
 }
 
@@ -1696,7 +1805,29 @@ fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId)
         }
         return;
     }
+    emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
     ctx.builder.terminate(Terminator::Throw { value });
+}
+
+/// Returns how many inner loop cleanups a multi-level branch skips.
+fn loop_cleanup_count_for_branch(level: usize) -> usize {
+    level.max(1).saturating_sub(1)
+}
+
+/// Emits cleanup for the innermost active loops that will not reach their exit block.
+fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, count: usize) {
+    let frames = ctx
+        .loop_stack
+        .iter()
+        .rev()
+        .take(count)
+        .copied()
+        .collect::<Vec<_>>();
+    for frame in frames {
+        if let Some(cleanup) = frame.cleanup {
+            crate::ir_lower::ownership::release_if_owned(ctx, cleanup.value, Some(cleanup.span));
+        }
+    }
 }
 
 /// Runs and removes the innermost applicable finally frame.

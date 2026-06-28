@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Iterable helpers dispatch on runtime kind tags and must report unsupported shapes without corrupting iteration state.
+//! - The `"Array"` write routes through `__rt_stdout_write` so `--web` output capture applies.
 
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
@@ -17,7 +18,8 @@ use crate::codegen::platform::Arch;
 /// Dispatches to the x86_64 Linux variant on that target; on ARM64 emits directly.
 /// Writes the literal `"Array"` to stdout for indexed-array (kind 2) and hash-table
 /// (kind 3) iterable payloads. Object payloads (kind 4) and all other heap kinds are
-/// silently skipped, matching PHP's `echo $array;` behavior.
+/// silently skipped, matching PHP's `echo $array;` behavior. The write is routed
+/// through `__rt_stdout_write` so the `--web` capture indirection sees the bytes.
 ///
 /// Input: x0/rax = iterable heap pointer.
 /// Output: writes `"Array"` to stdout for array-like iterables; no output otherwise.
@@ -32,7 +34,7 @@ pub fn emit_iterable_write_stdout(emitter: &mut Emitter) {
     emitter.comment("--- runtime: iterable_write_stdout ---");
     emitter.label_global("__rt_iterable_write_stdout");
 
-    // -- save the link register so we can call __rt_heap_kind without losing the return target --
+    // -- save the link register so we can call helpers without losing the return target --
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve frame and link registers across the helper call
     emitter.instruction("mov x29, sp");                                         // establish a frame pointer for the helper
 
@@ -45,9 +47,10 @@ pub fn emit_iterable_write_stdout(emitter: &mut Emitter) {
 
     emitter.label("__rt_iterable_write_stdout_array");
     abi::emit_symbol_address(emitter, "x1", "_iterable_array_str");             // load the page that contains the literal "Array" bytes
-    emitter.instruction("mov x2, #5");                                          // pass the 5-byte length of the literal "Array" to write()
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);
+    emitter.instruction("mov x2, #5");                                          // 5-byte length of the literal "Array"
+    emitter.instruction("mov x0, x1");                                          // capture-aware write: "Array" pointer → x0
+    emitter.instruction("mov x1, x2");                                          // "Array" length → x1 per __rt_stdout_write's ABI
+    emitter.instruction("bl __rt_stdout_write");                                // route through the capture indirection (response buffer in --web)
 
     emitter.label("__rt_iterable_write_stdout_done");
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the saved frame and link registers
@@ -57,7 +60,8 @@ pub fn emit_iterable_write_stdout(emitter: &mut Emitter) {
 /// Emits the Linux x86_64 variant of `__rt_iterable_write_stdout`.
 ///
 /// Saves and restores rbp as the frame pointer. Identical dispatch logic to the
-/// ARM64 variant: writes `"Array"` for heap kinds 2 and 3, silent no-op otherwise.
+/// ARM64 variant: writes `"Array"` for heap kinds 2 and 3, silent no-op otherwise,
+/// routing the write through `__rt_stdout_write` for `--web` capture.
 ///
 /// Input: rax = iterable heap pointer.
 /// Output: writes `"Array"` to stdout for array-like iterables; no output otherwise.
@@ -66,7 +70,7 @@ fn emit_iterable_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: iterable_write_stdout ---");
     emitter.label_global("__rt_iterable_write_stdout");
 
-    // -- preserve the return address so we can call __rt_heap_kind without losing it --
+    // -- preserve the return address so we can call helpers without losing it --
     emitter.instruction("push rbp");                                            // align the SysV stack frame on entry
     emitter.instruction("mov rbp, rsp");                                        // establish a frame pointer for the helper
 
@@ -78,11 +82,11 @@ fn emit_iterable_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_iterable_write_stdout_done");                 // every other heap kind is a silent no-op
 
     emitter.label("__rt_iterable_write_stdout_array");
-    abi::emit_symbol_address(emitter, "rsi", "_iterable_array_str");            // point the Linux write() buffer register at the literal "Array" bytes
-    emitter.instruction("mov edx, 5");                                          // pass the 5-byte length of the literal "Array" to write()
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");                                             // write the literal "Array" to stdout
+    abi::emit_symbol_address(emitter, "rsi", "_iterable_array_str");            // point at the literal "Array" bytes
+    emitter.instruction("mov edx, 5");                                          // 5-byte length of the literal "Array"
+    emitter.instruction("mov rdi, rsi");                                        // capture-aware write: "Array" pointer → first arg register
+    emitter.instruction("mov rsi, rdx");                                        // "Array" length → second arg register
+    emitter.instruction("call __rt_stdout_write");                              // route through the capture indirection (response buffer in --web)
 
     emitter.label("__rt_iterable_write_stdout_done");
     emitter.instruction("pop rbp");                                             // restore the prior frame pointer before returning

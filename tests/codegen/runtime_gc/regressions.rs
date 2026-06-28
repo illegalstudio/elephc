@@ -580,6 +580,50 @@ echo count($x->a);
     );
 }
 
+/// Verifies that assigning a Mixed indexed-array cell to a local retains an
+/// independent owner and does not leave the array with a dangling cell.
+#[test]
+fn test_mixed_indexed_array_read_survives_local_unset() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = [5, "x"];
+$first = $values[0];
+unset($first);
+echo $values[0];
+unset($values);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "5");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies that assigning a Mixed associative-array cell to a local retains an
+/// independent owner and does not leave the hash with a dangling cell.
+#[test]
+fn test_mixed_assoc_array_read_survives_local_unset() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$values = ["a" => 5, "b" => "x"];
+$first = $values["a"];
+unset($first);
+echo $values["a"];
+unset($values);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "5");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test: pushing an owned array literal into a Mixed-element property
 /// array adds a second ownership layer. The inner array is retained by the Mixed
 /// box and the Mixed box is retained by `__rt_array_push_refcounted`. The property
@@ -852,6 +896,73 @@ run();
     );
 }
 
+/// Regression test: assigning a by-value foreach element into another local should
+/// release the target slot using its widened Mixed storage representation.
+#[test]
+fn test_regression_foreach_mixed_value_assignment_releases_old_slot_storage() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($n = 0; $n < 50; $n++) {
+    foreach (["x", "y", "z"] as $p) {
+        $k = $p;
+    }
+}
+echo "x";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "x");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: refcounted hidden ternary merge temps must be released when
+/// reassigned across loop iterations and during function/main epilogue cleanup.
+#[test]
+fn test_regression_refcounted_hidden_ternary_temp_released() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 50; $i++) {
+    $a = ["a" => "b"];
+    $x = isset($a["missing"]) ? $a["missing"] : "";
+}
+echo "x";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "x");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: `isset($hash[$missing])` on a Mixed-valued hash should probe
+/// presence/null without allocating a throwaway Mixed miss value every iteration.
+#[test]
+fn test_regression_mixed_hash_isset_miss_does_not_materialize_leaking_value() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 50; $i++) {
+    $a = ["a" => 1, "b" => "s"];
+    $x = isset($a["missing"]) ? $a["missing"] : "";
+}
+echo "x";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "x");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for the array-to-string echo fix: echoing an owned temporary array
 /// stringifies to "Array" and releases the temporary, keeping GC allocs and frees balanced
 /// (no leak from the discarded array, no premature/double free).
@@ -868,4 +979,83 @@ fn test_echo_owned_temp_array_balances_gc_stats() {
         "expected the temporary array to allocate at least once"
     );
     assert_eq!(allocs - baseline_allocs, frees - baseline_frees);
+}
+
+/// Regression test for issue #408: releasing a string-keyed associative array
+/// must free everything it owns. Reassigning a hash-typed local each iteration
+/// promotes a fresh indexed array literal to hash storage via `array_to_hash`,
+/// which builds the result hash from a copy of the source array; the source
+/// array was leaked once per conversion. With many iterations the leak would
+/// exhaust the fixed heap, so a balanced alloc/free count proves it is freed.
+#[test]
+fn test_regression_408_reassigned_string_keyed_array_does_not_leak() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$g = [];
+for ($n = 0; $n < 500; $n++) {
+    $g = [];
+    $g["a"] = "x";
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert!(allocs >= 500, "expected per-iteration allocations: {allocs}");
+    assert_eq!(
+        allocs, frees,
+        "string-keyed array release must free its source array (issue #408)"
+    );
+}
+
+/// Regression test for issue #408 (heap-debug): the same reassignment loop must
+/// report a clean heap with no live blocks at exit and must not trip the
+/// double-free detector, confirming the conversion releases exactly one
+/// reference of the source array (correct COW ownership).
+#[test]
+fn test_regression_408_reassigned_string_keyed_array_heap_debug_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$g = [];
+for ($n = 0; $n < 500; $n++) {
+    $g = [];
+    $g["a"] = "x";
+    $g["bb"] = "yy";
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #408 (in-place promotion): a string-key write that
+/// promotes a freshly built indexed array literal to hash storage must also free
+/// the source array. Repeated promotion in a loop keeps GC allocs and frees
+/// balanced with no leaked source arrays.
+#[test]
+fn test_regression_408_string_key_promotion_does_not_leak() {
+    let out = compile_and_run_with_gc_stats(
+        r#"<?php
+$g = [];
+for ($n = 0; $n < 500; $n++) {
+    $g = [1, 2];
+    $g["a"] = "x";
+}
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    let (allocs, frees) = parse_gc_stats(&out.stderr);
+    assert_eq!(
+        allocs, frees,
+        "promoting an indexed array literal to hash storage must free the source array (issue #408)"
+    );
 }

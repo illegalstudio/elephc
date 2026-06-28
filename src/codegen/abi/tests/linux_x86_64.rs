@@ -443,14 +443,14 @@ fn test_emit_push_result_value_linux_x86_64_uses_native_result_registers() {
     );
 }
 
-/// Verifies that emit_write_stdout emits the correct x86_64 instructions to
-/// write to stdout via the Linux syscall interface: the integer argument is
-/// converted via __rt_itoa (leaving result in rax for pointer, rdx for length),
-/// then the syscall is invoked with sys_write parameters (edi=fd=1, esi=buf,
-/// edx=len, eax=syscall_number=1). The function sets up the syscall registers
-/// according to the Linux x86_64 syscall ABI.
+/// Verifies that emit_write_stdout routes the terminal x86_64 write through the
+/// `__rt_stdout_write` runtime indirection: the integer argument is converted via
+/// `__rt_itoa` (leaving the pointer in rax and the length in rdx), then the string
+/// result registers are moved into the `__rt_stdout_write` calling convention
+/// (rdi=byte pointer, rsi=length) and the helper is called. The actual `write(1, …)`
+/// syscall now lives inside `__rt_stdout_write`, not at this call site.
 #[test]
-fn test_emit_write_stdout_linux_x86_64_uses_syscall_registers() {
+fn test_emit_write_stdout_linux_x86_64_routes_through_stdout_write() {
     let mut emitter = test_emitter_x86();
 
     emit_write_stdout(&mut emitter, &PhpType::Int);
@@ -459,11 +459,9 @@ fn test_emit_write_stdout_linux_x86_64_uses_syscall_registers() {
         emitter.output(),
         concat!(
             "    call __rt_itoa\n",
-            "    mov rsi, rax\n",
-            "    mov rdx, rdx\n",
-            "    mov edi, 1\n",
-            "    mov eax, 1\n",
-            "    syscall\n",
+            "    mov rsi, rdx\n",
+            "    mov rdi, rax\n",
+            "    call __rt_stdout_write\n",
         )
     );
 }

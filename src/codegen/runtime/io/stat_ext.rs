@@ -311,7 +311,7 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
         emitter.comment(&format!("--- runtime: {} ---", &label[5..]));
         emitter.label_global(label);
         stat_call(emitter);
-        emitter.instruction("cmp rax, 0");                                      // stat() success?
+        emitter.instruction("cmp eax, 0");                                      // did libc stat() return success as a C int?
         emitter.instruction(&format!("jne {}_fail", label));                    // failure → false flag
         emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", off));    // load tv_sec at offset
         emitter.instruction("mov rdx, 1");                                      // success flag for codegen-side int|false boxing
@@ -325,7 +325,7 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fileperms ---");
     emitter.label_global("__rt_fileperms");
     stat_call(emitter);
-    emitter.instruction("cmp rax, 0");                                          // stat() success?
+    emitter.instruction("cmp eax, 0");                                          // did libc stat() return success as a C int?
     emitter.instruction("jne __rt_fileperms_fail");                             // failure → false flag
     emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", mode_off));   // load 32-bit st_mode (zero-extends into rax)
     emitter.instruction("mov rdx, 1");                                          // success flag for codegen-side int|false boxing
@@ -342,7 +342,7 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
         emitter.comment(&format!("--- runtime: {} ---", &label[5..]));
         emitter.label_global(label);
         stat_call(emitter);
-        emitter.instruction("cmp rax, 0");                                      // stat() success?
+        emitter.instruction("cmp eax, 0");                                      // did libc stat() return success as a C int?
         emitter.instruction(&format!("jne {}_fail", label));                    // failure → false flag
         emitter.instruction(&format!("mov eax, DWORD PTR [rsp + {}]", off));    // load 32-bit uid/gid
         emitter.instruction("mov rdx, 1");                                      // success flag for codegen-side int|false boxing
@@ -356,7 +356,7 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fileinode ---");
     emitter.label_global("__rt_fileinode");
     stat_call(emitter);
-    emitter.instruction("cmp rax, 0");                                          // stat() success?
+    emitter.instruction("cmp eax, 0");                                          // did libc stat() return success as a C int?
     emitter.instruction("jne __rt_fileinode_fail");                             // failure → false flag
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", ino_off));    // load 64-bit st_ino
     emitter.instruction("mov rdx, 1");                                          // success flag for codegen-side int|false boxing
@@ -369,7 +369,7 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: filetype ---");
     emitter.label_global("__rt_filetype");
     lstat_call(emitter);
-    emitter.instruction("cmp rax, 0");                                          // lstat() success?
+    emitter.instruction("cmp eax, 0");                                          // did libc lstat() return success as a C int?
     emitter.instruction("jne __rt_filetype_fail");                              // failure → PHP false
     emitter.instruction(&format!("mov r9d, DWORD PTR [rsp + {}]", mode_off));   // load st_mode
     emitter.instruction("and r9d, 0xF000");                                     // mask with S_IFMT
@@ -429,7 +429,7 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // first libc access() argument
     emitter.instruction("mov rsi, 1");                                          // X_OK = 1 (execute permission check)
     emitter.instruction("call access");                                         // libc access(path, X_OK)
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc access() return success as a C int?
     emitter.instruction("sete al");                                             // boolean byte
     emitter.instruction("movzx rax, al");                                       // widen to canonical integer result
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -440,7 +440,7 @@ fn emit_stat_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: is_link ---");
     emitter.label_global("__rt_is_link");
     lstat_call(emitter);
-    emitter.instruction("cmp rax, 0");                                          // lstat() success?
+    emitter.instruction("cmp eax, 0");                                          // did libc lstat() return success as a C int?
     emitter.instruction("jne __rt_is_link_no");                                 // failure → 0
     emitter.instruction(&format!("mov r9d, DWORD PTR [rsp + {}]", mode_off));   // load st_mode
     emitter.instruction("and r9d, 0xF000");                                     // mask with S_IFMT

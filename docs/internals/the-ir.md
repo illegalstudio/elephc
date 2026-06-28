@@ -884,6 +884,15 @@ function-like body (functions, methods, closures, trampolines, invokers)
 repeatedly until a full sweep reports no change, capped at a fixed iteration
 budget.
 
+The whole pipeline runs to a **module-level fixed point**: `optimize_module`
+interleaves the cross-function [small-function inliner](#small-function-inlining)
+with these per-function passes and repeats the round until neither layer changes
+anything (capped by a separate module-iteration budget). Interleaving lets the two
+feed each other — inlined bodies expose new constants and dead code for the
+per-function passes, and the simplified functions expose new (smaller) inline
+candidates. The first round reproduces the prior "inline once, then optimize"
+behavior, so later rounds only optimize further and never change semantics.
+
 In debug and test builds (`debug_assertions`), the driver re-validates the
 function with `validate_function` after every pass and panics — naming the
 offending pass — if any pass produced malformed IR. The same builds panic if a
@@ -947,6 +956,273 @@ phase commits them, sharing `replace_all_uses`, `resolve_chains`, and
   interns `a ++ b` into the data pool and becomes a single `const_str` marked
   `persistent` so cleanup never frees the literal. Nested concats converge across
   driver sweeps.
+
+### Constant Folding
+
+The third registered transform (`src/ir_passes/const_fold.rs`) folds operations
+whose operands are all compile-time constants into a single `const_*`
+instruction, rewriting the instruction in place and keeping its result value id
+(no use-rewrite needed). A single forward scan over the instruction table tracks
+the constant carried by each value — constants in SSA are program-wide, so one
+sweep discovers constant operands and collapses chains like `(2 + 3) * 4` at
+once. It folds integer `iadd`/`isub`/`imul`, bitwise `and`/`or`/`xor`, in-range
+(`0..=63`) `ishl`/`ishr_a`, unary `ineg`/`ibit_not`, float
+`fadd`/`fsub`/`fmul`/`fneg`, signed `icmp`, and the `is_null`/`is_truthy`
+predicates.
+
+Each fold reproduces exactly what the op's lowering computes at runtime, so the
+compiled result is unchanged: integers wrap at 64 bits (matching native
+`add`/`sub`/`mul`), shifts fold only for in-range counts, and floats use exact
+IEEE-754. The trapping integer division/modulo, float division (PHP's
+`DivisionByZeroError` versus IEEE infinity), and `NaN`-sensitive `fcmp` are left
+unfolded, the same conservatism as identity arithmetic.
+
+Propagation through local slots is realized by composition with the peephole's
+scalar load/store value-numbering, which forwards a constant stored to a local
+onto its later `load_local` uses; this pass then folds the resulting
+constant-operand operation. Together, under the fixed-point driver, they form
+per-block constant propagation over EIR value ids and local slots. Constants
+surfaced by identity arithmetic feed it too (`$argc * 0` → `const_i64 0` →
+downstream folds), and dead constant producers are cleaned up by dead
+instruction elimination.
+
+### Common Subexpression Elimination
+
+The fourth registered transform (`src/ir_passes/cse.rs`) removes a pure
+computation whose identical predecessor already dominates it, redirecting the
+redundant result to the earlier value (RAUW) and neutralizing it to `nop`. It
+covers per-block and cross-block redundancy in one dominator-tree value-numbering
+traversal: a scoped hash table maps each pure instruction's key
+`(op, result type, immediate, canonicalized operands)` to the value that first
+computed it. Because blocks are visited in dominator-tree preorder, the table
+holds exactly the definitions that dominate the current block — its own earlier
+instructions plus those of dominating blocks — so a match is always a dominating
+value, making the redirect dominance-safe. Entries a block inserts are removed
+when its whole subtree is done.
+
+Only **pure** (`Effects::PURE`) instructions that have at least one operand and
+whose result is `NonHeap` or `Persistent` are eligible: purity makes the value a
+function of its operands alone (no memory/state dependence, no fault), and the
+ownership restriction keeps the rewrite refcount-neutral — the same value class
+dead-instruction elimination is allowed to drop. Since SSA operands are
+equal-by-value, identical pure ops on identical operand values compute identical
+results. Nullary constant and address materializations (`const_*`, `data_addr`)
+are deliberately not deduplicated: they are cheaper to rematerialize at each use
+than to keep live across the span, so CSE only targets computations.
+Functions with exception handlers are skipped: their handler blocks are reachable
+through implicit edges absent from the terminator graph, so a terminator-graph
+dominator can be bypassed at runtime by a throw, which would make a cross-block
+redirect unsound — the same restriction branch simplification uses. CSE uses the
+[Dominance Analysis](#dominance-analysis) and shares
+`cfg::has_exception_handlers` with branch simplification.
+
+### Loop-Invariant Code Motion
+
+The fifth registered transform (`src/ir_passes/licm.rs`) moves a pure computation
+whose operands do not change across a loop out of the loop body into the loop
+preheader, so it runs once instead of per iteration. It builds the
+[loop forest](#loop-analysis) on the [dominator tree](#dominance-analysis), then
+for each loop grows the invariant set to a fixed point: an instruction is
+invariant when each operand is defined by another instruction being hoisted from
+the same loop or has a definition that dominates the preheader.
+
+Only **pure** (`Effects::PURE`) instructions with at least one operand and a
+`NonHeap`/`Persistent` result are eligible — purity means the value depends only
+on the operands and the op neither reads mutable state nor faults, so evaluating
+it once in the preheader, unconditionally even when its original block ran only on
+some iterations, is safe (no speculation hazard); the ownership bound keeps the
+move refcount-neutral. Nullary constant/address materializations are not hoisted
+(rematerializing them is cheaper than keeping them live across the loop). Loops
+are processed innermost-first with moves applied immediately, so a value invariant
+in several nested loops reaches the outermost preheader in one run. Instructions
+are relocated between blocks' instruction lists and their result `ValueDef`s
+(block + index) are recomputed once at the end so the value table matches the new
+layout. Loops without a detected preheader, and functions with exception
+handlers, are skipped. (PHP loop variables live in local slots reloaded through
+impure `load_local`, so an invariant source expression is not yet hoistable; the
+pass's reach grows as more values flow as SSA across loops.)
+
+### Dead Instruction Elimination
+
+The sixth registered transform (`src/ir_passes/dead_inst.rs`) removes
+result-producing instructions whose values are not live over the CFG and whose
+effect metadata says they are pure. It computes liveness with successor live-in
+sets, initializes each block's backward walk with those live-out values plus
+terminator uses, and then neutralizes dead instructions to `nop`.
+
+Neutralization preserves instruction/result value table slots, so the validator
+does not need value renumbering or block-list surgery. Read-only, allocation,
+mutation, refcounting, output, warning, fatal, throw, and deopt-capable
+instructions stay intact; dead read elimination is deferred until a later pass
+can prove equivalent PHP and ownership behavior. Dead chains in one block
+collapse during the backward walk; chains that cross block boundaries converge
+through the fixed-point pass driver after liveness is recomputed.
+
+### Dead Store Elimination
+
+The seventh registered transform (`src/ir_passes/dead_store.rs`) removes
+`store_local` instructions whose stored value is never read on any path before
+the slot is overwritten or the function exits. Unlike dead instruction
+elimination, which works at SSA-value granularity, this pass reasons about local
+*slots*: it runs a backward dataflow that gens a slot at each `load_local` and
+kills it at each `store_local`, iterating to a fixed point so live-out is the
+union of successor live-in sets. A store is dead when its slot is not live
+immediately after it, so an earlier store with no intervening read also dies.
+
+The pass is restricted to slots that are (1) ordinary `PhpLocal`s, (2) of a
+non-refcounted storage type (`!php_type_needs_lifetime_tracking`), (3) named only
+by plain `load_local`/`store_local`, and (4) never address-escaped by reference.
+The refcounting restriction is the key correctness boundary: assignment lowering
+wraps a refcounted slot's store with separate `acquire`/`release` instructions
+and releases the prior occupant, so dropping the `store_local` alone would leak
+the acquired value. Scalar slots carry no such ownership ops and their scope-exit
+cleanup is a no-op, so removing a dead scalar store is refcount-neutral. Any other
+slot-naming op (ref-cell promote/alias/release, `unset_local`, static-local or
+global access) makes a slot ineligible because it could read or alias the slot in
+a way the pass does not model.
+
+Condition (4) is subtle: a by-reference call argument (`new Box($v)` for a
+`public int &$value` constructor) or a by-reference closure capture
+(`use (&$x)`) is lowered as an ordinary `load_local`, and codegen later resolves
+that argument value back to its defining `load_local` and passes the slot's
+*address* — so the callee reads or mutates the slot through an alias that forward
+`load_local`-only liveness cannot see. Because a single-function pass has no
+callee signatures (which parameters are by-reference), the pass uses a
+conservative default-deny allowlist: a slot is excluded whenever any of its
+`load_local` results is consumed by an instruction that is not a proven
+value-only consumer (arithmetic, comparison, cast, output, store, string, or
+refcount op). Every call, object construction, closure capture, property/array
+access, and any future opcode is treated as a possible by-reference escape.
+Feeding a load into a value-only op first is safe because codegen only traces a
+*direct* `load_local` back to a slot.
+
+This complements the peephole pass's per-block, value-equality store forwarding
+(which drops a store of the value already resident): dead store elimination is
+liveness-based and crosses block boundaries, so it removes a store of a
+*different* value whose result is never observed. Stores are neutralized to
+`nop`; a pure value left feeding a removed store is then cleaned up by dead
+instruction elimination on a later driver sweep.
+
+### Branch Simplification
+
+The eighth registered transform (`src/ir_passes/branch_simplify.rs`) prunes the
+CFG in three ways:
+
+- **Constant-condition folding** — a `cond_br` whose condition resolves to a
+  constant (`const_bool`, `const_i64` via PHP truthiness, or `const_null`) becomes
+  an unconditional `br` to the taken edge. A `switch` on a `const_i64`/`const_bool`
+  scrutinee folds to a `br` to the matching case (or the default). A `while (true)`
+  loop, for example, lowers to a constant `cond_br` that this fold collapses.
+- **Empty-block jump threading** — a non-entry block with no parameters and only
+  `nop` instructions that ends in an unconditional `br` is a forwarding block.
+  Edges targeting it are redirected to the end of the forwarding chain (with cycle
+  detection). Because forwarding blocks have no parameters, every edge into them
+  carries empty arguments, so retargeting needs no argument rewriting.
+- **Unreachable-block neutralization** — blocks no longer reachable from the entry
+  have their terminator set to `Unreachable` and their instructions rewritten to
+  `nop`.
+
+Like the other passes, unreachable blocks are neutralized **in place** rather than
+physically removed. The validator requires `block.id == index` and reports any
+*use* in an unreachable block as `UseNotDominated` (an unreachable block's
+dominator set collapses to itself). Neutralizing clears every use — terminator
+and instruction operands — so the block stays valid, while the block, value, and
+instruction table slots keep their indices. This avoids renumbering and, crucially,
+keeps `try` handler block-id tokens (encoded in `try_push_handler` immediates)
+correct. Functions that use any exception-handling opcode are skipped wholesale,
+because their handler blocks are reachable through implicit edges absent from the
+terminator graph, so terminator-only reachability could wrongly neutralize a live
+handler. Removing edges only enlarges dominator sets and threaded forwarding blocks
+carry no definitions, so simplification never invalidates a use that was valid
+before; cross-block cascades converge through the fixed-point driver.
+
+### Small-Function Inlining
+
+`src/ir_passes/inline.rs` is a **cross-function**, module-level pass (not a member
+of the per-function `IrPass` set) that splices a small callee's body into its
+caller at the call site. The original call is removed; the callee's blocks are
+transplanted with fresh ids, arguments are bound into the remapped parameter slots
+with `store_local`, the caller block jumps into the transplanted entry, and each
+callee `return` becomes a `br` to a fresh continuation block that carries the
+result through a block parameter.
+
+A callee is inlined only when it is at most **24** non-`nop` instructions, has a
+0-parameter entry block, contains no exception-handling ops, is not a
+generator/fiber wrapper, and is **non-recursive** — directly or mutually, via a
+call-graph cycle analysis that excludes any function reachable from itself (a
+per-caller fuel cap backstops termination). Eligibility is further restricted to a
+provably ownership-safe **destructor-free** boundary and body (scalars, strings,
+and arrays/unions of destructor-free types; no by-ref/variadic params and no
+ref-cell/static/global/capture locals).
+
+Correctness across the boundary is preserved without an explicit epilogue: the
+splice replaces `return` with `br`, bypassing the callee's implicit codegen
+epilogue cleanup, so the transplant reproduces that cleanup's per-slot decisions —
+parameter slots and directly-returned slots become epilogue-excluded `HiddenTemp`
+(matching the callee, whose argument is borrowed and whose return ownership is
+moved to the caller), while ordinary refcounted internal locals stay `PhpLocal` and
+are still freed by the host epilogue. The destructor-free restriction makes the one
+residual difference — deferring those internal frees to the host epilogue —
+unobservable (no `__destruct`, no array identity), so reference-counting and
+copy-on-write behaviour are byte-for-byte preserved. Two call-site guards complete
+correctness: arguments must bind to parameter slots without coercion (matching
+storage types, so spread/named-boxed-`mixed` and `int`↔`float` sites stay ordinary
+calls), and any `string` argument must come from a non-scratch source
+(`const_str`/`load_local`), because the spliced body runs the callee's
+statement-boundary concat-buffer reset in the host frame and would otherwise free an
+in-flight scratch string argument. Call-site name resolution (`call` Data immediates
+and `function_variant_call` include-variant refs) uses snapshots taken before
+mutation, so the rewrite loop never aliases the module while holding a function.
+
+## Dominance Analysis
+
+`src/ir_passes/dominance.rs` is a read-only sidecar analysis (like liveness, not
+a driver transform) that builds each function's dominator tree, the foundation
+for the dominance-aware cross-block passes that follow (common-subexpression
+elimination, natural-loop detection, loop-invariant code motion).
+
+`compute_dominance` uses the Cooper–Harvey–Kennedy iterative algorithm: it walks
+reachable blocks in reverse postorder and recomputes each block's immediate
+dominator as the intersection of its already-processed predecessors' idoms — a
+two-finger walk over postorder numbers — until a fixed point. It converges for
+arbitrary CFGs and is fast on the small functions EIR produces.
+
+The resulting `DominanceInfo` answers `immediate_dominator`, reflexive
+`dominates` / `strictly_dominates`, dominator-tree `children` (top-down
+traversal), `nearest_common_dominator`, and `is_reachable`. Only blocks reachable
+from the entry participate; unreachable blocks (which branch simplification
+neutralizes in place but leaves in the table) are excluded from the tree and
+answer `false`/`None`. The internal idom table is self-rooted at the entry so the
+intersect and dominance walks terminate without special cases. The analysis uses
+the shared `cfg::predecessors` helper.
+
+## Loop Analysis
+
+`src/ir_passes/loops.rs` is a read-only sidecar analysis that builds the
+function's natural-loop forest on top of the dominator tree, the foundation for
+loop-invariant code motion and other loop optimizations.
+
+`compute_loops(func, &dominance)` first finds **back edges** — CFG edges
+`latch -> header` whose target dominates their source — so loop detection is a
+thin layer over dominance. Back edges sharing one header form a single
+[`NaturalLoop`] with multiple latches. The loop body is the header plus every
+block that can reach a latch without passing through the header, found by a
+backward walk over reachable predecessors that stops at the header.
+
+Each `NaturalLoop` exposes its `header`, `latches`, sorted `blocks` (with a
+binary-search `contains`), `parent` and `depth` in the nesting forest, and its
+`preheader`. **Nesting** is by block-set containment: loop `A` is nested in `B`
+when `A`'s header lies in `B`'s body, and the immediate parent is the smallest
+such `B`; the lowerer emits reducible CFGs, so loops are properly nested or
+disjoint. `LoopInfo` additionally answers `innermost_loop`, `loop_depth`,
+`is_loop_header`, and `back_edges` per block/function.
+
+A **preheader** is detected as the unique reachable out-of-loop predecessor of
+the header whose only successor is the header. PHP loops lower to slot-based CFGs
+(the loop variable lives in a local slot, not a block parameter), so the init
+block that branches into the header is a natural preheader; when entry into the
+loop is shared between blocks or conditional, no preheader exists and an
+optimization that needs one inserts it.
 
 ## AST Lowering Catalogue
 

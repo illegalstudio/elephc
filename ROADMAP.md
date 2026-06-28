@@ -675,6 +675,22 @@ binaries never link the bridge.
 - [x] Tagged null representation behind `--null-repr=tagged` / `ELEPHC_NULL_REPR` — inline two-word `{payload, tag}` `TaggedScalar` for null-capable scalars (miss-capable int array reads, empty `array_pop`/`array_shift`), tag-aware consumers (`echo`, `var_dump`, `is_null`, `??`, `??=`, `isset`, `empty`, `gettype`, casts, arithmetic narrowing, `===` via Mixed boxing), plain-int sentinel checks removed (full 64-bit int range round-trips, including `9223372036854775806`), local inference and untyped-param widening aligned; covered on all three targets in `tests/codegen/null_sentinel/tagged.rs`
 - [x] Flip the default null representation to `Tagged` (the collision bullet in `docs/php/types.md` now documents only the `--null-repr=sentinel` opt-out); the `{payload, tag}` shape is the convergence point for runtime int-overflow→float promotion
 
+### Date/time and calendar parity
+
+Full OOP + procedural date/time surface (`DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, and ~45 procedural functions/aliases), plus the complete `ext/calendar` extension, implemented as synthetic classes/methods over the `date()`/`mktime()`/`gmmktime()` runtime — no new codegen or assembly.
+
+- [x] `DateTime` / `DateTimeImmutable` — construct (string + `?DateTimeZone`), `format`, `getTimestamp` / `setTimestamp`, `getTimezone` / `setTimezone`, `getOffset`, `getMicrosecond` / `setMicrosecond`, `setTime`, `setDate`, `setISODate`, `add` / `sub`, `modify`, `diff`, `createFromFormat`, `createFromInterface`, `createFromMutable` / `createFromImmutable`, `createFromTimestamp`, `getLastErrors`; per-object timezone honored in `format()`
+- [x] `DateTimeInterface` format constants (`ATOM`, `COOKIE`, `ISO8601`, `ISO8601_EXPANDED`, the `RFC*` family, `RSS`, `W3C`) on the interface and both classes
+- [x] `DateInterval` — ISO 8601 duration parsing, `format()` (`%y %m %d %h %i %s %a %R %r %f %F` …), `createFromDateString`
+- [x] `DatePeriod` — `Iterator` over a date range, end-date and recurrence-count forms, `EXCLUDE_START_DATE` / `INCLUDE_END_DATE`, `createFromISO8601String`
+- [x] PHP 8.3 date exception hierarchy — `DateError` / `DateObjectError` / `DateRangeError` (extend `Error`); `DateException` / `DateInvalidTimeZoneException` / `DateInvalidOperationException` / `DateMalformed{String,IntervalString,PeriodString}Exception` (extend `Exception`)
+- [x] `date()` / `gmdate()` specifiers including `O P Z T e I c r u v p B X x`; `createFromFormat()` specifiers including `D l S F M z v O P Z T e X x` and the `! | # ? * +` metas with strict trailing-data rejection
+- [x] `strtotime()` returns `int|false` (PHP-compatible failure value; `-1` stays a valid pre-epoch timestamp); broad relative/ISO/keyword/timezone-suffix grammar
+- [x] Procedural date/time functions — `mktime` / `gmmktime`, `checkdate`, `getdate`, `localtime`, `gettimeofday`, `microtime`, `hrtime`, `idate`, `strftime` / `gmstrftime`, `strptime`, `date_parse` / `date_parse_from_format`, `date_default_timezone_get/set`, the `date_*` OOP aliases, and `timezone_open` / `timezone_identifiers_list` / `timezone_name_get` / `timezone_offset_get` / `timezone_name_from_abbr` / `timezone_version_get`
+- [x] Solar functions — `date_sun_info()`, and the deprecated `date_sunrise()` / `date_sunset()` (with `SUNFUNCS_RET_*`), a faithful bit-exact port of PHP's timelib astronomical algorithm
+- [x] `ext/calendar` — `gregoriantojd` / `juliantojd` / `frenchtojd` / `jewishtojd` and inverses, `cal_to_jd` / `cal_from_jd` / `cal_days_in_month` / `cal_info`, `jddayofweek`, `jdmonthname`, `easter_days` / `easter_date`, `unixtojd` / `jdtounix`, and the `CAL_*` constants (Gregorian, Julian, French Republican, and Jewish calendars; bit-exact vs PHP across the full Serial-Day-Number range)
+- [x] Bundled IANA timezone-database introspection — `DateTimeZone::getLocation()` / `getTransitions()` / `listAbbreviations()` and `timezone_location_get` / `timezone_transitions_get` / `timezone_abbreviations_list`. The three tables are baked from PHP's own timelib data (byte-for-byte identical to PHP) into the pure-Rust `crates/elephc-tz` bridge staticlib, linked **only** into programs that use one of these methods (pay-for-use, like the TLS/PDO/crypto bridges); the transition `time` string is recomputed at runtime by a proleptic-Gregorian formatter exact to `PHP_INT_MIN`
+
 ## v0.24.x — EIR introduction and register allocation
 
 Introduce a domain-specific intermediate representation (EIR) between the
@@ -701,7 +717,9 @@ v0.24.x. The legacy AST backend is frozen behind `--ast-backend` for diagnostics
 and removal work only, and ≥15% performance improvement on compute benchmarks
 after Phase 06 by end of v0.24.x.
 
-## v0.25.x — EIR optimization passes
+## v0.25.x — EIR optimization passes and Image support
+
+### EIR optimization passes
 
 Build the IR-level passes that the AST optimizer could not reach now that the
 EIR backend is the user-facing default.
@@ -712,26 +730,150 @@ EIR backend is the user-facing default.
 - [x] Fixed-point IR pass driver with validation after each pass in test builds — `src/ir_passes/driver.rs` runs registered `IrPass` transforms over each function to a fixed point; in debug/test builds it re-validates the function after every pass (panicking and naming the offending pass on malformed IR) and panics on non-convergence within the iteration cap, with both guards compiled out of `--release` (cap then stops and proceeds). Shared use-rewriting (RAUW) lives in `src/ir_passes/rewrite.rs`.
 - [x] Identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, etc.) — `src/ir_passes/identity_arith.rs`, the first registered pass. Fold-to-operand neutralizes the op to `nop` and redirects uses to the surviving operand (`x + 0`, `x * 1`, `x | 0`, `x << 0`, `x & x`, `x / 1`, `x * 1.0`, …); fold-to-zero rewrites the op in place to `const_i64 0` (`x ^ x`, `x - x`, `x * 0`, `x & 0`, `x % 1`). PHP-equivalence preserved: integer `x / 0` / `x % 0` still trap, and float additive-zero / `* 0.0` are excluded for signed-zero/`NaN` safety. Fold chains within a sweep resolve transitively.
 - [x] Peephole patterns: redundant load/store, box/unbox cancellation, string-literal concat folding, paired acquire/release cancellation, redundant `Move` / `Borrow` cleanup — `src/ir_passes/peephole/`, the second registered pass. Box/unbox folds scalar `unbox(box(x)) → x`; `Move`/`Borrow` fold to their operand when ownership/type are unchanged; scalar load/store value-numbering forwards `load`-after-`store` and drops self-stores on non-aliased `NonHeap` locals; single-use `acquire`/`release` pairs cancel (refcount-neutral); `str_concat(const_str, const_str)` folds to an interned `const_str` (the `IrPass` trait gained `&mut DataPool` for literal interning). All rewrites are dominance-safe, validator-clean, and PHP-equivalent; nested/chained cases converge across driver sweeps.
-- [ ] Dead instruction elimination over the IR CFG (absorbs former v0.23 "Dead code elimination v3")
-- [ ] Dead store elimination over PHP local slots
-- [ ] Branch simplification (constant-condition `CondBr`, empty-block jump threading, unreachable block removal)
-- [ ] Per-block constant propagation over EIR value IDs and local slots
-- [ ] Dominance analysis for cross-block optimization (`src/ir_passes/dominance.rs`)
-- [ ] Common subexpression elimination — per-block, then dominance-aware cross-block (absorbs former v0.23 "Constant propagation v4")
-- [ ] Loop detection and natural-loop construction (back edges, headers, preheaders)
-- [ ] Loop-invariant code motion for pure operations
-- [ ] Small-function inliner (size threshold 24 instructions, non-recursive, no try/catch, no generators/fibers) (absorbs former v0.23 "Inline small functions")
-- [ ] Pipeline integration in fixed-point order
+- [x] Dead instruction elimination over the IR CFG — `src/ir_passes/dead_inst.rs`, the third registered pass. It computes CFG liveness, walks each block backward from terminator uses plus successor live-in sets, and neutralizes unused result-producing instructions whose effect metadata says they are pure. The pass keeps read-only, allocation, throw/fatal/warn, mutation, refcounting, output, and deopt-capable paths intact; same-block dead chains collapse in one sweep and cross-block cascades converge through the fixed-point driver. This absorbs the former v0.23 "Dead code elimination v3" roadmap line at the EIR level.
+- [x] Dead store elimination over PHP local slots — `src/ir_passes/dead_store.rs`, the fourth registered pass. It computes CFG-aware backward slot liveness and neutralizes `store_local` instructions whose stored value is never read on any path before the slot is overwritten or the function exits (including across block boundaries). The pass is restricted to non-refcounted `PhpLocal` slots that are exclusively accessed through plain `load_local`/`store_local`: assignment lowering surrounds refcounted slots with separate `acquire`/`release` ops, so dropping such a store in isolation would unbalance reference counts, while scalar slots carry no ownership ops and their scope-exit cleanup is a no-op, making removal refcount-neutral. It complements the peephole pass's per-block value-equality store forwarding by removing liveness-dead stores of differing values across the CFG; dead pure values feeding a removed store are then cleaned up by dead instruction elimination through the fixed-point driver.
+- [x] Branch simplification (constant-condition `CondBr`, empty-block jump threading, unreachable block removal) — `src/ir_passes/branch_simplify.rs`, the fifth registered pass. It folds `CondBr`/`Switch` terminators whose selector is a compile-time `const_bool`/`const_i64`/`const_null` into an unconditional `Br`, threads predecessors through empty (parameterless, `nop`-only) forwarding blocks to the end of their `Br` chain, and neutralizes blocks unreachable from the entry. Unreachable blocks are neutralized in place — terminator set to `Unreachable`, instructions rewritten to `nop` — rather than physically removed, so `block.id == index`, every `ValueDef`/`ValueId`/`InstId` slot, and `try` handler block-id tokens stay intact with no renumbering; clearing all value uses keeps the validator's dominance check satisfied. Functions containing exception-handling ops are skipped because their handler blocks are reachable through implicit edges absent from the terminator graph. Removing edges only enlarges dominator sets and threaded blocks carry no definitions, so simplification never invalidates a previously valid use; cascades converge through the fixed-point driver.
+- [x] Per-block constant propagation over EIR value IDs and local slots — `src/ir_passes/const_fold.rs`, the third registered pass (after peephole). It folds pure operations whose operands are all compile-time constants into a single `const_*` instruction in place, keeping the same result `ValueId` (no RAUW): integer `iadd`/`isub`/`imul`, bitwise `and`/`or`/`xor`, in-range (`0..=63`) shifts, unary `ineg`/`ibit_not`, float `fadd`/`fsub`/`fmul`/`fneg`, signed `icmp`, and the `is_null`/`is_truthy` predicates. Because constants in SSA are program-wide (a `const_*` value is that constant at every use), a single forward scan over the instruction table discovers constant operands and collapses chains like `(2 + 3) * 4` in one sweep. Each fold reproduces exactly what the op's lowering computes at runtime (64-bit wrapping integers, in-range shifts only, exact IEEE floats), so the compiled result is unchanged; the trapping integer division/modulo and `NaN`-sensitive float division are deliberately not folded, matching identity arithmetic. Propagation through local slots is realized by composition: the peephole's scalar load/store value-numbering forwards a constant stored to a local onto its later `load_local` uses, and this pass then folds the resulting constant-operand operation — together, under the fixed-point driver, this is per-block constant propagation over EIR value ids and local slots. Constants surfaced by identity arithmetic feed it too (`$argc * 0` → `const_i64 0` → downstream folds). Dead constant producers are then cleaned up by dead instruction elimination and folded branch conditions by branch simplification.
+- [x] Dominance analysis for cross-block optimization (`src/ir_passes/dominance.rs`) — a read-only sidecar analysis (like `liveness`/`intervals`, not a fixed-point driver pass) computing the dominator tree of each function via the Cooper–Harvey–Kennedy iterative algorithm: walk reachable blocks in reverse postorder, recomputing each block's immediate dominator as the intersection of its already-processed predecessors' idoms (a finger-walk over postorder numbers) until a fixed point. `compute_dominance` returns a `DominanceInfo` exposing `immediate_dominator`, reflexive `dominates`/`strictly_dominates`, dominator-tree `children` (top-down traversal), `nearest_common_dominator`, and `is_reachable`. Only blocks reachable from the entry participate; unreachable blocks (which `branch_simplify` neutralizes in place but leaves in the table) are excluded from the tree and answer `false`/`None`. The internal idom table is self-rooted at the entry so the intersect and dominance walks terminate without special cases. Adds a shared `cfg::predecessors` helper. This is the foundation for the dominance-aware cross-block passes that follow (CSE, loop detection, LICM).
+- [x] Common subexpression elimination — per-block, then dominance-aware cross-block (absorbs former v0.23 "Constant propagation v4") — `src/ir_passes/cse.rs`, the fourth registered transform (after constant folding). It removes a pure computation whose identical predecessor already dominates it, redirecting the redundant result to the earlier value (RAUW) and neutralizing it to `nop`. Per-block and cross-block redundancy are handled together in one dominator-tree value-numbering traversal: a scoped hash table maps each pure instruction's key `(op, result type, immediate, canonicalized operands)` to the value that first computed it, and visiting blocks in dominator-tree preorder means the table holds exactly the definitions that dominate the current block (its own earlier instructions plus those of dominating blocks), so any match is a dominating value and the redirect is dominance-safe; entries a block inserts are dropped when its subtree is done. Only pure (`Effects::PURE`) instructions that have at least one operand and a `NonHeap`/`Persistent` result are eligible — purity makes the value a function of its operands alone and the ownership bound keeps the rewrite refcount-neutral (the same class DCE may drop); SSA operands are equal-by-value, so identical pure ops on identical operands compute identical results. Nullary constant/address materializations (`const_*`, `data_addr`) are deliberately left for the backend to rematerialize rather than CSE'd: keeping a single shared constant live across calls would force it into a callee-saved register or spill slot for the whole span with no work removed, so CSE only targets computations. Functions with exception handlers are skipped (a terminator-graph dominator can be bypassed by a throw to a handler reachable only through an implicit edge), reusing the shared `cfg::has_exception_handlers` guard and the new `dominance` analysis. The same change makes the validator's dominator computation ignore unreachable predecessors so a loop header whose only other predecessor is an unreachable `break`-skipped update block keeps the entry block in its dominator set. Constant operands are unified by value in the key (two distinct `const_i64 1` operands compare equal) so repeated computations over constants collapse too: composed with the peephole's load forwarding, `($n + 1) * ($n + 1)` loads `$n` once and computes `$n + 1` once, and `($a * $b) + ($a * $b)` collapses to a single `imul`. The nullary constants themselves are still left for the backend to rematerialize (only unified as operands, never CSE'd as instructions). Redundant instructions CSE neutralizes leave dead operands that dead instruction elimination removes, all converging through the fixed-point driver.
+- [x] Loop detection and natural-loop construction (back edges, headers, preheaders) — `src/ir_passes/loops.rs`, a read-only sidecar analysis (like `dominance`/`liveness`) building the natural-loop forest on top of the dominator tree. `compute_loops(func, &dominance)` finds back edges (CFG edges `latch -> header` whose target dominates their source), merges back edges sharing a header into one `NaturalLoop` with multiple latches, and constructs each loop body as the header plus every block that can reach a latch without passing through the header (backward walk over reachable predecessors that stops at the header). Each `NaturalLoop` exposes `header`, `latches`, sorted `blocks` (binary-search `contains`), nesting `parent`/`depth`, and a detected `preheader`; `LoopInfo` answers `innermost_loop`, `loop_depth`, `is_loop_header`, and `back_edges`. Nesting is by block-set containment (immediate parent = smallest enclosing loop), which is exact for the reducible CFGs the lowerer emits. A preheader is detected as the unique reachable out-of-loop predecessor of the header whose only successor is the header — PHP loops lower to slot-based CFGs (loop variable in a local slot, no block parameters), so the init block before the loop is a natural preheader; when entry is shared or conditional no preheader exists and the optimization that needs one inserts it. This is the foundation for the loop-invariant code motion pass that follows.
+- [x] Loop-invariant code motion for pure operations — `src/ir_passes/licm.rs`, the fifth registered transform (after CSE). It moves a pure computation whose operands do not change across a loop out of the loop body into the loop preheader, so it runs once instead of every iteration. Built on the dominance and loop-forest analyses: for each loop it grows an invariant set to a fixed point — an instruction is invariant when each operand is defined by another hoisted instruction from the same loop or has a definition that dominates the preheader. Only pure (`Effects::PURE`) instructions with at least one operand and a `NonHeap`/`Persistent` result are hoisted; purity makes the result a function of its operands with no mutable-state read and no fault, so evaluating it once in the preheader unconditionally (even when its original block ran only on some iterations) is safe, and the ownership bound keeps the move refcount-neutral. Nullary constant/address materializations are left for the backend to rematerialize rather than kept live across the loop (same policy as CSE). Loops are processed innermost-first with moves applied immediately, so a value invariant in several nested loops reaches the outermost preheader in one run; relocated instructions' result `ValueDef`s (block + index) are recomputed once at the end. Loops without a detected preheader, and functions with exception handlers, are skipped. Hoisting reach on current PHP is bounded by slot-based locals (loop variables are reloaded each iteration through impure `load_local`, so invariant source expressions are not yet pure-operand computations); the firing logic is covered by hand-built EIR unit tests, and e2e fixtures verify behavior is preserved on real for/while/nested loops.
+- [x] Small-function inliner (size threshold 24 instructions, non-recursive, no try/catch, no generators/fibers) (absorbs former v0.23 "Inline small functions") — `src/ir_passes/inline.rs`, a module-level phase run by `optimize_module` before the per-function fixed-point loop, so the per-function passes optimize the expanded bodies. It splices an eligible callee's blocks into the caller at the call site: arguments are bound into the remapped parameter slots with `store_local`, the caller block jumps into the transplanted entry, each callee `return` becomes a `br` to a fresh continuation block that carries the result via a block parameter (`replace_all_uses` rewrites the call result to it), and the original call is neutralized and parked in an unreachable block so value-def records stay consistent. A callee is eligible only when its body is ≤24 non-`nop` instructions, it has a 0-parameter entry block (EIR convention), no exception-handling ops, and it is not a generator/fiber wrapper. Recursion is excluded directly *and* mutually: a call-graph cycle analysis over `module.functions` marks every function that can reach itself and never inlines it, and a per-caller fuel cap backstops termination — so a mutually recursive pair compiles instead of expanding forever. Eligibility is restricted to a provably ownership-safe **destructor-free** boundary and body (no by-ref/variadic params; every parameter, the return and every local slot is a destructor-free type — scalars `int`/`float`/`bool`/`string` and arrays/unions of destructor-free types). The splice replaces `return` with `br`, bypassing the callee's implicit epilogue cleanup, so correctness is preserved by reproducing that cleanup's per-slot decisions during transplant — parameter slots and directly-returned slots are excluded from host-epilogue cleanup (`HiddenTemp`), matching the callee (borrowed argument / ownership moved to the caller), while ordinary refcounted internal locals stay `PhpLocal` and are still freed by the host epilogue. The only residual difference, deferring those internal frees to the host epilogue, is unobservable for destructor-free types (no `__destruct`, no array identity), so refcount/COW behavior is byte-for-byte preserved. Objects, closures, resources, `mixed`/`iterable`, buffers, ref-cell/static/global/capture locals, and by-ref params are excluded because their cleanup timing or aliasing cannot be reproduced by a value-copy splice. Two call-site guards complete correctness: arguments must bind to parameter slots without coercion (matching storage types — spread/named-boxed-`mixed` and int↔float sites stay ordinary calls), and any `string` argument must come from a non-scratch source (`const_str`/`load_local`), because the spliced body runs the callee's statement-boundary concat-buffer reset in the host frame and would otherwise free an in-flight scratch string argument. Call-site name resolution (`Call` Data immediates and `FunctionVariantCall` include-variant refs) uses snapshots taken before mutation, so the rewrite loop holds `&mut Function` without ever aliasing `&Module` (no `unsafe`). Behavior is identical with `--ir-opt` on or off; covered by hand-built EIR unit tests (scalar and destructor-free string inlining, FVC sites, multi-block callees, plus negative cases: oversize, direct and mutual recursion, generators, `try`, by-ref params, object-typed locals/returns) and e2e fixtures (scalar and string inlining proven via `--emit-ir`, discarded results, mutual-recursion compile-and-run, and string/array helpers — including a copy-on-write array param/return — verified byte-for-byte identical with `--ir-opt` on vs off; the existing `runtime_gc` suite passes with inlining on).
+- [x] Pipeline integration in fixed-point order — `optimize_module` (`src/ir_passes/driver.rs`) now runs the whole EIR pipeline to a module-level fixed point instead of "inline once, then optimize". Each round runs the cross-function small-function inliner and then drives the per-function passes (identity → peephole → const-fold → CSE → LICM → DCE → dead-store → branch-simplify) to their own fixed point on every function-like body; the round repeats while either layer reports a change, capped by `MAX_MODULE_ITERATIONS`. `run_function_passes` now returns whether it modified the function so the module loop can detect convergence. Interleaving lets the two layers feed each other: inlined bodies expose new constants/dead code for the function passes, and the simplified functions expose new (smaller) inline candidates — e.g. a callee that is over the 24-instruction threshold before optimization but collapses below it after constant folding and DCE is inlined in a later round (covered by an e2e fixture: a 48-instruction `calc` inlined only after folding shrinks it, verified identical with `--ir-opt` on vs off). The first round reproduces the prior single-pass behavior, so later rounds only optimize further and never change semantics; the combined process converges because inlining is bounded over the acyclic candidate call graph and the function passes only simplify. Covered by a driver unit test for the change-reporting protocol plus the e2e fixed-point fixture, with the full suite (including `runtime_gc`) green.
 
 Expected outcome: EIR remains the only active backend implementation target,
 additional 10–20% performance gain on loop-heavy and call-heavy benchmarks,
 and cumulative ≥30% improvement vs end-of-v0.23 baseline.
+
+### Image support (GD, Exif/IPTC, Imagick, Gmagick, Cairo)
+
+Complete PHP image surface on a pure-Rust bridge (`crates/elephc-image`,
+`image`/`imageproc`/`ab_glyph`/`tiny-skia`/`kamadak-exif`). Delivered through a
+PHP prelude (`src/image_prelude.rs`) + `extern` calls, like PDO/Phar, so binaries
+stay standalone (no system GD/libpng/libjpeg/ImageMagick). Imagick/Gmagick/Cairo
+are semantic reimplementations of their PHP APIs, not byte-identical to the
+original C/C++ libraries; operations with no pure-Rust path are documented,
+tested, diagnostic-emitting gaps.
+
+- [x] Foundation: `elephc-image` bridge + handle table, prelude
+  injection/detection, `IMAGETYPE_*` constants, the always-available core
+  (`getimagesize`, `image_type_to_mime_type`, `image_type_to_extension`), and a
+  GD raster round-trip (`imagecreatetruecolor`/`imagecreate`,
+  `imagecolorallocate(alpha)`, `imagesetpixel`, `imagesx`/`imagesy`, `imagepng`
+  to file, `imagedestroy`)
+- [x] GD raster I/O: `imagecreatefrom{png,jpeg,gif,bmp,webp}` +
+  `imagecreatefromstring`, output `image{png,jpeg,gif,bmp,webp}` (file or
+  in-memory/stdout) with a binary blob ABI (staging buffer + encode cell via
+  `ptr_write_string`/`ptr_read_string`), `imageistruecolor`, `imageresolution`,
+  `imagetypes`, `gd_info`. WBMP/XBM/XPM/GD/GD2/AVIF are documented gaps (no
+  pure-Rust path). imagecreatefrom* throw `ImageException` on failure instead of
+  returning `false` (elephc cannot pass/narrow a `GdImage|false` result)
+- [x] GD color handling: `imagecolorat`, `imagecolorsforindex`,
+  `imagecolorexact`/`closest`/`closesthwb`/`resolve` (+alpha) reduced to packed
+  true-color values, `imagecolordeallocate`, `imagecolorstotal`,
+  `imagecolortransparent`, `imagealphablending` (blend vs replace in setpixel),
+  `imagesavealpha` (alpha flattened on encode unless on), `imagelayereffect`,
+  `imagepalettetotruecolor`/`imagetruecolortopalette` (flag flip, no requantize)
+- [x] GD drawing & fill: `imageline`/`imagedashedline`,
+  `imagerectangle`/`imagefilledrectangle`, `imagepolygon`/`imageopenpolygon`/
+  `imagefilledpolygon`, `imageellipse`/`imagefilledellipse`, `imagearc`/
+  `imagefilledarc` (pie), `imagefill`/`imagefilltoborder`, `imagesetthickness`
+  (hand-rolled Bresenham/parametric/scanline/flood-fill, alpha-blending-aware).
+  Deferred: brush/style/tile drawing modes, clipping, antialias, built-in-font
+  chars (imagechar handled by the text surface)
+- [x] GD text & fonts (built-in): `imagestring`/`imagestringup`,
+  `imagechar`/`imagecharup`, `imagefontwidth`/`imagefontheight`, via the
+  public-domain `font8x8` glyph set (uniform 8×8 cell for every font number).
+  Deferred: TTF/FreeType (`imagettftext`/`imagettfbbox`/`imagefttext`/
+  `imageftbbox`, via `ab_glyph`) — needs a bundled cross-platform test font;
+  `imageloadfont` (.gdf)
+- [x] GD transform/copy/filter: `imagecopy`/`imagecopymerge`/
+  `imagecopymergegray`/`imagecopyresized`/`imagecopyresampled`, `imagescale`,
+  `imagecrop`/`imagecropauto`, `imageflip`, `imagerotate` (CCW, enlarged canvas),
+  `imageaffine`/`imageaffinematrixconcat`, `imagefilter` (all `IMG_FILTER_*`),
+  `imageconvolution`, `imagegammacorrect`, `imagesetinterpolation`/
+  `imagegetinterpolation`, `imageinterlace`, `imageantialias` (no-op). New-image
+  results throw `ImageException` on failure (same union-value limit as
+  `imagecreatefrom*`). Deferred/gaps: `imageaffinematrixget` (`array|float` param
+  unrepresentable), `imageaffine` `$clip`, antialiased drawing, scatter colors
+  array; deprecated `image2wbmp`/`jpeg2wbmp`/`png2wbmp` and Windows-only
+  `imagegrabscreen`/`imagegrabwindow` not provided
+- [x] Exif + IPTC: `exif_imagetype`, `exif_read_data`/`read_exif_data`
+  (flat tag array via the pure-Rust `kamadak-exif` parser), `exif_tagname`
+  (TIFF/EXIF/GPS/Interop dictionary), `exif_thumbnail` (IFD1 JPEG thumbnail with
+  by-ref `width`/`height`/`image_type`), `iptcparse` (IIM block → `record#dataset`
+  arrays) and `iptcembed` (Photoshop `APP13` insertion, replacing any existing
+  one). Documented simplifications: EXIF values rendered as strings (not typed
+  scalars/arrays); no synthetic `FILE`/`COMPUTED`/`SectionsFound` sections;
+  `exif_tagname`/`exif_thumbnail` return `""` (not `false`) on the not-found path
+  (`string|false` collapse); only JPEG-compressed thumbnails extracted
+- [x] Imagick (Imagick, ImagickDraw, ImagickPixel, ImagickPixelIterator,
+  ImagickKernel): wand = a sequence of frames (each a GD image handle), so every
+  per-image op reuses the GD bridge. `Imagick` implements `Iterator` + `Countable`
+  and covers read/readImageBlob/newImage/addImage, write/writeImage/getImageBlob,
+  set/getImageFormat + compression quality, geometry, resize/scale/thumbnail/crop/
+  rotate/flip/flop, blur/gaussianBlur/sharpen/negate/modulate, compositeImage
+  (`OVER`/`COPY`), drawImage, convolveImage (3×3 `ImagickKernel::fromMatrix`),
+  getImagePixelColor, and multi-frame iteration. `ImagickDraw` buffers
+  fill/stroke + line/rectangle/circle/ellipse/point/polygon and replays them via
+  the GD rasterizers. `ImagickPixel` parses CSS name/`#hex`/`rgb()` colors;
+  `ImagickPixelIterator` walks rows of pixels. Documented gaps throw the matching
+  `*Exception`: unsupported composite operators, non-3×3 kernels / `fromBuiltIn`,
+  `distortImage`/`liquidRescaleImage`/`fxImage`/`waveImage`/`swirlImage`, and
+  `annotateImage` (FreeType text). Two general elephc bugs found here (string
+  `switch` first-case-only; int→float parameter coercion) are now **fixed** in the
+  EIR lowering, not just worked around
+- [x] Gmagick (Gmagick, GmagickDraw, GmagickPixel): GraphicsMagick-style
+  API over the same wand bridge and color helpers as Imagick. Gmagick methods are
+  fluent (`return $this`) and cover read/readImageBlob/newImage/addImage,
+  writeImage/getImageBlob, set/getImageFormat + compression quality, geometry,
+  resize/scale/thumbnail/crop/rotate/flip/flop, blur/gaussianBlur/modulate,
+  compositeImage (`OVER`/`COPY`), drawImage, multi-frame navigation
+  (getNumberImages/getImageIndex/nextImage/previousImage/hasNext/hasPrevious), and
+  version/package info. `GmagickDraw` buffers fill/stroke + line/rectangle/ellipse/
+  point/polygon; `GmagickPixel` parses CSS name/`#hex`/`rgb()` colors with
+  get/setColorValue + getColorAsString. Documented gaps throw the matching
+  `*Exception`: unsupported composite operators, `swirlImage`/`charcoalImage`/
+  `oilPaintImage`/`embossImage`, and `annotateImage`/`GmagickDraw::annotate`
+  (FreeType text). A general `return $this` use-after-free + chained owning-receiver
+  leak surfaced here and was fixed in the EIR method-call ownership lowering
+- [x] Cairo (CairoContext, CairoImageSurface, CairoMatrix, patterns,
+  gradients): cairo-style 2D vector drawing on the pure-Rust `tiny-skia` rasterizer
+  (new `cairo.rs` bridge module + `tiny-skia` dep). CairoImageSurface (PNG) is fully
+  supported: paths (moveTo/lineTo/curveTo/arc/arcNegative/rectangle/closePath),
+  fill/stroke/paint with solid colors, linear and radial gradients
+  (`CairoLinearGradient`/`CairoRadialGradient`/`CairoSolidPattern`), the transform
+  stack (save/restore, translate/scale/rotate/transform/setMatrix), line cap/join/
+  width and fill rule, and `CairoMatrix` value-object transforms. Paths are built in
+  device space (the CTM maps each point as it is added). Documented gaps throw
+  `CairoException`: PDF/PS/SVG surfaces, FreeType text (showText/textExtents/
+  CairoToyFontFace/CairoScaledFont), and surface patterns. Geometry crosses the
+  bridge as fixed-point milli-units packed into i64 pairs; colors as packed RGBA8.
+  Surfaced a pre-existing general bug — mixed int/float positional args to an
+  untyped *method* param misplace the float (free functions and typed params are
+  unaffected); worked around by typing the Cairo numeric method params `float`
+- [x] Cairo procedural API (common subset): the PECL-style free-function
+  layer (`cairo_image_surface_create`/`_from_png`, `cairo_create`, the
+  `cairo_set_source_*`/path/render/transform ops, `cairo_pattern_create_*`,
+  `cairo_matrix_*`, `cairo_get_current_point`) wrapping the `Cairo*`
+  classes. `cairo_image_surface_create_from_png` adds a bridge primitive that decodes
+  a PNG via the `image` crate and premultiplies alpha into the tiny-skia pixmap.
+  `cairo_get_current_point`/`cairo_matrix_transform_point` return `["x"=>…,"y"=>…]`
+  assoc arrays and inline the OOP body (the prelude-internal call carries the
+  declared `array` type, which would force an unsupported AssocArray→Array(Mixed)
+  conversion if it delegated). The obscure PECL tail (font options, scaled fonts,
+  PDF/PS/SVG surface constructors, ~40 rarely-used helpers) is omitted — omitted
+  functions are genuinely undefined (compile-time `Undefined function:`), not stubs.
+  Bridge externs renamed `cairo_*` → `elephc_cairo_*` to free the `cairo_` namespace
+  for the procedural PHP layer, and `program_uses_image` now detects the `cairo_`
+  prefix so pure-procedural programs pull in the prelude
 
 ## v0.26.x — Performance closure, legacy cleanup, and 0.x stabilization
 
 Optimization work should now be driven by benchmarks, generated assembly size,
 and 0.x validation rather than by speculative pass work.
 
+- [x] Generators reimplemented on stackful coroutines (issue #329) — a generator body is compiled by the normal EIR backend and runs on its own coroutine stack (reusing the Fiber runtime), replacing the v1 state-machine lowering on the EIR path. `Generator::throw()` now raises the exception at the suspended `yield`, so a `try`/`catch` inside the generator body handles it and resumes instead of always terminating the generator and propagating to the caller; in-generator method calls, arbitrary control flow, and `try`/`finally` around `yield` work like ordinary functions. `yield from` over generators delegates through `__rt_gen_delegate` (forwarding sent values and returning the inner `getReturn()`) and over arrays desugars into an iterator loop; `send()`/`getReturn()`/closure captures preserved; Generator GC frees the coroutine stack and boxed key/value/return cells. The frozen legacy AST backend keeps its own `GeneratorFrame` state machine.
 - [ ] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling
 - [ ] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes
 - [ ] Resource scope-cleanup — auto-free tag-9 resource handles that leave scope without their explicit close (today an unclosed `fopen()` leaks its fd and an unfinalized `hash_init()` context leaks its heap state until process exit; `functions/cleanup.rs` skips `Resource`s by design). Prerequisites: a resource-kind subtype in the Mixed cell so the cleanup pass can pick the right destructor (fd → `close()`, HashContext → `elephc_crypto_free`, …), and aliasing safety (resources have no refcount; `$b = $a` would double-free under naive scope-free). Includes wiring the currently-uncalled `elephc_crypto_free` (`_elephc_crypto_free_fn` slot + publish entry + a `__rt_hash_ctx_free` helper) and nulling the Mixed payload in `hash_final` so finalized contexts are skipped — which also defuses the double-final UB documented in `src/codegen/runtime/strings/hash_context.rs`
@@ -759,6 +901,39 @@ and 0.x validation rather than by speculative pass work.
 
 These are valuable product directions that build on the stabilized 0.x compiler
 and runtime foundation.
+
+### Web server (`--web`) — product track
+
+`elephc --web app.php` compiles a standard PHP file into a standalone prefork
+HTTP server binary. The produced binary uses `SO_REUSEPORT` prefork workers; each
+request re-runs the top-level PHP body from a fresh state (globals, function
+statics, and static class properties all reset between requests). Run it with
+`--listen host:port` (required) and optionally `--workers N` (default: CPU count).
+
+- [x] **Phase 1** — core serve loop: `elephc --web` compile flag; `--listen`/`--workers`
+  runtime args; `_elephc_web_handler` entry restructure for per-request invocation;
+  `__rt_stdout_write` capture to the response body buffer; `__rt_web_reset`
+  per-request state reset (function statics, static properties, concat buffer);
+  `elephc-web` bridge staticlib with prefork/`SO_REUSEPORT` supervisor and
+  per-worker hyper HTTP server. Every Phase 1 response is `200 OK` with the
+  echoed body.
+- [x] **Phase 2** — request input superglobals: `$_SERVER` (method/URI/query +
+  `HTTP_*` headers + `CONTENT_TYPE`/`CONTENT_LENGTH`), `$_GET` (query string),
+  `$_POST` (urlencoded body), and `php://input` (raw body), built per request by a
+  `--web` web prelude and readable inside any function scope (true superglobals via
+  `_eir_global_*` storage); output-capture completeness so echoed Mixed/array/
+  resource values reach the response body; superglobals released per request. Not
+  included: `$_REQUEST`, multipart/form-data.
+- [x] **Phase 3** — response control: `http_response_code()` (set/read status,
+  returns previous on set) and `header()`, fully PHP-compatible — replace-vs-append,
+  `HTTP/`/`Status:` status lines, `Location:`→302, and the third `$response_code`
+  argument, all handled in the `elephc-web` bridge. Web-gated `__rt_http_response_code`
+  / `__rt_header` forward to the bridge under `--web` and are no-ops otherwise.
+  Not included: `Content-Type` is not set automatically (the program controls it).
+- [x] **Phase 4** — hardening: `--max-body-size` request body cap (413 on overflow),
+  graceful `SIGINT`/`SIGTERM` shutdown (forward to workers, reap, exit 0), worker
+  respawn on unexpected death, and a 30s header-read timeout bounding slow/idle
+  keep-alive connections. Out of v1 scope: cookies, sessions, TLS, HTTP/2–3, multipart.
 
 ## v0.27.x — Shared and static libraries (C ABI)
 
@@ -790,6 +965,7 @@ and runtime foundation.
 - [ ] `.wat` / `.wasm` emission
 - [ ] WASI support for I/O
 - [ ] NPM package generation
+
 
 ## Deferred ideas
 

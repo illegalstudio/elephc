@@ -10,10 +10,26 @@
 
 use std::collections::HashMap;
 
+use crate::types::PhpType;
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum DataWord {
     U64(u64),
     Symbol(String),
+}
+
+/// Symbol-backed metadata for one function static local recorded during EIR
+/// lowering: the value symbol, the one-time init-marker symbol, and the codegen
+/// PHP type. Consumed only by the `--web` `__rt_web_reset` generator, which must
+/// release/zero every persistent static between requests.
+#[derive(Clone, Debug)]
+pub struct StaticLocalRecord {
+    /// `.comm` value symbol (`_static_<fn>_<name>`, 16 bytes).
+    pub symbol: String,
+    /// `.comm` init-marker symbol (`<symbol>_init`, 8 bytes; 0 = not yet run).
+    pub init_symbol: String,
+    /// Codegen representation of the static's PHP type (drives release shape).
+    pub php_type: PhpType,
 }
 
 /// Tracks constants and common symbols for the assembly `.data` section.
@@ -33,6 +49,8 @@ pub struct DataSection {
     float_dedup: HashMap<u64, String>,
     word_dedup: HashMap<Vec<DataWord>, String>,
     comm_dedup: HashMap<String, String>,
+    static_locals: Vec<StaticLocalRecord>,
+    static_local_dedup: HashMap<String, usize>,
 }
 
 impl DataSection {
@@ -48,7 +66,28 @@ impl DataSection {
             float_dedup: HashMap::new(),
             word_dedup: HashMap::new(),
             comm_dedup: HashMap::new(),
+            static_locals: Vec::new(),
+            static_local_dedup: HashMap::new(),
         }
+    }
+
+    /// Records one function static local's storage metadata for the `--web`
+    /// per-request reset routine. Deduplicates by value symbol because the same
+    /// static is resolved on every load/store/init of that variable; only the
+    /// first record per symbol is kept, preserving first-seen order.
+    pub fn record_static_local(&mut self, record: StaticLocalRecord) {
+        if self.static_local_dedup.contains_key(&record.symbol) {
+            return;
+        }
+        self.static_local_dedup
+            .insert(record.symbol.clone(), self.static_locals.len());
+        self.static_locals.push(record);
+    }
+
+    /// Returns the recorded function static locals in first-seen order, used by
+    /// the `--web` `__rt_web_reset` generator after all functions are emitted.
+    pub fn static_locals(&self) -> &[StaticLocalRecord] {
+        &self.static_locals
     }
 
     /// Looks up `value` in the float deduplication map; if found, returns the existing label.

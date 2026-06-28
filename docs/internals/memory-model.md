@@ -27,7 +27,7 @@ This page explains where every value lives in memory at runtime.
 ├─────────────────────────────┤
 │     I/O and stream buffers   │  _cstr_buf/_cstr_buf2, _eof_flags,
 │  (C strings, streams, TLS,   │  _stream_*, _http_*, _ftp_*, wrapper/filter
-│   wrappers, filters)         │  tables, protocol/service lookup buffers
+│   wrappers, filters)         │  tables, protocol/service/principal lookup buffers
 ├─────────────────────────────┤
 │   Runtime metadata (BSS)     │  _concat_off, _global_argc/_argv,
 │  (heap state, counters,      │  _heap_off, _heap_free_list,
@@ -599,6 +599,7 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | HTTP active context | `_http_active_ignore_errors`, `_http_active_max_redirects`, `_http_active_timeout_seconds`, `_http_active_proxy_ptr`, `_http_active_proxy_len`, `_http_active_host_ptr`, `_http_active_host_len`, `_http_redirect_path_len` | Fixed-size state shared between HTTP request construction and redirect/open helpers |
 | Socket address scratch | `_recvfrom_addr_ptr`, `_recvfrom_addr_len`, `_accept_peer_ptr`, `_accept_peer_len` = 8 bytes each | Stores peer/address strings returned through by-reference socket parameters |
 | Protocol/service lookup buffers | `_protoent_buf` = 32KB, `_servent_buf` = 1MB | Scratch buffers for protocol and service database lookups |
+| Principal lookup buffers | `_principal_lookup_buf` = 4KB, `_etc_passwd_path`, `_etc_group_path`, `_principal_lookup_read_mode` | Scratch line buffer and fixed literals for `/etc/passwd` / `/etc/group` scans used by `chown()` / `chgrp()` string-name resolution without NSS |
 | User wrapper and filter registries | `_user_wrappers`, `_user_wrapper_handles` = 2048 bytes each; `_user_filter_registry`, `_user_filter_instances` = 4096 bytes each | Registered stream wrappers, active wrapper handles, user filter definitions, and attached filter instances |
 | PHAR writer state | `_phar_write_len`, `_phar_write_tpl_len`, `_phar_write_path_ptr`, `_phar_write_path_len`, `_phar_write_entry_ptr`, `_phar_write_entry_len`, `_phar_write_url_ptr`, `_phar_write_url_len` = 8 bytes each | State paired with the 1MB `_phar_write_out` archive buffer |
 | Data section | No fixed limit | Grows with number of unique literals |

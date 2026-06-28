@@ -19,7 +19,7 @@ use crate::codegen::abi;
 /// floats. Without the throw flag, this helper substitutes `0` so surrounding
 /// container encoders can keep producing partial JSON; the json_encode wrapper
 /// later returns `false` unless JSON_PARTIAL_OUTPUT_ON_ERROR is active. Finite
-/// floats tail-call into the existing `__rt_ftoa` formatter unchanged.
+/// floats are formatted by `__rt_json_ftoa` (shortest round-trip, json layout).
 ///
 /// Input:  ARM64 d0 / x86_64 xmm0 = float value
 /// Output: x1, x2 / rax, rdx = result ptr, len (in concat_buf)
@@ -45,7 +45,7 @@ pub(crate) fn emit_json_encode_float(emitter: &mut Emitter) {
     // when JSON_PRESERVE_ZERO_FRACTION is set on an integer-valued result.
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and link register so we can run after __rt_ftoa
     emitter.instruction("mov x29, sp");                                         // establish a stable frame pointer
-    emitter.instruction("bl __rt_ftoa");                                        // format the finite float as a decimal slice (x1=ptr, x2=len)
+    emitter.instruction("bl __rt_json_ftoa");                                   // format the finite float (shortest round-trip; x1=ptr, x2=len)
     emitter.instruction("b __rt_json_encode_float_post");                       // hand off to the post-formatter polish
 
     emitter.label("__rt_json_encode_float_non_finite");
@@ -54,7 +54,7 @@ pub(crate) fn emit_json_encode_float(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #7");                                          // JSON_ERROR_INF_OR_NAN = 7
     emitter.instruction("bl __rt_json_throw_error");                            // record the error and throw when JSON_THROW_ON_ERROR is set
     emitter.instruction("fmov d0, xzr");                                        // substitute 0 for the wrapper's partial-output path
-    emitter.instruction("bl __rt_ftoa");                                        // format the substituted zero value
+    emitter.instruction("bl __rt_json_ftoa");                                   // format the substituted zero value
     // fall through to the post-formatter polish so PRESERVE_ZERO_FRACTION
     // also applies to the substituted zero result.
 
@@ -107,8 +107,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     //!
     //! Mirrors the ARM64 `__rt_json_encode_float` path: detects Inf/NaN,
     //! records `JSON_ERROR_INF_OR_NAN` via `__rt_json_throw_error`, substitutes
-    //! zero for partial-output, formats via `__rt_ftoa`, and appends `.0` when
-    //! `JSON_PRESERVE_ZERO_FRACTION` is set on an integer-valued result.
+    //! zero for partial-output, formats via `__rt_json_ftoa`, and appends `.0`
+    //! when `JSON_PRESERVE_ZERO_FRACTION` is set on an integer-valued result.
     //!
     //! Input:  x86_64 xmm0 = float value
     //! Output: rax, rdx = result ptr, len (in concat_buf)
@@ -125,7 +125,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer so we can run after __rt_ftoa
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the post-formatter polish
-    emitter.instruction("call __rt_ftoa");                                      // format the finite float as a decimal slice (rax=ptr, rdx=len)
+    emitter.instruction("call __rt_json_ftoa");                                 // format the finite float (shortest round-trip; rax=ptr, rdx=len)
     emitter.instruction("jmp __rt_json_encode_float_post_x");                   // hand off to the post-formatter polish
 
     emitter.label("__rt_json_encode_float_non_finite_x");
@@ -134,7 +134,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, 7");                                          // JSON_ERROR_INF_OR_NAN = 7
     emitter.instruction("call __rt_json_throw_error");                          // record the error and throw when JSON_THROW_ON_ERROR is set
     emitter.instruction("xorpd xmm0, xmm0");                                    // substitute 0 for the wrapper's partial-output path
-    emitter.instruction("call __rt_ftoa");                                      // format the substituted zero value
+    emitter.instruction("call __rt_json_ftoa");                                 // format the substituted zero value
     // fall through to the post-formatter polish so PRESERVE_ZERO_FRACTION
     // also applies to the substituted zero result.
 

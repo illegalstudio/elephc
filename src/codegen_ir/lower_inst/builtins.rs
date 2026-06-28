@@ -296,10 +296,23 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "is_executable" => io::lower_is_executable(ctx, inst),
         "is_link" => io::lower_is_link(ctx, inst),
         "date" => system::lower_date(ctx, inst),
+        "gmdate" => system::lower_gmdate(ctx, inst),
+        "date_default_timezone_get" => system::lower_date_default_timezone_get(ctx, inst),
+        "date_default_timezone_set" => system::lower_date_default_timezone_set(ctx, inst),
         "microtime" => system::lower_microtime(ctx, inst),
         "mktime" => system::lower_mktime(ctx, inst),
+        "gmmktime" => system::lower_gmmktime(ctx, inst),
+        "__elephc_mktime_raw" => system::lower_mktime(ctx, inst),
+        "__elephc_gmmktime_raw" => system::lower_gmmktime(ctx, inst),
+        "checkdate" => system::lower_checkdate(ctx, inst),
+        "getdate" => system::lower_getdate(ctx, inst),
+        "localtime" => system::lower_localtime(ctx, inst),
+        "hrtime" => system::lower_hrtime(ctx, inst),
+        "http_response_code" => system::lower_http_response_code(ctx, inst),
+        "header" => system::lower_header(ctx, inst),
         "sleep" => system::lower_sleep(ctx, inst),
         "strtotime" => system::lower_strtotime(ctx, inst),
+        "__elephc_strtotime_raw" => system::lower_elephc_strtotime_raw(ctx, inst),
         "time" => system::lower_time(ctx, inst),
         "usleep" => system::lower_usleep(ctx, inst),
         "exit" | "die" => system::lower_exit(ctx, inst),
@@ -349,10 +362,11 @@ pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "is_bool" => lower_static_type_predicate(ctx, inst, "is_bool", PhpType::Bool),
         "is_null" => lower_is_null_builtin(ctx, inst),
         "is_string" => lower_static_type_predicate(ctx, inst, "is_string", PhpType::Str),
-        "is_array" => lower_is_array(ctx, inst),
-        "is_object" => lower_is_object(ctx, inst),
         "is_resource" => types::lower_is_resource(ctx, inst),
         "is_iterable" => lower_is_iterable(ctx, inst),
+        "is_array" => lower_is_array(ctx, inst),
+        "is_object" => lower_is_object(ctx, inst),
+        "is_scalar" => lower_is_scalar(ctx, inst),
         "get_resource_type" => types::lower_get_resource_type(ctx, inst),
         "get_resource_id" => types::lower_get_resource_id(ctx, inst),
         "is_numeric" => is_numeric::lower_is_numeric(ctx, inst),
@@ -753,6 +767,16 @@ pub(super) fn lower_eval_static_property_set(
     eval::lower_eval_static_property_set(ctx, inst, value, class_name, property_name)
 }
 
+/// Lowers an EIR native indexed-array `isset($array[$offset])` probe.
+pub(super) fn lower_array_isset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    isset::lower_array_isset(ctx, inst)
+}
+
+/// Lowers an EIR native associative-array `isset($hash[$key])` probe.
+pub(super) fn lower_hash_isset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    isset::lower_hash_isset(ctx, inst)
+}
+
 /// Lowers `define("NAME", value)` with the legacy duplicate-name runtime guard.
 fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "define", 2)?;
@@ -974,6 +998,12 @@ fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()
 }
 
 /// Lowers `function_exists("name")` for compile-time string names.
+///
+/// Recognizes user functions, externs, catalog builtins, and the date/time procedural aliases
+/// that `name_resolver` desugars (including the injected timezone-introspection prelude
+/// functions). The aliases are matched through `is_date_procedural_alias` rather than the catalog
+/// because their call sites are rewritten before codegen, so they never reach the builtin catalog
+/// yet must still report as existing to match PHP.
 fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "function_exists", 1)?;
     let value = expect_operand(inst, 0)?;
@@ -983,7 +1013,8 @@ fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     } else {
         let exists = ctx.function_by_name(&function_name).is_some()
             || ctx.has_extern_function(&function_name)
-            || is_php_visible_builtin_function(function_name.trim_start_matches('\\'));
+            || is_php_visible_builtin_function(function_name.trim_start_matches('\\'))
+            || crate::name_resolver::is_date_procedural_alias(&function_name);
         emit_static_bool(ctx, exists);
     }
     store_if_result(ctx, inst)
@@ -1751,88 +1782,24 @@ fn emit_tagged_scalar_int_predicate(ctx: &mut FunctionContext<'_>, value: ValueI
     ctx.load_value_to_result(value)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!(
+            let cmp_inst = format!(
                 "cmp x1, #{}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
-            ));                                                                 // does the tagged scalar carry the runtime null tag?
+            );
+            ctx.emitter.instruction(&cmp_inst);                                 // does the tagged scalar carry the runtime null tag?
             ctx.emitter.instruction("cset x0, ne");                             // materialize true when the tagged scalar holds an integer
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!(
+            let cmp_inst = format!(
                 "cmp rdx, {}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
-            ));                                                                 // does the tagged scalar carry the runtime null tag?
+            );
+            ctx.emitter.instruction(&cmp_inst);                                 // does the tagged scalar carry the runtime null tag?
             ctx.emitter.instruction("setne al");                                // materialize true when the tagged scalar holds an integer
             ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }
     }
     Ok(())
-}
-
-/// Lowers `is_array()` for concrete containers and boxed Mixed payloads.
-fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "is_array", 1)?;
-    let value = expect_operand(inst, 0)?;
-    let ty = ctx.value_php_type(value)?;
-    match ty {
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
-            emit_static_bool(ctx, true);
-        }
-        PhpType::Mixed | PhpType::Union(_) => {
-            emit_mixed_is_array(ctx, value)?;
-        }
-        _ => emit_static_bool(ctx, false),
-    }
-    store_if_result(ctx, inst)
-}
-
-/// Emits a runtime `is_array()` predicate for boxed Mixed array/hash tags.
-fn emit_mixed_is_array(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
-    let true_case = ctx.next_label("is_array_mixed_true");
-    let done = ctx.next_label("is_array_mixed_done");
-    let ty = ctx.load_value_to_result(value)?;
-    if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-        return Err(CodegenIrError::unsupported(format!(
-            "is_array Mixed check for PHP type {:?}",
-            ty
-        )));
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #4");                              // check for a boxed indexed-array payload
-            ctx.emitter.instruction(&format!("b.eq {}", true_case));            // indexed arrays satisfy is_array
-            ctx.emitter.instruction("cmp x0, #5");                              // check for a boxed associative-array payload
-            ctx.emitter.instruction(&format!("b.eq {}", true_case));            // associative arrays satisfy is_array
-            ctx.emitter.instruction("mov x0, #0");                              // all other Mixed payloads are not arrays
-            ctx.emitter.instruction(&format!("b {}", done));                    // skip the truthy result path
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 4");                              // check for a boxed indexed-array payload
-            ctx.emitter.instruction(&format!("je {}", true_case));              // indexed arrays satisfy is_array
-            ctx.emitter.instruction("cmp rax, 5");                              // check for a boxed associative-array payload
-            ctx.emitter.instruction(&format!("je {}", true_case));              // associative arrays satisfy is_array
-            ctx.emitter.instruction("mov rax, 0");                              // all other Mixed payloads are not arrays
-            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the truthy result path
-        }
-    }
-    ctx.emitter.label(&true_case);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
-    ctx.emitter.label(&done);
-    Ok(())
-}
-
-/// Lowers `is_object()` for concrete object values and boxed Mixed payloads.
-fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "is_object", 1)?;
-    let value = expect_operand(inst, 0)?;
-    let ty = ctx.value_php_type(value)?;
-    match ty {
-        PhpType::Object(_) => emit_static_bool(ctx, true),
-        PhpType::Mixed | PhpType::Union(_) => predicates::emit_mixed_tag_eq(ctx, value, 6)?,
-        _ => emit_static_bool(ctx, false),
-    }
-    store_if_result(ctx, inst)
 }
 
 /// Lowers `is_iterable()` for concrete values and boxed Mixed payloads.
@@ -2034,6 +2001,56 @@ fn lower_is_null_builtin(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     ensure_arg_count(inst, "is_null", 1)?;
     let value = expect_operand(inst, 0)?;
     predicates::emit_is_null_result(ctx, value)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value
+/// whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is
+/// not treated as a definite array here (it may hold a Traversable); use `is_iterable` for that.
+fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "is_array", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.value_php_type(value)? {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => emit_static_bool(ctx, true),
+        PhpType::Mixed | PhpType::Union(_) => {
+            predicates::emit_mixed_tag_membership(ctx, value, &[4, 5])?;
+        }
+        _ => emit_static_bool(ctx, false),
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose
+/// runtime tag is an object (6).
+fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "is_object", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.value_php_type(value)? {
+        PhpType::Object(_) => emit_static_bool(ctx, true),
+        PhpType::Mixed | PhpType::Union(_) => {
+            predicates::emit_mixed_tag_membership(ctx, value, &[6])?;
+        }
+        _ => emit_static_bool(ctx, false),
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed
+/// Mixed/Union value whose runtime tag is int (0), string (1), float (2), or bool (3). Null,
+/// arrays, objects, and resources are not scalars, matching PHP.
+fn lower_is_scalar(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "is_scalar", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.value_php_type(value)? {
+        PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool => {
+            emit_static_bool(ctx, true)
+        }
+        PhpType::TaggedScalar => emit_tagged_scalar_int_predicate(ctx, value)?,
+        PhpType::Mixed | PhpType::Union(_) => {
+            predicates::emit_mixed_tag_membership(ctx, value, &[0, 1, 2, 3])?;
+        }
+        _ => emit_static_bool(ctx, false),
+    }
     store_if_result(ctx, inst)
 }
 

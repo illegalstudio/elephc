@@ -31,13 +31,16 @@ impl Checker {
         if let PhpType::Object(class_name) = &obj_ty {
             return self.infer_property_on_class_type(class_name, property, expr);
         }
-        // Non-nullsafe property access on a nullable / union object type
-        // (`?Foo`, `Foo|null`) is allowed when the union resolves to a
-        // single class. A null receiver emits a PHP-style warning and
-        // evaluates to null, so the inferred type remains nullable.
+        // Non-nullsafe property access on a nullable / union object type is
+        // allowed when the union resolves to a single object class.
+        //   - `?Foo` / `Foo|null`: a null receiver emits a PHP-style warning and
+        //     evaluates to null, so the inferred type stays nullable.
+        //   - `Foo|false` (and other object-plus-scalar unions): dispatch on the
+        //     single object class; a non-object runtime value faults like PHP, so
+        //     the inferred type is the plain property type.
         if let PhpType::Union(_) = &obj_ty {
-            if let Some((class_name, nullable)) =
-                self.nullsafe_object_receiver(&obj_ty, expr, "property access")?
+            if let Ok(Some((class_name, nullable))) =
+                self.nullsafe_object_receiver(&obj_ty, expr, "property access")
             {
                 let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
                 return if nullable {
@@ -46,6 +49,22 @@ impl Checker {
                     Ok(property_ty)
                 };
             }
+            if let Some(class_name) = self.union_single_object_class(&obj_ty) {
+                return self.infer_property_on_class_type(&class_name, property, expr);
+            }
+            // Union of two or more distinct object classes (`A|B`): the property
+            // must exist on every object member; codegen dispatches on the runtime
+            // class id and the result is the union of each member's property type.
+            let object_classes = self.union_object_classes(&obj_ty);
+            if object_classes.len() >= 2 {
+                let mut property_types = Vec::with_capacity(object_classes.len());
+                for class_name in &object_classes {
+                    property_types.push(self.infer_property_on_class_type(class_name, property, expr)?);
+                }
+                return Ok(self.normalize_union_type(property_types));
+            }
+            // No object class at all: surface the strict diagnostic.
+            self.nullsafe_object_receiver(&obj_ty, expr, "property access")?;
         }
         if let PhpType::Pointer(Some(class_name)) = &obj_ty {
             if let Some(field_ty) = self.extern_field_type(class_name, property) {
@@ -318,6 +337,29 @@ impl Checker {
             }
         }
         found
+    }
+
+    /// Returns every distinct object class in a union receiver, in declaration
+    /// order, ignoring non-object members (scalars, `void`).
+    ///
+    /// Used to allow regular `->` method/property access on a union of two or
+    /// more distinct object classes (`A|B`, `A|B|false`): codegen unboxes the
+    /// receiver and dispatches on the runtime class id (`lower_mixed_method_call`
+    /// and the Mixed property path), so the checker only needs the set of object
+    /// classes to validate the member and merge the per-class result types.
+    pub(crate) fn union_object_classes(&self, obj_ty: &PhpType) -> Vec<String> {
+        let PhpType::Union(members) = obj_ty else {
+            return Vec::new();
+        };
+        let mut classes: Vec<String> = Vec::new();
+        for member in members {
+            if let PhpType::Object(name) = member {
+                if !classes.iter().any(|existing| existing == name) {
+                    classes.push(name.clone());
+                }
+            }
+        }
+        classes
     }
 
     /// Infers the type of a static property access (`Foo::$prop`).

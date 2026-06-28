@@ -340,6 +340,15 @@ fn runtime_extern_named(ctx: &Context, name: &str) -> bool {
 fn runtime_static_method_wrappers(ctx: &Context) -> Vec<(String, String, FunctionSig)> {
     let mut wrappers = Vec::new();
     for (class_name, class_info) in &ctx.classes {
+        // Synthetic builtin classes (e.g. DateTime::createFromFormat) are emitted on demand, so
+        // their static-method symbols may not exist in a program that never uses the class. Keep
+        // them out of the dynamic-callable descriptor to avoid referencing an unemitted symbol,
+        // mirroring how they are excluded from dynamic `new $x()`.
+        if crate::codegen::expr::objects::known_dynamic_new_builtin_class_names()
+            .contains(&class_name.as_str())
+        {
+            continue;
+        }
         for (method_name, sig) in &class_info.static_methods {
             if !class_info
                 .static_method_visibilities
@@ -541,10 +550,20 @@ pub(crate) fn runtime_instance_method_case(
 }
 
 /// Provides the Runtime builtin wrapper excluded helper used by the callable dispatch module.
+///
+/// `__elephc_mktime_raw` / `__elephc_gmmktime_raw` are internal escape hatches that the
+/// `mktime`/`gmmktime` procedural-alias rewriter and synthetic DateTime bodies call directly.
+/// They are lowered inline by the active EIR backend (`__rt_mktime` / `__rt_gmmktime`) and have no
+/// standalone `fn_` symbol, but the deferred-closure wrapper body emitted here is lowered by the
+/// frozen legacy direct backend, which does not know these names and would emit an unresolved
+/// `bl _fn_<name>` reference. They are never invoked dynamically, so excluding them from the
+/// dynamic-call descriptor table is both safe and semantically correct.
 fn runtime_builtin_wrapper_excluded(name: &str) -> bool {
     matches!(
         name,
-        "iterator_apply" | "method_exists" | "preg_replace_callback" | "property_exists"
+        "iterator_apply" | "preg_replace_callback"
+            | "method_exists" | "property_exists"
+            | "__elephc_mktime_raw" | "__elephc_gmmktime_raw"
     )
 }
 

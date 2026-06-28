@@ -1,0 +1,33 @@
+[package]
+name = "elephc-image"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pure-Rust image bridge staticlib (GD/Exif/Imagick/Gmagick/Cairo backend) for the elephc PHP-to-native compiler"
+
+# Built as a staticlib so compiled PHP programs link `-lelephc_image`, and as an
+# rlib so the compiler's `cargo test` runner can depend on it as a dev-dependency
+# (mirrors crates/elephc-pdo).
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# `image` is the de-facto pure-Rust imaging stack. Every format backend selected
+# here is pure Rust (png, zune-based jpeg, gif, bmp, image-webp, tga) — NO C
+# toolchain, so the emitted binaries stay standalone and identical across all
+# supported targets. The GD-only formats with no pure-Rust path (wbmp, xbm/xpm,
+# gd/gd2, avif decode) are delivered as documented gaps; see docs/php/image.md.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp", "tga"] }
+# Built-in GD bitmap fonts: the public-domain font8x8 glyph set (pure Rust, no
+# font file to bundle), used by imagestring/imagechar.
+font8x8 = "0.3"
+# Pure-Rust EXIF/TIFF parser (kamadak-exif) backing exif_read_data /
+# exif_thumbnail. No C dependency, so it preserves the standalone-binary
+# guarantee. IPTC has no comparable crate and is parsed/embedded by hand in
+# `iptc.rs`.
+exif = { package = "kamadak-exif", version = "0.6" }
+# Pure-Rust 2D vector rasterizer (anti-aliased paths, fills, strokes, gradients,
+# transforms) — the closest analog to cairo/skia with no C dependency. Backs the
+# Cairo object API (CairoContext / CairoImageSurface / patterns / matrix) in
+# `cairo.rs`. PNG output reuses the `png` codec already pulled by `image`.
+tiny-skia = "0.11"

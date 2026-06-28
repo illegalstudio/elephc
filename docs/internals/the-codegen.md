@@ -1082,13 +1082,15 @@ Emits code to print a value to stdout:
 
 | Type | How it prints |
 |---|---|
-| `Str` | `mov x0, #1` / `mov x16, #4` / `svc #0x80` (direct syscall) |
+| `Str` | move the string pointer/length into `__rt_stdout_write`'s convention, then `bl __rt_stdout_write` |
 | `Int` | `bl __rt_itoa` → then write |
 | `Float` | `bl __rt_ftoa` → then write |
 | `Bool` | `true` prints "1", `false` prints nothing |
 | `Pointer` | `bl __rt_ptoa` → then write |
 | `Mixed` | `bl __rt_mixed_write_stdout` → inspect boxed runtime tag, then write |
 | `Void`/`Array`/`AssocArray`/`Callable`/`Object` | Prints nothing |
+
+The terminal write itself goes through one shared runtime indirection, `__rt_stdout_write(ptr, len)` (byte pointer in `x0`/`rdi`, length in `x1`/`rsi`). It performs the platform `write(1, ptr, len)` syscall directly. In `--web` builds it first checks the `_elephc_web_capture` flag and, when capture is enabled, hands the bytes to `elephc_web_write` instead so per-request response bodies can be captured; non-web binaries never reference the web symbols. (The `Mixed` / `Resource` / `Iterable` writers still issue their own syscalls and bypass this indirection.)
 
 For Linux `x86_64`, the same write path now follows the SysV ABI and a broad native runtime slice rather than AArch64-specific helper sequences. String results use the Linux syscall register layout, integer and float echo go through x86_64 `__rt_itoa` / `__rt_ftoa`, `_main` initializes `$argc` / `$argv` only when needed, and the bootstrap runtime now covers a wide set of array, string, math, filesystem, FFI, enum, exception, GC, and mixed-value helpers without leaking AArch64-only assumptions back into the higher-level walkers.
 

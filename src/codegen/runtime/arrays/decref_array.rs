@@ -6,7 +6,8 @@
 //! - `crate::codegen::runtime::emitters::emit_runtime()` via `crate::codegen::runtime::arrays`.
 //!
 //! Key details:
-//! - Decrement helpers are release paths for refcounted values and must balance recursive frees with GC cycle collection.
+//! - Decrement helpers are release paths for refcounted values; cycle collection
+//!   runs only from explicit safe points after PHP-visible roots are updated.
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -57,27 +58,7 @@ pub fn emit_decref_array(emitter: &mut Emitter) {
     emitter.instruction("str w9, [x0, #-12]");                                  // store decremented refcount
     emitter.instruction("b.eq __rt_decref_array_free");                         // zero refcount means the array can be freed immediately
 
-    // -- non-zero refcount may indicate a now-unrooted cycle; run the targeted collector unless it is already active --
-    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_release_suppressed");
-    emitter.instruction("ldr x9, [x9]");                                        // load the release-suppression flag
-    emitter.instruction("cbnz x9, __rt_decref_array_skip");                     // ordinary deep-free walks suppress nested collector runs
-    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
-    emitter.instruction("ldr x9, [x9]");                                        // load the collector-active flag
-    emitter.instruction("cbnz x9, __rt_decref_array_skip");                     // nested decref calls during collection must not restart the collector
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the packed array kind word from the heap header
-    emitter.instruction("lsr x9, x9, #8");                                      // move the array value_type tag into the low bits
-    emitter.instruction("and x9, x9, #0x7f");                                   // isolate the runtime array value_type tag without the persistent COW flag
-    emitter.instruction("cmp x9, #4");                                          // is this an array of indexed arrays?
-    emitter.instruction("b.eq __rt_decref_array_collect");                      // array-of-array cycles can require a collector pass
-    emitter.instruction("cmp x9, #5");                                          // is this an array of associative arrays?
-    emitter.instruction("b.eq __rt_decref_array_collect");                      // nested heap payloads can participate in cycles
-    emitter.instruction("cmp x9, #6");                                          // is this an array of objects?
-    emitter.instruction("b.ne __rt_decref_array_skip");                         // scalar/string arrays skip the targeted collector
-    emitter.label("__rt_decref_array_collect");
-    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address across the collector call
-    emitter.instruction("bl __rt_gc_collect_cycles");                           // reclaim any newly-unrooted refcounted graph components
-    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after collection
-    emitter.instruction("b __rt_decref_array_skip");                            // return after the optional collection pass
+    emitter.instruction("b __rt_decref_array_skip");                            // non-zero refcount stays alive until an explicit GC safe point
 
     // -- refcount reached zero: deep free the array --
     emitter.label("__rt_decref_array_free");
@@ -90,7 +71,7 @@ pub fn emit_decref_array(emitter: &mut Emitter) {
 /// Emits the x86_64 Linux variant of the `__rt_decref_array` runtime helper.
 ///
 /// Uses the OS x86_64 ABI: array pointer in `rax`, preserves all caller-saved registers,
-/// and calls `__rt_gc_collect_cycles` / `__rt_array_free_deep` as needed.
+/// and calls `__rt_array_free_deep` when the array's refcount reaches zero.
 fn emit_decref_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: decref_array ---");
@@ -116,23 +97,7 @@ fn emit_decref_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10d, 1");                                         // decrement the refcount for the array owner that is going away
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // persist the decremented array refcount in the uniform heap header
     emitter.instruction("jz __rt_decref_array_free");                           // zero refcount means the indexed array can be deep-freed immediately
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_release_suppressed");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the release-suppression flag before considering a targeted cycle-collector run
-    emitter.instruction("test r11, r11");                                       // is this decref happening inside an ordinary deep-free walk?
-    emitter.instruction("jnz __rt_decref_array_skip");                          // yes — nested collector runs stay suppressed during deep frees
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_collecting");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the collector-active flag before attempting another collection pass
-    emitter.instruction("test r11, r11");                                       // is the collector already running?
-    emitter.instruction("jnz __rt_decref_array_skip");                          // yes — nested decref calls during collection must not restart the collector
-    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load the packed array kind word to inspect the runtime array value_type tag
-    emitter.instruction("shr r11, 8");                                          // move the packed array value_type tag into the low bits
-    emitter.instruction("and r11, 0x7f");                                       // isolate the runtime array value_type without the persistent COW flag bit
-    emitter.instruction("cmp r11, 4");                                          // does this array carry refcounted element payloads that can participate in cycles?
-    emitter.instruction("jb __rt_decref_array_skip");                           // scalar and string arrays do not require a targeted cycle-collector pass
-    emitter.instruction("cmp r11, 7");                                          // is the array value_type within the supported refcounted range?
-    emitter.instruction("ja __rt_decref_array_skip");                           // unknown array payload tags are ignored by the x86_64 collector trigger
-    emitter.instruction("call __rt_gc_collect_cycles");                         // reclaim any newly unrooted refcounted graph components reachable from arrays
-    emitter.instruction("jmp __rt_decref_array_skip");                          // return after the optional x86_64 collector pass
+    emitter.instruction("jmp __rt_decref_array_skip");                          // non-zero refcount stays alive until an explicit GC safe point
 
     emitter.label("__rt_decref_array_free");
     emitter.instruction("jmp __rt_array_free_deep");                            // tail-call into the indexed-array deep-free helper so nested heap-backed elements are released too

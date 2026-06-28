@@ -58,3 +58,32 @@ echo only_int(1) . only_int(2) . only_int(3);
     );
     assert_eq!(out, "III");
 }
+
+/// An integer argument passed to a declared `float` parameter is converted with int→float
+/// (`IToF`) before the call, not reinterpreted as a raw 64-bit bit-pattern. A single int argument
+/// to a single float parameter previously produced garbage (the int bits read as a double).
+#[test]
+fn test_int_arg_to_float_param_single() {
+    let out = compile_and_run(
+        r#"<?php
+function f(float $g): float { return $g; }
+echo f(2), "|", f(7);
+"#,
+    );
+    assert_eq!(out, "2|7");
+}
+
+/// When a float parameter receiving an int argument sits next to another float argument, the
+/// int→float conversion must target the correct slot. Without the conversion the unconverted
+/// argument slot was overwritten by the neighbouring float argument, so both parameters read the
+/// same value regardless of argument order.
+#[test]
+fn test_int_arg_to_float_param_beside_float_arg() {
+    let out = compile_and_run(
+        r#"<?php
+function f(float $g, float $h): string { return $g . "," . $h; }
+echo f(90.5, 2), "|", f(2, 90.5);
+"#,
+    );
+    assert_eq!(out, "90.5,2|2,90.5");
+}

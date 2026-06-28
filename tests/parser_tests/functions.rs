@@ -474,6 +474,38 @@ fn test_parse_union_and_nullable_function_types() {
     }
 }
 
+/// Verifies that union return types containing the literal types `false`/`true`/`null` parse:
+/// `false`/`true` map to `Bool`, and a `null` member makes the whole type nullable
+/// (`T|null` is equivalent to `?T`). Covers `int|false`, `A|null`, and `string|false|null`.
+#[test]
+fn test_parse_union_return_types_with_literal_types() {
+    let ret = |src: &str| match &parse_source(src)[0].kind {
+        StmtKind::FunctionDecl { return_type, .. } => return_type.clone(),
+        other => panic!("Expected FunctionDecl, got {:?}", other),
+    };
+    assert_eq!(
+        ret("<?php function f(): int|false { return 1; }"),
+        Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Bool]))
+    );
+    assert_eq!(
+        ret("<?php function f(): A|null { return null; }"),
+        Some(TypeExpr::Nullable(Box::new(TypeExpr::Named(
+            Name::unqualified("A")
+        ))))
+    );
+    assert_eq!(
+        ret("<?php function f(): string|false|null { return null; }"),
+        // A wider union (2+ non-null members) keeps the `null` as a trailing `Void` sentinel
+        // member rather than wrapping the whole union in `Nullable`; both shapes are recognized as
+        // nullable downstream. A single non-null member instead folds to `Nullable` (see `A|null`).
+        Some(TypeExpr::Union(vec![
+            TypeExpr::Str,
+            TypeExpr::Bool,
+            TypeExpr::Void
+        ]))
+    );
+}
+
 #[test]
 /// Verifies that a `T|null` union folds to the canonical `?T` nullable shorthand: the
 /// parser reproduces exactly the same `TypeExpr::Nullable` that `?string` would yield, so

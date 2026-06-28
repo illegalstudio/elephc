@@ -19,7 +19,7 @@ use crate::ir::{
     validate_module, ExternDecl, ExternParamDecl, Function, Immediate, IrType, Module, Op,
     TraitMethodInfo,
 };
-use crate::ir_lower::{function, LoweringError};
+use crate::ir_lower::{builtin_datetime, function, LoweringError};
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind, Visibility};
 use crate::types::{CheckResult, ClassInfo, FunctionSig, InterfaceInfo, PhpType};
@@ -42,6 +42,12 @@ pub(crate) fn lower(
     lower_builtin_reflection_methods(&mut module, check_result, &constants, &fiber_return_sigs);
     function::lower_main(program, &mut module, check_result, &constants, &fiber_return_sigs);
     lower_referenced_builtin_spl_methods(&mut module, check_result, &constants, &fiber_return_sigs);
+    builtin_datetime::lower_referenced_builtin_datetime_methods(
+        &mut module,
+        check_result,
+        &constants,
+        &fiber_return_sigs,
+    );
     include_lowered_runtime_features(&mut module);
     validate_module(&module)?;
     Ok(module)

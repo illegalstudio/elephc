@@ -11,7 +11,13 @@
 mod class_attribute_args;
 mod class_attribute_names;
 mod class_get_attributes;
+mod checkdate;
 mod date;
+mod getdate;
+mod hrtime;
+mod localtime;
+mod date_default_timezone_get;
+mod date_default_timezone_set;
 mod define;
 mod defined;
 mod exec_fn;
@@ -66,6 +72,12 @@ pub fn emit(
         "usleep" => usleep::emit(name, args, emitter, ctx, data),
         "getenv" => getenv::emit(name, args, emitter, ctx, data),
         "putenv" => putenv::emit(name, args, emitter, ctx, data),
+        "date_default_timezone_set" => {
+            date_default_timezone_set::emit(name, args, emitter, ctx, data)
+        }
+        "date_default_timezone_get" => {
+            date_default_timezone_get::emit(name, args, emitter, ctx, data)
+        }
         "php_uname" => php_uname::emit(name, args, emitter, ctx, data),
         "phpversion" => phpversion::emit(name, args, emitter, ctx, data),
         "class_attribute_args" => class_attribute_args::emit(name, args, emitter, ctx, data),
@@ -75,9 +87,13 @@ pub fn emit(
         "shell_exec" => shell_exec::emit(name, args, emitter, ctx, data),
         "system" => system_fn::emit(name, args, emitter, ctx, data),
         "passthru" => passthru::emit(name, args, emitter, ctx, data),
-        "date" => date::emit(name, args, emitter, ctx, data),
-        "mktime" => mktime::emit(name, args, emitter, ctx, data),
-        "strtotime" => strtotime::emit(name, args, emitter, ctx, data),
+        "date" | "gmdate" => date::emit(name, args, emitter, ctx, data),
+        "mktime" | "gmmktime" => mktime::emit(name, args, emitter, ctx, data),
+        "checkdate" => checkdate::emit(name, args, emitter, ctx, data),
+        "getdate" => getdate::emit(name, args, emitter, ctx, data),
+        "localtime" => localtime::emit(name, args, emitter, ctx, data),
+        "hrtime" => hrtime::emit(name, args, emitter, ctx, data),
+        "strtotime" | "__elephc_strtotime_raw" => strtotime::emit(name, args, emitter, ctx, data),
         "json_encode" => json_encode::emit(name, args, emitter, ctx, data),
         "json_decode" => json_decode::emit(name, args, emitter, ctx, data),
         "json_last_error" => json_last_error::emit(name, args, emitter, ctx, data),

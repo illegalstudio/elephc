@@ -75,6 +75,8 @@ fn try_expand_value_include(
     Ok(Some(expanded))
 }
 
+/// Resolves a statement list by expanding includes, resolving expression-position
+/// includes, and preserving include-once/function-variant bookkeeping.
 pub(super) fn resolve_stmts(
     stmts: Vec<Stmt>,
     base_dir: &Path,

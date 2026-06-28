@@ -89,11 +89,12 @@ foreach (outer() as $v) { echo $v . " "; }
 // Prints: 0 1 2 3 99
 ```
 
-The runtime stores the inner generator pointer in the outer frame's
-`delegated_iter` slot and reuses one resume state index for every step
-of the delegation. v1 only delegates to function calls returning
-`Generator` and locals that hold a `Generator`; arbitrary `Iterator`
-expressions in `yield from` are not yet supported. Invalid non-generator
+`yield from <generator>` is driven by the `__rt_gen_delegate` runtime
+helper, which runs on the outer generator's coroutine stack: it advances
+the inner generator, re-yields each inner key/value through the outer
+suspend boundary, forwards sent values into the inner generator, and
+returns the inner generator's `getReturn()`. `yield from <array>` is
+desugared into an iterator loop. Invalid non-generator, non-iterable
 delegates are rejected at type-check time.
 
 Like PHP, `yield from` also evaluates to the delegated generator's
@@ -169,11 +170,32 @@ return value; `getReturn()` then surfaces the slot's initial null/0.
 
 ## Generator::throw
 
-`$g->throw($exc)` injects an exception that propagates up the caller's
-stack as if the generator had thrown it. The generator is marked
-terminated so subsequent calls become no-ops. Since `try`/`catch`
-inside a generator body is rejected at type-check time, the exception
-always lands in the caller's nearest active handler:
+`$g->throw($exc)` resumes the generator and raises `$exc` **at the
+suspended `yield`**, exactly like PHP. If the generator body has a
+surrounding `try`/`catch`, that handler runs and execution continues; the
+value of `throw()` is the next yielded value. If the exception is not
+caught inside the body, it propagates to the caller as if the generator
+had thrown it.
+
+```php
+<?php
+function gen() {
+    try {
+        yield 1;
+    } catch (Exception $e) {
+        echo "caught inside: " . $e->getMessage() . " ";
+    }
+    yield 2;
+}
+
+$g = gen();
+echo $g->current() . " ";              // 1
+echo $g->throw(new Exception("boom")); // caught inside: boom 2
+// Prints: 1 caught inside: boom 2
+```
+
+When the body has no handler, the exception escapes to the caller's
+nearest active handler:
 
 ```php
 <?php
@@ -196,10 +218,10 @@ try {
 
 ## Locals and control flow inside generator bodies
 
-Generator bodies in elephc can contain ordinary local variables, simple
-arithmetic, and the usual control-flow constructs. Local int variables
-declared inside the generator survive across yield points — the resume
-function reads/writes the same heap-backed slot on every entry.
+Generator bodies in elephc can contain ordinary local variables,
+arithmetic, and the usual control-flow constructs. Locals declared inside
+the generator survive across yield points because the body's real stack
+frame is suspended and resumed in place on the coroutine stack.
 
 ```php
 <?php
@@ -220,12 +242,11 @@ foreach (fib(10) as $v) { echo $v . " "; }
 // Prints: 0 1 1 2 3 5 8 13 21 34
 ```
 
-Supported in v1: `if`/`else`/`elseif`, `while`, `do-while`, `for`,
-`break`, `continue`, `switch` over int subjects with integer-literal
-cases (with PHP fall-through semantics), and arbitrary nesting of all
-of the above. Comparison operators include `<`, `<=`, `>`, `>=`, `==`,
-`!=`, `===`, and `!==`. Arithmetic supports `+`, `-`, `*`, and integer
-`/` (signed division).
+Because the body is compiled like an ordinary function, every control-flow
+construct and operator the language supports is available inside a
+generator body — `if`/`else`/`elseif`, `while`, `do-while`, `for`,
+`foreach`, `switch`, `break`, `continue`, `try`/`catch`/`finally`, and
+arbitrary nesting — with the same semantics they have outside a generator.
 
 ## Calling user functions from a generator body
 
@@ -345,63 +366,63 @@ foreach (new AggregateRange() as $v) { echo $v; }
 // Prints: 012
 ```
 
-## Restrictions in v1
+## Control flow inside generator bodies
 
-Generator bodies are translated to a state machine at compile time.
-The translation only recognizes the subset of PHP constructs listed
-above; anything outside that grammar makes the generator silently stop
-yielding past the unsupported statement. The compiler does not produce
-an error in that case so that complex generators can be ported
-incrementally.
+A generator body runs on its own coroutine stack and is compiled by the
+same backend as an ordinary function, so it supports the full language:
+arbitrary control flow (`if`/`while`/`for`/`foreach`/`switch`),
+`try`/`catch`/`finally` around `yield`, method calls, `return` values, and
+locals of any type — all preserved across yield points because the body's
+real stack frame is suspended and resumed in place.
 
-The following are **not yet supported** inside generator bodies:
-
-- `try` / `catch` / `finally` (rejected at type-check time — yield
-  inside an exception scope is explicitly disallowed).
-- `foreach` over an `Iterator`-typed parameter when the static type is
-  the interface itself (concrete classes implementing Iterator work
-  fine; interface-typed parameters need interface-vtable dispatch
-  which v1 doesn't model).
-- `Generator::throw()` re-thrown **into** a generator body for the
-  body's own try/catch to handle (since try/catch is forbidden inside
-  the body, the runtime always propagates straight to the caller's
-  catch).
-- `yield from` over an `Iterator` interface instance whose static
-  class is unknown (only `yield from <generator_function(args)>` and
-  `yield from $local` where the local holds a Generator pointer work).
-- Fiber suspension/resume operations inside generator bodies are outside
-  the v1 generator-body lowering subset.
-
-Generator bodies *do* support Mixed-typed locals: `$msg = "hello";
-yield $msg;` works, with the resume function reading/writing the
-boxed cell pointer in the same frame slot across yield points.
-
-The full list of remaining work for generators lives in `ROADMAP.md`.
+```php
+<?php
+function items() {
+    foreach (["a" => 1, "b" => 2] as $k => $v) {
+        try {
+            yield $k => $v;
+        } catch (Exception $e) {
+            echo "handled: " . $e->getMessage() . " ";
+        }
+    }
+}
+```
 
 ## How it works at runtime
 
-Each generator function `f` produces two target-specific symbols:
+A `Generator` is a stackful coroutine that reuses the Fiber runtime: the
+object reuses the Fiber memory layout (its own mmap'd stack plus the
+exception-handler and `transfer`/`pending` fields) and a small block of
+generator-specific fields (`last_key`, `last_value`, `return_value`,
+`auto_key`). Each generator function `f` produces three target-specific
+symbols:
 
-- `_fn_<f>` — the wrapper that allocates a `GeneratorFrame` on the
-  heap (fixed 80-byte header followed by N×8-byte slots for parameters
-  and int locals), stamps it with `Generator`'s class id, and returns
-  the frame pointer.
-- `_fn_<f>__resume` — the resume function that dispatches on the
-  frame's `state_idx` to either the body's entry point (state 0) or one
-  of the per-yield resume labels.
+- `_fn_<f>` — the **constructor** at the public symbol. It allocates the
+  Generator coroutine object (`__rt_fiber_construct`), boxes the call
+  arguments and closure captures into the object's `start_args` slots, and
+  returns the object. The body does not run yet — it starts lazily on the
+  first accessor. The `start_args` storage has room for **7** boxed values,
+  so a generator may declare at most 7 parameters (counting closure
+  captures); a generator with more is rejected at compile time.
+- `_fn_<f>__genbody` — the **body**, compiled by the normal backend as a
+  Mixed-returning function. Its `return` value is what `getReturn()`
+  surfaces.
+- `_fn_<f>__gencb` — the **coroutine entry wrapper**. The fiber entry
+  trampoline runs it on the coroutine stack; it unboxes `start_args` back
+  into the body's parameter registers, runs the body, and parks the body's
+  return value in the `return_value` slot.
 
-Each `yield` site receives a unique state index. At a yield, the
-resume function:
-
-1. Calls `__rt_mixed_from_value` to box the yielded payload (and key)
-   into a Mixed cell.
-2. Refcount-drops the previous boxed key/value via `__rt_decref_mixed`
-   so generators don't leak a cell per iteration.
-3. Stores the new Mixed pointer into the frame's `last_key` /
-   `last_value` slot.
-4. Sets `state_idx` to the next-yield index and returns.
+Each `yield` lowers to `__rt_gen_suspend(key, value)`, which records the
+boxed key/value into the generator's `last_key`/`last_value` slots and then
+suspends the coroutine. Because the suspend boundary re-raises a scheduled
+exception **inside** the coroutine's own stack, `Generator::throw()` lands
+in a `try`/`catch` inside the body. `yield from <generator>` is driven by
+`__rt_gen_delegate`, which forwards sent values into the inner generator and
+returns its `getReturn()`; `yield from <array>` is desugared into an
+iterator loop that re-yields each entry.
 
 The synthetic `Generator` class has no PHP body — its method dispatch is
 intercepted in the codegen and routed directly to the `__rt_gen_*`
 runtime helpers (`current`, `key`, `valid`, `next`, `send`, `rewind`,
-`throw`, `getReturn`).
+`throw`, `getReturn`), which drive the coroutine through the shared Fiber
+primitives.

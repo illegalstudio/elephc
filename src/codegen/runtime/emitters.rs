@@ -114,10 +114,18 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_build_argv(emitter);
     system::emit_time(emitter);
     system::emit_microtime(emitter);
+    system::emit_microtime_build_into(emitter);
+    system::emit_microtime_str(emitter);
+    system::emit_microtime_mixed(emitter);
     system::emit_php_uname(emitter);
     system::emit_getenv(emitter);
     system::emit_shell_exec(emitter);
     system::emit_date(emitter);
+    system::emit_date_default_timezone(emitter);
+    system::emit_checkdate(emitter);
+    system::emit_getdate(emitter);
+    system::emit_localtime(emitter);
+    system::emit_hrtime(emitter);
     system::emit_mktime(emitter);
     system::emit_strtotime(emitter);
     system::emit_json_encode_bool(emitter);
@@ -125,6 +133,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_json_encode_str(emitter);
     system::emit_json_encode_mixed(emitter);
     system::emit_json_encode_float(emitter);
+    system::emit_json_ftoa(emitter);
     system::emit_json_encode_object(emitter);
     system::emit_json_pretty_helpers(emitter);
     system::emit_json_throw_error(emitter);
@@ -228,6 +237,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_fill(emitter);
     arrays::emit_array_fill_assoc(emitter);
     arrays::emit_array_fill_refcounted(emitter);
+    arrays::emit_array_fill_str(emitter);
     arrays::emit_array_pad(emitter);
     arrays::emit_array_pad_refcounted(emitter);
     arrays::emit_array_diff(emitter);
@@ -316,6 +326,16 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     buffers::emit_buffer_use_after_free(emitter);
 
     // I/O runtime functions
+    // The terminal-stdout indirection every echo/print travels through. Always
+    // emitted (every program can echo); its body differs for `--web` builds.
+    io::emit_stdout_write(emitter, features.web);
+    // Backs file_get_contents('php://input'); reads the request body under --web,
+    // returns false (null) otherwise. Always emitted so the EIR call resolves.
+    io::emit_php_input(emitter, features.web);
+    // Back http_response_code()/header(); call the bridge setters under --web,
+    // no-ops otherwise. Always emitted so the EIR calls resolve.
+    io::emit_http_response_code(emitter, features.web);
+    io::emit_header(emitter, features.web);
     io::emit_cstr(emitter);
     io::emit_disk_space(emitter);
     io::emit_fopen(emitter);
@@ -423,11 +443,21 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_var_dump_array_float(emitter);
     io::emit_var_dump_array_mixed(emitter);
     io::emit_var_dump_emit_indexed_key(emitter);
+    io::emit_var_dump_emit_string_key(emitter);
+    io::emit_var_dump_hash(emitter);
     io::emit_var_dump_emit_int_line(emitter);
     io::emit_var_dump_emit_string_line(emitter);
     io::emit_var_dump_emit_bool_line(emitter);
     io::emit_var_dump_emit_float_line(emitter);
     io::emit_var_dump_emit_null_line(emitter);
+    io::emit_print_r_spaces(emitter);
+    io::emit_print_r_open(emitter);
+    io::emit_print_r_close(emitter);
+    io::emit_print_r_int_key(emitter);
+    io::emit_print_r_str_key(emitter);
+    io::emit_print_r_value(emitter);
+    io::emit_print_r_indexed(emitter);
+    io::emit_print_r_hash(emitter);
     io::emit_file_get_contents(emitter);
     io::emit_file_put_contents(emitter);
     io::emit_file(emitter);
@@ -452,6 +482,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_realpath(emitter);
     io::emit_pathinfo_str(emitter);
     io::emit_pathinfo_array(emitter);
+    io::emit_principal_lookup(emitter);
     io::emit_modify(emitter);
     io::emit_streams_ext(emitter);
     io::emit_symlink(emitter);

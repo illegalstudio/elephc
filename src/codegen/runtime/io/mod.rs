@@ -26,6 +26,9 @@ mod fopen;
 mod fputcsv;
 mod fread;
 mod fwrite;
+mod http_response;
+mod php_input;
+mod stdout_write;
 mod phar_read;
 mod phar_write;
 mod fs;
@@ -42,6 +45,7 @@ mod protoent;
 mod servent;
 mod modify;
 mod modify_x86_64;
+mod principal_lookup;
 mod pathinfo_array;
 mod pathinfo_str;
 mod realpath;
@@ -114,6 +118,7 @@ mod user_wrapper_dir;
 mod user_wrapper_path_op;
 mod user_wrapper_set_option;
 mod user_wrapper_url_stat;
+mod print_r_walk;
 mod var_dump_walk;
 
 pub(crate) use basename::emit_basename;
@@ -134,6 +139,9 @@ pub(crate) use fopen::emit_fopen;
 pub(crate) use fputcsv::emit_fputcsv;
 pub(crate) use fread::emit_fread;
 pub(crate) use fwrite::emit_fwrite;
+pub(crate) use http_response::{emit_header, emit_http_response_code};
+pub(crate) use php_input::emit_php_input;
+pub(crate) use stdout_write::emit_stdout_write;
 pub(crate) use phar_read::emit_phar_read;
 pub(crate) use phar_write::emit_phar_write;
 pub(crate) use fs::emit_fs;
@@ -149,6 +157,7 @@ pub(crate) use glob::emit_glob;
 pub(crate) use protoent::emit_protoent_load;
 pub(crate) use servent::emit_servent_load;
 pub(crate) use modify::emit_modify;
+pub(crate) use principal_lookup::emit_principal_lookup;
 pub(crate) use pathinfo_array::emit_pathinfo_array;
 pub(crate) use pathinfo_str::emit_pathinfo_str;
 pub(crate) use realpath::emit_realpath;
@@ -239,9 +248,14 @@ pub(crate) use user_wrapper_set_option::emit_user_wrapper_set_option;
 pub(crate) use user_wrapper_url_stat::{
     emit_user_wrapper_url_stat, emit_user_wrapper_url_stat_field,
 };
+pub(crate) use print_r_walk::{
+    emit_print_r_close, emit_print_r_hash, emit_print_r_indexed, emit_print_r_int_key,
+    emit_print_r_open, emit_print_r_spaces, emit_print_r_str_key, emit_print_r_value,
+};
 pub(crate) use var_dump_walk::{
     emit_var_dump_array_bool, emit_var_dump_array_float, emit_var_dump_array_int,
     emit_var_dump_array_mixed, emit_var_dump_array_str, emit_var_dump_emit_bool_line,
     emit_var_dump_emit_float_line, emit_var_dump_emit_indexed_key, emit_var_dump_emit_int_line,
-    emit_var_dump_emit_null_line, emit_var_dump_emit_string_line,
+    emit_var_dump_emit_null_line, emit_var_dump_emit_string_key, emit_var_dump_emit_string_line,
+    emit_var_dump_hash,
 };

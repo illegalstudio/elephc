@@ -70,8 +70,25 @@ impl Checker {
                     .tracked_reflection_class_method_return_type(object, method)
                     .unwrap_or(return_ty));
             }
-            // No single object class: re-run the strict check to surface its
-            // diagnostic (e.g. a union of two distinct object classes).
+            // Union of two or more distinct object classes (`A|B`, `A|B|false`):
+            // the method must exist on every object member; codegen dispatches on
+            // the runtime class id and the result is the union of each member's
+            // return type. A non-object runtime value faults like PHP.
+            let object_classes = self.union_object_classes(&obj_ty);
+            if object_classes.len() >= 2 {
+                let mut return_types = Vec::with_capacity(object_classes.len());
+                for class_name in &object_classes {
+                    let return_ty = if self.interfaces.contains_key(class_name) {
+                        self.infer_method_call_on_interface_type(class_name, method, args, expr, env)?
+                    } else {
+                        self.infer_method_call_on_class_type(class_name, method, args, expr, env)?
+                    };
+                    return_types.push(return_ty);
+                }
+                return Ok(self.normalize_union_type(return_types));
+            }
+            // No object class at all: re-run the strict check to surface its
+            // diagnostic.
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?;
         }
         Ok(PhpType::Int)
@@ -373,6 +390,16 @@ impl Checker {
                     sig.params.len()
                 };
                 for (i, arg_ty) in arg_types.iter().enumerate() {
+                    if i < regular_param_count
+                        && declared_flags.get(i).copied().unwrap_or(false)
+                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    {
+                        // Sharpen a declared generic `array` parameter to the call-site array
+                        // shape so method `array` params keep their associative shape, matching
+                        // how free-function `array` parameters are specialized (issue #406).
+                        sig.params[i].1 = Self::specialize_generic_array_hint(&sig.params[i].1, arg_ty);
+                    }
                     if i < regular_param_count
                         && !declared_flags.get(i).copied().unwrap_or(false)
                         && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
@@ -855,6 +882,16 @@ impl Checker {
                 };
                 for (i, arg_ty) in arg_types.iter().enumerate() {
                     if i < regular_param_count
+                        && static_declared_flags.get(i).copied().unwrap_or(false)
+                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    {
+                        // Sharpen a declared generic `array` parameter to the call-site array
+                        // shape so static-method `array` params keep their associative shape,
+                        // matching free-function specialization (issue #406).
+                        sig.params[i].1 = Self::specialize_generic_array_hint(&sig.params[i].1, arg_ty);
+                    }
+                    if i < regular_param_count
                         && !static_declared_flags.get(i).copied().unwrap_or(false)
                         && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)
                     {
@@ -907,6 +944,16 @@ impl Checker {
                     sig.params.len()
                 };
                 for (i, arg_ty) in arg_types.iter().enumerate() {
+                    if i < regular_param_count
+                        && instance_declared_flags.get(i).copied().unwrap_or(false)
+                        && Self::is_generic_array_hint(&sig.params[i].1)
+                        && matches!(arg_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    {
+                        // Sharpen a declared generic `array` parameter to the call-site array
+                        // shape on `parent::`/`self::` instance dispatch, matching free-function
+                        // specialization (issue #406).
+                        sig.params[i].1 = Self::specialize_generic_array_hint(&sig.params[i].1, arg_ty);
+                    }
                     if i < regular_param_count
                         && !instance_declared_flags.get(i).copied().unwrap_or(false)
                         && !matches!(*arg_ty, PhpType::Void | PhpType::Never | PhpType::Callable)

@@ -8,6 +8,8 @@ user-invocable: true
 
 You are a meticulous release engineer for the elephc PHP-to-native compiler. Your job is to verify that everything is consistent, documented, tested, and working before a version tag across the supported target matrix.
 
+This skill is an explicit exception to the normal implementation workflow in `AGENTS.md`: because release verification is specifically requested, run the full local suite unless the user asks to skip it. For ordinary feature/bug-fix work, do not invoke full-suite commands locally; rely on focused tests and the CI matrix.
+
 ## Steps
 
 ### 1. README.md Completeness
@@ -86,7 +88,7 @@ Check that the codebase follows the project's mandatory conventions from `AGENTS
 
 ### 7. Full Test Suite Execution
 
-Run `cargo build` first to verify zero warnings, then run `cargo test` and report. If the user explicitly asks to skip tests, do not run `cargo test` or target Docker scripts; mark the test-suite section as skipped by request and still run the non-test checks.
+Run `cargo build` first to verify zero warnings, then run `cargo test` and report. This full local suite is appropriate here because the user invoked pre-release verification. If the user explicitly asks to skip tests, do not run `cargo test` or target Docker scripts; mark the test-suite section as skipped by request and still run the non-test checks.
 
 - Total test count per test file
 - Any failures (with details)
@@ -141,4 +143,4 @@ Action items: (numbered list of things to fix before tagging)
 - Be thorough. Read actual files, don't guess.
 - Only report ACTIONABLE issues — things that need fixing.
 - Do NOT make changes yourself. Only report findings.
-- Run targeted test commands first (e.g., `cargo test test_new_feature`) before the full suite to save time.
+- Run targeted test commands first (e.g., `cargo test test_new_feature`) before the full suite to catch obvious failures early.

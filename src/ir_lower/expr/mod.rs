@@ -11,8 +11,8 @@
 //!   conservative effects until Phase 04 gives them target-specific meaning.
 
 use crate::ir::{
-    BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, MixedNumericOp, Op, Ownership,
-    Terminator, ValueId,
+    BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, LocalSlotId, MixedNumericOp, Op,
+    Ownership, Terminator, ValueId,
 };
 use crate::ir_lower::context::{
     value_ir_type, ClosureCapture, LoweredValue, LoweringContext, StaticCallableBinding,
@@ -30,6 +30,7 @@ use crate::types::{
     array_key_type_from_value_type, checker::infer_expr_type_syntactic, merge_array_key_types,
     normalized_array_key_type, ExternFunctionSig, FunctionSig, PhpType,
 };
+use std::collections::HashSet;
 
 mod constants;
 mod nullsafe_chain;
@@ -836,6 +837,24 @@ fn lower_compare(
 ) -> LoweredValue {
     let mut lhs = lower_expr(ctx, left);
     let mut rhs = lower_expr(ctx, right);
+    // DateTime-family value comparison: PHP orders `DateTime`/`DateTimeImmutable` by their absolute
+    // instant (timestamp seconds + microsecond), independent of the stored timezone. Replace each
+    // object operand with a monotonic integer instant key so `==`, `!=`, `<`, `<=`, `>`, `>=`, and
+    // `<=>` reduce to ordinary integer comparison. Identity `===`/`!==` is deliberately excluded so
+    // it keeps comparing object references.
+    if datetime_instant_compare_operator(op)
+        && is_datetime_family_value(ctx, lhs.value)
+        && is_datetime_family_value(ctx, rhs.value)
+    {
+        let lhs_key = lower_datetime_instant_key(ctx, lhs, expr);
+        let rhs_key = lower_datetime_instant_key(ctx, rhs, expr);
+        release_binary_operand_temporary(ctx, lhs, expr.span);
+        if rhs.value != lhs.value {
+            release_binary_operand_temporary(ctx, rhs, expr.span);
+        }
+        lhs = lhs_key;
+        rhs = rhs_key;
+    }
     let opcode = match op {
         BinOp::StrictEq => Op::StrictEq,
         BinOp::StrictNotEq => Op::StrictNotEq,
@@ -854,7 +873,7 @@ fn lower_compare(
         lhs = coerce_to_int(ctx, lhs, left);
         rhs = coerce_to_int(ctx, rhs, right);
     }
-    let immediate = if matches!(opcode, Op::ICmp | Op::FCmp) {
+    let immediate = if matches!(opcode, Op::ICmp | Op::FCmp | Op::StrCmp) {
         Some(Immediate::CmpPredicate(cmp_predicate(op)))
     } else {
         None
@@ -888,6 +907,70 @@ fn release_binary_operand_temporary(
     if ctx.value_is_owning_temporary(operand) {
         crate::ir_lower::ownership::release_if_owned(ctx, operand, Some(span));
     }
+}
+
+/// Returns true for the comparison operators PHP evaluates against a `DateTime`'s instant.
+///
+/// Identity `===`/`!==` is excluded: PHP keeps those as object-reference comparisons, so they must
+/// not be rewritten into the instant-key integer comparison.
+fn datetime_instant_compare_operator(op: &BinOp) -> bool {
+    matches!(
+        op,
+        BinOp::Eq
+            | BinOp::NotEq
+            | BinOp::Lt
+            | BinOp::LtEq
+            | BinOp::Gt
+            | BinOp::GtEq
+            | BinOp::Spaceship
+    )
+}
+
+/// Returns true when `value` is a non-nullable `DateTime`/`DateTimeImmutable` instance whose instant
+/// can be compared through its `timestamp`/`microsecond` integer properties.
+///
+/// Nullable operands (`?DateTime`) are excluded: reading the `timestamp`/`microsecond` properties off
+/// a possible `null` would be invalid, so those fall through to the normal comparison path where
+/// PHP's null-vs-object ordering applies.
+fn is_datetime_family_value(ctx: &LoweringContext<'_, '_>, value: ValueId) -> bool {
+    let ty = ctx.builder.value_php_type(value);
+    matches!(
+        singular_object_class(&ty),
+        Some((name, false))
+            if matches!(name.trim_start_matches('\\'), "DateTime" | "DateTimeImmutable")
+    )
+}
+
+/// Lowers a `DateTime`/`DateTimeImmutable` object to a monotonic integer instant key,
+/// `timestamp * 1_000_000 + microsecond`.
+///
+/// Both components are stored as `int` properties, so the key is an exact ordering of the absolute
+/// instant including the sub-second part. Reducing each operand to this key lets the family's
+/// comparison operators reuse ordinary signed-integer comparison without any object-aware codegen.
+fn lower_datetime_instant_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let timestamp = lower_property_get_from_value(ctx, object, "timestamp", Op::PropGet, expr);
+    let microsecond = lower_property_get_from_value(ctx, object, "microsecond", Op::PropGet, expr);
+    let million = lower_int_literal(ctx, 1_000_000, expr);
+    let scaled = ctx.emit_value(
+        Op::IMul,
+        vec![timestamp.value, million.value],
+        None,
+        PhpType::Int,
+        Op::IMul.default_effects(),
+        Some(expr.span),
+    );
+    ctx.emit_value(
+        Op::IAdd,
+        vec![scaled.value, microsecond.value],
+        None,
+        PhpType::Int,
+        Op::IAdd.default_effects(),
+        Some(expr.span),
+    )
 }
 
 /// Maps an AST comparison operator to an EIR predicate.
@@ -1114,7 +1197,7 @@ fn lower_logical_binary(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Lowers non-short-circuiting PHP logical `xor`.
@@ -1198,10 +1281,9 @@ fn lower_null_coalesce(
         Some(expr.span),
     );
     let result_type = null_coalesce_result_type(ctx, value.value, default);
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
-    let default_block = ctx
-        .builder
-        .create_named_block("coalesce.default", Vec::new());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let default_block = ctx.builder.create_named_block("coalesce.default", Vec::new());
     let value_block = ctx.builder.create_named_block("coalesce.value", Vec::new());
     let merge = ctx.builder.create_named_block("coalesce.merge", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
@@ -1213,15 +1295,29 @@ fn lower_null_coalesce(
     });
 
     ctx.builder.position_at_end(default_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     store_expr_into_temp(ctx, &temp_name, result_type.clone(), default, expr.span);
+    release_discarded_branch_value(ctx, value, expr.span);
+    let default_reachable = !ctx.builder.insertion_block_is_terminated();
+    let default_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(value_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     store_value_into_temp(ctx, &temp_name, result_type, value, expr.span);
+    let value_reachable = !ctx.builder.insertion_block_is_terminated();
+    let value_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &split_initialized,
+        default_initialized,
+        default_reachable,
+        value_initialized,
+        value_reachable,
+    ));
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Returns the materialized result type for a null-coalesce merge.
@@ -1288,16 +1384,11 @@ fn lower_short_ternary(
     let value = lower_expr(ctx, value);
     let cond = ctx.truthy(value, Some(condition_span));
     let result_type = fallback_expr_type(expr);
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
-    let value_block = ctx
-        .builder
-        .create_named_block("short_ternary.value", Vec::new());
-    let default_block = ctx
-        .builder
-        .create_named_block("short_ternary.default", Vec::new());
-    let merge = ctx
-        .builder
-        .create_named_block("short_ternary.merge", Vec::new());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let split_initialized = ctx.initialized_slots_snapshot();
+    let value_block = ctx.builder.create_named_block("short_ternary.value", Vec::new());
+    let default_block = ctx.builder.create_named_block("short_ternary.default", Vec::new());
+    let merge = ctx.builder.create_named_block("short_ternary.merge", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
         cond: cond.value,
         then_target: value_block,
@@ -1307,15 +1398,40 @@ fn lower_short_ternary(
     });
 
     ctx.builder.position_at_end(value_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     store_value_into_temp(ctx, &temp_name, result_type.clone(), value, expr.span);
+    let value_reachable = !ctx.builder.insertion_block_is_terminated();
+    let value_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(default_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     store_expr_into_temp(ctx, &temp_name, result_type, default, expr.span);
+    release_discarded_branch_value(ctx, value, expr.span);
+    let default_reachable = !ctx.builder.insertion_block_is_terminated();
+    let default_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &split_initialized,
+        value_initialized,
+        value_reachable,
+        default_initialized,
+        default_reachable,
+    ));
+    take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Releases a lowered value that a lazy branch tested but did not forward.
+fn release_discarded_branch_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) {
+    if ctx.value_needs_release_after_retaining_store(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
 }
 
 /// Lowers a pipe operation.
@@ -1811,19 +1927,31 @@ fn lower_function_call(
             Some(expr.span),
         );
     }
-    let data = ctx.intern_function_name(canonical);
-    let value = ctx.emit_value(
+    emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span)
+}
+
+/// Emits a builtin call and releases owned temporary arguments after the call consumes them.
+fn emit_builtin_call_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    operands: Vec<crate::ir::ValueId>,
+    php_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let data = ctx.intern_function_name(name);
+    let call = ctx.emit_value(
         Op::BuiltinCall,
-        operands,
+        operands.clone(),
         Some(Immediate::Data(data)),
         php_type,
-        effects_lookup::builtin_effects(canonical),
-        Some(expr.span),
+        effects_lookup::builtin_effects(name),
+        Some(span),
     );
-    if php_symbol_key(canonical.trim_start_matches('\\')) == "eval" {
+    release_owned_call_arg_temporaries(ctx, &operands, Some(call.value), span);
+    if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
         ctx.apply_eval_barrier();
     }
-    value
+    call
 }
 
 /// Returns true when a dynamic eval fallback can preserve simple positional call semantics.
@@ -1933,25 +2061,12 @@ fn lower_lazy_isset(
     }
 
     let temp_name = ctx.declare_hidden_temp(PhpType::Int);
-    let false_block = ctx
-        .builder
-        .create_named_block("isset.lazy_false", Vec::new());
-    let merge = ctx
-        .builder
-        .create_named_block("isset.lazy_merge", Vec::new());
-    let data = ctx.intern_function_name(name);
-
+    let false_block = ctx.builder.create_named_block("isset.lazy_false", Vec::new());
+    let merge = ctx.builder.create_named_block("isset.lazy_merge", Vec::new());
     for (idx, arg) in args.iter().enumerate() {
         let checked = lower_lazy_isset_operand(ctx, arg).unwrap_or_else(|| {
             let value = lower_expr(ctx, arg);
-            ctx.emit_value(
-                Op::BuiltinCall,
-                vec![value.value],
-                Some(Immediate::Data(data)),
-                PhpType::Int,
-                effects_lookup::builtin_effects(name),
-                Some(arg.span),
-            )
+            emit_builtin_call_value(ctx, name, vec![value.value], PhpType::Int, arg.span)
         });
         let then_target = if idx + 1 == args.len() {
             ctx.builder
@@ -1980,7 +2095,7 @@ fn lower_lazy_isset(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    Some(ctx.load_local(&temp_name, Some(expr.span)))
+    Some(take_owned_temp(ctx, &temp_name, expr.span))
 }
 
 /// Lowers a single `isset()` operand that has special lazy PHP semantics.
@@ -2003,18 +2118,137 @@ fn lower_lazy_array_access_isset_operand(
     index: &Expr,
     arg: &Expr,
 ) -> Option<LoweredValue> {
-    if !array_access_expr_satisfies_array_access(ctx, array) {
+    if array_access_expr_satisfies_array_access(ctx, array) {
+        let synthetic = Expr::new(
+            ExprKind::MethodCall {
+                object: Box::new(array.clone()),
+                method: "offsetExists".to_string(),
+                args: vec![index.clone()],
+            },
+            arg.span,
+        );
+        return Some(lower_expr(ctx, &synthetic));
+    }
+    if !array_access_expr_supports_native_isset_probe(ctx, array) {
         return None;
     }
-    let synthetic = Expr::new(
-        ExprKind::MethodCall {
-            object: Box::new(array.clone()),
-            method: "offsetExists".to_string(),
-            args: vec![index.clone()],
-        },
-        arg.span,
+    Some(lower_native_isset_offset_probe(ctx, array, index, arg))
+}
+
+/// Lowers native array/hash `isset($array[$key])` without reading the element value.
+fn lower_native_isset_offset_probe(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let array_value = lower_expr(ctx, array);
+    if value_is_nullable(ctx, array_value.value) {
+        return lower_nullable_native_isset_offset_probe(ctx, array_value, index, expr);
+    }
+    lower_native_isset_offset_probe_from_value(ctx, array_value, index, expr)
+}
+
+/// Lowers nullable native array/hash `isset` without evaluating the offset on null receivers.
+fn lower_nullable_native_isset_offset_probe(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![array_value.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
     );
-    Some(lower_expr(ctx, &synthetic))
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let null_block = ctx.builder.create_named_block("isset.native.null", Vec::new());
+    let probe_block = ctx.builder.create_named_block("isset.native.probe", Vec::new());
+    let merge = ctx.builder.create_named_block("isset.native.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: probe_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    let false_value = emit_bool_literal(ctx, false, Some(expr.span));
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, false_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(probe_block);
+    let checked = lower_native_isset_offset_probe_from_value(ctx, array_value, index, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, checked, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Lowers native array/hash `isset` once the receiver has already been evaluated.
+fn lower_native_isset_offset_probe_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    match array_value.ir_type {
+        IrType::Heap(IrHeapKind::Array) => {
+            let mut index_value = lower_expr(ctx, index);
+            index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+            ctx.emit_value(
+                Op::ArrayIsset,
+                vec![array_value.value, index_value.value],
+                None,
+                PhpType::Bool,
+                Op::ArrayIsset.default_effects(),
+                Some(expr.span),
+            )
+        }
+        IrType::Heap(IrHeapKind::Hash) => {
+            let index_value = lower_expr(ctx, index);
+            ctx.emit_value(
+                Op::HashIsset,
+                vec![array_value.value, index_value.value],
+                None,
+                PhpType::Bool,
+                Op::HashIsset.default_effects(),
+                Some(expr.span),
+            )
+        }
+        _ => {
+            let read_value = lower_array_access_from_value(ctx, array_value, index, expr);
+            emit_builtin_call_value(ctx, "isset", vec![read_value.value], PhpType::Int, expr.span)
+        }
+    }
+}
+
+/// Returns whether a syntactic array receiver can use a non-materializing native `isset` probe.
+fn array_access_expr_supports_native_isset_probe(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let ty = match &array.kind {
+        ExprKind::Variable(name) => ctx
+            .local_types
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| infer_expr_type_syntactic(array)),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+        }
+        ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, array),
+        ExprKind::ArrayLiteralAssoc(pairs) => assoc_array_literal_type_for_ir(ctx, pairs, array),
+        _ => infer_expr_type_syntactic(array),
+    }
+    .codegen_repr();
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
 }
 
 /// Lowers `isset($object->property)` without performing a normal property read first.
@@ -2506,19 +2740,19 @@ fn lower_dynamic_call_user_func_array(
     }
     let signature = callable_descriptor_signature_for_expr(ctx, callback_expr);
     let callback = lower_expr(ctx, callback_expr);
-    let arg_array = lower_descriptor_invoker_arg_array_for_call_user_func_array(
+    let arg_array =
+        lower_descriptor_invoker_arg_array_for_call_user_func_array(
+            ctx,
+            arg_array_expr,
+            signature.as_ref(),
+        )
+        .unwrap_or_else(|| lower_expr(ctx, arg_array_expr));
+    Some(emit_callable_descriptor_invoke(
         ctx,
-        arg_array_expr,
-        signature.as_ref(),
-    )
-    .unwrap_or_else(|| lower_expr(ctx, arg_array_expr));
-    Some(ctx.emit_value(
-        Op::CallableDescriptorInvoke,
-        vec![callback.value, arg_array.value],
-        None,
+        callback,
+        arg_array,
         PhpType::Mixed,
-        Op::CallableDescriptorInvoke.default_effects(),
-        Some(expr.span),
+        expr.span,
     ))
 }
 
@@ -2645,7 +2879,7 @@ fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
             Op::ArrayPush.default_effects(),
             Some(item.span),
         );
-        release_value_after_retaining_insert(ctx, Some(&elem_ty), value, item.span);
+        super::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, item.span);
     }
     Some(array)
 }
@@ -2745,14 +2979,35 @@ fn lower_call_user_func_descriptor_invoke_from_value(
     let result_type = sig
         .map(|sig| normalize_value_php_type(sig.return_type.codegen_repr()))
         .unwrap_or(PhpType::Mixed);
-    Some(ctx.emit_value(
+    Some(emit_callable_descriptor_invoke(
+        ctx,
+        callback,
+        arg_container,
+        result_type,
+        expr.span,
+    ))
+}
+
+/// Emits a descriptor invoke and releases an owned argument container after the call.
+fn emit_callable_descriptor_invoke(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback: LoweredValue,
+    arg_container: LoweredValue,
+    result_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    let result = ctx.emit_value(
         Op::CallableDescriptorInvoke,
         vec![callback.value, arg_container.value],
         None,
         result_type,
         Op::CallableDescriptorInvoke.default_effects(),
-        Some(expr.span),
-    ))
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(arg_container) {
+        crate::ir_lower::ownership::release_if_owned(ctx, arg_container, Some(span));
+    }
+    result
 }
 
 /// Returns true when the EIR backend has descriptor dispatch for this callback type.
@@ -2821,7 +3076,7 @@ fn lower_indexed_descriptor_invoker_arg_array(
             Op::ArrayPush.default_effects(),
             Some(arg.span),
         );
-        release_value_after_retaining_insert(ctx, Some(&elem_ty), value, arg.span);
+        super::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, arg.span);
         positional_index += 1;
     }
     array
@@ -2975,7 +3230,7 @@ fn lower_static_array_map(
         Op::ArrayNew,
         Vec::new(),
         Some(Immediate::Capacity(items.len() as u32)),
-        PhpType::Array(Box::new(elem_type)),
+        PhpType::Array(Box::new(elem_type.clone())),
         Op::ArrayNew.default_effects(),
         Some(expr.span),
     );
@@ -2989,6 +3244,7 @@ fn lower_static_array_map(
             Op::ArrayPush.default_effects(),
             Some(item.span),
         );
+        super::stmt::release_indexed_array_write_operand(ctx, Some(&elem_type), value, item.span);
     }
     Some(array)
 }
@@ -3017,7 +3273,7 @@ fn lower_static_array_reduce(
     }
     let callback = static_call_user_func_callback(ctx, &args[1])?;
     let result_type = fallback_expr_type(expr);
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let initial = lower_expr(ctx, &args[2]);
     store_value_into_temp(ctx, &temp_name, result_type.clone(), initial, expr.span);
     for item in items {
@@ -3031,7 +3287,7 @@ fn lower_static_array_reduce(
         )?;
         store_value_into_temp(ctx, &temp_name, result_type.clone(), reduced, expr.span);
     }
-    Some(ctx.load_local(&temp_name, Some(expr.span)))
+    Some(take_owned_temp(ctx, &temp_name, expr.span))
 }
 
 /// Lowers `array_walk()` for a static callback and immediate indexed-array literal.
@@ -3134,15 +3390,7 @@ fn lower_static_callable_value_call(
         }
         StaticCallableBinding::Builtin(function_name) => {
             let php_type = call_return_type(ctx, &function_name, &operands);
-            let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
-                Op::BuiltinCall,
-                operands,
-                Some(Immediate::Data(data)),
-                php_type,
-                effects_lookup::builtin_effects(&function_name),
-                Some(expr.span),
-            ))
+            Some(emit_builtin_call_value(ctx, &function_name, operands, php_type, expr.span))
         }
         StaticCallableBinding::Closure {
             name,
@@ -3401,7 +3649,7 @@ fn lower_callable_array_literal_with_receiver(
         Op::ArrayPush.default_effects(),
         Some(expr.span),
     );
-    release_value_after_retaining_insert(ctx, elem_ty.as_ref(), receiver, expr.span);
+    super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), receiver, expr.span);
     for item in items.iter().skip(1) {
         let value = lower_expr(ctx, item);
         ctx.emit_void(
@@ -3411,7 +3659,7 @@ fn lower_callable_array_literal_with_receiver(
             Op::ArrayPush.default_effects(),
             Some(item.span),
         );
-        release_value_after_retaining_insert(ctx, elem_ty.as_ref(), value, item.span);
+        super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, item.span);
     }
     array
 }
@@ -3577,15 +3825,7 @@ fn lower_static_callable_call(
             let operands =
                 lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
             let php_type = call_return_type(ctx, &function_name, &operands);
-            let data = ctx.intern_function_name(&function_name);
-            Some(ctx.emit_value(
-                Op::BuiltinCall,
-                operands,
-                Some(Immediate::Data(data)),
-                php_type,
-                effects_lookup::builtin_effects(&function_name),
-                Some(expr.span),
-            ))
+            Some(emit_builtin_call_value(ctx, &function_name, operands, php_type, expr.span))
         }
         StaticCallableBinding::Closure {
             name,
@@ -3796,6 +4036,7 @@ fn lower_unset_locals(
             _ => {}
         }
     }
+    crate::ir_lower::ownership::collect_cycles(ctx, Some(expr.span));
     Some(null)
 }
 
@@ -4005,6 +4246,11 @@ fn lower_static_array_push(
         Op::ArrayPush.default_effects(),
         Some(expr.span),
     );
+    let elem_ty = super::stmt::indexed_array_write_element_type(
+        ctx,
+        array_value,
+        updated_ty.as_ref(),
+    );
     super::stmt::finish_indexed_array_local_write(
         ctx,
         array_name,
@@ -4013,6 +4259,7 @@ fn lower_static_array_push(
         needs_storeback,
         expr.span,
     );
+    super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, expr.span);
     Some(lower_null(ctx, expr))
 }
 
@@ -4042,6 +4289,12 @@ fn lower_builtin_call_args(
         {
             lower_args(ctx, args)
         }
+        "usort" | "uasort"
+            if !crate::types::call_args::has_named_args(args)
+                && !args.iter().any(is_spread_arg) =>
+        {
+            lower_user_value_sort_args(ctx, sig, args)
+        }
         _ => lower_args_with_signature(ctx, sig, args),
     }
 }
@@ -4062,6 +4315,83 @@ fn lower_eval_args(
     };
     let span = args.first().map(|arg| arg.span);
     vec![coerce_to_string_at_span(ctx, code_value, span).value]
+}
+
+/// Lowers `usort`/`uasort` arguments, typing an unannotated comparator closure
+/// against the array's object element type.
+///
+/// `usort`/`uasort` compare values, so a comparator over an array of objects must
+/// see each element as the object handle — for `<=>` instant comparison and for
+/// property/method access — not the raw pointer-sized integer the runtime stores
+/// in each slot. The array operand is lowered exactly as the default positional
+/// path would (positional builtin calls reach here with no signature); only an
+/// unannotated closure comparator over an object-element array is specialized,
+/// matching the element-type hint the checker applied to the comparator body.
+fn lower_user_value_sort_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    if args.len() != 2 || !matches!(&args[1].kind, ExprKind::Closure { .. }) {
+        return lower_args_with_signature(ctx, sig, args);
+    }
+    // The mutating sort keeps its by-reference local storeback in the EIR backend,
+    // so the array operand only has to resolve to the array's value here.
+    let array = match sig {
+        Some(sig) => lower_arg_with_signature(ctx, sig, 0, &args[0]),
+        None => lower_expr(ctx, &args[0]).value,
+    };
+    let elem_ty = match ctx.builder.value_php_type(array).codegen_repr() {
+        PhpType::Array(elem) => elem.codegen_repr(),
+        _ => PhpType::Int,
+    };
+    // Only an object-element array needs the comparator parameters re-typed; scalar
+    // comparators already lower correctly through the default path.
+    let callback = if matches!(elem_ty, PhpType::Object(_)) {
+        lower_value_sort_comparator_closure(ctx, &args[1], elem_ty)
+    } else {
+        match sig {
+            Some(sig) => lower_arg_with_signature(ctx, sig, 1, &args[1]),
+            None => lower_expr(ctx, &args[1]).value,
+        }
+    };
+    vec![array, callback]
+}
+
+/// Lowers a value-sort comparator closure with both parameters typed as the array element.
+///
+/// Falls back to the plain closure lowering for any non-closure callback operand,
+/// though callers only reach this path with a closure comparator.
+fn lower_value_sort_comparator_closure(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback: &Expr,
+    elem_ty: PhpType,
+) -> crate::ir::ValueId {
+    let ExprKind::Closure {
+        params,
+        variadic,
+        return_type,
+        body,
+        captures,
+        capture_refs,
+        ..
+    } = &callback.kind
+    else {
+        return lower_expr(ctx, callback).value;
+    };
+    lower_closure_with_context(
+        ctx,
+        params,
+        variadic.as_deref(),
+        return_type.as_ref(),
+        body,
+        captures,
+        capture_refs,
+        callback,
+        &[elem_ty.clone(), elem_ty],
+        None,
+    )
+    .value
 }
 
 /// Returns true when the call uses exactly one static empty indexed spread.
@@ -4107,15 +4437,7 @@ fn lower_static_settype(
     let target_ty = static_settype_target_type(&type_arg)?;
     let sig = call_signature(ctx, name, args);
     let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
-    let data = ctx.intern_function_name(name);
-    let result = ctx.emit_value(
-        Op::BuiltinCall,
-        operands,
-        Some(Immediate::Data(data)),
-        PhpType::Bool,
-        effects_lookup::builtin_effects(name),
-        Some(expr.span),
-    );
+    let result = emit_builtin_call_value(ctx, name, operands, PhpType::Bool, expr.span);
     ctx.set_local_type(local_name, target_ty);
     Some(result)
 }
@@ -4324,7 +4646,69 @@ fn lower_arg_with_signature(
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
-    lower_expr(ctx, arg).value
+    let lowered = lower_expr(ctx, arg);
+    coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+}
+
+/// Coerces a positional argument's storage to match a declared scalar parameter type.
+///
+/// EIR passes each call argument in its natural storage. A declared `float` parameter is
+/// materialized into the callee's floating-point register/slot, so an integer argument must be
+/// converted with `IToF` first: without it the raw 64-bit integer bit-pattern lands in the
+/// float slot and the callee reads garbage (and, when other float arguments are present, the
+/// unconverted slot is overwritten by a neighbouring float argument). Only the int→float case
+/// is adjusted; every other argument/parameter storage combination is passed through unchanged.
+fn coerce_scalar_arg_to_param_storage(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    value: LoweredValue,
+    arg: &Expr,
+) -> LoweredValue {
+    let Some((_, param_ty)) = sig.params.get(index) else {
+        return value;
+    };
+    if value.ir_type == IrType::I64 && param_ty.codegen_repr() == PhpType::Float {
+        return coerce_to_float(ctx, value, arg);
+    }
+    value
+}
+
+/// Widens positional call operands to their declared scalar parameter types.
+///
+/// The C/native ABI places an argument in an integer or floating-point register based
+/// on the *value's* type, while the callee reads each parameter from the register class
+/// of the *parameter's* type. Without this step an `int` (or `bool`) argument passed to
+/// a `float` parameter is deposited in an integer register and then read back as garbage
+/// from a floating-point slot. Only pure `float` parameters receiving an integer/bool
+/// operand are rewritten with an int→float conversion; by-reference parameters and the
+/// variadic tail operand are left untouched.
+fn coerce_operands_to_params(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    mut operands: Vec<crate::ir::ValueId>,
+) -> Vec<crate::ir::ValueId> {
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    let limit = operands.len().min(regular_param_count);
+    for index in 0..limit {
+        if sig.ref_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some((_, param_ty)) = sig.params.get(index) else {
+            continue;
+        };
+        if param_ty.codegen_repr() != PhpType::Float {
+            continue;
+        }
+        let value = operands[index];
+        let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
+        if !matches!(operand_ty, PhpType::Int | PhpType::Bool) {
+            continue;
+        }
+        let lowered = LoweredValue { value, ir_type: IrType::I64 };
+        operands[index] = coerce_to_float_at_span(ctx, lowered, None).value;
+    }
+    operands
 }
 
 /// Widens local indexed-array storage before passing it to an `array<mixed>` ref parameter.
@@ -4386,10 +4770,11 @@ fn lower_args_with_signature(
         return lower_args(ctx, args);
     };
     if crate::types::call_args::has_named_args(args) {
-        return lower_named_args_with_signature(ctx, sig, args);
+        let operands = lower_named_args_with_signature(ctx, sig, args);
+        return coerce_operands_to_params(ctx, sig, operands);
     }
     if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args) {
-        return operands;
+        return coerce_operands_to_params(ctx, sig, operands);
     }
     let static_spread_args = if has_static_call_spread_args(args) {
         Some(expand_static_call_spread_args(args))
@@ -4398,7 +4783,7 @@ fn lower_args_with_signature(
     };
     let args = static_spread_args.as_deref().unwrap_or(args);
     if let Some(operands) = lower_assoc_spread_only_args(ctx, sig, args) {
-        return operands;
+        return coerce_operands_to_params(ctx, sig, operands);
     }
     if args.iter().any(is_spread_arg) {
         return lower_args(ctx, args);
@@ -4410,11 +4795,12 @@ fn lower_args_with_signature(
         args.len()
     };
     if sig.variadic.is_none() && fixed_arg_count >= regular_param_count {
-        return args
+        let operands = args
             .iter()
             .enumerate()
             .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg))
             .collect();
+        return coerce_operands_to_params(ctx, sig, operands);
     }
     let mut operands: Vec<crate::ir::ValueId> = args[..fixed_arg_count]
         .iter()
@@ -4435,7 +4821,7 @@ fn lower_args_with_signature(
         };
         operands.push(lower_variadic_tail_array(ctx, sig, tail).value);
     }
-    operands
+    coerce_operands_to_params(ctx, sig, operands)
 }
 
 /// Lowers one trailing indexed spread in a fixed-arity positional call.
@@ -5413,6 +5799,7 @@ fn lower_named_variadic_tail_array(
         Op::ArrayNew.default_effects(),
         Some(span),
     );
+    let elem_ty = indexed_array_literal_element_type(&array_ty);
     for source in tail {
         if source.param_idx().is_some() {
             continue;
@@ -5426,6 +5813,12 @@ fn lower_named_variadic_tail_array(
             None,
             Op::ArrayPush.default_effects(),
             Some(source.expr().span),
+        );
+        super::stmt::release_indexed_array_write_operand(
+            ctx,
+            elem_ty.as_ref(),
+            value,
+            source.expr().span,
         );
     }
     array
@@ -5513,6 +5906,7 @@ fn lower_variadic_tail_array(
         Op::ArrayNew.default_effects(),
         Some(span),
     );
+    let elem_ty = indexed_array_literal_element_type(&array_ty);
     for item in tail {
         let value = lower_expr(ctx, item);
         let value = coerce_variadic_tail_value(ctx, value, &array_ty, item.span);
@@ -5523,6 +5917,7 @@ fn lower_variadic_tail_array(
             Op::ArrayPush.default_effects(),
             Some(item.span),
         );
+        super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, item.span);
     }
     array
 }
@@ -5724,7 +6119,25 @@ fn call_return_type_for_args(
         "array_fill" => array_fill_builtin_return_type_for_args(ctx, args, operands),
         "array_map" => array_map_builtin_return_type(ctx, args, operands),
         "iterator_to_array" => iterator_to_array_builtin_return_type(ctx, args, operands),
+        "microtime" => microtime_builtin_return_type_for_args(args),
         _ => None,
+    }
+}
+
+/// Returns `microtime()` metadata when the literal `as_float` flag is still available.
+///
+/// `microtime(true)` is a float; `microtime()` / `microtime(false)` is the "0.NNNNNNNN sec"
+/// string; a non-literal flag returns `None` so the result type falls back to the `string|float`
+/// union (boxed `Mixed`) declared in `call_return_type`. This must match the checker
+/// (`src/types/checker/builtins/system.rs`) and the EIR backend dispatch in `lower_microtime`.
+fn microtime_builtin_return_type_for_args(args: &[Expr]) -> Option<PhpType> {
+    match args.first() {
+        Some(arg) => match &arg.kind {
+            ExprKind::BoolLiteral(true) => Some(PhpType::Float),
+            ExprKind::BoolLiteral(false) => Some(PhpType::Str),
+            _ => None,
+        },
+        None => Some(PhpType::Str),
     }
 }
 
@@ -5740,7 +6153,12 @@ fn array_fill_builtin_return_type_for_args(
     let value = operands.get(2)?;
     let value_ty = ctx.builder.value_php_type(*value).codegen_repr();
     let start_is_literal_zero = matches!(args[0].kind, ExprKind::IntLiteral(0));
-    if !start_is_literal_zero || matches!(value_ty, PhpType::Str) {
+    // A non-literal-zero start builds a keyed Mixed-valued hash (`__rt_array_fill_assoc`,
+    // keys start..start+count-1). A literal-zero start builds the 0-indexed path: string
+    // values use the dedicated 16-byte-slot `__rt_array_fill_str` helper, scalars use the
+    // single-word `__rt_array_fill` / `__rt_array_fill_refcounted` helpers. This must match
+    // the checker (`src/types/checker/builtins/arrays.rs`) and `infer_local_type`.
+    if !start_is_literal_zero {
         return Some(PhpType::AssocArray {
             key: Box::new(PhpType::Int),
             value: Box::new(PhpType::Mixed),
@@ -5983,7 +6401,7 @@ fn array_builtin_return_type(
         | "array_intersect"
         | "array_diff_key"
         | "array_intersect_key" => array_preserve_first_builtin_return_type(ctx, operands),
-        "in_array" => Some(PhpType::Int),
+        "in_array" => Some(PhpType::Bool),
         "range" => Some(PhpType::Array(Box::new(PhpType::Int))),
         "array_values" => {
             let array = operands.first()?;
@@ -6156,6 +6574,7 @@ fn is_scalar_merge_element_type(ty: &PhpType) -> bool {
 fn builtin_return_type_override(name: &str) -> Option<PhpType> {
     match php_symbol_key(name.trim_start_matches('\\')).as_str() {
         "chdir"
+        | "checkdate"
         | "chgrp"
         | "chmod"
         | "chown"
@@ -6197,6 +6616,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "is_numeric"
         | "is_object"
         | "is_real"
+        | "is_scalar"
         | "is_string"
         | "link"
         | "method_exists"
@@ -6237,6 +6657,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "unlink" => Some(PhpType::Bool),
         "basename"
         | "date"
+        | "gmdate"
         | "dirname"
         | "exec"
         | "get_class"
@@ -6263,7 +6684,7 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "strval"
         | "tempnam"
         | "vsprintf" => Some(PhpType::Str),
-        "disk_free_space" | "disk_total_space" | "microtime" => Some(PhpType::Float),
+        "disk_free_space" | "disk_total_space" => Some(PhpType::Float),
         "clearstatcache"
         | "closedir"
         | "exit"
@@ -6291,19 +6712,33 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
         | "isset"
         | "linkinfo"
         | "mktime"
+        | "gmmktime"
         | "sleep"
+        | "__elephc_mktime_raw"
+        | "__elephc_gmmktime_raw"
         | "pclose"
         | "spl_object_id"
         | "stream_select"
         | "stream_set_chunk_size"
         | "stream_set_read_buffer"
         | "stream_set_write_buffer"
-        | "strtotime"
+        | "__elephc_strtotime_raw"
         | "time"
         | "umask"
         | "vfprintf"
         | "vprintf"
         | "realpath_cache_size" => Some(PhpType::Int),
+        // strtotime() is `int|false`: a real timestamp (including a valid -1 pre-epoch) on success,
+        // or boolean false when the string cannot be parsed. The backend boxes the result so
+        // `=== false` and `echo` observe the distinct false; `__elephc_strtotime_raw` (the DateTime
+        // internal alias above) stays a plain Int that maps the failure sentinel to -1.
+        "strtotime" => Some(PhpType::Union(vec![PhpType::Int, PhpType::Bool])),
+        // microtime() with a non-literal `as_float` flag yields `string|float` (boxed `Mixed`):
+        // the runtime branches on the flag and boxes either the "0.NNNNNNNN sec" string or the
+        // float. Literal-true / literal-false / omitted cases are resolved earlier by
+        // `call_return_type_for_args` (Float / Str), so this entry is only reached for a
+        // non-literal flag.
+        "microtime" => Some(PhpType::Union(vec![PhpType::Str, PhpType::Float])),
         "spl_object_hash" => Some(PhpType::Str),
         "spl_autoload" | "spl_autoload_call" | "usleep" => Some(PhpType::Void),
         "stream_context_create" | "stream_context_get_default" | "stream_context_set_default" => {
@@ -6316,7 +6751,10 @@ fn builtin_return_type_override(name: &str) -> Option<PhpType> {
             key: Box::new(PhpType::Str),
             value: Box::new(PhpType::Mixed),
         }),
-        "file_get_contents"
+        "getdate"
+        | "localtime"
+        | "hrtime"
+        | "file_get_contents"
         | "fileatime"
         | "filectime"
         | "filegroup"
@@ -6428,7 +6866,7 @@ fn lower_array_literal(
             Op::ArrayPush.default_effects(),
             Some(item.span),
         );
-        release_value_after_retaining_insert(ctx, elem_ty.as_ref(), value, item.span);
+        super::stmt::release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, item.span);
     }
     array
 }
@@ -6502,7 +6940,7 @@ fn lower_indexed_array_spread_into_array(
         Op::ArrayPush.default_effects(),
         Some(span),
     );
-    release_value_after_retaining_insert(ctx, container_elem_ty, value, span);
+    super::stmt::release_indexed_array_write_operand(ctx, container_elem_ty, value, span);
     let one = emit_i64_at_span(ctx, 1, span);
     let next = ctx.emit_value(
         Op::IAdd,
@@ -6812,7 +7250,7 @@ fn lower_match(
 ) -> LoweredValue {
     let subject = lower_expr(ctx, subject);
     let result_type = fallback_expr_type(expr);
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let merge = ctx.builder.create_named_block("match.merge", Vec::new());
 
     for (conditions, result) in arms {
@@ -6854,7 +7292,7 @@ fn lower_match(
         ctx.builder.terminate(Terminator::Fatal { message });
     }
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Lowers array, hash, string, or ArrayAccess indexing.
@@ -6919,16 +7357,10 @@ fn lower_nullable_array_access(
         Some(expr.span),
     );
     let result_type = PhpType::Mixed;
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
-    let null_block = ctx
-        .builder
-        .create_named_block("nullable.index.null", Vec::new());
-    let read_block = ctx
-        .builder
-        .create_named_block("nullable.index.read", Vec::new());
-    let merge = ctx
-        .builder
-        .create_named_block("nullable.index.merge", Vec::new());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let null_block = ctx.builder.create_named_block("nullable.index.null", Vec::new());
+    let read_block = ctx.builder.create_named_block("nullable.index.read", Vec::new());
+    let merge = ctx.builder.create_named_block("nullable.index.merge", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
         cond: is_null.value,
         then_target: null_block,
@@ -6948,7 +7380,7 @@ fn lower_nullable_array_access(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Returns the best PHP result type for a lowered array/string/hash access.
@@ -7172,7 +7604,8 @@ fn lower_ternary(
     let cond = lower_expr(ctx, condition);
     let cond = ctx.truthy(cond, Some(condition.span));
     let result_type = branch_merge_result_type(ctx, then_expr, else_expr, expr);
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let split_initialized = ctx.initialized_slots_snapshot();
     let then_block = ctx.builder.create_named_block("ternary.then", Vec::new());
     let else_block = ctx.builder.create_named_block("ternary.else", Vec::new());
     let merge = ctx.builder.create_named_block("ternary.merge", Vec::new());
@@ -7185,15 +7618,28 @@ fn lower_ternary(
     });
 
     ctx.builder.position_at_end(then_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     store_expr_into_temp(ctx, &temp_name, result_type.clone(), then_expr, expr.span);
+    let then_reachable = !ctx.builder.insertion_block_is_terminated();
+    let then_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(else_block);
+    ctx.restore_initialized_slots(split_initialized.clone());
     store_expr_into_temp(ctx, &temp_name, result_type, else_expr, expr.span);
+    let else_reachable = !ctx.builder.insertion_block_is_terminated();
+    let else_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &split_initialized,
+        then_initialized,
+        then_reachable,
+        else_initialized,
+        else_reachable,
+    ));
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Lowers a cast expression.
@@ -7743,16 +8189,13 @@ fn lower_closure_call(
     let result_type =
         result_type.unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
     if instance_signature.is_none() {
-        if let Some(arg_container) =
-            lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
-        {
-            return ctx.emit_value(
-                Op::CallableDescriptorInvoke,
-                vec![callable.value, arg_container.value],
-                None,
+        if let Some(arg_container) = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span) {
+            return emit_callable_descriptor_invoke(
+                ctx,
+                callable,
+                arg_container,
                 result_type,
-                Op::CallableDescriptorInvoke.default_effects(),
-                Some(expr.span),
+                expr.span,
             );
         }
     }
@@ -7839,16 +8282,13 @@ fn lower_expr_call(
     }
     let lowered_callee = lower_expr(ctx, callee);
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
-    if let Some(arg_container) =
-        lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
-    {
-        return ctx.emit_value(
-            Op::CallableDescriptorInvoke,
-            vec![lowered_callee.value, arg_container.value],
-            None,
+    if let Some(arg_container) = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span) {
+        return emit_callable_descriptor_invoke(
+            ctx,
+            lowered_callee,
+            arg_container,
             result_type,
-            Op::CallableDescriptorInvoke.default_effects(),
-            Some(expr.span),
+            expr.span,
         );
     }
     let mut operands = vec![lowered_callee.value];
@@ -7884,13 +8324,12 @@ fn lower_literal_callable_array_expr_call(
     let lowered_callee = lower_expr(ctx, callee);
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
     let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)?;
-    Some(ctx.emit_value(
-        Op::CallableDescriptorInvoke,
-        vec![lowered_callee.value, arg_container.value],
-        None,
+    Some(emit_callable_descriptor_invoke(
+        ctx,
+        lowered_callee,
+        arg_container,
         result_type,
-        Op::CallableDescriptorInvoke.default_effects(),
-        Some(expr.span),
+        expr.span,
     ))
 }
 
@@ -7902,16 +8341,13 @@ fn lower_expr_call_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = dynamic_callable_result_type(ctx, callee.value, expr);
-    if let Some(arg_container) =
-        lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
-    {
-        return ctx.emit_value(
-            Op::CallableDescriptorInvoke,
-            vec![callee.value, arg_container.value],
-            None,
+    if let Some(arg_container) = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span) {
+        return emit_callable_descriptor_invoke(
+            ctx,
+            callee,
+            arg_container,
             result_type,
-            Op::CallableDescriptorInvoke.default_effects(),
-            Some(expr.span),
+            expr.span,
         );
     }
     let mut operands = vec![callee.value];
@@ -7972,7 +8408,7 @@ fn lower_untyped_descriptor_invoker_indexed_container(
             Op::ArrayPush.default_effects(),
             Some(arg.span),
         );
-        release_value_after_retaining_insert(ctx, Some(&elem_ty), value, arg.span);
+        super::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, arg.span);
     }
     array
 }
@@ -8239,15 +8675,13 @@ fn lower_first_class_callable_expr_call(
                 .as_ref()
                 .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
                 .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
-            let arg_container =
-                lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)?;
-            Some(ctx.emit_value(
-                Op::CallableDescriptorInvoke,
-                vec![callable.value, arg_container.value],
-                None,
+            let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)?;
+            Some(emit_callable_descriptor_invoke(
+                ctx,
+                callable,
+                arg_container,
                 result_type,
-                Op::CallableDescriptorInvoke.default_effects(),
-                Some(expr.span),
+                expr.span,
             ))
         }
         _ => None,
@@ -9128,6 +9562,7 @@ fn lower_method_call(
         Some(expr.span),
     );
     release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span);
+    release_owning_receiver_temporary(ctx, object, expr.span);
     call
 }
 
@@ -9192,16 +9627,10 @@ fn lower_nullable_regular_method_call(
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = method_call_result_type(ctx, object.value, method, Op::MethodCall, expr);
-    let temp_name = ctx.declare_hidden_temp(result_type.clone());
-    let fatal_block = ctx
-        .builder
-        .create_named_block("method.null.fatal", Vec::new());
-    let call_block = ctx
-        .builder
-        .create_named_block("method.non_null.call", Vec::new());
-    let merge = ctx
-        .builder
-        .create_named_block("method.nullable.merge", Vec::new());
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let fatal_block = ctx.builder.create_named_block("method.null.fatal", Vec::new());
+    let call_block = ctx.builder.create_named_block("method.non_null.call", Vec::new());
+    let merge = ctx.builder.create_named_block("method.nullable.merge", Vec::new());
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![object.value],
@@ -9227,7 +9656,7 @@ fn lower_nullable_regular_method_call(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    ctx.load_local(&temp_name, Some(expr.span))
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Lowers `ReflectionClass::newInstance()` by constructing the reflected class name.
@@ -11652,6 +12081,7 @@ fn lower_method_call_with_receiver(
         Some(expr.span),
     );
     release_owned_call_arg_temporaries(ctx, &arg_values, Some(call.value), expr.span);
+    release_owning_receiver_temporary(ctx, object, expr.span);
     call
 }
 
@@ -11719,6 +12149,9 @@ fn call_result_may_alias_arg(
     let Some(result) = result else {
         return false;
     };
+    if ctx.builder.value_defining_op(arg) == Some(Op::MixedNumericBinop) {
+        return false;
+    }
     let arg_ty = ctx.builder.value_php_type(arg).codegen_repr();
     let result_ty = ctx.builder.value_php_type(result).codegen_repr();
     if !Ownership::php_type_needs_lifetime_tracking(&arg_ty)
@@ -11738,6 +12171,25 @@ fn call_result_may_alias_arg(
         (PhpType::Callable, PhpType::Callable) => true,
         (PhpType::Buffer(_), PhpType::Buffer(_)) => true,
         _ => arg_ty == result_ty,
+    }
+}
+
+/// Releases the receiver of a method call when it was an owning temporary.
+///
+/// A method borrows its receiver, so a receiver that is itself a temporary — the
+/// result of a prior chained call (`$o->a()->b()`) or an inline `new X()->m()` —
+/// has no owner once the call returns and would otherwise never reach refcount
+/// zero (a leak; its destructor never runs). A plain local or `$this` receiver is
+/// not an owning temporary and is left to normal scope cleanup. This must run
+/// after the call is emitted (and after `return $this` has acquired its own
+/// reference) so the released reference is the receiver's, not the result's.
+fn release_owning_receiver_temporary(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    span: Span,
+) {
+    if ctx.value_is_owning_temporary(receiver) {
+        crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
     }
 }
 
@@ -12253,15 +12705,138 @@ fn lower_yield(
 }
 
 /// Lowers `yield from`.
+///
+/// `yield from <generator|Traversable>` lowers to `Op::GeneratorYieldFrom`, which
+/// the backend delegates to `__rt_gen_delegate` (forwarding sent values and
+/// producing the inner generator's return value). `yield from <array>` is
+/// desugared here into an iterator loop that re-yields each key/value pair,
+/// reusing the foreach iterator opcodes; its result is PHP null.
 fn lower_yield_from(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
-    ctx.emit_value(
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        return lower_yield_from_array(ctx, value, expr);
+    }
+    let result = ctx.emit_value(
         Op::GeneratorYieldFrom,
         vec![value.value],
         None,
         PhpType::Mixed,
         Op::GeneratorYieldFrom.default_effects(),
         Some(expr.span),
+    );
+    // `__rt_gen_delegate` borrows the inner generator. When it is a fresh owning
+    // temporary (`yield from inner()`) nothing else frees it once delegation
+    // ends, so release it here; a borrowed local (`yield from $g`) keeps its
+    // owner and must not be released (it would double-free at scope end).
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+    }
+    result
+}
+
+/// Desugars `yield from <array>` into an iterator loop that re-yields each
+/// key/value pair, returning a boxed PHP null (arrays have no delegated return
+/// value). Reuses the foreach iterator opcodes so every array kind (indexed,
+/// associative, by-element-type) is handled by the existing iterator lowering.
+fn lower_yield_from_array(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let span = expr.span;
+    let iterator = ctx.emit_value(
+        Op::IterStart,
+        vec![source.value],
+        None,
+        PhpType::Iterable,
+        Op::IterStart.default_effects(),
+        Some(span),
+    );
+    let header = ctx.builder.create_named_block("yieldfrom.next", Vec::new());
+    let body = ctx.builder.create_named_block("yieldfrom.body", Vec::new());
+    let exit = ctx.builder.create_named_block("yieldfrom.exit", Vec::new());
+    if !ctx.builder.insertion_block_is_terminated() {
+        ctx.builder
+            .terminate(Terminator::Br { target: header, args: Vec::new() });
+    }
+
+    ctx.builder.position_at_end(header);
+    let has_next = ctx.emit_value(
+        Op::IterNext,
+        vec![iterator.value],
+        None,
+        PhpType::Bool,
+        Op::IterNext.default_effects(),
+        Some(span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: has_next.value,
+        then_target: body,
+        then_args: Vec::new(),
+        else_target: exit,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(body);
+    let key = ctx.emit_value(
+        Op::IterCurrentKey,
+        vec![iterator.value],
+        None,
+        PhpType::Mixed,
+        Op::IterCurrentKey.default_effects(),
+        Some(span),
+    );
+    let element = ctx.emit_value(
+        Op::IterCurrentValue,
+        vec![iterator.value],
+        None,
+        PhpType::Mixed,
+        Op::IterCurrentValue.default_effects(),
+        Some(span),
+    );
+    // Re-yield the inner key/value pair through the outer generator. The sent
+    // value is discarded (arrays ignore it), exactly like a `yield $k => $v;`
+    // statement.
+    ctx.emit_value(
+        Op::GeneratorYield,
+        vec![key.value, element.value],
+        None,
+        PhpType::Mixed,
+        Op::GeneratorYield.default_effects(),
+        Some(span),
+    );
+    if !ctx.builder.insertion_block_is_terminated() {
+        ctx.builder
+            .terminate(Terminator::Br { target: header, args: Vec::new() });
+    }
+
+    ctx.builder.position_at_end(exit);
+    // The iterator borrows a freshly-created array (e.g. a literal): release it
+    // once iteration ends, mirroring `lower_foreach`.
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+    let null_value = ctx
+        .builder
+        .emit_with_effects(
+            Op::ConstNull,
+            Vec::new(),
+            None,
+            IrType::I64,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::ConstNull.default_effects(),
+            Some(span),
+        )
+        .expect("const_null produces a value");
+    ctx.emit_value(
+        Op::MixedBox,
+        vec![null_value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(span),
     )
 }
 
@@ -12488,9 +13063,20 @@ fn store_value_into_temp(
     let source = value;
     let stored = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
     ctx.store_local(temp_name, stored, temp_type, Some(span));
-    if stored.value != source.value && ctx.value_is_owning_temporary(source) {
+    if stored.value != source.value && ctx.value_needs_release_after_retaining_store(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
+}
+
+/// Loads an owned hidden temp into SSA and clears the backing slot without releasing it.
+fn take_owned_temp(
+    ctx: &mut LoweringContext<'_, '_>,
+    temp_name: &str,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let value = ctx.load_local(temp_name, Some(span));
+    ctx.clear_owned_hidden_temp(temp_name, Some(span));
+    value
 }
 
 /// Chooses a merge temp type from contextual branch materialization and fallback metadata.
@@ -12558,6 +13144,12 @@ fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) 
             let default_ty = materialized_expr_type_for_merge(ctx, default).codegen_repr();
             wider_type_for_merge(&value_ty, &default_ty)
         }
+        ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
+            .unwrap_or_else(|| fallback_expr_type(expr)),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| fallback_expr_type(expr))
+        }
         _ => fallback_expr_type(expr),
     }
 }
@@ -12599,6 +13191,25 @@ fn branch_to(ctx: &mut LoweringContext<'_, '_>, target: BlockId) {
             target,
             args: Vec::new(),
         });
+    }
+}
+
+/// Computes definitely initialized slots after a two-way expression split.
+fn merge_initialized_slots_for_expr(
+    split_initialized: &HashSet<LocalSlotId>,
+    then_initialized: HashSet<LocalSlotId>,
+    then_reachable: bool,
+    else_initialized: HashSet<LocalSlotId>,
+    else_reachable: bool,
+) -> HashSet<LocalSlotId> {
+    match (then_reachable, else_reachable) {
+        (true, true) => then_initialized
+            .intersection(&else_initialized)
+            .copied()
+            .collect(),
+        (true, false) => then_initialized,
+        (false, true) => else_initialized,
+        (false, false) => split_initialized.clone(),
     }
 }
 

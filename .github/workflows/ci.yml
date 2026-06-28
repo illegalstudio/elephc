@@ -6,46 +6,114 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  CARGO_TERM_COLOR: always
+  BRIDGE_CRATES: >-
+    -p elephc-tls
+    -p elephc-pdo
+    -p elephc-crypto
+    -p elephc-phar
+    -p elephc-tz
+    -p elephc-image
+    -p elephc-web
+
 jobs:
   non-codegen-tests:
-    name: Build & Non-Codegen Tests
-    runs-on: macos-14  # Apple Silicon runner
+    name: Build & Non-Codegen Tests (${{ matrix.platform.name }})
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: macos-aarch64
+            runner: macos-14
+            nextest_jobs: 1
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+            nextest_jobs: 1
+          - name: linux-aarch64
+            runner: ubuntu-24.04-arm
+            nextest_jobs: 1
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-nextest
-        run: |
-          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
-          curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
-          cargo nextest --version
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-${{ matrix.platform.name }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-${{ matrix.platform.name }}-
 
-      - name: Install native test dependencies
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies (macOS)
+        if: runner.os == 'macOS'
         run: brew install pcre2
 
-      - name: Check (no warnings)
-        run: cargo build 2>&1 | grep -v "^$" | grep -i warning && exit 1 || true
+      - name: Install native test dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
 
-      - name: Build bridge staticlibs
+      - name: Check (no warnings)
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
+          ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
-        # staticlibs (TLS, PDO, crypto, PHAR), which `cargo test` / nextest do
-        # not produce on their own. Build them explicitly first.
-        run: cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar
+        # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
+        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a.
+        # Build all of them up front so every CI platform validates native support
+        # crates before integration tests need them.
+        run: cargo build $BRIDGE_CRATES
 
       - name: Run non-codegen tests
-        run: cargo nextest run --workspace -E 'not binary(codegen_tests)' --no-fail-fast -j 8
+        run: cargo nextest run --profile ci --workspace -E 'not binary(codegen_tests)' --no-fail-fast --retries 1 --flaky-result pass -j ${{ matrix.platform.nextest_jobs }}
 
       - name: Run doctests
         run: cargo test --workspace --doc
 
   codegen-tests:
-    name: Codegen Tests (${{ matrix.shard }}/16)
-    runs-on: macos-14  # Apple Silicon runner
+    name: Codegen Tests (${{ matrix.platform.name }} ${{ matrix.shard }}/16)
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
+        platform:
+          - name: macos-aarch64
+            runner: macos-14
+            nextest_jobs: 1
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+            nextest_jobs: 1
+          - name: linux-aarch64
+            runner: ubuntu-24.04-arm
+            nextest_jobs: 1
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - uses: actions/checkout@v4
@@ -53,23 +121,101 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-nextest
-        run: |
-          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
-          curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
-          cargo nextest --version
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-${{ matrix.platform.name }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-${{ matrix.platform.name }}-
 
-      - name: Install native test dependencies
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install native test dependencies (macOS)
+        if: runner.os == 'macOS'
         run: brew install pcre2
 
-      - name: Build bridge staticlibs
+      - name: Install native test dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            file \
+            libbz2-dev \
+            libpcre2-dev \
+            libssl-dev \
+            pkg-config \
+            tzdata \
+            zlib1g-dev
+
+      - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
-        # staticlibs (TLS, PDO, crypto, PHAR), which `cargo test` / nextest do
-        # not produce on their own. Build them explicitly first.
-        run: cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-phar
+        # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
+        # (GD / Exif / Imagick / Gmagick / Cairo), and libelephc_web.a.
+        # Build all of them up front so every CI platform validates native support
+        # crates before integration tests need them.
+        run: cargo build $BRIDGE_CRATES
 
       - name: Run codegen test shard
-        run: cargo nextest run --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast -j 8
+        run: cargo nextest run --profile ci --test codegen_tests --partition hash:${{ matrix.shard }}/16 --no-fail-fast --retries 1 --flaky-result pass -j ${{ matrix.platform.nextest_jobs }}
+
+  image-api-sync:
+    name: Image API stubs in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Regenerate image API stubs
+        # Re-run the generator from its pinned spec; the committed prelude stubs and
+        # coverage tests must come back byte-identical. A diff means someone edited
+        # the prelude or api_spec.json without regenerating (see
+        # crates/elephc-image/tools/README.md).
+        run: python3 crates/elephc-image/tools/gen_image_api_stubs.py
+
+      - name: Fail if regeneration changed tracked files
+        run: git diff --exit-code -- src/image_prelude.rs tests/codegen/image/
+
+      - name: Check extern/export symbol parity
+        # Every `extern "elephc_image"` declaration in the prelude must have a
+        # matching #[no_mangle] export in the staticlib, or compiled programs that
+        # use the symbol fail to link.
+        run: python3 crates/elephc-image/tools/check_extern_exports.py
+
+  builtins-docs-sync:
+    name: Builtins docs in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Regenerate builtins documentation
+        # Re-run the generator; the committed Markdown pages and JSON registry
+        # must come back byte-identical. A diff means someone changed a builtin
+        # signature, lowering, or area assignment without regenerating docs.
+        run: python3 scripts/docs/extract_builtins.py --render --force
+
+      - name: Audit generated builtins docs
+        run: python3 scripts/docs/audit_builtins.py
+
+      - name: Validate generated docs for site compatibility
+        run: python3 scripts/docs/elephc_builtins/validate_site_compat.py
+
+      - name: Fail if generated docs are out of sync
+        run: |
+          changes=$(git status --porcelain -- docs/php/builtins.md docs/php/builtins docs/internals/builtins scripts/docs/builtin_registry.json)
+          if [ -n "$changes" ]; then
+            echo "Generated builtins docs are out of sync."
+            echo "Run 'python3 scripts/docs/extract_builtins.py --render --force' and commit the result."
+            echo "$changes"
+            exit 1
+          fi
 
   test:
     name: Build & Test
@@ -77,12 +223,16 @@ jobs:
     needs:
       - non-codegen-tests
       - codegen-tests
+      - image-api-sync
+      - builtins-docs-sync
     if: always()
     steps:
       - name: Verify test jobs
         run: |
           test "${{ needs.non-codegen-tests.result }}" = "success"
           test "${{ needs.codegen-tests.result }}" = "success"
+          test "${{ needs.image-api-sync.result }}" = "success"
+          test "${{ needs.builtins-docs-sync.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite

@@ -132,13 +132,22 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
             abi::emit_call_label(ctx.emitter, "__rt_hash_new");
             ctx.emitter.instruction("mov x1, x0");                              // pass the empty temporary hash as the right union operand
             abi::emit_pop_reg(ctx.emitter, "x0");
+            // Keep both the source indexed array and the empty temporary hash on
+            // the stack across the union so the conversion can release them after
+            // the copy: array_hash_union borrows both operands and returns a fresh
+            // result hash, so the source array (an owning temporary or a moved-out
+            // local reference) and the temporary hash both leak unless freed here.
+            abi::emit_push_reg(ctx.emitter, "x0");
             abi::emit_push_reg(ctx.emitter, "x1");
             abi::emit_call_label(ctx.emitter, "__rt_array_hash_union");
-            abi::emit_pop_reg(ctx.emitter, "x1");
             abi::emit_push_reg(ctx.emitter, "x0");
-            ctx.emitter.instruction("mov x0, x1");                              // release the empty temporary hash after the union copy
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload the empty temporary hash from the stack
             abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            ctx.emitter.instruction("ldr x0, [sp, #32]");                       // reload the temporary source indexed array from the stack
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
             abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            abi::emit_pop_reg(ctx.emitter, "x1");
             if result_value_ty == PhpType::Mixed {
                 abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
             }
@@ -170,13 +179,22 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
             abi::emit_call_label(ctx.emitter, "__rt_hash_new");
             ctx.emitter.instruction("mov rsi, rax");                            // pass the empty temporary hash as the right union operand
             abi::emit_pop_reg(ctx.emitter, "rdi");
+            // Keep both the source indexed array and the empty temporary hash on
+            // the stack across the union so the conversion can release them after
+            // the copy: array_hash_union borrows both operands and returns a fresh
+            // result hash, so the source array (an owning temporary or a moved-out
+            // local reference) and the temporary hash both leak unless freed here.
+            abi::emit_push_reg(ctx.emitter, "rdi");
             abi::emit_push_reg(ctx.emitter, "rsi");
             abi::emit_call_label(ctx.emitter, "__rt_array_hash_union");
-            abi::emit_pop_reg(ctx.emitter, "rdi");
             abi::emit_push_reg(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov rax, rdi");                            // release the empty temporary hash after the union copy
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload the empty temporary hash from the stack
             abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 32]");           // reload the temporary source indexed array from the stack
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
             abi::emit_pop_reg(ctx.emitter, "rax");
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+            abi::emit_pop_reg(ctx.emitter, "rsi");
             if result_value_ty == PhpType::Mixed {
                 ctx.emitter.instruction("mov rdi, rax");                        // pass the promoted hash to the Mixed-entry conversion helper
                 abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
@@ -218,6 +236,7 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
+    ctx.writeback_global_array_source(array)?;
     Ok(())
 }
 
@@ -237,6 +256,7 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
+    ctx.writeback_global_array_source(array)?;
     Ok(())
 }
 
@@ -470,8 +490,11 @@ fn emit_array_get_in_bounds_aarch64(
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
-            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); //skip the indexed-array header to reach element payloads
-            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); //load the selected pointer-sized indexed-array element
+            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
+            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); // load the selected pointer-sized indexed-array element
+            if matches!(elem_ty, PhpType::Callable) {
+                abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
+            }
             if matches!(result_ty, PhpType::TaggedScalar) {
                 crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
             }
@@ -496,9 +519,15 @@ fn emit_array_get_in_bounds_aarch64(
             abi::emit_load_from_address(ctx.emitter, index_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, tag_reg, array_reg, 8);
         }
+        PhpType::Mixed => {
+            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach Mixed cell payloads
+            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); // load the selected boxed Mixed cell
+            abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
+        }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); //skip the indexed-array header to reach pointer payloads
-            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); //load the selected refcounted indexed-array element
+            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach pointer payloads
+            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); // load the selected refcounted indexed-array element
+            abi::emit_incref_if_refcounted(ctx.emitter, other);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -523,8 +552,11 @@ fn emit_array_get_in_bounds_x86_64(
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
         }
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
-            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); //skip the indexed-array header to reach element payloads
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); //load the selected pointer-sized indexed-array element
+            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); // load the selected pointer-sized indexed-array element
+            if matches!(elem_ty, PhpType::Callable) {
+                abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
+            }
             if matches!(result_ty, PhpType::TaggedScalar) {
                 crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
             }
@@ -549,9 +581,15 @@ fn emit_array_get_in_bounds_x86_64(
             abi::emit_load_from_address(ctx.emitter, index_reg, array_reg, 0);
             abi::emit_load_from_address(ctx.emitter, tag_reg, array_reg, 8);
         }
+        PhpType::Mixed => {
+            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach Mixed cell payloads
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); // load the selected boxed Mixed cell
+            abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
+        }
         other if other.is_refcounted() => {
-            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); //skip the indexed-array header to reach pointer payloads
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); //load the selected refcounted indexed-array element
+            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach pointer payloads
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); // load the selected refcounted indexed-array element
+            abi::emit_incref_if_refcounted(ctx.emitter, other);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(

@@ -275,7 +275,7 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // first libc stat() argument
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_neg));              // second libc stat() argument: stat buffer
     emitter.instruction("call stat");                                           // libc stat()
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc stat() return success as a C int?
     emitter.instruction("jne __rt_stat_array_fail_x86");                        // failure → null hash pointer
     emit_build_hash(emitter, &entries);
     emitter.instruction(&format!("add rsp, {}", frame));                        // release frame
@@ -298,7 +298,7 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // first libc lstat() argument
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_neg));              // second libc lstat() argument
     emitter.instruction("call lstat");                                          // libc lstat()
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc lstat() return success as a C int?
     emitter.instruction("jne __rt_lstat_array_fail_x86");                       // failure → null hash pointer
     emit_build_hash(emitter, &entries);
     emitter.instruction(&format!("add rsp, {}", frame));                        // release frame
@@ -321,7 +321,7 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // fd → first libc fstat() argument
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_neg));              // second libc fstat() argument
     emitter.instruction("call fstat");                                          // libc fstat()
-    emitter.instruction("cmp rax, 0");                                          // success?
+    emitter.instruction("cmp eax, 0");                                          // did libc fstat() return success as a C int?
     emitter.instruction("jne __rt_fstat_array_fail_x86");                       // failure → null hash pointer
     emit_build_hash(emitter, &entries);
     emitter.instruction(&format!("add rsp, {}", frame));                        // release frame

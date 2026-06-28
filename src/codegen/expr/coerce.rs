@@ -277,6 +277,26 @@ pub fn coerce_null_to_zero(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+/// Coerce a typed expression result to a raw PHP integer in the integer result register.
+///
+/// First normalizes null via [`coerce_null_to_zero`], then for `Mixed`/`Union` values calls
+/// `__rt_mixed_cast_int` to unbox the boxed payload (int|bool|string|float) into a plain `i64`.
+/// `Int`/`Bool`/`Float` already occupy the right register and are left unchanged.
+///
+/// This is the shared coercion used by arithmetic, bitwise, comparison, and integer-argument
+/// builtins (e.g. `intdiv`), so a boxed Mixed operand is never consumed as a raw integer.
+pub fn coerce_to_int(emitter: &mut Emitter, ty: &PhpType) {
+    coerce_null_to_zero(emitter, ty);
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(emitter, "__rt_mixed_cast_int");                   // normalize boxed int|bool|string values into a raw integer
+    } else if *ty == PhpType::Str {
+        // A string operand lives in the string-result registers; on x86_64 the pointer also
+        // occupies the integer result register, so an unconverted string would be compared as a
+        // raw pointer. Parse it through PHP string-to-int rules into the integer register.
+        abi::emit_call_label(emitter, "__rt_str_to_int");                       // numeric value of the string operand in the int register
+    }
+}
+
 /// Coerce any type to a PHP truthiness value in the integer result register.
 ///
 /// Handles all PHP truthiness rules:

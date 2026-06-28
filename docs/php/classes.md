@@ -238,6 +238,19 @@ Property type declarations are checked at compile time for both instance and sta
 
 Property default values are applied both for the normal `new ClassName()` form and for dynamic `new $variable()` instantiation (and therefore for runtime-instantiated stream wrappers and stream filters). When the class name resolves to a known class, dynamic instantiation follows the same allocation path as direct construction, so constructor arguments are evaluated and `__construct` runs normally.
 
+An `array`-typed (or untyped) property may take an associative literal default such as `['a' => 1]`. The property is then stored as an associative array, so string-key reads and writes (`$this->data['a']`, `$this->data[$key]`) type-check and run like any other associative array. A positional literal default (`[1, 2, 3]`) keeps integer-keyed list storage.
+
+```php
+<?php
+class Bag {
+    public array $data = ['a' => 1, 'b' => 2];
+    public function get(string $key): int {
+        return $this->data[$key] ?? 0;
+    }
+}
+echo (new Bag())->get('a'); // 1
+```
+
 ### Asymmetric visibility (`private(set)`)
 
 PHP 8.4 asymmetric visibility lets a property be read more widely than it can be written. A `(set)` modifier after a visibility keyword sets the write visibility independently of the read visibility:
@@ -693,10 +706,11 @@ enum Color: int {
     case Red = 1;
     case Green = 2;
 }
+echo Color::Red->name;           // Red
 echo Color::Red->value;          // 1
 echo Color::from(2) === Color::Green; // 1
 ```
-Pure and backed enums. `->value`, `::from()`, `::tryFrom()`, `::cases()`. Only `int` and `string` backing types.
+Pure and backed enums. Every case exposes the read-only `->name` property (the case identifier); backed cases also expose `->value`. Plus `::from()`, `::tryFrom()`, `::cases()`. Only `int` and `string` backing types.
 
 ### Enum methods, constants, and interfaces
 
@@ -736,7 +750,7 @@ echo Suit::default()->code();         // H
 
 Rules:
 
-- Instance methods may use `$this` (the case), `match ($this)`, `$this->name`, the backing `$this->value`, and `self::CONST`.
+- Instance methods may use `$this` (the case), `match ($this)`, the case `$this->name`, the backing `$this->value`, and `self::CONST`.
 - Static methods dispatch like class static methods and can act as factories.
 - An enum can `implements` one or more interfaces and be used through them.
 - Enums can `use` traits that provide methods, including `insteadof` and `as`

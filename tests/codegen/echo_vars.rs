@@ -11,6 +11,16 @@ use crate::support::*;
 
 // --- Phase 1: Echo strings ---
 
+/// Verifies basic echo still reaches stdout after the terminal write is routed
+/// through the `__rt_stdout_write` runtime indirection. Non-web binaries leave
+/// the `_elephc_web_capture` flag at 0, so output must travel the plain `write(1, …)`
+/// syscall path byte-for-byte unchanged.
+#[test]
+fn echo_routes_through_stdout_write() {
+    let out = compile_and_run("<?php echo \"abc\";");
+    assert_eq!(out, "abc");
+}
+
 /// Compiles `<?php echo "Hello, World!\n";` and asserts stdout is `"Hello, World!\n"`.
 #[test]
 fn test_echo_hello_world() {

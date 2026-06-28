@@ -10,8 +10,9 @@
 //!   file is written, which shaves ~1/3 of the file-system events the macOS
 //!   `syspolicyd` / on-access AV scans inspect during a full `cargo test`.
 
-use std::io::Write as _;
-use std::process::Stdio;
+use std::io::{Read as _, Write as _};
+use std::process::{Output, Stdio};
+use std::time::{Duration, Instant};
 
 use super::*;
 
@@ -45,7 +46,22 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         lib_name: "elephc_magician",
         package: "elephc-magician",
     },
+    TestBridgeStaticlib {
+        lib_name: "elephc_tz",
+        package: "elephc-tz",
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_image",
+        package: "elephc-image",
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_web",
+        package: "elephc-web",
+    },
 ];
+
+/// Default timeout for executing one compiled codegen fixture binary.
+const DEFAULT_BINARY_TIMEOUT_SECS: u64 = 60;
 
 /// Assemble `asm` to `obj_path` by piping the source through `as`'s stdin so
 /// no intermediate `.s` file is created.
@@ -140,9 +156,7 @@ pub(crate) fn assemble_custom_runtime(heap_size: usize, dir: &Path) -> std::path
 }
 
 /// Returns the bridge staticlibs requested by a fixture's effective link libraries.
-fn requested_bridge_staticlibs<'a>(
-    actual_link_libs: &[&str],
-) -> Vec<&'a TestBridgeStaticlib> {
+fn requested_bridge_staticlibs<'a>(actual_link_libs: &[&str]) -> Vec<&'a TestBridgeStaticlib> {
     TEST_BRIDGE_STATICLIBS
         .iter()
         .filter(|bridge| actual_link_libs.iter().any(|lib| *lib == bridge.lib_name))
@@ -254,22 +268,24 @@ pub(crate) fn link_binary(
 ) {
     let actual_link_libs = effective_link_libs(extra_link_libs);
 
-    // The bridge staticlibs all live in
-    // `<target>/debug` alongside the test binaries; surface that directory on the
-    // linker search path automatically whenever a compiled program links any
-    // bridge, so PDO/crypto tests get the same robust, absolute `-L` as TLS
-    // instead of depending on a cwd-relative lookup. The Docker scripts override
-    // CARGO_TARGET_DIR to point at a shared volume, so honour that envvar before
-    // falling back to the in-tree target/.
-    let needs_bridge_staticlib = actual_link_libs
-        .iter()
-        .any(|l| {
-            *l == "elephc_tls"
-                || *l == "elephc_pdo"
-                || *l == "elephc_crypto"
-                || *l == "elephc_phar"
-                || *l == "elephc_magician"
-        });
+    // The bridge staticlibs (elephc-tls, elephc-pdo, elephc-crypto, elephc-phar,
+    // elephc-magician, elephc-tz, elephc-image, elephc-web) all live in
+    // `<target>/debug` alongside the test binaries; surface that directory on
+    // the linker search path automatically whenever a compiled program links any bridge, so PDO/crypto/phar/tz/image/web
+    // tests get the same robust, absolute `-L` as TLS instead of depending on a
+    // cwd-relative lookup. The Docker scripts override CARGO_TARGET_DIR to point at
+    // a shared volume, so honour that envvar before falling back to the in-tree
+    // target/.
+    let needs_bridge_staticlib = actual_link_libs.iter().any(|l| {
+        *l == "elephc_tls"
+            || *l == "elephc_pdo"
+            || *l == "elephc_crypto"
+            || *l == "elephc_phar"
+            || *l == "elephc_magician"
+            || *l == "elephc_tz"
+            || *l == "elephc_image"
+            || *l == "elephc_web"
+    });
     let bridge_staticlib_dir = match std::env::var("CARGO_TARGET_DIR") {
         Ok(dir) if !dir.is_empty() => format!("{}/debug", dir),
         _ => format!("{}/target/debug", env!("CARGO_MANIFEST_DIR")),
@@ -361,7 +377,7 @@ pub(crate) fn link_binary(
 /// Runs a compiled binary directly, using qemu on Linux x86_64 to emulate ARM64.
 /// On other platform/arch combinations, execs the binary natively.
 /// Used for post-link execution of already-assembled test binaries.
-pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> std::process::Output {
+pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> Output {
     if target().platform == Platform::Linux
         && target().arch == Arch::AArch64
         && cfg!(target_arch = "x86_64")
@@ -370,16 +386,80 @@ pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> std::process::Output {
         if let Some(sysroot) = qemu_sysroot() {
             cmd.args(["-L", sysroot]);
         }
-        cmd.arg(bin_path)
-            .current_dir(dir)
-            .output()
-            .expect("failed to run compiled binary via qemu")
+        cmd.arg(bin_path).current_dir(dir);
+        run_command_with_timeout(cmd)
     } else {
-        Command::new(bin_path)
-            .current_dir(dir)
-            .output()
-            .expect("failed to run compiled binary")
+        let mut cmd = Command::new(bin_path);
+        cmd.current_dir(dir);
+        run_command_with_timeout(cmd)
     }
+}
+
+/// Runs a child command with a timeout and captures stdout/stderr.
+fn run_command_with_timeout(mut cmd: Command) -> Output {
+    let label = format!("{:?}", cmd);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .unwrap_or_else(|err| panic!("failed to run compiled binary {label}: {err}"));
+    let mut stdout_pipe = child.stdout.take().expect("compiled binary stdout missing");
+    let mut stderr_pipe = child.stderr.take().expect("compiled binary stderr missing");
+    let stdout_reader = std::thread::spawn(move || {
+        let mut stdout = Vec::new();
+        stdout_pipe
+            .read_to_end(&mut stdout)
+            .expect("failed to read compiled binary stdout");
+        stdout
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut stderr = Vec::new();
+        stderr_pipe
+            .read_to_end(&mut stderr)
+            .expect("failed to read compiled binary stderr");
+        stderr
+    });
+
+    let timeout = codegen_binary_timeout();
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .unwrap_or_else(|err| panic!("failed to wait for compiled binary {label}: {err}"))
+        {
+            let stdout = stdout_reader.join().expect("stdout reader panicked");
+            let stderr = stderr_reader.join().expect("stderr reader panicked");
+            return Output {
+                status,
+                stdout,
+                stderr,
+            };
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let stdout = stdout_reader.join().expect("stdout reader panicked");
+            let stderr = stderr_reader.join().expect("stderr reader panicked");
+            panic!(
+                "compiled binary timed out after {}s: {}\nstdout:\n{}\nstderr:\n{}",
+                timeout.as_secs(),
+                label,
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Returns the per-binary timeout for codegen fixtures.
+fn codegen_binary_timeout() -> Duration {
+    std::env::var("ELEPHC_TEST_BINARY_TIMEOUT_SECS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(DEFAULT_BINARY_TIMEOUT_SECS))
 }
 
 /// Assembles user assembly, links it with a runtime object, runs the binary,

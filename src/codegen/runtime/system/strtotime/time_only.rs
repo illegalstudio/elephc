@@ -134,7 +134,7 @@ fn emit_time_only_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldr w9, [sp, #88]");                                   // reload second
     emitter.instruction("str w9, [sp, #0]");                                    // tm_sec
     emitter.instruction("mov x0, sp");                                          // x0 = &tm
-    emitter.bl_c("mktime");                                                     // → x0 = ts
+    emitter.instruction("bl __rt_mktime_shifted");                              // → x0 = ts
     emitter.instruction("b __rt_strtotime_ret");                                // return through shared epilogue
 }
 
@@ -249,6 +249,6 @@ fn emit_time_only_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, DWORD PTR [rbp - 40]");                       // reload saved second
     emitter.instruction("mov DWORD PTR [rsp + 0], eax");                        // tm_sec
     emitter.instruction("mov rdi, rsp");                                        // rdi = &tm
-    emitter.instruction("call mktime");                                         // → rax = ts
+    emitter.instruction("call __rt_mktime_shifted");                            // → rax = ts
     emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                 // return
 }

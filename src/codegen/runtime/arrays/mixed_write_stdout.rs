@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
+//! - Every scalar branch routes its terminal write through `__rt_stdout_write` (not a raw `write` syscall) so `--web`
+//!   output capture applies: echoing a boxed `Mixed` value reaches the response body instead of the worker's stdout.
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -17,6 +19,8 @@ use crate::codegen::platform::Arch;
 /// on the runtime tag to write the appropriate scalar representation to stdout.
 /// Handles null, bool, int, float, resource, and string payloads; non-scalar
 /// types (array, object, callable, etc.) print nothing consistent with PHP echo semantics.
+/// Each branch funnels its (pointer, length) into the shared emit tail, which calls
+/// `__rt_stdout_write` so the `--web` capture indirection sees the bytes.
 pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_write_stdout_linux_x86_64(emitter);
@@ -45,37 +49,34 @@ pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_mixed_write_stdout_done");                   // non-scalar boxed payloads print nothing for echo
     emitter.instruction("ldr x1, [x0, #8]");                                    // load the boxed string pointer
     emitter.instruction("ldr x2, [x0, #16]");                                   // load the boxed string length
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);
-    emitter.instruction("b __rt_mixed_write_stdout_done");                      // restore x30 and return after printing the boxed string
+    emitter.instruction("b __rt_mixed_write_stdout_emit");                      // emit the boxed string through the capture-aware tail
 
     emitter.label("__rt_mixed_write_stdout_bool");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed bool payload
     emitter.instruction("cbz x0, __rt_mixed_write_stdout_done");                // false prints an empty string
-    emitter.instruction("bl __rt_itoa");                                        // true prints as integer 1
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);
-    emitter.instruction("b __rt_mixed_write_stdout_done");                      // restore x30 and return after printing the boxed bool
+    emitter.instruction("bl __rt_itoa");                                        // true prints as integer 1 (string in x1/x2)
+    emitter.instruction("b __rt_mixed_write_stdout_emit");                      // emit the converted bool through the capture-aware tail
 
     emitter.label("__rt_mixed_write_stdout_int");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed integer payload
-    emitter.instruction("bl __rt_itoa");                                        // convert the boxed integer to a decimal string
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);
-    emitter.instruction("b __rt_mixed_write_stdout_done");                      // restore x30 and return after printing the boxed integer
+    emitter.instruction("bl __rt_itoa");                                        // convert the boxed integer to a decimal string (x1/x2)
+    emitter.instruction("b __rt_mixed_write_stdout_emit");                      // emit the converted integer through the capture-aware tail
 
     emitter.label("__rt_mixed_write_stdout_resource");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed native resource payload
-    emitter.instruction("bl __rt_resource_write_stdout");                       // print the resource marker through the shared helper
+    emitter.instruction("bl __rt_resource_write_stdout");                       // print the resource marker through the shared (capture-aware) helper
     emitter.instruction("b __rt_mixed_write_stdout_done");                      // restore x30 and return after printing the boxed resource
 
     emitter.label("__rt_mixed_write_stdout_float");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the boxed float bits
     emitter.instruction("fmov d0, x9");                                         // move the boxed float bits into the FP return register
-    emitter.instruction("bl __rt_ftoa");                                        // convert the boxed float to a printable string
-    emitter.instruction("mov x0, #1");                                          // fd = stdout
-    emitter.syscall(4);
-    emitter.instruction("b __rt_mixed_write_stdout_done");                      // restore x30 and return after printing the boxed float
+    emitter.instruction("bl __rt_ftoa");                                        // convert the boxed float to a printable string (x1/x2)
+    emitter.instruction("b __rt_mixed_write_stdout_emit");                      // emit the converted float through the capture-aware tail
+
+    emitter.label("__rt_mixed_write_stdout_emit");
+    emitter.instruction("mov x0, x1");                                          // capture-aware write: move the string pointer into x0
+    emitter.instruction("mov x1, x2");                                          // and the string length into x1 per __rt_stdout_write's ABI
+    emitter.instruction("bl __rt_stdout_write");                                // route through the capture indirection (response buffer in --web)
 
     emitter.label("__rt_mixed_write_stdout_done");
     emitter.instruction("ldr x30, [sp]");                                       // restore the caller return address after any nested helper calls
@@ -83,11 +84,12 @@ pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller
 }
 
-/// Emits the x86_64 Linux variant of `__rt_mixed_write_stdout` using the Linux syscall ABI.
+/// Emits the x86_64 Linux variant of `__rt_mixed_write_stdout`.
 ///
 /// Takes a boxed `Mixed` pointer in `rax` and dispatches on the runtime tag to write
-/// scalar values to stdout via Linux `syscall 1` (`write`). Preserves `rbp` as frame
-/// pointer and maintains 16-byte stack alignment for nested helper calls.
+/// scalar values to stdout. Each branch funnels its (pointer, length) into the shared
+/// emit tail, which calls `__rt_stdout_write` (not a raw `write` syscall) so the `--web`
+/// capture indirection applies. Preserves `rbp` and 16-byte alignment for nested calls.
 fn emit_mixed_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_write_stdout ---");
@@ -110,46 +112,37 @@ fn emit_mixed_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_write_stdout_float");                    // floats print through the shared float-to-string helper
     emitter.instruction("cmp r10, 1");                                          // is the boxed value a string?
     emitter.instruction("jne __rt_mixed_write_stdout_done");                    // non-scalar boxed payloads print nothing for echo
-    emitter.instruction("mov rsi, QWORD PTR [rax + 8]");                        // load the boxed string pointer into the Linux write buffer register
-    emitter.instruction("mov rdx, QWORD PTR [rax + 16]");                       // load the boxed string length into the Linux write length register
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");                                             // write the boxed string payload directly to stdout
-    emitter.instruction("jmp __rt_mixed_write_stdout_done");                    // skip the scalar conversion helpers after the direct string write
+    emitter.instruction("mov rdx, QWORD PTR [rax + 16]");                       // load the boxed string length into the length register
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed string pointer into the pointer register
+    emitter.instruction("jmp __rt_mixed_write_stdout_emit");                    // emit the boxed string through the capture-aware tail
 
     emitter.label("__rt_mixed_write_stdout_bool");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed bool payload into the integer conversion register
     emitter.instruction("test rax, rax");                                       // false prints an empty string under PHP echo semantics
     emitter.instruction("je __rt_mixed_write_stdout_done");                     // skip output entirely when the boxed bool is false
-    emitter.instruction("call __rt_itoa");                                      // true prints as integer 1 via the shared integer-to-string helper
-    emitter.instruction("mov rsi, rax");                                        // move the formatted string pointer into the Linux write buffer register
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");                                             // write the converted bool string payload to stdout
-    emitter.instruction("jmp __rt_mixed_write_stdout_done");                    // return after printing the boxed bool payload
+    emitter.instruction("call __rt_itoa");                                      // true prints as integer 1 (pointer in rax, length in rdx)
+    emitter.instruction("jmp __rt_mixed_write_stdout_emit");                    // emit the converted bool through the capture-aware tail
 
     emitter.label("__rt_mixed_write_stdout_int");
-    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed integer payload into the shared integer conversion register
-    emitter.instruction("call __rt_itoa");                                      // convert the boxed integer to its decimal string representation
-    emitter.instruction("mov rsi, rax");                                        // move the formatted string pointer into the Linux write buffer register
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");                                             // write the converted integer string payload to stdout
-    emitter.instruction("jmp __rt_mixed_write_stdout_done");                    // return after printing the boxed integer payload
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed integer payload into the conversion register
+    emitter.instruction("call __rt_itoa");                                      // convert the boxed integer to a decimal string (pointer rax, length rdx)
+    emitter.instruction("jmp __rt_mixed_write_stdout_emit");                    // emit the converted integer through the capture-aware tail
 
     emitter.label("__rt_mixed_write_stdout_resource");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed native resource payload
-    emitter.instruction("call __rt_resource_write_stdout");                     // print the resource marker through the shared helper
+    emitter.instruction("call __rt_resource_write_stdout");                     // print the resource marker through the shared (capture-aware) helper
     emitter.instruction("jmp __rt_mixed_write_stdout_done");                    // return after printing the boxed resource payload
 
     emitter.label("__rt_mixed_write_stdout_float");
-    emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the boxed float bits into a scratch register before the float conversion call
+    emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the boxed float bits into a scratch register before the conversion call
     emitter.instruction("movq xmm0, r10");                                      // move the boxed float bits into the standard x86_64 float argument register
-    emitter.instruction("call __rt_ftoa");                                      // convert the boxed float to a printable string
-    emitter.instruction("mov rsi, rax");                                        // move the formatted string pointer into the Linux write buffer register
-    emitter.instruction("mov edi, 1");                                          // fd = stdout
-    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");                                             // write the converted float string payload to stdout
+    emitter.instruction("call __rt_ftoa");                                      // convert the boxed float to a printable string (pointer rax, length rdx)
+    emitter.instruction("jmp __rt_mixed_write_stdout_emit");                    // emit the converted float through the capture-aware tail
+
+    emitter.label("__rt_mixed_write_stdout_emit");
+    emitter.instruction("mov rdi, rax");                                        // capture-aware write: move the string pointer into the first arg register
+    emitter.instruction("mov rsi, rdx");                                        // move the string length into the second arg register
+    emitter.instruction("call __rt_stdout_write");                              // route through the capture indirection (response buffer in --web)
 
     emitter.label("__rt_mixed_write_stdout_done");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning from the mixed echo helper

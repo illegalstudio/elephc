@@ -46,6 +46,17 @@ fn test_error_undefined_method() {
     );
 }
 
+/// Verifies that a method call on an object union (`A|B`) is rejected when the
+/// method is absent from one of the member classes: every object member must
+/// provide the method for the runtime class-id dispatch to be sound.
+#[test]
+fn test_error_object_union_method_missing_from_member() {
+    expect_error(
+        "<?php class A { function only_a() {} } class B {} function make(bool $b): A|B { return $b ? new A() : new B(); } make(true)->only_a();",
+        "Undefined method: B::only_a",
+    );
+}
+
 /// Verifies the error diagnostic for object subscript requires array access.
 #[test]
 fn test_error_object_subscript_requires_array_access() {

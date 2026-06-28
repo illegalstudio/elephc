@@ -116,3 +116,22 @@ if (step("c", false)) {
 
     assert_eq!(out, "aX|cdY");
 }
+
+/// Regression: tail-sinking must NOT duplicate a hoisted declaration that follows
+/// an `if`. A `function` declaration is position-independent and emits a global
+/// symbol; sinking it into every branch (here 2^2 copies for two runtime-`if`s)
+/// previously produced duplicate `_fn_c` symbols and failed the assembler.
+/// `$argc`-conditioned `if`s keep the branches runtime-live so they reach DCE.
+#[test]
+fn test_dead_code_elimination_does_not_duplicate_function_after_if() {
+    let out = compile_and_run(
+        r#"<?php
+if ($argc > 100) { echo "x"; }
+if ($argc > 200) { echo "y"; }
+function c() { return 7; }
+echo c();
+"#,
+    );
+
+    assert_eq!(out, "7");
+}

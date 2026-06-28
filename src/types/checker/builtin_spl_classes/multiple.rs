@@ -96,8 +96,8 @@ fn spl_multiple_iterator_methods() -> Vec<ClassMethod> {
         ),
         method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), multiple_rewind_body()),
         method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), multiple_valid_body()),
-        method_with_body("key", Vec::new(), Some(mixed_type()), multiple_output_body("key")),
-        method_with_body("current", Vec::new(), Some(mixed_type()), multiple_output_body("current")),
+        method_with_body("key", Vec::new(), Some(array_type()), multiple_output_body("key")),
+        method_with_body("current", Vec::new(), Some(array_type()), multiple_output_body("current")),
         method_with_body("next", Vec::new(), Some(TypeExpr::Void), multiple_next_body()),
         method_with_body("__debugInfo", Vec::new(), Some(array_type()), multiple_debug_info_body()),
     ]

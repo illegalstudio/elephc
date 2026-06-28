@@ -125,10 +125,14 @@ PHP source (.php)
        ▼
 ┌─────────────┐
 │ EIR passes  │  src/ir_passes/
-│             │  Fixed-point optimization pass driver (identity folding,
-│             │  peephole, …) and linear-scan register allocation (liveness,
-│             │  intervals, pools)
-│             │  over EIR functions before codegen.
+│             │  Module-level fixed-point pipeline: a cross-function
+│             │  small-function inliner interleaved with the per-function
+│             │  pass driver (identity folding, peephole rewrites, constant
+│             │  folding, common-subexpression elimination, loop-invariant
+│             │  code motion, dead-instruction elimination, dead-store
+│             │  elimination, branch simplification) plus dominance and loop
+│             │  analysis and linear-scan register allocation (liveness,
+│             │  intervals, pools) before codegen.
 └──────┬──────┘
        │
        ▼
@@ -174,6 +178,8 @@ src/
 ├── linker.rs                  Assembler and linker invocation
 ├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
+├── intrinsics.rs              Compiler-recognized intrinsic method calls for runtime-managed core objects
+├── string_bytes.rs            Parser string-literal payload → PHP runtime bytes conversion
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── magic_constants/           File/scope/trait magic-constant walkers
 ├── conditional/               Build-time `ifdef` pass
@@ -183,13 +189,21 @@ src/
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
 ├── ir_lower/                  Active checked-AST to EIR lowering
-├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, and linear-scan register allocation
+├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation
 ├── codegen_ir/                Active EIR to target assembly backend
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
 ├── termination.rs             Structured terminal-effect analysis shared by checker and optimizer
 ├── names.rs                   Qualified/FQN name model + assembly symbol mangling
 ├── name_resolver/             Namespace/use resolution to canonical names
+├── pdo_prelude.rs             PDO standard-library prelude injection entry point
+├── pdo_prelude/               PDO driver detection from the DSN prefix
+├── tz_prelude.rs              Timezone-introspection prelude injection entry point
+├── tz_prelude/                Timezone-introspection prelude usage detection
+├── list_id_prelude.rs         DateTimeZone identifier-list prelude injection entry point
+├── list_id_prelude/           Identifier-list prelude detection and baked table data
+├── var_export_prelude.rs      var_export prelude injection entry point
+├── var_export_prelude/        var_export prelude usage detection
 │
 ├── lexer/
 │   ├── mod.rs                 tokenize() → Vec<(Token, Span)>
@@ -331,7 +345,7 @@ src/
 │   │   ├── io/                fopen, fwrite, file_get_contents, streams, sockets, scandir, ... (142 files)
 │   │   ├── pointers/          ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ... (16 files)
 │   │   ├── spl/               iterator_to_array, iterator_count, iterator_apply, iterator_common (5 files)
-│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, attribute reflection, ... (32 files)
+│   │   └── system/            exit, define, time, date, mktime, json_encode, preg_match, attribute reflection, ... (38 files)
 │   │
 │   └── runtime/               Runtime routines and target-specific emission helpers
 │       ├── mod.rs             Runtime module boundary; re-exports the emission entry points
@@ -339,13 +353,13 @@ src/
 │       ├── diagnostics.rs     Suppressible runtime-warning channel used by `@`
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
 │       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (71 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (131 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (132 files)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed plus callable descriptor release (3 files)
-│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (108 files)
+│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (113 files)
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (6 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, mktime, strtotime, match_unhandled, json_encode_*, json_decode, preg_*, ... (34 files)
+│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, getdate, localtime, checkdate, microtime, hrtime, date_default_timezone, match_unhandled, json_encode_*, json_decode, preg_*, ... (40 files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 files) + `api/` (target-aware public API helpers)
 │       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding, destructor dispatch, new-by-name helpers (6 files)
@@ -458,7 +472,7 @@ The runtime data emission in `src/codegen/runtime/data/` is split into `emit_run
 | Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_class_parent_ids` | Active handler stack, activation cleanup stack, current exception object, and parent links used for catch matching |
 | Include-once guards | `_include_once_<hash>` | Per-resolved-file loaded flags used by `include_once` / `require_once` runtime guards |
 | Include-loaded function variants | `_fn_variant_active_<function>` | Active hidden implementation pointer for a function loaded through an include point |
-| I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags` | Syscall-oriented C-string scratch buffers and EOF bookkeeping |
+| I/O scratch | `_cstr_buf`, `_cstr_buf2`, `_eof_flags`, `_principal_lookup_buf`, `_etc_passwd_path`, `_etc_group_path`, `_principal_lookup_read_mode` | Syscall-oriented C-string scratch buffers, EOF bookkeeping, and passwd/group lookup state for `chown()` / `chgrp()` name resolution |
 | String/runtime tables | `_fmt_g`, `_b64_encode_tbl`, `_b64_decode_tbl` | Formatting and lookup tables for runtime helpers |
 | JSON/date state and tables | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_*`, `_json_decode_assoc`, `_json_error_*`, `_json_true`, `_json_false`, `_json_null`, `_json_err_msg_*`, `_json_err_msg_table`, `_json_err_loc_*`, `_json_int_max_str`, `_json_int_min_str`, `_day_names`, `_month_names`, `_strtotime_*` | Runtime JSON state, JSON literal/error lookup data, decode error-location fragments, bigint thresholds, date lookup tables, and `strtotime()` keyword/unit tables |
 | User-dependent storage | `_gvar_<name>`, `_static_<func>_<name>`, `_static_<func>_<name>_init`, `_static_prop_<class>_<prop>`, enum-case `.comm` symbols via `enum_case_symbol(...)` | Global/static local storage, class static-property storage, plus singleton backing slots for enum cases |
@@ -527,4 +541,4 @@ Traits are flattened into the owning class before inheritance metadata is built.
 
 ### I/O buffers
 
-Two 4KB C-string conversion buffers (`_cstr_buf`, `_cstr_buf2`) are still used by low-level I/O helpers and syscalls. FFI string calls do not use these scratch buffers anymore; they allocate per-call C strings through `__rt_str_to_cstr` so multiple string arguments remain valid across the same native call and are then released as soon as control returns from C. A 256-byte EOF flag array (`_eof_flags`) tracks end-of-file state per file descriptor.
+Two 4KB C-string conversion buffers (`_cstr_buf`, `_cstr_buf2`) are still used by low-level I/O helpers and syscalls. FFI string calls do not use these scratch buffers anymore; they allocate per-call C strings through `__rt_str_to_cstr` so multiple string arguments remain valid across the same native call and are then released as soon as control returns from C. A 256-byte EOF flag array (`_eof_flags`) tracks end-of-file state per file descriptor. `chown()` / `chgrp()` string-name variants resolve local principals by scanning `/etc/passwd` and `/etc/group` through `_principal_lookup_buf` and fixed path/mode literals, avoiding NSS calls in static Linux binaries.

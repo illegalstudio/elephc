@@ -16,7 +16,7 @@ use crate::codegen::{abi, emit_box_current_owned_value_as_mixed, emit_box_curren
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
-use crate::ir::{BlockId, DataId, Function, LocalSlotId, Module, Op, Ownership, ValueDef, ValueId};
+use crate::ir::{BlockId, DataId, Function, LocalKind, LocalSlotId, Module, Op, Ownership, ValueDef, ValueId};
 use crate::ir_passes::Allocation;
 use crate::types::PhpType;
 
@@ -40,6 +40,7 @@ pub(super) struct FunctionContext<'a> {
     pub(super) concat_base_offset: usize,
     pub(super) epilogue_emitted: bool,
     pub(super) is_main: bool,
+    pub(super) web: bool,
     pub(super) gc_stats: bool,
     pub(super) heap_debug: bool,
     pub(super) epilogue_label: Option<String>,
@@ -74,6 +75,7 @@ impl<'a> FunctionContext<'a> {
             concat_base_offset: layout.concat_base_offset,
             epilogue_emitted: false,
             is_main,
+            web: false,
             gc_stats,
             heap_debug,
             epilogue_label,
@@ -172,6 +174,15 @@ impl<'a> FunctionContext<'a> {
             .locals
             .get(slot.as_raw() as usize)
             .map(|metadata| metadata.php_type.codegen_repr())
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
+    }
+
+    /// Returns the semantic role attached to a local slot.
+    pub(super) fn local_kind(&self, slot: LocalSlotId) -> Result<LocalKind> {
+        self.function
+            .locals
+            .get(slot.as_raw() as usize)
+            .map(|metadata| metadata.kind)
             .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))
     }
 
@@ -350,6 +361,40 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
+    /// After an in-place hash/array mutation whose runtime helper returns the
+    /// possibly-reallocated container pointer in `value`'s register (already
+    /// persisted via `store_result_value`), writes that pointer back to global
+    /// storage when `value` was loaded from a global — i.e. a superglobal such as
+    /// `$_SERVER`/`$_GET`/`$_POST`. Mirrors the local-slot write-back that array
+    /// and hash set/append lowerings already perform; without it a global array
+    /// that grows past its initial capacity leaves the global symbol pointing at
+    /// freed storage (corruption / crash). No-op unless `value` came from
+    /// `Op::LoadGlobal`.
+    pub(super) fn writeback_global_array_source(&mut self, value: ValueId) -> Result<()> {
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(());
+        };
+        let Some(inst_ref) = self.function.instruction(inst) else {
+            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+        };
+        if inst_ref.op != Op::LoadGlobal {
+            return Ok(());
+        }
+        let Some(crate::ir::Immediate::GlobalName(data)) = inst_ref.immediate else {
+            return Ok(());
+        };
+        let name = self.global_name_data(data)?.to_string();
+        let symbol = crate::names::ir_global_symbol(&name);
+        let ty = self.value_php_type(value)?;
+        self.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
+        self.load_value_to_result(value)?;
+        abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);
+        Ok(())
+    }
+
     /// Stores an SSA value through a local ref-cell pointer slot.
     fn store_value_to_ref_cell_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
         let source_ty = self.load_value_to_result(value)?;
@@ -465,6 +510,9 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns true when a value producer can leave an owned source consumed by Mixed boxing.
     pub(super) fn value_can_own_mixed_box_source(&self, value: ValueId) -> Result<bool> {
+        if self.value_php_type(value)?.codegen_repr() == PhpType::Str {
+            return self.value_is_heap_owned_string_for_mixed_box(value);
+        }
         let Some(value_ref) = self.function.value(value) else {
             return Err(CodegenIrError::missing_entry("value", value.as_raw()));
         };
@@ -478,14 +526,6 @@ impl<'a> FunctionContext<'a> {
         Ok(matches!(
             inst.op,
             Op::Acquire
-                | Op::StrPersist
-                | Op::IToStr
-                | Op::FToStr
-                | Op::BoolToStr
-                | Op::ResourceToStr
-                | Op::StrConcat
-                | Op::StrCharAt
-                | Op::StrInterpolate
                 | Op::ArrayNew
                 | Op::HashNew
                 | Op::ArrayToMixed
@@ -519,6 +559,39 @@ impl<'a> FunctionContext<'a> {
                 | Op::NullsafeMethodCall
                 | Op::StaticMethodCall
                 | Op::ClosureCall
+                | Op::CallableDescriptorInvoke
+                | Op::ExprCall
+                | Op::PipeCall
+                | Op::IteratorMethodCall
+                | Op::SplRuntimeCall
+                | Op::FiberRuntimeCall
+        ))
+    }
+
+    /// Returns true when a string producer leaves a heap-owned payload that Mixed boxing may consume.
+    fn value_is_heap_owned_string_for_mixed_box(&self, value: ValueId) -> Result<bool> {
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(false);
+        };
+        let inst = self
+            .function
+            .instruction(inst)
+            .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        Ok(matches!(
+            inst.op,
+            Op::Acquire
+                | Op::StrPersist
+                | Op::Call
+                | Op::FunctionVariantCall
+                | Op::ExternCall
+                | Op::MethodCall
+                | Op::NullsafeMethodCall
+                | Op::StaticMethodCall
+                | Op::ClosureCall
+                | Op::CallableDescriptorInvoke
                 | Op::ExprCall
                 | Op::PipeCall
                 | Op::IteratorMethodCall

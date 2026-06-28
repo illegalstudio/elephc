@@ -14,6 +14,7 @@ use super::{
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
 };
 use super::super::system;
+use crate::codegen::platform::Target;
 use crate::types::checker::builtins::supported_builtin_function_names;
 
 /// Emit the fixed runtime `.data` section as assembly text.
@@ -24,11 +25,49 @@ use crate::types::checker::builtins::supported_builtin_function_names;
 ///
 /// `heap_size` is the maximum heap bytes requested by the user program;
 /// it is baked into `_heap_max` to enforce the heap limit at runtime.
-pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
+///
+/// `target` is needed only for the one symbol the `--web` bridge references
+/// (`elephc_web_capture`): it must carry the platform's C-ABI mangling so the
+/// runtime's `.comm`, the runtime's load, and the Rust bridge's `extern "C"`
+/// all name the same symbol (`_elephc_web_capture` on macOS, `elephc_web_capture`
+/// on Linux). The cache key already includes the target, so this stays cache-safe.
+pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
     out.push_str(".comm _concat_buf, 65536, 3\n");
     out.push_str(".comm _concat_off, 8, 3\n");
+    out.push_str(".comm _strtotime_clock, 8, 3\n");
+    // Default-timezone state: the "TZ=<id>" env buffer (kept alive for putenv), the stored
+    // identifier length (0 = none set → date_default_timezone_get returns "UTC"), and the
+    // "UTC" literal returned in that default case.
+    out.push_str(".comm _php_tz_env, 264, 3\n");
+    out.push_str(".comm _php_default_tz_len, 8, 3\n");
+    out.push_str(".comm _php_tz_save, 264, 3\n");
+    out.push_str(".globl _php_tz_utc\n");
+    out.push_str("_php_tz_utc:\n");
+    out.push_str("    .ascii \"UTC\"\n");
+    // getdate() associative-array key strings (read by __rt_getdate).
+    for (sym, key) in [
+        ("_gd_k_seconds", "seconds"),
+        ("_gd_k_minutes", "minutes"),
+        ("_gd_k_hours", "hours"),
+        ("_gd_k_mday", "mday"),
+        ("_gd_k_wday", "wday"),
+        ("_gd_k_mon", "mon"),
+        ("_gd_k_year", "year"),
+        ("_gd_k_yday", "yday"),
+        ("_gd_k_weekday", "weekday"),
+        ("_gd_k_month", "month"),
+    ] {
+        out.push_str(&format!(".globl {sym}\n{sym}:\n    .ascii \"{key}\"\n"));
+    }
+    // localtime() associative-array key strings (read by __rt_localtime).
+    for key in [
+        "tm_sec", "tm_min", "tm_hour", "tm_mday", "tm_mon", "tm_year", "tm_wday", "tm_yday",
+        "tm_isdst",
+    ] {
+        out.push_str(&format!(".globl _lt_k_{key}\n_lt_k_{key}:\n    .ascii \"{key}\"\n"));
+    }
     out.push_str(".comm _global_argc, 8, 3\n");
     out.push_str(".comm _global_argv, 8, 3\n");
     out.push_str(".comm _exc_handler_top, 8, 3\n");
@@ -40,6 +79,17 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".comm _fiber_main_saved_call_frame, 8, 3\n");
     out.push_str(".comm _elephc_eval_dynamic_object_destruct_fn, 8, 3\n");
     out.push_str(".comm _rt_diag_suppression, 8, 3\n");
+    // elephc_web_capture: per-request output-capture mode flag read by
+    // __rt_stdout_write. Zero (the default) routes echo output to the plain
+    // write(1, …) syscall; non-zero (set only by the --web bridge) routes it to
+    // elephc_web_write so the response body can be captured per request. Only the
+    // low byte is used, but the 8-byte/align-3 house style keeps it word-aligned.
+    // The symbol is mangled per-target so the bridge's `extern "C"` declaration
+    // resolves to it on every platform (see emit_runtime_data_fixed docs).
+    out.push_str(&format!(
+        ".comm {}, 8, 3\n",
+        target.extern_symbol("elephc_web_capture")
+    ));
     out.push_str(&format!(".comm _heap_buf, {}, 3\n", heap_size));
     out.push_str(".comm _heap_off, 8, 3\n");
     out.push_str(".comm _heap_free_list, 8, 3\n");
@@ -620,6 +670,22 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".globl _vd_bool_false_line\n_vd_bool_false_line:\n    .ascii \"  bool(false)\\n\"\n");
     out.push_str(".globl _vd_float_prefix\n_vd_float_prefix:\n    .ascii \"  float(\"\n");
     out.push_str(".globl _vd_null_line\n_vd_null_line:\n    .ascii \"  NULL\\n\"\n");
+    // var_dump hash (associative array) string-key delimiters: `  ["` before the
+    // key bytes and `"]=>\n` after, matching PHP's `  ["key"]=>` line format.
+    out.push_str(".globl _vd_str_key_open\n_vd_str_key_open:\n    .ascii \"  [\\\"\"\n");
+    out.push_str(".globl _vd_str_key_close\n_vd_str_key_close:\n    .ascii \"\\\"]=>\\n\"\n");
+    // print_r body literals (rodata): PHP's `Array\n(\n` header, `)\n` footer,
+    // `[`/`] => ` key delimiters (unquoted keys, unlike var_dump), a lone
+    // newline, the `1` rendered for boolean true, and a 64-space pad used by
+    // the recursive indentation helper (written in <=64-byte chunks).
+    out.push_str(".globl _pr_array_hdr\n_pr_array_hdr:\n    .ascii \"Array\\n\"\n");
+    out.push_str(".globl _pr_open\n_pr_open:\n    .ascii \"(\\n\"\n");
+    out.push_str(".globl _pr_close\n_pr_close:\n    .ascii \")\\n\"\n");
+    out.push_str(".globl _pr_lbrack\n_pr_lbrack:\n    .ascii \"[\"\n");
+    out.push_str(".globl _pr_arrow\n_pr_arrow:\n    .ascii \"] => \"\n");
+    out.push_str(".globl _pr_nl\n_pr_nl:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _pr_one\n_pr_one:\n    .ascii \"1\"\n");
+    out.push_str(".globl _pr_spaces\n_pr_spaces:\n    .ascii \"                                                                \"\n");
     out.push_str(".globl _ftp_user_cmd\n_ftp_user_cmd:\n    .ascii \"USER anonymous\\x0d\\n\"\n");
     out.push_str(".globl _ftp_pass_cmd\n_ftp_pass_cmd:\n    .ascii \"PASS anonymous@\\x0d\\n\"\n");
     out.push_str(".globl _ftp_type_cmd\n_ftp_type_cmd:\n    .ascii \"TYPE I\\x0d\\n\"\n");
@@ -639,6 +705,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".globl _etc_protocols_path\n_etc_protocols_path:\n    .asciz \"/etc/protocols\"\n");
     out.push_str(".comm _servent_buf, 1048576, 3\n");
     out.push_str(".globl _etc_services_path\n_etc_services_path:\n    .asciz \"/etc/services\"\n");
+    out.push_str(".comm _principal_lookup_buf, 4096, 3\n");
+    out.push_str(".globl _etc_passwd_path\n_etc_passwd_path:\n    .asciz \"/etc/passwd\"\n");
+    out.push_str(".globl _etc_group_path\n_etc_group_path:\n    .asciz \"/etc/group\"\n");
+    out.push_str(".globl _principal_lookup_read_mode\n_principal_lookup_read_mode:\n    .asciz \"r\"\n");
     out.push_str(&emit_spl_autoload_extensions_data());
     out.push_str(".globl _heap_dbg_stats_prefix\n_heap_dbg_stats_prefix:\n    .ascii \"HEAP DEBUG: allocs=\"\n");
     out.push_str(".globl _heap_dbg_frees_label\n_heap_dbg_frees_label:\n    .ascii \" frees=\"\n");
@@ -651,6 +721,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize) -> String {
     out.push_str(".globl _heap_dbg_newline\n_heap_dbg_newline:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
     out.push_str(".globl _fmt_g\n_fmt_g:\n    .asciz \"%.14G\"\n");
+    out.push_str(".globl _fmt_star_e\n_fmt_star_e:\n    .asciz \"%.*e\"\n");
+    out.push_str(".globl _fmt_star_f\n_fmt_star_f:\n    .asciz \"%.*f\"\n");
     out.push_str(".globl _b64_encode_tbl\n_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
     out.push_str(".globl _b64_decode_tbl\n_b64_decode_tbl:\n");
 

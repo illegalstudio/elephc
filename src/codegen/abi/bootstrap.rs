@@ -63,3 +63,35 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
         }
     }
 }
+
+/// Emit a process-exit sequence that uses the integer result register as the exit code.
+///
+/// Unlike `emit_exit`, which takes a constant, this routine exits with whatever
+/// value a preceding call left in the target's integer result register (`x0` /
+/// `rax`). Used by the `--web` process-entry stub to surface `elephc_web_run`'s
+/// return value as the process exit code.
+///
+/// # Platform behavior
+/// - **macOS ARM64 / Linux ARM64**: the return value already sits in `x0`, which
+///   is `sys_exit`'s argument register, so it invokes syscall 1 directly.
+/// - **Linux x86_64**: moves `eax` (the C return value) into `edi` (the SysV exit
+///   argument) and invokes syscall 60 (`exit`).
+/// - **macOS x86_64**: panics — not in the supported target matrix.
+///
+/// This routine never returns to the calling code.
+pub fn emit_exit_with_result_reg(emitter: &mut Emitter) {
+    match (emitter.target.platform, emitter.target.arch) {
+        (super::super::platform::Platform::MacOS, Arch::AArch64)
+        | (super::super::platform::Platform::Linux, Arch::AArch64) => {
+            emitter.syscall(1);
+        }
+        (super::super::platform::Platform::Linux, Arch::X86_64) => {
+            emitter.instruction("mov edi, eax");                                // move the C return value into the SysV exit argument register
+            emitter.instruction("mov eax, 60");                                 // Linux x86_64 syscall 60 = exit
+            emitter.instruction("syscall");                                     // terminate the process with the bridge return code
+        }
+        (super::super::platform::Platform::MacOS, Arch::X86_64) => {
+            panic!("process exit emission is not implemented yet for target macos-x86_64");
+        }
+    }
+}

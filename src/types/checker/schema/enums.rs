@@ -325,6 +325,18 @@ pub(crate) fn insert_enum_metadata(
             &mut property_reference_slots,
         );
     }
+    // Every enum case (pure or backed) exposes a readonly public `name` string holding the case
+    // identifier, mirroring PHP's `UnitEnum::$name`. Append it after any backing `value` so backed
+    // enums keep `value` at offset 8; the offset matches the singleton property slot layout used by
+    // EIR codegen (`8 + index * 16`).
+    let name_offset = 8 + properties.len() * 16;
+    properties.push(("name".to_string(), PhpType::Str));
+    property_offsets.insert("name".to_string(), name_offset);
+    property_declaring_classes.insert("name".to_string(), name.to_string());
+    defaults.push(None);
+    property_visibilities.insert("name".to_string(), Visibility::Public);
+    declared_properties.insert("name".to_string());
+    readonly_properties.insert("name".to_string());
 
     let mut static_methods = HashMap::new();
     let mut static_method_visibilities = HashMap::new();

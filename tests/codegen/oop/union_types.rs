@@ -145,3 +145,85 @@ fn test_union_property_string_literal_default() {
     );
     assert_eq!(out, "string(2) \"hi\"\n");
 }
+
+/// Verifies method dispatch on an object-or-false union return (`A|false`): the
+/// object branch dispatches the method on the single object class. Mirrors the
+/// `DateTime::createFromFormat()` pattern (returns `DateTime|false`).
+#[test]
+fn test_object_false_union_method_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public int $v = 5; function who(): string { return "A"; } }
+function make(bool $b): A|false { return $b ? new A() : false; }
+echo make(true)->who(), make(true)->v;
+"#,
+    );
+    assert_eq!(out, "A5");
+}
+
+/// Verifies property and method access on a nullable object union (`A|null`)
+/// still works after the union-receiver relaxation (regression guard).
+#[test]
+fn test_object_null_union_access() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public int $v = 7; function who(): string { return "A"; } }
+function make(bool $b): A|null { return $b ? new A() : null; }
+echo make(true)->who(), make(true)->v;
+"#,
+    );
+    assert_eq!(out, "A7");
+}
+
+/// Verifies runtime class-id dispatch on a union of two distinct object classes
+/// (`A|B`): the method and property resolve to whichever class the value holds.
+#[test]
+fn test_two_class_union_method_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public int $v = 1; function who(): string { return "A"; } }
+class B { public int $v = 2; function who(): string { return "B"; } }
+function make(bool $b): A|B { return $b ? new A() : new B(); }
+echo make(true)->who(), make(false)->who(), make(true)->v, make(false)->v;
+"#,
+    );
+    assert_eq!(out, "AB12");
+}
+
+/// Verifies a three-member object union with a scalar sentinel (`A|B|false`)
+/// dispatches the object branches by runtime class id.
+#[test]
+fn test_two_class_false_union_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public int $v = 1; function who(): string { return "A"; } }
+class B { public int $v = 2; function who(): string { return "B"; } }
+function make(int $w): A|B|false { if ($w == 0) return new A(); if ($w == 1) return new B(); return false; }
+echo make(0)->who(), make(1)->who(), make(0)->v, make(1)->v;
+"#,
+    );
+    assert_eq!(out, "AB12");
+}
+
+/// Regression: a `mixed`/union-typed property accepts a scalar literal *default* (int, bool, float)
+/// at object construction, boxing it into a `Mixed` cell. Previously `object_new` raised
+/// "unsupported EIR backend feature: object_new for default value of property ... with PHP type
+/// Mixed/Union". Each property must round-trip its default and a later reassignment.
+#[test]
+fn test_union_property_scalar_literal_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag {
+    public int|false $count = false;
+    public mixed $tag = 7;
+    public int|float $ratio = 1.5;
+}
+$b = new Bag();
+echo ($b->count === false) ? "F" : "T";
+echo "|", $b->tag, "|", $b->ratio;
+$b->count = 42;
+echo "|", $b->count;
+"#,
+    );
+    assert_eq!(out, "F|7|1.5|42");
+}

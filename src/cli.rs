@@ -15,7 +15,7 @@ pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 
 /// Usage string printed to stderr when command-line arguments are invalid or missing.
-pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--ir-backend] [--ast-backend] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] <source.php>";
+pub(crate) const USAGE: &str = "Usage: elephc [--target TARGET] [--heap-size=BYTES] [--gc-stats] [--heap-debug] [--emit-ir] [--ir-backend] [--ast-backend] [--emit-asm] [--emit KIND] [--check] [--null-repr=sentinel|tagged] [--regalloc=linear|stack] [--ir-opt=on|off] [--timings] [--source-map] [--define SYMBOL] [--link LIB|-lLIB] [--link-path DIR|-LDIR] [--framework NAME] [--web] <source.php>";
 
 /// Backend selected for assembly generation after frontend and optimization passes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,6 +46,7 @@ pub(crate) struct CliConfig {
     pub(crate) extra_link_paths: Vec<String>,
     pub(crate) extra_frameworks: Vec<String>,
     pub(crate) defines: HashSet<String>,
+    pub(crate) web: bool,
 }
 
 /// Parse command-line arguments into a CliConfig struct.
@@ -73,6 +74,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let mut extra_link_paths: Vec<String> = Vec::new();
     let mut extra_frameworks: Vec<String> = Vec::new();
     let mut defines: HashSet<String> = HashSet::new();
+    let mut web = false;
     let mut null_repr = match std::env::var("ELEPHC_NULL_REPR").as_deref() {
         Ok("tagged") => crate::codegen::NullRepr::Tagged,
         Ok("sentinel") => crate::codegen::NullRepr::Sentinel,
@@ -169,6 +171,8 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
                 i,
                 "Missing framework name after --framework",
             ));
+        } else if arg == "--web" {
+            web = true;
         } else if arg.starts_with("--") {
             fail(&format!("Unknown flag: {}", arg));
         } else {
@@ -196,6 +200,18 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             "warning: --ast-backend is deprecated and will be removed in v0.26.0. The EIR backend is now the default. See docs/internals/the-ir.md for details."
         );
     }
+    if web && check_only {
+        fail("--web cannot be combined with --check");
+    }
+    if web && matches!(emit, Emit::Cdylib) {
+        fail("--web cannot be combined with --emit cdylib");
+    }
+    if web && emit_asm {
+        fail("--web cannot be combined with --emit-asm");
+    }
+    if web && emit_ir {
+        fail("--web cannot be combined with --emit-ir");
+    }
 
     CliConfig {
         filename,
@@ -217,6 +233,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         extra_link_paths,
         extra_frameworks,
         defines,
+        web,
     }
 }
 
@@ -367,5 +384,21 @@ mod tests {
     fn regalloc_parses_linear_and_stack() {
         assert!(parse_regalloc("linear"));
         assert!(!parse_regalloc("stack"));
+    }
+
+    /// Verifies `--web` sets the web flag on the parsed config.
+    #[test]
+    fn web_flag_sets_web() {
+        let args = vec!["elephc".into(), "--web".into(), "app.php".into()];
+        let config = parse_args(&args);
+        assert!(config.web);
+    }
+
+    /// Verifies the absence of `--web` leaves the web flag off.
+    #[test]
+    fn no_web_flag_defaults_off() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        let config = parse_args(&args);
+        assert!(!config.web);
     }
 }

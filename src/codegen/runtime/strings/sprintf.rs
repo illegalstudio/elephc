@@ -9,7 +9,7 @@
 //! - Formatting helpers parse format strings and marshal values through target ABI calls or emitted formatting paths.
 
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::Arch;
+use crate::codegen::platform::{Arch, Platform};
 
 use super::sprintf_x86_64::emit_sprintf_linux_x86_64;
 
@@ -207,6 +207,10 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("add x15, x22, x15");                                   // arg address in caller's stack
     emitter.instruction("ldr x3, [x15]");                                       // load float bits as integer
     emitter.instruction("add x21, x21, #1");                                    // increment arg index
+
+    if emitter.platform == Platform::Linux {
+        emitter.instruction("fmov d0, x3");                                     // pass first variadic double in the Linux AArch64 FP register
+    }
 
     // -- store variadic arg on stack for snprintf --
     emitter.instruction("str x3, [sp]");                                        // variadic float bits at [sp]

@@ -32,6 +32,8 @@ mod exception;
 mod encode_flags;
 #[path = "json/encode_inf_nan.rs"]
 mod encode_inf_nan;
+#[path = "json/encode_float_precision.rs"]
+mod encode_float_precision;
 #[path = "json/encode_depth.rs"]
 mod encode_depth;
 #[path = "json/encode_invalid_utf8.rs"]

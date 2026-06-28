@@ -24,8 +24,10 @@ mod ir_lower;
 mod ir_passes;
 mod linker;
 mod lexer;
+mod list_id_prelude;
 mod magic_constants;
 mod name_resolver;
+mod image_prelude;
 mod names;
 mod optimize;
 mod parser;
@@ -36,9 +38,13 @@ mod runtime_cache;
 mod source_map;
 mod span;
 mod string_bytes;
+mod superglobals;
 mod termination;
 mod timings;
 mod types;
+mod tz_prelude;
+mod var_export_prelude;
+mod web_prelude;
 
 /// Entry point for the `elephc` binary.
 ///

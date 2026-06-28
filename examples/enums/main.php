@@ -14,6 +14,13 @@ echo PHP_EOL;
 echo count(Color::cases());
 echo PHP_EOL;
 
+// Every enum case exposes a read-only ->name (the case identifier);
+// backed cases also expose ->value.
+foreach (Color::cases() as $color) {
+    echo $color->name, "=", $color->value, " ";
+}
+echo PHP_EOL;
+
 function sql_sort_keyword(SortDirection $direction): string {
     return match ($direction) {
         SortDirection::Ascending => "ASC",

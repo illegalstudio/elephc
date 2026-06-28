@@ -6,7 +6,8 @@
 //! - `crate::codegen::runtime::emitters::emit_runtime()` via `crate::codegen::runtime::arrays`.
 //!
 //! Key details:
-//! - Decrement helpers are release paths for refcounted values and must balance recursive frees with GC cycle collection.
+//! - Decrement helpers are release paths for refcounted values; cycle collection
+//!   runs only from explicit safe points after PHP-visible roots are updated.
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -18,8 +19,8 @@ const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 /// Takes an object pointer in `x0`. Performs null check, heap-range validation,
 /// and optional heap-debug liveness check. Decrements the refcount field stored at
 /// `[x0 - 12]` in the uniform heap header. On zero refcount, tail-calls
-/// `__rt_object_free_deep`. On non-zero refcount, may invoke the GC cycle collector
-/// unless `_gc_release_suppressed` or `_gc_collecting` is set, then returns.
+/// `__rt_object_free_deep`. On non-zero refcount, returns without invoking the
+/// cycle collector; explicit `GcCollect` safe points own cycle reclamation.
 ///
 /// ## ABI constraints
 /// - Input: `x0` = object pointer
@@ -65,17 +66,7 @@ pub fn emit_decref_object(emitter: &mut Emitter) {
     emitter.instruction("str w9, [x0, #-12]");                                  // store decremented refcount
     emitter.instruction("b.eq __rt_decref_object_free");                        // zero refcount means the object can be freed immediately
 
-    // -- non-zero refcount may indicate a now-unrooted cycle; run the targeted collector unless it is already active --
-    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_release_suppressed");
-    emitter.instruction("ldr x9, [x9]");                                        // load the release-suppression flag
-    emitter.instruction("cbnz x9, __rt_decref_object_skip");                    // ordinary deep-free walks suppress nested collector runs
-    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
-    emitter.instruction("ldr x9, [x9]");                                        // load the collector-active flag
-    emitter.instruction("cbnz x9, __rt_decref_object_skip");                    // nested decref calls during collection must not restart the collector
-    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address across the collector call
-    emitter.instruction("bl __rt_gc_collect_cycles");                           // reclaim any newly-unrooted refcounted graph components
-    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after collection
-    emitter.instruction("b __rt_decref_object_skip");                           // return after the optional collection pass
+    emitter.instruction("b __rt_decref_object_skip");                           // non-zero refcount stays alive until an explicit GC safe point
 
     // -- refcount reached zero: deep free the object --
     emitter.label("__rt_decref_object_free");
@@ -90,7 +81,7 @@ pub fn emit_decref_object(emitter: &mut Emitter) {
 /// Takes an object pointer in `rax`. Performs null check, heap-range validation
 /// using the x86_64 heap magic header word at `[rax - 8]`, and refcount decrement
 /// at `[rax - 12]`. On zero refcount, tail-jumps to `__rt_object_free_deep`. On
-/// non-zero refcount, may call the GC cycle collector unless suppressed, then returns.
+/// non-zero refcount, returns without invoking the cycle collector.
 ///
 /// ## ABI constraints
 /// - Input: `rax` = object pointer
@@ -125,16 +116,7 @@ fn emit_decref_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10d, 1");                                         // decrement the object refcount for the releasing x86_64 owner
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented object refcount back into the uniform heap header
     emitter.instruction("jz __rt_decref_object_free");                          // zero refcount means the object properties and storage can be released now
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_release_suppressed");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the release-suppression flag before considering a targeted cycle-collector run
-    emitter.instruction("test r11, r11");                                       // is this decref happening inside an ordinary deep-free walk?
-    emitter.instruction("jnz __rt_decref_object_skip");                         // yes — nested collector runs stay suppressed during deep frees
-    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_gc_collecting");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the collector-active flag before attempting another collection pass
-    emitter.instruction("test r11, r11");                                       // is the collector already running?
-    emitter.instruction("jnz __rt_decref_object_skip");                         // yes — nested decref calls during collection must not restart the collector
-    emitter.instruction("call __rt_gc_collect_cycles");                         // reclaim any newly unrooted object-containing graph components on x86_64
-    emitter.instruction("jmp __rt_decref_object_skip");                         // return after the optional x86_64 collector pass
+    emitter.instruction("jmp __rt_decref_object_skip");                         // non-zero refcount stays alive until an explicit GC safe point
 
     emitter.label("__rt_decref_object_skip");
     emitter.instruction("ret");                                                 // nothing else needs to happen for non-zero refcounts or foreign pointers

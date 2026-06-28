@@ -1,0 +1,29 @@
+[package]
+name = "elephc-web"
+version = "0.1.0"
+edition = "2021"
+description = "Prefork HTTP server staticlib for the elephc --web flag (hyper + tokio)."
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# hyper 1.x is the HTTP engine; http carries the Request/Response types.
+hyper = { version = "1", features = ["server", "http1"] }
+http = "1"
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["tokio"] }
+# tokio current-thread runtime only: each prefork worker runs single-threaded,
+# so PHP execution (a blocking call) never overlaps within a worker.
+tokio = { version = "1", default-features = false, features = ["net", "rt", "io-util", "sync", "time"] }
+# socket2 sets SO_REUSEPORT before bind so N workers share one port and the
+# kernel load-balances connections across them.
+socket2 = { version = "0.5", features = ["all"] }
+# libc: fork/waitpid/signals for the prefork master, kept default-features for
+# musl-compatibility on the Docker Linux images.
+libc = "0.2"
+# flate2: optional gzip response compression (--gzip). Already in the workspace
+# dependency tree, so this adds no new external crate.
+flate2 = "1"

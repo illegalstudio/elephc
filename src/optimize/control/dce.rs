@@ -41,14 +41,24 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
     let mut stmts = body.into_iter().peekable();
     while let Some(stmt) = stmts.next() {
         let has_tail = stmts.peek().is_some();
-        let use_tail_sink = has_tail
+        let mut use_tail_sink = has_tail
             && matches!(
                 stmt.kind,
                 StmtKind::If { .. } | StmtKind::IfDef { .. } | StmtKind::Switch { .. } | StmtKind::Try { .. }
             );
         let dce_stmt = if use_tail_sink {
             let tail: Vec<Stmt> = stmts.clone().collect();
-            dce_stmt_with_tail(stmt, tail, &guards)
+            // Tail-sinking copies the tail into each branch of the if/switch/try.
+            // Declarations (functions, classes, interfaces, enums, traits, externs)
+            // are hoisted and must stay singular — sinking one into multiple
+            // branches would emit duplicate symbols and fail the assembler. Fall
+            // back to plain per-statement DCE when the tail declares anything.
+            if stmts_contain_declaration(&tail) {
+                use_tail_sink = false;
+                dce_stmt_with_guards(stmt, &guards)
+            } else {
+                dce_stmt_with_tail(stmt, tail, &guards)
+            }
         } else {
             dce_stmt_with_guards(stmt, &guards)
         };
@@ -67,6 +77,84 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
         }
     }
     eliminated
+}
+
+/// Returns true when `stmts` contain — at any nesting depth — a declaration that
+/// emits a global symbol (function, class, interface, enum, trait, or extern
+/// declaration). Such declarations are hoisted and position-independent, so
+/// tail-sinking must never duplicate them: two copies would define the same
+/// assembler symbol twice.
+fn stmts_contain_declaration(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_contains_declaration)
+}
+
+/// Returns true when `stmt` is, or recursively contains, a symbol-emitting
+/// declaration. Recurses through control-flow and grouping bodies.
+fn stmt_contains_declaration(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::FunctionDecl { .. }
+        | StmtKind::ClassDecl { .. }
+        | StmtKind::EnumDecl { .. }
+        | StmtKind::PackedClassDecl { .. }
+        | StmtKind::InterfaceDecl { .. }
+        | StmtKind::TraitDecl { .. }
+        | StmtKind::ExternFunctionDecl { .. }
+        | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ExternGlobalDecl { .. } => true,
+        StmtKind::Synthetic(body)
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::For { body, .. }
+        | StmtKind::Foreach { body, .. } => stmts_contain_declaration(body),
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            stmts_contain_declaration(then_body)
+                || elseif_clauses
+                    .iter()
+                    .any(|(_, body)| stmts_contain_declaration(body))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| stmts_contain_declaration(body))
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            stmts_contain_declaration(then_body)
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| stmts_contain_declaration(body))
+        }
+        StmtKind::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .any(|(_, body)| stmts_contain_declaration(body))
+                || default
+                    .as_ref()
+                    .is_some_and(|body| stmts_contain_declaration(body))
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            stmts_contain_declaration(try_body)
+                || catches
+                    .iter()
+                    .any(|catch| stmts_contain_declaration(&catch.body))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|body| stmts_contain_declaration(body))
+        }
+        _ => false,
+    }
 }
 
 /// Converts a GuardLiteral to a ScalarValue for guard-based constant resolution.

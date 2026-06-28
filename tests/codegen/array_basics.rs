@@ -447,11 +447,12 @@ fn test_in_array_found() {
     assert_eq!(out, "1");
 }
 
-/// Verifies in array not found.
+/// Verifies in array not found. `in_array` returns bool, so `echo false` is the empty
+/// string (not "0").
 #[test]
 fn test_in_array_not_found() {
     let out = compile_and_run("<?php $a = [10, 20, 30]; echo in_array(99, $a);");
-    assert_eq!(out, "0");
+    assert_eq!(out, "");
 }
 
 /// Verifies in array string found.
@@ -461,11 +462,27 @@ fn test_in_array_string_found() {
     assert_eq!(out, "1");
 }
 
-/// Verifies in array string not found.
+/// Verifies in array string not found. A false result echoes as the empty string.
 #[test]
 fn test_in_array_string_not_found() {
     let out = compile_and_run(r#"<?php $a = ["a", "b", "c"]; echo in_array("x", $a);"#);
-    assert_eq!(out, "0");
+    assert_eq!(out, "");
+}
+
+/// Verifies `in_array` returns a real `bool` (var_dump shows bool, not int), matching PHP.
+/// Regression: previously typed `int`, so `var_dump` printed `int(1)`/`int(0)` and a false
+/// result echoed as "0" instead of "".
+#[test]
+fn test_in_array_returns_bool() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20, 30];
+var_dump(in_array(20, $a));
+var_dump(in_array(99, $a));
+var_dump(in_array(99, $a) === false);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\nbool(true)\n");
 }
 
 /// Verifies sort.
@@ -707,4 +724,25 @@ else { echo "other"; }
 "#,
     );
     assert_eq!(out, "four");
+}
+
+/// Regression: `in_array()` with a string needle must work over an indexed `array<Mixed>`. A
+/// function whose container return is built from an untyped parameter is lowered to `array<Mixed>`
+/// (each element a boxed Mixed cell), as is a `foreach`-value collected into a fresh array. Before
+/// the fix the backend rejected `in_array(Str, array<Mixed>)` with an "unsupported" error; the
+/// scan now unboxes each cell and string-compares the string-tagged ones.
+#[test]
+fn test_in_array_string_needle_over_mixed_array() {
+    let out = compile_and_run(
+        r#"<?php
+function collect($x) { $r = []; $r[] = $x; return $r; }
+$a = collect("hello");
+$names = [];
+foreach (["alpha", "beta", "gamma"] as $n) { $names[] = $n; }
+echo (in_array("hello", $a) ? "y" : "n"),
+     (in_array("beta", $names) ? "y" : "n"),
+     (in_array("missing", $names) ? "y" : "n");
+"#,
+    );
+    assert_eq!(out, "yyn");
 }

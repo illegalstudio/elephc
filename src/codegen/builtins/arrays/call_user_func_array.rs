@@ -26,7 +26,7 @@ use super::callable_forms;
 use super::super::callable_lookup::{lookup_function, FunctionLookup};
 
 /// Internal boxed-Mixed tag used only inside descriptor-invoker argument arrays.
-pub(crate) const INVOKER_ARG_REF_CELL_TAG: i64 = 10;
+pub(crate) const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
 
 /// Stamps the heap header of a runtime array with a runtime value-type tag derived from
 /// `elem_ty`. Used by `call_user_func_array` to mark variadic tail arrays so the runtime

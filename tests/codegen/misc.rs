@@ -17,6 +17,15 @@ fn test_utf8_bom_prefixed_source_compiles_and_runs() {
     assert_eq!(out, "hi");
 }
 
+/// Verifies a top-level `return <expr>;` halts the script and discards the value
+/// (PHP only uses a script's return value for includes). Previously this errored
+/// as "return values on the EIR backend entry function".
+#[test]
+fn test_top_level_return_value_halts_and_is_discarded() {
+    let out = compile_and_run("<?php echo \"a\"; return 5; echo \"b\";");
+    assert_eq!(out, "a");
+}
+
 // --- IIFE (Immediately Invoked Function Expression) ---
 
 /// Compiles an IIFE that returns a string literal and verifies the value is echoed correctly.
@@ -285,6 +294,21 @@ function test($flag) {
 test(false);
 "#,
     );
+    assert_eq!(out, "none");
+}
+
+// --- Superglobals ---
+
+/// Verifies `$_GET` is recognized as a superglobal (no undefined-variable error) and that
+/// reading it as an assoc array via null-coalescing works end-to-end.
+///
+/// Off-web, `$_GET` is seeded as an empty assoc array. `$_GET['x']` on the missing key
+/// returns null, and `?? 'none'` yields "none". The primary assertion is that it COMPILES
+/// without "Undefined variable: $_GET" — i.e. the superglobal is type-recognized at
+/// top level.
+#[test]
+fn superglobal_get_is_recognized() {
+    let out = compile_and_run("<?php $v = $_GET['x'] ?? 'none'; echo $v;");
     assert_eq!(out, "none");
 }
 

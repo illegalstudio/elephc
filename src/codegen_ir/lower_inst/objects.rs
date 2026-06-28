@@ -31,19 +31,20 @@ use super::super::context::FunctionContext;
 use super::{
     builtins, callables, cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes,
     coerce_loaded_value_to_tagged_scalar, emit_loaded_assoc_array_to_mixed,
-    emit_loaded_indexed_array_to_mixed, emit_ref_arg_writebacks, expect_data, expect_operand,
-    iterators, load_value_to_first_int_arg, materialize_direct_call_args_with_refs,
+    emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
+    emit_ref_arg_writebacks, expect_data, expect_operand, iterators, load_value_to_first_int_arg,
+    materialize_direct_call_args_with_refs,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
     store_call_result, store_if_result,
 };
 use crate::codegen_ir::fibers;
 use crate::codegen_ir::literal_defaults::{
-    emit_array_literal_default_to_result, emit_assoc_array_entries_literal_default_to_result,
-    emit_assoc_array_literal_default_to_result, emit_boxed_bool_literal_to_result,
-    emit_boxed_float_literal_to_result, emit_boxed_int_literal_to_result,
-    emit_boxed_null_literal_to_result, emit_boxed_string_literal_default_to_result,
-    emit_empty_assoc_array_literal_to_result, emit_string_literal_default_to_result,
-    emit_tagged_null_literal_to_result, literal_default_value, LiteralDefaultValue,
+    emit_array_literal_default_to_result, emit_assoc_array_literal_default_to_result,
+    emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
+    emit_boxed_int_literal_to_result, emit_boxed_null_literal_to_result,
+    emit_boxed_string_literal_default_to_result, emit_empty_assoc_array_literal_to_result,
+    emit_string_literal_default_to_result, emit_tagged_null_literal_to_result,
+    literal_default_value, LiteralDefaultValue,
 };
 use crate::codegen_ir::{CodegenIrError, Result};
 
@@ -2319,21 +2320,10 @@ fn emit_property_default(
         }
         LiteralDefaultValue::AssocArray {
             value_type,
-            elements,
-        } => {
-            abi::emit_push_reg(ctx.emitter, object_reg);
-            emit_assoc_array_literal_default_to_result(ctx, value_type, elements)?;
-            abi::emit_pop_reg(ctx.emitter, object_reg);
-            let int_reg = abi::int_result_reg(ctx.emitter);
-            abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);
-            abi::emit_store_zero_to_address(ctx.emitter, object_reg, default.offset + 8);
-        }
-        LiteralDefaultValue::AssocArrayEntries {
-            value_type,
             entries,
         } => {
             abi::emit_push_reg(ctx.emitter, object_reg);
-            emit_assoc_array_entries_literal_default_to_result(ctx, value_type, entries)?;
+            emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
             abi::emit_pop_reg(ctx.emitter, object_reg);
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);
@@ -2813,10 +2803,13 @@ fn stdclass_class_id(ctx: &FunctionContext<'_>) -> Option<u64> {
         .map(|(_, class_info)| class_info.class_id)
 }
 
-/// Boxes a declared-property load so all Mixed receiver paths produce a Mixed cell.
+/// Boxes or retains a declared-property load so Mixed receiver paths produce owned Mixed cells.
 fn box_mixed_property_candidate_result(ctx: &mut FunctionContext<'_>, source_ty: &PhpType) {
-    if source_ty.codegen_repr() != PhpType::Mixed {
-        emit_box_current_value_as_mixed(ctx.emitter, &source_ty.codegen_repr());
+    let source_ty = source_ty.codegen_repr();
+    if source_ty == PhpType::Mixed {
+        abi::emit_incref_if_refcounted(ctx.emitter, &source_ty);
+    } else {
+        emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
     }
 }
 
@@ -2941,7 +2934,7 @@ pub(super) fn lower_nullsafe_prop_get(
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }
     emit_property_load(ctx, &slot, base_reg)?;
-    emit_box_current_value_as_mixed(ctx.emitter, &slot.php_type.codegen_repr());
+    materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
     emit_boxed_null(ctx);
@@ -3276,13 +3269,18 @@ fn materialize_loaded_property_result(
     inst: &Instruction,
     source_ty: &PhpType,
 ) -> Result<()> {
+    let source_ty = source_ty.codegen_repr();
     match inst.result_php_type.codegen_repr() {
-        PhpType::Mixed if source_ty.codegen_repr() != PhpType::Mixed => {
-            emit_box_current_value_as_mixed(ctx.emitter, &source_ty.codegen_repr());
+        PhpType::Mixed if source_ty == PhpType::Mixed => {
+            abi::emit_incref_if_refcounted(ctx.emitter, &source_ty);
             Ok(())
         }
-        PhpType::TaggedScalar if source_ty.codegen_repr() != PhpType::TaggedScalar => {
-            super::coerce_loaded_value_to_tagged_scalar(ctx, source_ty)?;
+        PhpType::Mixed => {
+            emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+            Ok(())
+        }
+        PhpType::TaggedScalar if source_ty != PhpType::TaggedScalar => {
+            super::coerce_loaded_value_to_tagged_scalar(ctx, &source_ty)?;
             Ok(())
         }
         _ => Ok(()),
@@ -5493,10 +5491,7 @@ fn load_property_store_value_to_result(
     if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         load_value_to_first_int_arg(ctx, value)?;
         match slot_ty.codegen_repr() {
-            PhpType::Str => {
-                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-                abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            }
+            PhpType::Str => emit_mixed_string_for_persistent_store(ctx),
             PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"),
             PhpType::Bool => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool"),
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),

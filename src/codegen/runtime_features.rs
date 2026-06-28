@@ -38,6 +38,11 @@ pub struct RuntimeFeatures {
     pub descriptor_invoker: bool,
     /// True when codegen can call the optional eval bridge staticlib.
     pub eval: bool,
+    /// True when compiling a `--web` program. Selects the output-capture variant
+    /// of `__rt_stdout_write`, which checks the `_elephc_web_capture` flag and may
+    /// tail-call `elephc_web_write` (a symbol only linked into `--web` binaries).
+    /// Non-web runtimes must leave this false so they never reference that symbol.
+    pub web: bool,
 }
 
 impl RuntimeFeatures {
@@ -48,6 +53,7 @@ impl RuntimeFeatures {
             phar_archive: false,
             descriptor_invoker: false,
             eval: false,
+            web: false,
         }
     }
 
@@ -59,6 +65,7 @@ impl RuntimeFeatures {
             phar_archive: true,
             descriptor_invoker: true,
             eval: true,
+            web: true,
         }
     }
 }
@@ -1069,6 +1076,7 @@ mod tests {
             phar_archive: false,
             descriptor_invoker: true,
             eval: false,
+            web: false,
         })
         .iter()
         .any(|lib| lib == "elephc_crypto"));

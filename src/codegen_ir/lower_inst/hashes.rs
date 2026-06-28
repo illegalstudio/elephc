@@ -17,7 +17,10 @@ use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
-use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
+use super::{
+    emit_mixed_string_for_persistent_store, expect_operand, load_value_to_first_int_arg,
+    store_if_result,
+};
 use crate::codegen_ir::{CodegenIrError, Result};
 
 /// Lowers associative-array allocation through the shared runtime constructor.
@@ -101,6 +104,7 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, hash)?;
     }
+    ctx.writeback_global_array_source(hash)?;
     Ok(())
 }
 
@@ -121,6 +125,7 @@ pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instructio
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, hash)?;
     }
+    ctx.writeback_global_array_source(hash)?;
     Ok(())
 }
 
@@ -597,8 +602,7 @@ fn materialize_hash_mixed_value_for_concrete_storage_aarch64(
         }
         PhpType::Str => {
             load_value_to_first_int_arg(ctx, value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            emit_mixed_string_for_persistent_store(ctx);
             ctx.emitter.instruction("mov x3, x1");                              // pass the persisted string pointer as the hash value low word
             ctx.emitter.instruction("mov x4, x2");                              // pass the persisted string length as the hash value high word
         }
@@ -639,8 +643,7 @@ fn materialize_hash_mixed_value_for_concrete_storage_x86_64(
         }
         PhpType::Str => {
             load_value_to_first_int_arg(ctx, value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            emit_mixed_string_for_persistent_store(ctx);
             ctx.emitter.instruction("mov rcx, rax");                            // pass the persisted string pointer as the hash value low word
             ctx.emitter.instruction("mov r8, rdx");                             // pass the persisted string length as the hash value high word
         }
@@ -852,6 +855,9 @@ fn emit_hash_get_success_aarch64(
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov x0, x1");                              // move the borrowed hash scalar payload into the standard integer result
+            if matches!(value_ty, PhpType::Callable) {
+                abi::emit_incref_if_refcounted(ctx.emitter, value_ty);
+            }
             if matches!(result_ty, PhpType::TaggedScalar) {
                 crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
             }
@@ -865,6 +871,7 @@ fn emit_hash_get_success_aarch64(
         }
         other if other.is_refcounted() => {
             ctx.emitter.instruction("mov x0, x1");                              // return the borrowed pointer-backed hash payload
+            abi::emit_incref_if_refcounted(ctx.emitter, other);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -885,6 +892,9 @@ fn emit_hash_get_success_x86_64(
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed hash scalar payload into the standard integer result
+            if matches!(value_ty, PhpType::Callable) {
+                abi::emit_incref_if_refcounted(ctx.emitter, value_ty);
+            }
             if matches!(result_ty, PhpType::TaggedScalar) {
                 crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
             }
@@ -901,6 +911,7 @@ fn emit_hash_get_success_x86_64(
         }
         other if other.is_refcounted() => {
             ctx.emitter.instruction("mov rax, rdi");                            // return the borrowed pointer-backed hash payload
+            abi::emit_incref_if_refcounted(ctx.emitter, other);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -919,6 +930,7 @@ fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("cmp x3, #7");                                      // check whether the entry already stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("b.ne {}", box_label));                    // box concrete per-entry payloads before returning them as Mixed
     ctx.emitter.instruction("mov x0, x1");                                      // return the boxed Mixed pointer stored in the hash entry
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip on-demand boxing for already boxed entries
     ctx.emitter.label(&box_label);
     ctx.emitter.instruction("mov x0, x3");                                      // pass the concrete entry tag to the Mixed boxing helper
@@ -933,6 +945,7 @@ fn emit_hash_get_mixed_success_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("cmp rcx, 7");                                      // check whether the entry already stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("jne {}", box_label));                     // box concrete per-entry payloads before returning them as Mixed
     ctx.emitter.instruction("mov rax, rdi");                                    // return the boxed Mixed pointer stored in the hash entry
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip on-demand boxing for already boxed entries
     ctx.emitter.label(&box_label);
     ctx.emitter.instruction("mov rax, rcx");                                    // pass the concrete entry tag to the Mixed boxing helper

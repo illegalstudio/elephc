@@ -269,6 +269,44 @@ fn load_after_store_forwards_stored_value() {
     assert!(validate_function(&function).is_ok());
 }
 
+/// Effectful operations between a store and later load are barriers: forwarding
+/// across them would create long live ranges across call/runtime clobber points.
+#[test]
+fn load_after_effectful_instruction_is_not_forwarded() {
+    let mut function = Function::new("effect_barrier".to_string(), IrType::I64, PhpType::Int);
+    {
+        let mut builder = Builder::new(&mut function);
+        let slot = add_int_local(&mut builder);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let v = builder.emit_const_i64(7);
+        builder.emit_store_local(slot, v);
+        builder.emit(
+            Op::Call,
+            Vec::new(),
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        let loaded = builder.emit_load_local(slot, IrType::I64, PhpType::Int);
+        builder.terminate(Terminator::Return {
+            value: Some(loaded),
+        });
+    }
+    assert!(
+        !run_peephole(&mut function),
+        "effectful instructions must reset tracked slot residents"
+    );
+    assert_eq!(
+        function.instructions[3].op,
+        Op::LoadLocal,
+        "the post-call load is preserved"
+    );
+    assert!(validate_function(&function).is_ok());
+}
+
 /// Storing back the value just loaded from the same slot is a redundant store
 /// and is neutralized; the load is preserved.
 #[test]
