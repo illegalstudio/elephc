@@ -40,7 +40,9 @@ pub(crate) struct EvalStreamResources {
     socket_names: HashMap<i64, EvalSocketNames>,
     stream_contexts: HashMap<i64, EvalStreamContext>,
     streams: HashMap<i64, EvalFileStream>,
+    user_stream_wrapper_classes: HashMap<String, String>,
     user_stream_wrappers: Vec<String>,
+    user_wrapper_streams: HashMap<i64, EvalUserWrapperStream>,
 }
 
 impl EvalStreamResources {
@@ -238,8 +240,13 @@ impl EvalStreamResources {
         self.insert_stream_context(EvalStreamContext { options })
     }
 
-    /// Registers a user stream wrapper protocol in eval-local state.
-    pub(crate) fn register_stream_wrapper(&mut self, protocol: &str, builtins: &[&str]) -> bool {
+    /// Registers a user stream wrapper protocol and class in eval-local state.
+    pub(crate) fn register_stream_wrapper(
+        &mut self,
+        protocol: &str,
+        class_name: &str,
+        builtins: &[&str],
+    ) -> bool {
         let Some(protocol) = eval_normalize_stream_wrapper_protocol(protocol) else {
             return false;
         };
@@ -255,6 +262,8 @@ impl EvalStreamResources {
         {
             return false;
         }
+        self.user_stream_wrapper_classes
+            .insert(protocol.clone(), class_name.to_string());
         self.user_stream_wrappers.push(protocol);
         true
     }
@@ -269,7 +278,8 @@ impl EvalStreamResources {
             .iter()
             .position(|current| current.eq_ignore_ascii_case(&protocol))
         {
-            self.user_stream_wrappers.remove(index);
+            let protocol = self.user_stream_wrappers.remove(index);
+            self.user_stream_wrapper_classes.remove(&protocol);
             return true;
         }
         if eval_builtin_stream_wrapper_exists(builtins, &protocol) {
@@ -301,6 +311,54 @@ impl EvalStreamResources {
         wrappers
     }
 
+    /// Returns the registered userspace wrapper class for a URL scheme.
+    pub(crate) fn user_stream_wrapper_class_for_path(&self, path: &str) -> Option<String> {
+        let scheme = stream_wrappers::stream_scheme(path)?;
+        self.user_stream_wrapper_classes.get(&scheme).cloned()
+    }
+
+    /// Opens a userspace wrapper stream around an eval-created wrapper object.
+    pub(crate) fn open_user_wrapper_stream(
+        &mut self,
+        object: RuntimeCellHandle,
+        class_name: &str,
+        uri: &str,
+        mode: &str,
+    ) -> i64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.user_wrapper_streams.insert(
+            id,
+            EvalUserWrapperStream {
+                object,
+                class_name: class_name.to_string(),
+                uri: uri.to_string(),
+                mode: mode.to_string(),
+                eof: false,
+            },
+        );
+        id
+    }
+
+    /// Returns a copied userspace-wrapper stream descriptor for dispatch.
+    pub(crate) fn user_wrapper_stream_info(
+        &self,
+        id: i64,
+    ) -> Option<EvalUserWrapperStreamInfo> {
+        self.user_wrapper_streams
+            .get(&id)
+            .map(EvalUserWrapperStream::info)
+    }
+
+    /// Updates the cached EOF state for a userspace-wrapper stream.
+    pub(crate) fn set_user_wrapper_eof(&mut self, id: i64, eof: bool) -> bool {
+        let Some(stream) = self.user_wrapper_streams.get_mut(&id) else {
+            return false;
+        };
+        stream.eof = eof;
+        true
+    }
+
     /// Returns the default stream context resource id, creating it if needed.
     pub(crate) fn default_stream_context(&mut self) -> i64 {
         if let Some(id) = self.default_stream_context {
@@ -319,7 +377,10 @@ impl EvalStreamResources {
             closed = true;
             ok = stream.finalize_on_close();
         }
-        closed = closed || self.filter_resources.remove(&id) || self.socket_listeners.remove(&id).is_some();
+        closed = closed
+            || self.user_wrapper_streams.remove(&id).is_some()
+            || self.filter_resources.remove(&id)
+            || self.socket_listeners.remove(&id).is_some();
         self.socket_names.remove(&id);
         if let Some(mut child) = self.process_children.remove(&id) {
             let _ = child.wait();
@@ -329,7 +390,7 @@ impl EvalStreamResources {
 
     /// Returns whether a file-like stream resource exists.
     pub(crate) fn has_stream(&self, id: i64) -> bool {
-        self.streams.contains_key(&id)
+        self.streams.contains_key(&id) || self.user_wrapper_streams.contains_key(&id)
     }
 
     /// Returns a local or remote socket name for a socket resource.
@@ -560,7 +621,10 @@ impl EvalStreamResources {
 
     /// Returns whether the stream has reached EOF after the last read attempt.
     pub(crate) fn eof(&self, id: i64) -> Option<bool> {
-        self.streams.get(&id).map(|stream| stream.eof)
+        self.streams
+            .get(&id)
+            .map(|stream| stream.eof)
+            .or_else(|| self.user_wrapper_streams.get(&id).map(|stream| stream.eof))
     }
 
     /// Returns the current stream cursor offset.
@@ -671,7 +735,14 @@ impl EvalStreamResources {
 
     /// Returns metadata fields used by PHP `stream_get_meta_data()`.
     pub(crate) fn meta_data(&self, id: i64) -> Option<EvalStreamMetaData> {
-        let stream = self.streams.get(&id)?;
+        if let Some(stream) = self.streams.get(&id) {
+            return Some(EvalStreamMetaData {
+                eof: stream.eof,
+                mode: stream.mode.clone(),
+                uri: stream.uri.clone(),
+            });
+        }
+        let stream = self.user_wrapper_streams.get(&id)?;
         Some(EvalStreamMetaData {
             eof: stream.eof,
             mode: stream.mode.clone(),
@@ -914,6 +985,33 @@ impl EvalFileStream {
         }
         flush_target.write_back(&bytes)
     }
+}
+
+/// Userspace wrapper stream stored behind one eval resource id.
+struct EvalUserWrapperStream {
+    object: RuntimeCellHandle,
+    class_name: String,
+    uri: String,
+    mode: String,
+    eof: bool,
+}
+
+impl EvalUserWrapperStream {
+    /// Copies the dispatch-relevant wrapper fields out of the resource table.
+    fn info(&self) -> EvalUserWrapperStreamInfo {
+        EvalUserWrapperStreamInfo {
+            object: self.object,
+            class_name: self.class_name.clone(),
+            eof: self.eof,
+        }
+    }
+}
+
+/// Copied userspace-wrapper stream fields used while dispatching PHP methods.
+pub(crate) struct EvalUserWrapperStreamInfo {
+    pub(crate) object: RuntimeCellHandle,
+    pub(crate) class_name: String,
+    pub(crate) eof: bool,
 }
 
 /// Wrapper targets that need a write-back step when their stream closes.
