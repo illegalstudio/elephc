@@ -12,6 +12,7 @@
 //!   to `RuntimeValueOps`, which will be backed by elephc runtime hooks.
 
 mod array_literals;
+pub mod builtin_metadata;
 mod builtin_interfaces;
 mod builtins;
 mod constant_eval;

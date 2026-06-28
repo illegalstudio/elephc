@@ -109,7 +109,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "array_fill" => Some(&["start_index", "count", "value"]),
         "array_fill_keys" => Some(&["keys", "value"]),
         "array_filter" => Some(&["array", "callback", "mode"]),
-        "array_map" => Some(&["callback", "array"]),
+        "array_map" => Some(&["callback", "array", "arrays"]),
         "array_reduce" => Some(&["array", "callback", "initial"]),
         "array_walk" => Some(&["array", "callback"]),
         "uasort" | "uksort" | "usort" => Some(&["array", "callback"]),
@@ -118,13 +118,17 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort" | "shuffle" | "sort" => {
             Some(&["array"])
         }
+        "array_merge" => Some(&["arrays"]),
+        "array_diff" | "array_intersect" | "array_diff_key" | "array_intersect_key" => {
+            Some(&["array", "arrays"])
+        }
         "array_push" | "array_unshift" => Some(&["array", "values"]),
         "array_key_exists" => Some(&["key", "array"]),
         "array_pad" => Some(&["array", "length", "value"]),
-        "array_reverse" => Some(&["array", "preserve_keys"]),
+        "array_reverse" => Some(&["array"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
         "array_slice" => Some(&["array", "offset", "length"]),
-        "array_splice" => Some(&["array", "offset", "length", "replacement"]),
+        "array_splice" => Some(&["array", "offset", "length"]),
         "acos" | "asin" | "atan" | "cos" | "cosh" | "deg2rad" | "exp" | "log2" | "log10"
         | "rad2deg" | "sin" | "sinh" | "tan" | "tanh" => Some(&["num"]),
         "atan2" => Some(&["y", "x"]),
@@ -133,9 +137,10 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         | "hex2bin" | "rawurldecode" | "rawurlencode" | "stripslashes" | "urldecode"
         | "urlencode" => Some(&["string"]),
         "boolval" | "empty" | "floatval" | "gettype" | "intval" | "is_array" | "is_bool"
-        | "is_double" | "is_finite" | "is_float" | "is_infinite" | "is_int" | "is_integer"
-        | "is_iterable" | "is_long" | "is_nan" | "is_null" | "is_numeric" | "is_object"
-        | "is_real" | "is_resource" | "is_string" | "is_callable" | "strval" => Some(&["value"]),
+        | "is_double" | "is_float" | "is_int" | "is_integer" | "is_iterable" | "is_long"
+        | "is_null" | "is_numeric" | "is_object" | "is_real" | "is_resource" | "is_string"
+        | "is_callable" | "strval" => Some(&["value"]),
+        "is_finite" | "is_infinite" | "is_nan" => Some(&["num"]),
         "settype" => Some(&["var", "type"]),
         "get_called_class" => Some(&[]),
         "get_class" => Some(&["object"]),
@@ -143,7 +148,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "get_class_vars" => Some(&["class"]),
         "get_object_vars" => Some(&["object"]),
         "get_parent_class" => Some(&["object_or_class"]),
-        "call_user_func" => Some(&["callback"]),
+        "call_user_func" => Some(&["callback", "args"]),
         "call_user_func_array" => Some(&["callback", "args"]),
         "class_alias" => Some(&["class", "alias", "autoload"]),
         "class_attribute_args" => Some(&["class_name", "attribute_name"]),
@@ -176,7 +181,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "dirname" => Some(&["path", "levels"]),
         "disk_free_space" | "disk_total_space" => Some(&["directory"]),
         "exec" | "shell_exec" | "system" | "passthru" => Some(&["command"]),
-        "explode" => Some(&["separator", "string"]),
+        "explode" => Some(&["separator", "string", "limit"]),
         "fdiv" | "fmod" => Some(&["num1", "num2"]),
         "fclose"
         | "fgetc"
@@ -229,7 +234,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "hash_file" => Some(&["algo", "filename", "binary"]),
         "hash_final" => Some(&["context", "binary"]),
         "hash_hmac" => Some(&["algo", "data", "key", "binary"]),
-        "hash_init" => Some(&["algo"]),
+        "hash_init" => Some(&["algo", "flags", "key"]),
         "hash_update" => Some(&["context", "data"]),
         "gzcompress" | "gzdeflate" => Some(&["data", "level"]),
         "gzinflate" | "gzuncompress" => Some(&["data", "max_length"]),
@@ -251,11 +256,11 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "link" | "symlink" => Some(&["target", "link"]),
         "linkinfo" | "readlink" => Some(&["path"]),
         "log" => Some(&["num", "base"]),
-        "max" | "min" => Some(&["value"]),
+        "max" | "min" => Some(&["value", "values"]),
         "md5" | "sha1" => Some(&["string", "binary"]),
         "microtime" => Some(&["as_float"]),
         "mktime" => Some(&["hour", "minute", "second", "month", "day", "year"]),
-        "nl2br" => Some(&["string", "use_xhtml"]),
+        "nl2br" => Some(&["string"]),
         "number_format" => Some(&[
             "num",
             "decimals",
@@ -270,17 +275,18 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "pclose" => Some(&["handle"]),
         "popen" => Some(&["command", "mode"]),
         "pow" => Some(&["num", "exponent"]),
-        "preg_match" => Some(&["pattern", "subject", "matches", "flags", "offset"]),
-        "preg_match_all" => Some(&["pattern", "subject", "matches", "flags", "offset"]),
-        "preg_replace" => Some(&["pattern", "replacement", "subject", "limit", "count"]),
-        "preg_replace_callback" => Some(&["pattern", "callback", "subject", "limit", "count"]),
+        "preg_match" => Some(&["pattern", "subject", "matches"]),
+        "preg_match_all" => Some(&["pattern", "subject"]),
+        "preg_replace" => Some(&["pattern", "replacement", "subject"]),
+        "preg_replace_callback" => Some(&["pattern", "callback", "subject"]),
         "preg_split" => Some(&["pattern", "subject", "limit", "flags"]),
         "print_r" | "var_dump" => Some(&["value"]),
         "putenv" => Some(&["assignment"]),
         "rand" | "mt_rand" | "random_int" => Some(&["min", "max"]),
         "range" => Some(&["start", "end"]),
         "readline" => Some(&["prompt"]),
-        "realpath" | "stream_resolve_include_path" => Some(&["path"]),
+        "realpath" => Some(&["path"]),
+        "stream_resolve_include_path" => Some(&["filename"]),
         "realpath_cache_get" | "realpath_cache_size" => Some(&[]),
         "round" => Some(&["num", "precision"]),
         "sleep" => Some(&["seconds"]),
@@ -327,8 +333,8 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         }
         "stream_socket_get_name" => Some(&["socket", "remote"]),
         "stream_socket_pair" => Some(&["domain", "type", "protocol"]),
-        "stream_socket_recvfrom" => Some(&["stream", "length", "flags", "address"]),
-        "stream_socket_sendto" => Some(&["stream", "data", "flags", "address"]),
+        "stream_socket_recvfrom" => Some(&["socket", "length", "flags", "address"]),
+        "stream_socket_sendto" => Some(&["socket", "data", "flags", "address"]),
         "stream_socket_shutdown" => Some(&["stream", "mode"]),
         "stream_wrapper_register" => Some(&["protocol", "class", "flags"]),
         "stream_wrapper_unregister" | "stream_wrapper_restore" => Some(&["protocol"]),
@@ -337,7 +343,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "strtotime" => Some(&["datetime"]),
         "strstr" => Some(&["haystack", "needle", "before_needle"]),
         "str_pad" => Some(&["string", "length", "pad_string", "pad_type"]),
-        "str_replace" | "str_ireplace" => Some(&["search", "replace", "subject"]),
+        "str_replace" | "str_ireplace" => Some(&["search", "replace", "subject", "count"]),
         "strpos" | "strrpos" => Some(&["haystack", "needle", "offset"]),
         "str_repeat" => Some(&["string", "times"]),
         "str_split" => Some(&["string", "length"]),

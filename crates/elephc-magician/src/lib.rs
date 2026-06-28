@@ -26,4 +26,5 @@ pub mod scope;
 mod stream_resources;
 pub mod value;
 
+pub use interpreter::builtin_metadata;
 pub use ffi::*;

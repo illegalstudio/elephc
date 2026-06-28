@@ -9,6 +9,8 @@
 //! - Public module boundaries here are part of the crate-facing compiler API.
 
 pub mod autoload;
+/// Builtin catalog and signature metadata snapshots.
+pub mod builtin_metadata;
 /// Compiler pipeline for autoloading classes.
 pub mod codegen;
 /// EIR-consuming assembly backend track.

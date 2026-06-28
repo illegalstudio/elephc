@@ -18,6 +18,7 @@ mod cli;
 mod benchmarks;
 mod echo_vars;
 mod eval;
+mod eval_builtin_parity;
 mod operators;
 mod control_flow;
 mod scalar_strings;
