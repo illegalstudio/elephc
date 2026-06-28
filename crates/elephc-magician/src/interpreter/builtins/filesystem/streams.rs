@@ -133,14 +133,19 @@ pub(in crate::interpreter) fn eval_unary_stream_result(
                 None => values.bool_value(false),
             }
         }
-        "fgets" => match context
-            .stream_resources_mut()
-            .read_line(id, usize::MAX, None, true, true)
-        {
-            Some(bytes) if !bytes.is_empty() => values.string_bytes_value(&bytes),
-            Some(_) => values.bool_value(false),
-            None => values.bool_value(false),
-        },
+        "fgets" => {
+            if let Some(result) = eval_user_wrapper_fgets_result(id, context, values)? {
+                return Ok(result);
+            }
+            match context
+                .stream_resources_mut()
+                .read_line(id, usize::MAX, None, true, true)
+            {
+                Some(bytes) if !bytes.is_empty() => values.string_bytes_value(&bytes),
+                Some(_) => values.bool_value(false),
+                None => values.bool_value(false),
+            }
+        }
         "feof" => {
             if let Some(result) = eval_user_wrapper_feof_result(id, context, values)? {
                 return Ok(result);
@@ -750,6 +755,11 @@ pub(in crate::interpreter) fn eval_stream_get_line_result(
         }
         _ => None,
     };
+    if let Some(result) =
+        eval_user_wrapper_stream_get_line_result(id, length, ending.as_deref(), context, values)?
+    {
+        return Ok(result);
+    }
     match context
         .stream_resources_mut()
         .read_line(id, length, ending.as_deref(), false, false)
