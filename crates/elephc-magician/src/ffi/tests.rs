@@ -1532,6 +1532,22 @@ fn execute_rejects_php_opening_tags_as_parse_errors() {
     assert_eq!(status, EvalStatus::ParseError.code());
 }
 
+/// Verifies execute maps invalid ABI code storage to runtime fatal instead of panicking.
+#[test]
+fn execute_rejects_null_code_pointer_with_nonzero_length() {
+    let status = unsafe {
+        __elephc_eval_execute(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            1,
+            std::ptr::null_mut(),
+        )
+    };
+
+    assert_eq!(status, EvalStatus::RuntimeFatal.code());
+}
+
 /// Verifies scope set/get expose runtime-cell handles and dirty flags through the ABI.
 #[test]
 fn scope_set_get_round_trips_cell_and_flags() {

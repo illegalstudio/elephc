@@ -13,6 +13,14 @@
 
 use crate::support::*;
 
+/// Asserts an eval failure stayed inside the C ABI/error-status contract.
+fn assert_no_rust_panic_leaked(stderr: &str) {
+    assert!(
+        !stderr.contains("panicked at") && !stderr.contains("thread '"),
+        "eval failure leaked Rust panic diagnostics: {stderr}"
+    );
+}
+
 /// Verifies `eval` is resolved as a language construct, not a PHP-visible callable function.
 #[test]
 fn test_eval_is_not_function_exists_or_callable() {
@@ -71,6 +79,75 @@ fn test_non_eval_program_does_not_request_eval_bridge() {
             .iter()
             .any(|lib| lib == "elephc_magician"),
         "non-eval required libraries should not include elephc_magician: {required_libraries:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies non-eval builtin probes stay static and do not request the eval bridge.
+#[test]
+fn test_non_eval_builtin_probes_remain_static_without_eval_bridge() {
+    let dir = make_cli_test_dir("elephc_no_eval_builtin_static_contract");
+    let source = r#"<?php
+namespace EvalNoBridgeContract;
+echo function_exists("strlen") ? "F" : "f";
+echo function_exists("STRLEN") ? "C" : "c";
+echo ":";
+echo STRLEN("abcd");
+echo ":";
+echo \strlen("xy");
+echo ":";
+echo ChOp("value\f");
+"#;
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        !user_asm.contains("__elephc_eval_"),
+        "non-eval builtin contract should not reference eval bridge:\n{user_asm}"
+    );
+    assert!(
+        !runtime_asm.contains("__elephc_eval_"),
+        "non-eval builtin contract runtime should not reference eval bridge:\n{runtime_asm}"
+    );
+    assert_eq!(
+        required_libraries
+            .iter()
+            .filter(|lib| lib.as_str() == "elephc_magician")
+            .count(),
+        0,
+        "non-eval builtin contract should not link elephc_magician: {required_libraries:?}"
+    );
+
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let out = assemble_and_run(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "FC:4:2:value");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies multiple eval calls still request the optional bridge exactly once.
+#[test]
+fn test_eval_runtime_feature_links_magician_once() {
+    let dir = make_cli_test_dir("elephc_eval_bridge_once");
+    let (_user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        "<?php eval('$a = 1;'); eval('$b = 2;'); eval('$c = $a + $b;');",
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert_eq!(
+        required_libraries
+            .iter()
+            .filter(|lib| lib.as_str() == "elephc_magician")
+            .count(),
+        1,
+        "eval bridge should be linked exactly once: {required_libraries:?}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
@@ -4184,6 +4261,74 @@ fn test_eval_parse_error_reports_eval_parse_diagnostic() {
     );
 }
 
+/// Verifies eval failure classes map to distinct stable user-facing diagnostics.
+#[test]
+fn test_eval_error_contract_distinguishes_parse_unsupported_runtime_and_warning() {
+    let parse_err = compile_and_run_expect_failure("<?php eval('if (');");
+    assert!(
+        parse_err.contains("Parse error: eval() fragment is invalid"),
+        "stderr did not contain eval parse-error diagnostic: {parse_err}"
+    );
+    assert_no_rust_panic_leaked(&parse_err);
+
+    let unsupported_err = compile_and_run_expect_failure(
+        "<?php eval('function eval_bad_static_return(): static {}');",
+    );
+    assert!(
+        unsupported_err.contains("Fatal error: eval() fragment uses an unsupported construct"),
+        "stderr did not contain eval unsupported-construct diagnostic: {unsupported_err}"
+    );
+    assert_no_rust_panic_leaked(&unsupported_err);
+
+    let runtime_err =
+        compile_and_run_expect_failure("<?php eval('return MissingEvalContractConst;');");
+    assert!(
+        runtime_err.contains("Fatal error: eval() runtime failed"),
+        "stderr did not contain eval runtime-fatal diagnostic: {runtime_err}"
+    );
+    assert_no_rust_panic_leaked(&runtime_err);
+
+    let warning = compile_and_run_capture(
+        r#"<?php
+eval('define("EvalErrorContractConst", 1);');
+echo eval('return define("EvalErrorContractConst", 2) ? "bad" : "ok";');
+"#,
+    );
+    assert!(warning.success, "warning fixture should not fail: {}", warning.stderr);
+    assert_eq!(warning.stdout, "ok");
+    assert!(
+        warning
+            .stderr
+            .contains("Warning: define(): Constant already defined"),
+        "stderr did not contain eval warning diagnostic: {}",
+        warning.stderr
+    );
+}
+
+/// Verifies malformed input, builtin failure, and non-callables do not leak Rust panics.
+#[test]
+fn test_eval_bridge_failure_paths_do_not_leak_rust_panics() {
+    for (source, expected) in [
+        ("<?php eval('if (');", "Parse error: eval() fragment is invalid"),
+        ("<?php eval('clamp(5, 10, 0);');", "Fatal error: eval() runtime failed"),
+        (
+            concat!(
+                "<?php eval('class EvalPanicBoundaryPlainCallback {} ",
+                "$callback = new EvalPanicBoundaryPlainCallback(); ",
+                "call_user_func($callback);');"
+            ),
+            "Fatal error: uncaught exception",
+        ),
+    ] {
+        let err = compile_and_run_expect_failure(source);
+        assert!(
+            err.contains(expected),
+            "stderr did not contain expected eval diagnostic `{expected}`: {err}"
+        );
+        assert_no_rust_panic_leaked(&err);
+    }
+}
+
 /// Verifies eval `abs()` preserves integer/float result typing through direct and callable calls.
 #[test]
 fn test_eval_dispatches_abs_builtin_call() {
@@ -7720,6 +7865,49 @@ echo function_exists('missing_eval_probe') ? '1' : '0';
 "#,
     );
     assert_eq!(out, "110");
+}
+
+/// Verifies eval dynamic symbol probes are false before the barrier and true after it.
+#[test]
+fn test_eval_barrier_dynamic_symbol_probes_are_ordered_and_namespaced() {
+    let out = compile_and_run(
+        r#"<?php
+echo function_exists("EvalBarrierNs\\dyn_eval_barrier") ? "bad" : "f";
+echo class_exists("EvalBarrierNs\\DynEvalBarrierClass") ? "bad" : "c";
+echo defined("EvalBarrierNs\\DYN_EVAL_BARRIER_CONST") ? "bad" : "d";
+eval('namespace EvalBarrierNs;
+function dyn_eval_barrier() { return "fn"; }
+class DynEvalBarrierClass {}
+define(__NAMESPACE__ . "\\DYN_EVAL_BARRIER_CONST", 9);');
+echo function_exists("EvalBarrierNs\\dyn_eval_barrier") ? "F" : "bad";
+echo is_callable("EvalBarrierNs\\dyn_eval_barrier") ? "I" : "bad";
+echo class_exists("EvalBarrierNs\\DynEvalBarrierClass") ? "C" : "bad";
+echo defined("EvalBarrierNs\\DYN_EVAL_BARRIER_CONST") ? "D" : "bad";
+echo ":" . call_user_func("EvalBarrierNs\\dyn_eval_barrier");
+echo ":" . \EvalBarrierNs\DYN_EVAL_BARRIER_CONST;
+"#,
+    );
+    assert_eq!(out, "fcdFICD:fn:9");
+}
+
+/// Verifies eval-aware dynamic probes do not leak into sibling functions without a barrier.
+#[test]
+fn test_eval_barrier_is_not_inherited_by_sibling_functions() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_no_barrier_probe() {
+    return function_exists("dyn_eval_isolated_fn") ? "Y" : "N";
+}
+function eval_with_barrier_probe() {
+    eval('function dyn_eval_isolated_fn() { return 1; }');
+    return function_exists("dyn_eval_isolated_fn") ? "Y" : "N";
+}
+echo eval_no_barrier_probe();
+echo eval_with_barrier_probe();
+echo eval_no_barrier_probe();
+"#,
+    );
+    assert_eq!(out, "NYN");
 }
 
 /// Verifies callable probes inside eval inspect dynamic functions and supported builtins.
