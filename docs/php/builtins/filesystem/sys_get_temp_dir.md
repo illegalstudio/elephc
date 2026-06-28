@@ -2,7 +2,7 @@
 title: "sys_get_temp_dir()"
 description: "Lowers `sys_get_temp_dir()` as the project's hardcoded `/tmp` string."
 sidebar:
-  order: 130
+  order: 145
 ---
 
 ## sys_get_temp_dir()

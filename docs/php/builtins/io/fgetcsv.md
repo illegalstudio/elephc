@@ -2,7 +2,7 @@
 title: "fgetcsv()"
 description: "Lowers `fgetcsv(stream, separator?, enclosure?)` through the CSV row runtime helper."
 sidebar:
-  order: 142
+  order: 157
 ---
 
 ## fgetcsv()

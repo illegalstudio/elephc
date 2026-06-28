@@ -2,7 +2,7 @@
 title: "gethostname()"
 description: "Lowers `gethostname()` through the shared runtime helper."
 sidebar:
-  order: 162
+  order: 177
 ---
 
 ## gethostname()

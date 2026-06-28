@@ -2,7 +2,7 @@
 title: "stream_socket_accept()"
 description: "Lowers `stream_socket_accept(server, timeout?, peer_name?)`."
 sidebar:
-  order: 199
+  order: 214
 ---
 
 ## stream_socket_accept()

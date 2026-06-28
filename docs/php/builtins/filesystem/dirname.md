@@ -2,7 +2,7 @@
 title: "dirname()"
 description: "Lowers `dirname(path, levels?)` through the target-aware runtime helper."
 sidebar:
-  order: 88
+  order: 103
 ---
 
 ## dirname()

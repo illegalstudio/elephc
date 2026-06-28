@@ -2,7 +2,7 @@
 title: "array_unshift()"
 description: "Lowers `array_unshift()` by ensuring uniqueness, prepending one scalar value, and returning count."
 sidebar:
-  order: 29
+  order: 43
 ---
 
 ## array_unshift()

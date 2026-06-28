@@ -2,7 +2,7 @@
 title: "array_rand() — internals"
 description: "Compiler internals for array_rand(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 20
+  order: 30
 ---
 
 ## `array_rand()` — internals

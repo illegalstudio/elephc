@@ -2,7 +2,7 @@
 title: "stream_context_set_params()"
 description: "Lowers `stream_context_set_params(context, params)` as an accepted parameter update."
 sidebar:
-  order: 180
+  order: 195
 ---
 
 ## stream_context_set_params()

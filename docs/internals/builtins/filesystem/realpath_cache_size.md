@@ -2,7 +2,7 @@
 title: "realpath_cache_size() — internals"
 description: "Compiler internals for realpath_cache_size(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 124
+  order: 139
 ---
 
 ## `realpath_cache_size()` — internals

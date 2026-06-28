@@ -2,7 +2,7 @@
 title: "flock()"
 description: "Lowers `flock(stream, operation, would_block?)` through the libc flock wrapper."
 sidebar:
-  order: 147
+  order: 162
 ---
 
 ## flock()

@@ -2,7 +2,7 @@
 title: "stream_bucket_new()"
 description: "Lowers `stream_bucket_new(stream, data)` into a stdClass-backed bucket object."
 sidebar:
-  order: 173
+  order: 188
 ---
 
 ## stream_bucket_new()

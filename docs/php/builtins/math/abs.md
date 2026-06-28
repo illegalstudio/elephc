@@ -2,7 +2,7 @@
 title: "abs()"
 description: "Lowers `abs()` for concrete integer-like and floating operands."
 sidebar:
-  order: 218
+  order: 233
 ---
 
 ## abs()

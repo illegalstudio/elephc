@@ -2,7 +2,7 @@
 title: "uksort() — internals"
 description: "Compiler internals for uksort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 45
+  order: 60
 ---
 
 ## `uksort()` — internals
@@ -20,7 +20,8 @@ sidebar:
 
 ## Runtime helpers
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+The following runtime helpers are referenced:
+- `__rt_array_is_list`
 
 ## Signature summary
 

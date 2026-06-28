@@ -2,7 +2,7 @@
 title: "is_a()"
 description: "is_a() — class builtin supported by Elephc."
 sidebar:
-  order: 65
+  order: 80
 ---
 
 ## is_a()

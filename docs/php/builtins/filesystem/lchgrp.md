@@ -2,7 +2,7 @@
 title: "lchgrp()"
 description: "Lowers `lchgrp(path, group)` for integer GIDs and string group names without following symlinks."
 sidebar:
-  order: 112
+  order: 127
 ---
 
 ## lchgrp()

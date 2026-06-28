@@ -2,7 +2,7 @@
 title: "pi()"
 description: "Lowers `pi()` as the same data-section float constant used by the legacy backend."
 sidebar:
-  order: 243
+  order: 258
 ---
 
 ## pi()

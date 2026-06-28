@@ -2,7 +2,7 @@
 title: "arsort()"
 description: "Lowers `arsort()` for indexed integer arrays through the descending value-sort wrapper."
 sidebar:
-  order: 32
+  order: 47
 ---
 
 ## arsort()

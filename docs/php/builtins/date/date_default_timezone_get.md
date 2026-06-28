@@ -2,7 +2,7 @@
 title: "date_default_timezone_get()"
 description: "Lowers `date_default_timezone_get()` through the shared runtime helper."
 sidebar:
-  order: 70
+  order: 85
 ---
 
 ## date_default_timezone_get()

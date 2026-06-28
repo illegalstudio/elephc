@@ -2,7 +2,7 @@
 title: "stream_socket_server()"
 description: "Lowers `stream_socket_server(address)` and boxes `resource|false`."
 sidebar:
-  order: 206
+  order: 221
 ---
 
 ## stream_socket_server()

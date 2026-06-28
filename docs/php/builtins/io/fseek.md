@@ -2,7 +2,7 @@
 title: "fseek()"
 description: "Lowers `fseek(stream, offset, whence?)` and clears EOF state on success."
 sidebar:
-  order: 154
+  order: 169
 ---
 
 ## fseek()

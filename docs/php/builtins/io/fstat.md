@@ -2,7 +2,7 @@
 title: "fstat()"
 description: "Lowers `fstat(stream)` and boxes the runtime stat array or PHP false result."
 sidebar:
-  order: 155
+  order: 170
 ---
 
 ## fstat()

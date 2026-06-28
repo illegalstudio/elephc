@@ -2,7 +2,7 @@
 title: "getprotobyname()"
 description: "Lowers `getprotobyname(protocol)` and boxes a missing entry as PHP `false`."
 sidebar:
-  order: 163
+  order: 178
 ---
 
 ## getprotobyname()

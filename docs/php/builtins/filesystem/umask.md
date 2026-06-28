@@ -2,7 +2,7 @@
 title: "umask()"
 description: "Lowers `umask(mask?)` through the target-aware runtime helper."
 sidebar:
-  order: 134
+  order: 149
 ---
 
 ## umask()

@@ -2,7 +2,7 @@
 title: "is_writable() — internals"
 description: "Compiler internals for is_writable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 110
+  order: 125
 ---
 
 ## `is_writable()` — internals

@@ -2,7 +2,7 @@
 title: "stream_set_chunk_size()"
 description: "Lowers `stream_set_chunk_size(stream, size)` and returns the previous size."
 sidebar:
-  order: 195
+  order: 210
 ---
 
 ## stream_set_chunk_size()

@@ -2,7 +2,7 @@
 title: "filegroup()"
 description: "Lowers `filegroup(path)` and boxes the runtime integer-or-false result."
 sidebar:
-  order: 94
+  order: 109
 ---
 
 ## filegroup()

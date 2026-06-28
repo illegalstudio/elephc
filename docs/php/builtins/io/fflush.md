@@ -2,7 +2,7 @@
 title: "fflush()"
 description: "Lowers `fflush(stream)` through the shared fd flush runtime helper."
 sidebar:
-  order: 140
+  order: 155
 ---
 
 ## fflush()

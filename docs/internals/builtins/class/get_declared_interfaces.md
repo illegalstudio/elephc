@@ -2,7 +2,7 @@
 title: "get_declared_interfaces() — internals"
 description: "Compiler internals for get_declared_interfaces(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 61
+  order: 76
 ---
 
 ## `get_declared_interfaces()` — internals

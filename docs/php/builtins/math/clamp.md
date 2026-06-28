@@ -2,7 +2,7 @@
 title: "clamp()"
 description: "Lowers numeric `clamp(value, min, max)` calls with PHP-compatible bound checks."
 sidebar:
-  order: 224
+  order: 239
 ---
 
 ## clamp()

@@ -2,7 +2,7 @@
 title: "file_exists()"
 description: "Lowers `file_exists(path)` through the target-aware runtime stat helper."
 sidebar:
-  order: 91
+  order: 106
 ---
 
 ## file_exists()

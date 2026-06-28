@@ -2,7 +2,7 @@
 title: "unlink()"
 description: "Lowers `unlink(path)` through the target-aware runtime helper."
 sidebar:
-  order: 135
+  order: 150
 ---
 
 ## unlink()

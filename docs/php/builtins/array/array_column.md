@@ -2,7 +2,7 @@
 title: "array_column()"
 description: "Lowers `array_column()` by dispatching to the helper matching row value ownership."
 sidebar:
-  order: 2
+  order: 4
 ---
 
 ## array_column()

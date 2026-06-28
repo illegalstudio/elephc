@@ -2,7 +2,7 @@
 title: "stream_resolve_include_path()"
 description: "Lowers `stream_resolve_include_path(filename)` as realpath-backed `string|false`."
 sidebar:
-  order: 192
+  order: 207
 ---
 
 ## stream_resolve_include_path()

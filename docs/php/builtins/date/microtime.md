@@ -2,7 +2,7 @@
 title: "microtime()"
 description: "Lowers `microtime()` / `microtime(true)` / `microtime(false)` / `microtime($flag)`."
 sidebar:
-  order: 77
+  order: 92
 ---
 
 ## microtime()

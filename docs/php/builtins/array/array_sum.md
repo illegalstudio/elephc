@@ -2,7 +2,7 @@
 title: "array_sum()"
 description: "Lowers `array_sum()` over supported indexed-array payloads."
 sidebar:
-  order: 27
+  order: 39
 ---
 
 ## array_sum()

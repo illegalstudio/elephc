@@ -2,7 +2,7 @@
 title: "is_dir()"
 description: "Lowers `is_dir(path)` through the target-aware runtime stat helper."
 sidebar:
-  order: 105
+  order: 120
 ---
 
 ## is_dir()

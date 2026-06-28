@@ -2,7 +2,7 @@
 title: "array_merge() — internals"
 description: "Compiler internals for array_merge(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 15
+  order: 23
 ---
 
 ## `array_merge()` — internals

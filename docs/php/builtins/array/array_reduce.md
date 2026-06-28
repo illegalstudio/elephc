@@ -2,7 +2,7 @@
 title: "array_reduce()"
 description: "Lowers `array_reduce()` through the callback-driven runtime helper."
 sidebar:
-  order: 21
+  order: 31
 ---
 
 ## array_reduce()

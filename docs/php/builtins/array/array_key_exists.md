@@ -2,7 +2,7 @@
 title: "array_key_exists()"
 description: "Lowers `array_key_exists()` for indexed arrays and associative arrays."
 sidebar:
-  order: 12
+  order: 18
 ---
 
 ## array_key_exists()

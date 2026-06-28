@@ -2,7 +2,7 @@
 title: "gmdate()"
 description: "Lowers `gmdate(format[, timestamp])`: the UTC counterpart of `date()`."
 sidebar:
-  order: 73
+  order: 88
 ---
 
 ## gmdate()

@@ -2,7 +2,7 @@
 title: "fgetc()"
 description: "Lowers `fgetc(stream)` and boxes the one-byte string or PHP false result."
 sidebar:
-  order: 141
+  order: 156
 ---
 
 ## fgetc()

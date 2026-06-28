@@ -2,7 +2,7 @@
 title: "feof()"
 description: "Lowers `feof(stream)` through the runtime EOF-flag table helper."
 sidebar:
-  order: 139
+  order: 154
 ---
 
 ## feof()

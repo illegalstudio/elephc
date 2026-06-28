@@ -2,7 +2,7 @@
 title: "buffer_len()"
 description: "Lowers `buffer_len()` through the direct buffer opcode helper."
 sidebar:
-  order: 48
+  order: 63
 ---
 
 ## buffer_len()

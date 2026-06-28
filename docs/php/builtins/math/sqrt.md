@@ -2,7 +2,7 @@
 title: "sqrt()"
 description: "Lowers `sqrt()` for concrete integer-like and floating operands."
 sidebar:
-  order: 251
+  order: 266
 ---
 
 ## sqrt()

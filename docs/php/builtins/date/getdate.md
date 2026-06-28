@@ -2,7 +2,7 @@
 title: "getdate()"
 description: "Lowers `getdate([$timestamp])` through the shared decomposition runtime helper."
 sidebar:
-  order: 72
+  order: 87
 ---
 
 ## getdate()

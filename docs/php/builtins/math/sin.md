@@ -2,7 +2,7 @@
 title: "sin()"
 description: "sin() — math builtin supported by Elephc."
 sidebar:
-  order: 249
+  order: 264
 ---
 
 ## sin()

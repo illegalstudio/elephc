@@ -2,7 +2,7 @@
 title: "rename()"
 description: "Lowers `rename(from, to)` through the target-aware runtime helper."
 sidebar:
-  order: 125
+  order: 140
 ---
 
 ## rename()

@@ -2,7 +2,7 @@
 title: "stream_get_filters()"
 description: "Lowers `stream_get_filters()` to the static built-in filter list."
 sidebar:
-  order: 185
+  order: 200
 ---
 
 ## stream_get_filters()

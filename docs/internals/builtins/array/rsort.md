@@ -2,7 +2,7 @@
 title: "rsort() — internals"
 description: "Compiler internals for rsort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 41
+  order: 56
 ---
 
 ## `rsort()` — internals

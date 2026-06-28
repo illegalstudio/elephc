@@ -2,7 +2,7 @@
 title: "stream_socket_shutdown()"
 description: "Lowers `stream_socket_shutdown(stream, mode)`."
 sidebar:
-  order: 207
+  order: 222
 ---
 
 ## stream_socket_shutdown()

@@ -2,7 +2,7 @@
 title: "shuffle()"
 description: "Lowers `shuffle()` for indexed arrays with 8-byte slots by mutating the source array in place."
 sidebar:
-  order: 42
+  order: 57
 ---
 
 ## shuffle()

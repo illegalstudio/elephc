@@ -2,7 +2,7 @@
 title: "ksort()"
 description: "Lowers `ksort()` through the legacy key-sort helper surface."
 sidebar:
-  order: 37
+  order: 52
 ---
 
 ## ksort()

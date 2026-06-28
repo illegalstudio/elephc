@@ -2,7 +2,7 @@
 title: "get_declared_traits()"
 description: "get_declared_traits() — class builtin supported by Elephc."
 sidebar:
-  order: 62
+  order: 77
 ---
 
 ## get_declared_traits()

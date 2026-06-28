@@ -2,7 +2,7 @@
 title: "filesize()"
 description: "Lowers `filesize(path)` through the target-aware runtime stat helper."
 sidebar:
-  order: 99
+  order: 114
 ---
 
 ## filesize()

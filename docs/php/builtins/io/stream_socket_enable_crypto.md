@@ -2,7 +2,7 @@
 title: "stream_socket_enable_crypto()"
 description: "Lowers `stream_socket_enable_crypto(stream, enable, method?, session_stream?)`."
 sidebar:
-  order: 201
+  order: 216
 ---
 
 ## stream_socket_enable_crypto()

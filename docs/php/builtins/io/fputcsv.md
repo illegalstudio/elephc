@@ -2,7 +2,7 @@
 title: "fputcsv()"
 description: "Lowers `fputcsv(stream, fields, separator?, enclosure?)` for string arrays."
 sidebar:
-  order: 151
+  order: 166
 ---
 
 ## fputcsv()

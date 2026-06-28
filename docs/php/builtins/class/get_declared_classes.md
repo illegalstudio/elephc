@@ -2,7 +2,7 @@
 title: "get_declared_classes()"
 description: "get_declared_classes() — class builtin supported by Elephc."
 sidebar:
-  order: 60
+  order: 75
 ---
 
 ## get_declared_classes()

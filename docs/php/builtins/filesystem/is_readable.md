@@ -2,7 +2,7 @@
 title: "is_readable()"
 description: "Lowers `is_readable(path)` through the target-aware runtime access helper."
 sidebar:
-  order: 109
+  order: 124
 ---
 
 ## is_readable()

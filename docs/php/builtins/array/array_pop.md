@@ -2,7 +2,7 @@
 title: "array_pop()"
 description: "Lowers `array_pop()` for indexed arrays by mutating length and boxing `T|null` as Mixed."
 sidebar:
-  order: 17
+  order: 27
 ---
 
 ## array_pop()

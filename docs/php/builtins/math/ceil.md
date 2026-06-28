@@ -2,7 +2,7 @@
 title: "ceil()"
 description: "Lowers `ceil()` for concrete integer-like and floating operands."
 sidebar:
-  order: 223
+  order: 238
 ---
 
 ## ceil()

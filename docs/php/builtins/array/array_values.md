@@ -2,7 +2,7 @@
 title: "array_values()"
 description: "Lowers `array_values()` for indexed arrays as an alias or associative arrays as a new values array."
 sidebar:
-  order: 30
+  order: 44
 ---
 
 ## array_values()

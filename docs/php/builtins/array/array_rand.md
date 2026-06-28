@@ -2,7 +2,7 @@
 title: "array_rand()"
 description: "Lowers `array_rand()` for indexed arrays."
 sidebar:
-  order: 20
+  order: 30
 ---
 
 ## array_rand()

@@ -2,7 +2,7 @@
 title: "is_writeable()"
 description: "Lowers `is_writeable(path)`, PHP's alias of `is_writable(path)`."
 sidebar:
-  order: 111
+  order: 126
 ---
 
 ## is_writeable()

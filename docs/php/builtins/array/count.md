@@ -2,7 +2,7 @@
 title: "count()"
 description: "Lowers `count(array)` for concrete array values by reading the runtime length header."
 sidebar:
-  order: 34
+  order: 49
 ---
 
 ## count()

@@ -205,8 +205,10 @@ fn builtin_call_name<'a>(module: &'a Module, inst: &crate::ir::Instruction) -> O
 fn string_callback_operand_index(name: &str) -> Option<usize> {
     match crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str() {
         "array_map" => Some(0),
-        "array_filter" | "array_reduce" | "array_walk" | "usort" | "uksort" | "uasort"
-        | "iterator_apply" | "preg_replace_callback" => Some(1),
+        "array_filter" | "array_reduce" | "array_walk" | "array_walk_recursive" | "usort"
+        | "uksort" | "uasort" | "iterator_apply" | "preg_replace_callback" | "array_find"
+        | "array_any" | "array_all" => Some(1),
+        "array_udiff" | "array_uintersect" => Some(2),
         _ => None,
     }
 }

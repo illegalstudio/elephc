@@ -2,7 +2,7 @@
 title: "stream_socket_client()"
 description: "Lowers `stream_socket_client(address)` and records the connected host for TLS defaults."
 sidebar:
-  order: 200
+  order: 215
 ---
 
 ## stream_socket_client()

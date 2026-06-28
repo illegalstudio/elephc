@@ -2,7 +2,7 @@
 title: "fileinode()"
 description: "Lowers `fileinode(path)` and boxes the runtime integer-or-false result."
 sidebar:
-  order: 95
+  order: 110
 ---
 
 ## fileinode()

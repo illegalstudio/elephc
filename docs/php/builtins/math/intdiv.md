@@ -2,7 +2,7 @@
 title: "intdiv()"
 description: "Lowers `intdiv()` for concrete integer-like numeric operands."
 sidebar:
-  order: 233
+  order: 248
 ---
 
 ## intdiv()

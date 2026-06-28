@@ -2,7 +2,7 @@
 title: "uksort()"
 description: "Lowers `uksort()` through the legacy user-sort helper for static comparators."
 sidebar:
-  order: 45
+  order: 60
 ---
 
 ## uksort()

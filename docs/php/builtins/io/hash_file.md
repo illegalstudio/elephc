@@ -2,7 +2,7 @@
 title: "hash_file()"
 description: "Lowers `hash_file(algo, filename, binary?)` by reading bytes then hashing them."
 sidebar:
-  order: 167
+  order: 182
 ---
 
 ## hash_file()

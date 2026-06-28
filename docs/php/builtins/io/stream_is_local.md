@@ -2,7 +2,7 @@
 title: "stream_is_local()"
 description: "Lowers `stream_is_local(stream)` as a true predicate after evaluating its argument."
 sidebar:
-  order: 190
+  order: 205
 ---
 
 ## stream_is_local()

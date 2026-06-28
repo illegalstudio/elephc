@@ -2,7 +2,7 @@
 title: "random_int()"
 description: "Lowers `random_int()` over an inclusive integer range."
 sidebar:
-  order: 247
+  order: 262
 ---
 
 ## random_int()

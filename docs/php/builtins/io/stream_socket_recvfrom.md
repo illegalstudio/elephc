@@ -2,7 +2,7 @@
 title: "stream_socket_recvfrom()"
 description: "Lowers `stream_socket_recvfrom(socket, length, flags?, address?)`."
 sidebar:
-  order: 204
+  order: 219
 ---
 
 ## stream_socket_recvfrom()

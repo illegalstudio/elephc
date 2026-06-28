@@ -2,7 +2,7 @@
 title: "fdatasync()"
 description: "Lowers `fdatasync(stream)` through the shared fd data-sync runtime helper."
 sidebar:
-  order: 138
+  order: 153
 ---
 
 ## fdatasync()

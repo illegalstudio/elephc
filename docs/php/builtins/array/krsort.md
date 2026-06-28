@@ -2,7 +2,7 @@
 title: "krsort()"
 description: "Lowers `krsort()` through the legacy reverse key-sort helper surface."
 sidebar:
-  order: 36
+  order: 51
 ---
 
 ## krsort()

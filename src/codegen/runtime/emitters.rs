@@ -243,6 +243,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_pad_refcounted(emitter);
     arrays::emit_array_diff(emitter);
     arrays::emit_array_diff_refcounted(emitter);
+    arrays::emit_array_is_list(emitter);
+    arrays::emit_array_edge_key(emitter);
     arrays::emit_array_intersect(emitter);
     arrays::emit_array_intersect_refcounted(emitter);
     arrays::emit_array_flip(emitter);
@@ -261,6 +263,13 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_splice_refcounted(emitter);
     arrays::emit_array_diff_key(emitter);
     arrays::emit_array_intersect_key(emitter);
+    arrays::emit_array_to_hash(emitter);
+    arrays::emit_array_replace(emitter);
+    arrays::emit_array_replace_recursive(emitter);
+    arrays::emit_assoc_diff_intersect(emitter);
+    arrays::emit_amr_box_value(emitter);
+    arrays::emit_array_merge_recursive(emitter);
+    arrays::emit_array_multisort(emitter);
     arrays::emit_asort(emitter);
     arrays::emit_ksort(emitter);
     arrays::emit_natsort(emitter);
@@ -270,8 +279,11 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_map_str_owned(emitter);
     arrays::emit_array_filter(emitter);
     arrays::emit_array_filter_refcounted(emitter);
+    arrays::emit_array_find_any_all(emitter);
     arrays::emit_array_reduce(emitter);
     arrays::emit_array_walk(emitter);
+    arrays::emit_array_walk_recursive(emitter);
+    arrays::emit_array_udiff_uintersect(emitter);
     arrays::emit_usort(emitter);
     arrays::emit_array_to_mixed(emitter);
     arrays::emit_array_merge_into(emitter);

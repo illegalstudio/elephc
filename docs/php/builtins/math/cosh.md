@@ -2,7 +2,7 @@
 title: "cosh()"
 description: "cosh() — math builtin supported by Elephc."
 sidebar:
-  order: 226
+  order: 241
 ---
 
 ## cosh()

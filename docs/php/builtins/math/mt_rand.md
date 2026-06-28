@@ -2,7 +2,7 @@
 title: "mt_rand()"
 description: "mt_rand() — math builtin supported by Elephc."
 sidebar:
-  order: 242
+  order: 257
 ---
 
 ## mt_rand()

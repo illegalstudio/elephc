@@ -2,7 +2,7 @@
 title: "array_diff_key()"
 description: "Lowers `array_diff_key()` for two associative arrays by filtering first-operand keys."
 sidebar:
-  order: 5
+  order: 8
 ---
 
 ## array_diff_key()

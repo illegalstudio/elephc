@@ -2,7 +2,7 @@
 title: "fopen()"
 description: "Lowers `fopen(filename, mode)` and boxes stream resources or PHP false."
 sidebar:
-  order: 148
+  order: 163
 ---
 
 ## fopen()

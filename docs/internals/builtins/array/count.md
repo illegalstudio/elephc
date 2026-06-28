@@ -2,7 +2,7 @@
 title: "count() — internals"
 description: "Compiler internals for count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 34
+  order: 49
 ---
 
 ## `count()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
-- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:917](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L917) (`lower_count`)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins.rs`:932](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins.rs#L932) (`lower_count`)
 - **Function symbol**: `lower_count()`
 
 

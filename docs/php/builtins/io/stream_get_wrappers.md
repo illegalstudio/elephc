@@ -2,7 +2,7 @@
 title: "stream_get_wrappers()"
 description: "Lowers `stream_get_wrappers()` to the static built-in wrapper list."
 sidebar:
-  order: 189
+  order: 204
 ---
 
 ## stream_get_wrappers()

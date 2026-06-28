@@ -2,7 +2,7 @@
 title: "pathinfo() — internals"
 description: "Compiler internals for pathinfo(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 118
+  order: 133
 ---
 
 ## `pathinfo()` — internals

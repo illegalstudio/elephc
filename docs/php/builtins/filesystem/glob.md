@@ -2,7 +2,7 @@
 title: "glob()"
 description: "Lowers `glob(pattern)` through the target-aware runtime glob expansion helper."
 sidebar:
-  order: 104
+  order: 119
 ---
 
 ## glob()

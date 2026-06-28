@@ -2,7 +2,7 @@
 title: "get_class()"
 description: "get_class() — class builtin supported by Elephc."
 sidebar:
-  order: 59
+  order: 74
 ---
 
 ## get_class()

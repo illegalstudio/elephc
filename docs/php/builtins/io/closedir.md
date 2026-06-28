@@ -2,7 +2,7 @@
 title: "closedir()"
 description: "Lowers `closedir(dir_handle)` for libc, glob, and userspace-wrapper handles."
 sidebar:
-  order: 136
+  order: 151
 ---
 
 ## closedir()

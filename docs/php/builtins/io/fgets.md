@@ -2,7 +2,7 @@
 title: "fgets()"
 description: "Lowers `fgets(stream)` through the shared line-read runtime helper."
 sidebar:
-  order: 143
+  order: 158
 ---
 
 ## fgets()

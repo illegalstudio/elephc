@@ -2,7 +2,7 @@
 title: "pathinfo()"
 description: "Lowers `pathinfo(path, flags?)` through string, array, or boxed dynamic helpers."
 sidebar:
-  order: 118
+  order: 133
 ---
 
 ## pathinfo()

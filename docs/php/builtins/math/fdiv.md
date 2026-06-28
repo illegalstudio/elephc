@@ -2,7 +2,7 @@
 title: "fdiv()"
 description: "Lowers `fdiv()` for concrete integer-like and floating operands."
 sidebar:
-  order: 229
+  order: 244
 ---
 
 ## fdiv()

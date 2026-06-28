@@ -2,7 +2,7 @@
 title: "stream_set_blocking()"
 description: "Lowers `stream_set_blocking(stream, enable)`."
 sidebar:
-  order: 194
+  order: 209
 ---
 
 ## stream_set_blocking()

@@ -2,7 +2,7 @@
 title: "array_chunk()"
 description: "Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays."
 sidebar:
-  order: 1
+  order: 3
 ---
 
 ## array_chunk()

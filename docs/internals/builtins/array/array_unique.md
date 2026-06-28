@@ -2,7 +2,7 @@
 title: "array_unique() — internals"
 description: "Compiler internals for array_unique(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 28
+  order: 42
 ---
 
 ## `array_unique()` — internals

@@ -2,7 +2,7 @@
 title: "array_shift()"
 description: "Lowers `array_shift()` for indexed arrays by compacting slots and boxing `T|null` as Mixed."
 sidebar:
-  order: 24
+  order: 36
 ---
 
 ## array_shift()

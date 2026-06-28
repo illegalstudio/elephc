@@ -2,7 +2,7 @@
 title: "putenv()"
 description: "Lowers `putenv(assignment)` by copying the environment string into persistent heap storage."
 sidebar:
-  order: 119
+  order: 134
 ---
 
 ## putenv()

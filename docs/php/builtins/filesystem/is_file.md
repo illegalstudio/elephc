@@ -2,7 +2,7 @@
 title: "is_file()"
 description: "Lowers `is_file(path)` through the target-aware runtime stat helper."
 sidebar:
-  order: 107
+  order: 122
 ---
 
 ## is_file()

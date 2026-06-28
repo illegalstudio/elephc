@@ -2,7 +2,7 @@
 title: "strtotime()"
 description: "Lowers `strtotime(datetime[, baseTimestamp])` through the shared parser runtime helper."
 sidebar:
-  order: 79
+  order: 94
 ---
 
 ## strtotime()

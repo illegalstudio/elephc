@@ -2,7 +2,7 @@
 title: "acos()"
 description: "acos() — math builtin supported by Elephc."
 sidebar:
-  order: 219
+  order: 234
 ---
 
 ## acos()

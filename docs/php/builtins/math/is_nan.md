@@ -2,7 +2,7 @@
 title: "is_nan()"
 description: "Lowers `is_nan()` by checking whether the normalized float is unordered with itself."
 sidebar:
-  order: 236
+  order: 251
 ---
 
 ## is_nan()

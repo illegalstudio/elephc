@@ -2,7 +2,7 @@
 title: "chmod()"
 description: "Lowers `chmod(path, mode)` through the target-aware runtime helper."
 sidebar:
-  order: 84
+  order: 99
 ---
 
 ## chmod()

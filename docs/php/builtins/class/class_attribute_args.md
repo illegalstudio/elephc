@@ -2,7 +2,7 @@
 title: "class_attribute_args()"
 description: "Lowers `class_attribute_args(class, attr)` into an indexed Mixed array."
 sidebar:
-  order: 50
+  order: 65
 ---
 
 ## class_attribute_args()

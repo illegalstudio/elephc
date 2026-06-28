@@ -2,7 +2,7 @@
 title: "mktime()"
 description: "Lowers `mktime(hour, minute, second, month, day, year)` through the runtime helper."
 sidebar:
-  order: 78
+  order: 93
 ---
 
 ## mktime()

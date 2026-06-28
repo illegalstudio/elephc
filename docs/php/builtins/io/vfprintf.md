@@ -2,7 +2,7 @@
 title: "vfprintf()"
 description: "Lowers `vfprintf(stream, format, values)` through `__rt_vsprintf` then fwrite."
 sidebar:
-  order: 212
+  order: 227
 ---
 
 ## vfprintf()

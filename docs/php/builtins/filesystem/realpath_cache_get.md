@@ -2,7 +2,7 @@
 title: "realpath_cache_get()"
 description: "Lowers `realpath_cache_get()` to elephc's empty realpath-cache view."
 sidebar:
-  order: 123
+  order: 138
 ---
 
 ## realpath_cache_get()

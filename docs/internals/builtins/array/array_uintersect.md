@@ -1,0 +1,38 @@
+---
+title: "array_uintersect() — internals"
+description: "Compiler internals for array_uintersect(): lowering path, type checks, and runtime helpers."
+sidebar:
+  order: 41
+---
+
+## `array_uintersect()` — internals
+
+## Where it lives
+
+- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Lowering**: [`src/codegen_ir/lower_inst/builtins/arrays.rs`:1663](https://github.com/illegalstudio/elephc/blob/main/src/codegen_ir/lower_inst/builtins/arrays.rs#L1663) (`lower_array_uintersect`)
+- **Function symbol**: `lower_array_uintersect()`
+
+
+### Lowering notes
+
+- Lowers `array_uintersect()`: keeps first-array elements equal (per comparator) to some second-array element.
+
+## Runtime helpers
+
+_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+
+## Signature summary
+
+```php
+function array_uintersect(array $array1, array $array2, callable $callback): mixed
+```
+
+## What the type checker enforces
+
+- **Arity**: takes exactly 3 arguments.
+
+## Cross-references
+
+- [User reference for `array_uintersect()`](../../../php/builtins/array/array_uintersect.md)
+

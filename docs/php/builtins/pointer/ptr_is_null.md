@@ -2,7 +2,7 @@
 title: "ptr_is_null()"
 description: "Lowers `ptr_is_null(pointer)` by comparing the raw pointer address to zero."
 sidebar:
-  order: 270
+  order: 285
 ---
 
 ## ptr_is_null()

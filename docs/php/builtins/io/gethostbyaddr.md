@@ -2,7 +2,7 @@
 title: "gethostbyaddr()"
 description: "Lowers `gethostbyaddr(address)` and boxes malformed addresses as PHP `false`."
 sidebar:
-  order: 160
+  order: 175
 ---
 
 ## gethostbyaddr()

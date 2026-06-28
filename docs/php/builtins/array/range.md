@@ -2,7 +2,7 @@
 title: "range()"
 description: "Lowers `range()` for integer endpoints through the shared runtime constructor."
 sidebar:
-  order: 40
+  order: 55
 ---
 
 ## range()

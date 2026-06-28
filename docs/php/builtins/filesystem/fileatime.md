@@ -2,7 +2,7 @@
 title: "fileatime()"
 description: "Lowers `fileatime(path)` and boxes the runtime integer-or-false result."
 sidebar:
-  order: 92
+  order: 107
 ---
 
 ## fileatime()

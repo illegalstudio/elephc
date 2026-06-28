@@ -2,7 +2,7 @@
 title: "cos()"
 description: "cos() — math builtin supported by Elephc."
 sidebar:
-  order: 225
+  order: 240
 ---
 
 ## cos()

@@ -2,7 +2,7 @@
 title: "array_combine()"
 description: "Lowers `array_combine()` through the legacy hash-building runtime helpers."
 sidebar:
-  order: 3
+  order: 5
 ---
 
 ## array_combine()

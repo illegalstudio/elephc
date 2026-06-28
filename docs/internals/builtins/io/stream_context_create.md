@@ -2,7 +2,7 @@
 title: "stream_context_create() — internals"
 description: "Compiler internals for stream_context_create(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 174
+  order: 189
 ---
 
 ## `stream_context_create()` — internals

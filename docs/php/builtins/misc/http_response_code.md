@@ -2,7 +2,7 @@
 title: "http_response_code()"
 description: "Lowers `http_response_code([$code])` to `__rt_http_response_code`. The code (or"
 sidebar:
-  order: 261
+  order: 276
 ---
 
 ## http_response_code()

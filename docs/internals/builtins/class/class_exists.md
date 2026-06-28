@@ -2,7 +2,7 @@
 title: "class_exists() — internals"
 description: "Compiler internals for class_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 52
+  order: 67
 ---
 
 ## `class_exists()` — internals

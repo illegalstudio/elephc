@@ -868,6 +868,23 @@ tested, diagnostic-emitting gaps.
   for the procedural PHP layer, and `program_uses_image` now detects the `cairo_`
   prefix so pure-procedural programs pull in the prelude
 
+### Array builtin parity (key/list helpers, associative set-ops, recursive merge/walk)
+
+Well-bounded PHP-visible array builtins implemented on the EIR backend. All
+target-aware (ARM64 + x86_64), with codegen and error tests; the shared `__rt_*`
+runtime helpers are reused and driven through EIR lowering.
+
+- [x] `array_key_first()` / `array_key_last()` (PHP 7.3) — first/last key in insertion order, boxed as `Mixed`, `null` for empty arrays
+- [x] `array_is_list()` (PHP 8.1) — sequential `0..n-1` key check (indexed arrays are lists by construction; associative arrays walk the insertion-order chain)
+- [x] `array_replace()` / `array_replace_recursive()` — right-wins key merge over associative arrays (recursive variant merges when both values at a key are associative arrays)
+- [x] `array_diff_assoc()` / `array_intersect_assoc()` — key + string-cast-value comparison via the unified `__rt_assoc_diff_intersect` helper
+- [x] `array_merge_recursive()` — integer-key renumbering, string-key collisions recurse (both arrays) or combine into a list (scalars)
+- [x] `array_walk_recursive()` — invokes the callback on each non-array leaf, recursing through nested indexed/associative arrays
+- [x] `array_find()` / `array_any()` / `array_all()` (PHP 8.4) — predicate callbacks; find returns the first match or `null`, any/all return booleans
+- [x] `array_udiff()` / `array_uintersect()` — difference/intersection with a user comparator (`$cmp($a, $b) === 0`)
+- [x] `array_multisort()` — sort the first indexed array ascending (stable) and reorder a second array in tandem, both by reference (two scalar-element arrays; flags/descending/multi-key are follow-ups)
+- [x] Scalar indexed-array inputs for the hash-based functions converted to integer-keyed hashes via `__rt_array_to_hash`; result key/value widen to `Mixed` for heterogeneous inputs so `foreach` dispatches keys correctly. Callback/comparator builtins reuse the EIR descriptor-callback machinery (string, function, and non-capturing closure callbacks). Hash-based functions accept associative arrays and scalar-element indexed arrays; string/heap-element indexed inputs and the callback/sort element-type limits are documented in `docs/php/arrays.md`
+
 ## v0.26.x — Performance closure, legacy cleanup, and 0.x stabilization
 
 Optimization work should now be driven by benchmarks, generated assembly size,

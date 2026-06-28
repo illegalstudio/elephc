@@ -2,7 +2,7 @@
 title: "link()"
 description: "Lowers `link(oldpath, newpath)` through the target-aware libc wrapper."
 sidebar:
-  order: 114
+  order: 129
 ---
 
 ## link()

@@ -2,7 +2,7 @@
 title: "is_writable()"
 description: "Lowers `is_writable(path)` through the target-aware runtime access helper."
 sidebar:
-  order: 110
+  order: 125
 ---
 
 ## is_writable()

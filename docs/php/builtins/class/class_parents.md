@@ -2,7 +2,7 @@
 title: "class_parents()"
 description: "class_parents() — class builtin supported by Elephc."
 sidebar:
-  order: 55
+  order: 70
 ---
 
 ## class_parents()

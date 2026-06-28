@@ -2,7 +2,7 @@
 title: "array_shift() — internals"
 description: "Compiler internals for array_shift(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 24
+  order: 36
 ---
 
 ## `array_shift()` — internals

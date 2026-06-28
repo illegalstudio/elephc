@@ -2,7 +2,7 @@
 title: "array_fill() — internals"
 description: "Compiler internals for array_fill(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 6
+  order: 9
 ---
 
 ## `array_fill()` — internals

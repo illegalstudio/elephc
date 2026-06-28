@@ -2,7 +2,7 @@
 title: "atan2()"
 description: "Lowers `atan2()` using the C ABI argument order `y, x`."
 sidebar:
-  order: 222
+  order: 237
 ---
 
 ## atan2()

@@ -2,7 +2,7 @@
 title: "readlink()"
 description: "Lowers `readlink(path)` and boxes the owned runtime string-or-false result."
 sidebar:
-  order: 121
+  order: 136
 ---
 
 ## readlink()

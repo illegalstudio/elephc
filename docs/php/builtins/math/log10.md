@@ -2,7 +2,7 @@
 title: "log10()"
 description: "log10() — math builtin supported by Elephc."
 sidebar:
-  order: 238
+  order: 253
 ---
 
 ## log10()

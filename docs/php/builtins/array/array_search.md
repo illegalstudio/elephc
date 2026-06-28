@@ -2,7 +2,7 @@
 title: "array_search()"
 description: "Lowers `array_search()` for indexed arrays with integer-like payloads."
 sidebar:
-  order: 23
+  order: 35
 ---
 
 ## array_search()

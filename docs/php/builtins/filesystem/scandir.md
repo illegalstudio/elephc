@@ -2,7 +2,7 @@
 title: "scandir()"
 description: "Lowers `scandir(path)` through the target-aware runtime directory listing helper."
 sidebar:
-  order: 127
+  order: 142
 ---
 
 ## scandir()

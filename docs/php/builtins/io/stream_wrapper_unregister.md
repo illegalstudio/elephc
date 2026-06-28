@@ -2,7 +2,7 @@
 title: "stream_wrapper_unregister()"
 description: "Lowers `stream_wrapper_unregister(protocol)`."
 sidebar:
-  order: 211
+  order: 226
 ---
 
 ## stream_wrapper_unregister()

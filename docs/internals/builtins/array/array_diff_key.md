@@ -2,7 +2,7 @@
 title: "array_diff_key() — internals"
 description: "Compiler internals for array_diff_key(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 5
+  order: 8
 ---
 
 ## `array_diff_key()` — internals

@@ -2,7 +2,7 @@
 title: "linkinfo()"
 description: "Lowers `linkinfo(path)` through the target-aware runtime lstat helper."
 sidebar:
-  order: 115
+  order: 130
 ---
 
 ## linkinfo()

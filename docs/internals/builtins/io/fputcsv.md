@@ -2,7 +2,7 @@
 title: "fputcsv() — internals"
 description: "Compiler internals for fputcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 151
+  order: 166
 ---
 
 ## `fputcsv()` — internals

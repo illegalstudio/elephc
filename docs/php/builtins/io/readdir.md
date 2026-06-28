@@ -2,7 +2,7 @@
 title: "readdir()"
 description: "Lowers `readdir(dir_handle)` for libc, glob, and userspace-wrapper handles."
 sidebar:
-  order: 169
+  order: 184
 ---
 
 ## readdir()

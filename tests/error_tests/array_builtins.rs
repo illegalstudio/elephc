@@ -486,3 +486,178 @@ fn test_error_call_user_func_array_ref_callback_param_requires_variable() {
         "parameter $n must be passed a variable",
     );
 }
+
+/// Verifies that array_is_list() with no arguments reports an arity error.
+#[test]
+fn test_error_array_is_list_wrong_args() {
+    expect_error(
+        "<?php array_is_list();",
+        "array_is_list() takes exactly 1 argument",
+    );
+}
+
+/// Verifies that array_is_list() rejects a non-array argument.
+#[test]
+fn test_error_array_is_list_non_array() {
+    expect_error(
+        "<?php array_is_list(5);",
+        "array_is_list() argument must be array",
+    );
+}
+
+/// Verifies that array_key_first() with no arguments reports an arity error.
+#[test]
+fn test_error_array_key_first_wrong_args() {
+    expect_error(
+        "<?php array_key_first();",
+        "array_key_first() takes exactly 1 argument",
+    );
+}
+
+/// Verifies that array_key_last() rejects a non-array argument.
+#[test]
+fn test_error_array_key_last_non_array() {
+    expect_error(
+        "<?php array_key_last(\"x\");",
+        "array_key_last() argument must be array",
+    );
+}
+
+/// Verifies that array_replace() with a single argument reports an arity error.
+#[test]
+fn test_error_array_replace_wrong_args() {
+    expect_error(
+        "<?php $a = [\"k\" => 1]; array_replace($a);",
+        "array_replace() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies that array_replace() rejects string-element indexed arrays (scalar indexed inputs
+/// are supported; string/heap element indexed inputs are a follow-up).
+#[test]
+fn test_error_array_replace_string_indexed_unsupported() {
+    expect_error(
+        "<?php array_replace([\"a\", \"b\"], [\"c\"]);",
+        "array_replace() arguments must be associative arrays or indexed arrays of scalars",
+    );
+}
+
+/// Verifies that array_replace_recursive() with a single argument reports an arity error.
+#[test]
+fn test_error_array_replace_recursive_wrong_args() {
+    expect_error(
+        "<?php $a = [\"k\" => 1]; array_replace_recursive($a);",
+        "array_replace_recursive() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies that array_replace_recursive() rejects string-element indexed arrays (scalar indexed
+/// inputs are supported; string/heap element indexed inputs are a follow-up).
+#[test]
+fn test_error_array_replace_recursive_string_indexed_unsupported() {
+    expect_error(
+        "<?php array_replace_recursive([\"a\"], [\"b\"]);",
+        "array_replace_recursive() arguments must be associative arrays or indexed arrays of scalars",
+    );
+}
+
+/// Verifies that array_diff_assoc() with a single argument reports an arity error.
+#[test]
+fn test_error_array_diff_assoc_wrong_args() {
+    expect_error(
+        "<?php $a = [\"k\" => 1]; array_diff_assoc($a);",
+        "array_diff_assoc() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies that array_intersect_assoc() rejects string-element indexed arrays (scalar indexed
+/// inputs are supported; string/heap element indexed inputs are a follow-up).
+#[test]
+fn test_error_array_intersect_assoc_string_indexed_unsupported() {
+    expect_error(
+        "<?php array_intersect_assoc([\"a\", \"b\"], [\"a\"]);",
+        "array_intersect_assoc() arguments must be associative arrays or indexed arrays of scalars",
+    );
+}
+
+/// Verifies that array_merge_recursive() with a single argument reports an arity error.
+#[test]
+fn test_error_array_merge_recursive_wrong_args() {
+    expect_error(
+        "<?php $a = [\"k\" => 1]; array_merge_recursive($a);",
+        "array_merge_recursive() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies that array_merge_recursive() rejects string-element indexed arrays (scalar indexed
+/// inputs are supported; string/heap element indexed inputs are a follow-up).
+#[test]
+fn test_error_array_merge_recursive_string_indexed_unsupported() {
+    expect_error(
+        "<?php array_merge_recursive([\"a\"], [\"b\"]);",
+        "array_merge_recursive() arguments must be associative arrays or indexed arrays of scalars",
+    );
+}
+
+/// Verifies that array_find() with a single argument reports an arity error.
+#[test]
+fn test_error_array_find_wrong_args() {
+    expect_error(
+        "<?php function f($x) { return true; } array_find([1, 2]);",
+        "array_find() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies that array_all() rejects a non-array first argument.
+#[test]
+fn test_error_array_all_non_array() {
+    expect_error(
+        "<?php function f($x) { return true; } array_all(5, \"f\");",
+        "array_all() first argument must be array",
+    );
+}
+
+/// Verifies that array_walk_recursive() with a single argument reports an arity error.
+#[test]
+fn test_error_array_walk_recursive_wrong_args() {
+    expect_error(
+        "<?php function f($x) {} $a = [[1]]; array_walk_recursive($a);",
+        "array_walk_recursive() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies that array_udiff() with two arguments reports an arity error.
+#[test]
+fn test_error_array_udiff_wrong_args() {
+    expect_error(
+        "<?php function c($a, $b) { return 0; } array_udiff([1], [2]);",
+        "array_udiff() takes exactly 3 arguments",
+    );
+}
+
+/// Verifies that array_uintersect() rejects a non-array first argument.
+#[test]
+fn test_error_array_uintersect_non_array() {
+    expect_error(
+        "<?php function c($a, $b) { return 0; } array_uintersect(5, [2], \"c\");",
+        "array_uintersect() first argument must be array",
+    );
+}
+
+/// Verifies that array_multisort() with a single argument reports an arity error.
+#[test]
+fn test_error_array_multisort_wrong_args() {
+    expect_error(
+        "<?php $a = [1, 2]; array_multisort($a);",
+        "array_multisort() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies that array_multisort() rejects non-indexed-array arguments.
+#[test]
+fn test_error_array_multisort_non_array() {
+    expect_error(
+        "<?php $a = [1, 2]; array_multisort($a, 5);",
+        "array_multisort() arguments must be indexed arrays",
+    );
+}

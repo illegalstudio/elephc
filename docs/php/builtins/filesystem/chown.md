@@ -2,7 +2,7 @@
 title: "chown()"
 description: "Lowers `chown(path, owner)` for integer UIDs and string user names."
 sidebar:
-  order: 85
+  order: 100
 ---
 
 ## chown()

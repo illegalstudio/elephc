@@ -2,7 +2,7 @@
 title: "stream_socket_pair()"
 description: "Lowers `stream_socket_pair(domain, type, protocol)` and boxes `array|false`."
 sidebar:
-  order: 203
+  order: 218
 ---
 
 ## stream_socket_pair()

@@ -2,7 +2,7 @@
 title: "sort()"
 description: "Lowers `sort()` for indexed integer arrays by mutating the source array in place."
 sidebar:
-  order: 43
+  order: 58
 ---
 
 ## sort()

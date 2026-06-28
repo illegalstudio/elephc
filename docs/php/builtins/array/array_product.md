@@ -2,7 +2,7 @@
 title: "array_product()"
 description: "Lowers `array_product()` over supported indexed-array payloads."
 sidebar:
-  order: 18
+  order: 28
 ---
 
 ## array_product()

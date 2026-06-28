@@ -2,7 +2,7 @@
 title: "getenv()"
 description: "Lowers `getenv(name)` through the target-aware environment lookup helper."
 sidebar:
-  order: 103
+  order: 118
 ---
 
 ## getenv()

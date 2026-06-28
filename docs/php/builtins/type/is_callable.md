@@ -2,7 +2,7 @@
 title: "is_callable()"
 description: "Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers."
 sidebar:
-  order: 400
+  order: 415
 ---
 
 ## is_callable()

@@ -2,7 +2,7 @@
 title: "file()"
 description: "Lowers `file(path)` through the target-aware runtime line-array helper."
 sidebar:
-  order: 144
+  order: 159
 ---
 
 ## file()

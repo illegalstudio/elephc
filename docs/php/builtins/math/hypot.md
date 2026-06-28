@@ -2,7 +2,7 @@
 title: "hypot()"
 description: "Lowers `hypot()` using the C ABI argument order `x, y`."
 sidebar:
-  order: 232
+  order: 247
 ---
 
 ## hypot()

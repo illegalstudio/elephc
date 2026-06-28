@@ -2,7 +2,7 @@
 title: "stream_set_write_buffer()"
 description: "Lowers stream read/write buffer setters as successful no-ops."
 sidebar:
-  order: 198
+  order: 213
 ---
 
 ## stream_set_write_buffer()

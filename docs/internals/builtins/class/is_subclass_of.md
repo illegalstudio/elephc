@@ -2,7 +2,7 @@
 title: "is_subclass_of() — internals"
 description: "Compiler internals for is_subclass_of(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 66
+  order: 81
 ---
 
 ## `is_subclass_of()` — internals

@@ -2,7 +2,7 @@
 title: "log2()"
 description: "log2() — math builtin supported by Elephc."
 sidebar:
-  order: 239
+  order: 254
 ---
 
 ## log2()

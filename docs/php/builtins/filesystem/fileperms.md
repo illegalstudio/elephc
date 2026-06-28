@@ -2,7 +2,7 @@
 title: "fileperms()"
 description: "Lowers `fileperms(path)` and boxes the runtime integer-or-false result."
 sidebar:
-  order: 98
+  order: 113
 ---
 
 ## fileperms()
