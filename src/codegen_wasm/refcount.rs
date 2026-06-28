@@ -103,14 +103,14 @@ const RT_STR_PERSIST: &str = r#"(func $__rt_str_persist (param $ptr i32) (param 
   (local.set $n (i32.wrap_i64 (local.get $len)))            ;; byte length
   (local.set $new (call $__rt_heap_alloc (local.get $n)))   ;; fresh heap block (8-byte minimum)
   (i64.store (i32.sub (local.get $new) (i32.const 8)) (i64.const 1)) ;; stamp header kind = 1 (string)
-  (local.set $i (i32.const 0))
+  (local.set $i (i32.const 0))                              ;; i = 0 (copy cursor)
   (block $end (loop $copy
     (br_if $end (i32.ge_u (local.get $i) (local.get $n)))   ;; stop after n bytes
     (i32.store8
       (i32.add (local.get $new) (local.get $i))
-      (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
-    (local.set $i (i32.add (local.get $i) (i32.const 1)))
-    (br $copy)))
+      (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))  ;; dst[i] = src[i]
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))   ;; i++
+    (br $copy)))                                            ;; next byte
   (return (local.get $new) (local.get $len)))               ;; new pointer + original length
 "#;
 

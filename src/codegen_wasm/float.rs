@@ -176,16 +176,16 @@ const RT_F64_DIGITS: &str = r#"(func $__rt_f64_digits (param $bits i64) (param $
   (local.set $mant)                                                ;; pop mantissa
   (local.set $sign)                                                ;; pop sign
   (if (i32.ne (local.get $class) (i32.const 0))                    ;; non-finite or zero: no digits
-    (then (return (local.get $sign) (local.get $class) (local.get $dbuf) (i32.const 0) (i32.const 0))))
+    (then (return (local.get $sign) (local.get $class) (local.get $dbuf) (i32.const 0) (i32.const 0)))) ;; early return: sign, class, buf, 0, 0 (non-finite or zero)
   (i64.store32 (local.get $big) (local.get $mant))                 ;; big[0] = mantissa low 32 bits
   (i64.store32 (i32.add (local.get $big) (i32.const 4)) (i64.shr_u (local.get $mant) (i64.const 32)))  ;; big[1] = mantissa high bits
   (local.set $p (i32.const 0))                                     ;; default p = 0 (exp2 >= 0 case)
   (if (i32.ge_s (local.get $exp2) (i32.const 0))                   ;; exp2 >= 0: J = mantissa * 2^exp2
-    (then (call $__rt_bignum_mul_small_n_times (local.get $big) (local.get $nlimbs) (i64.const 2) (local.get $exp2))))
+    (then (call $__rt_bignum_mul_small_n_times (local.get $big) (local.get $nlimbs) (i64.const 2) (local.get $exp2)))) ;; J = mantissa * 2^exp2 (exp2 >= 0)
   (if (i32.lt_s (local.get $exp2) (i32.const 0))                   ;; exp2 < 0: J = mantissa * 5^(-exp2), p = -exp2
     (then
       (local.set $p (i32.sub (i32.const 0) (local.get $exp2)))     ;; p = -exp2
-      (call $__rt_bignum_mul_small_n_times (local.get $big) (local.get $nlimbs) (i64.const 5) (local.get $p))))
+      (call $__rt_bignum_mul_small_n_times (local.get $big) (local.get $nlimbs) (i64.const 5) (local.get $p)))) ;; J = mantissa * 5^(-exp2) (exp2 < 0)
   (local.set $wp (local.get $dmax))                               ;; write cursor starts past the buffer end
   (block $pend                                                    ;; chunk-loop exit target
     (loop $ptop                                                   ;; do-while: peel at least one 9-digit chunk
@@ -221,11 +221,11 @@ const RT_F64_DIGITS: &str = r#"(func $__rt_f64_digits (param $bits i64) (param $
 const RT_ROUND_DIGITS: &str = r#"(func $__rt_round_digits (param $digptr i32) (param $ndigits i32) (param $prec i32) (result i32)
   (local $rd i32) (local $up i32) (local $i i32) (local $sticky i32)
   (if (i32.le_s (local.get $ndigits) (local.get $prec))            ;; already <= prec significant digits: nothing to round
-    (then (return (i32.const 0))))
+    (then (return (i32.const 0))))                                 ;; nothing to round -> return 0
   (local.set $rd (i32.sub (i32.load8_u (i32.add (local.get $digptr) (local.get $prec))) (i32.const 48)))  ;; first dropped digit value
   (local.set $up (i32.const 0))                                    ;; round-up flag = false
   (if (i32.gt_s (local.get $rd) (i32.const 5))                     ;; dropped digit > 5 -> round up
-    (then (local.set $up (i32.const 1))))
+    (then (local.set $up (i32.const 1))))                          ;; round-up flag set
   (if (i32.eq (local.get $rd) (i32.const 5))                       ;; dropped digit exactly 5 -> half-way case
     (then
       (local.set $sticky (i32.const 0))                            ;; any nonzero digit after the round digit?
@@ -238,12 +238,12 @@ const RT_ROUND_DIGITS: &str = r#"(func $__rt_round_digits (param $digptr i32) (p
           (local.set $i (i32.add (local.get $i) (i32.const 1)))    ;; next digit
           (br $sl)))                                               ;; continue scanning
       (if (local.get $sticky)                                      ;; nonzero tail -> definitely round up
-        (then (local.set $up (i32.const 1)))
+        (then (local.set $up (i32.const 1)))                       ;; nonzero tail -> round up
         (else
           (if (i32.and (i32.sub (i32.load8_u (i32.add (local.get $digptr) (i32.sub (local.get $prec) (i32.const 1)))) (i32.const 48)) (i32.const 1))  ;; last kept digit is odd
             (then (local.set $up (i32.const 1))))))))              ;; round half to even
   (if (i32.eqz (local.get $up))                                    ;; not rounding up -> truncation suffices
-    (then (return (i32.const 0))))
+    (then (return (i32.const 0))))                                 ;; no round-up needed -> return 0
   (local.set $i (local.get $prec))                                 ;; carry walk starts one past the last kept digit
   (block $ce                                                       ;; carry-loop exit target
     (loop $cl                                                      ;; propagate the +1 carry leftward
@@ -456,7 +456,7 @@ const RT_FTOA: &str = r#"(func $__rt_ftoa (param $bits i64) (param $big i32) (pa
     (then (local.set $x (i32.add (local.get $x) (i32.const 1)))))  ;; carry overflow shifts the exponent
   (local.set $nsig (local.get $ndigits))                         ;; nsig = min(ndigits, 14)
   (if (i32.gt_s (local.get $ndigits) (i32.const 14))             ;; clamp to 14 significant digits
-    (then (local.set $nsig (i32.const 14))))
+    (then (local.set $nsig (i32.const 14))))                     ;; cap nsig at 14
   (block $st                                                     ;; trailing-zero strip exit
     (loop $sl                                                    ;; drop trailing '0' digits, keep at least one
       (br_if $st (i32.le_s (local.get $nsig) (i32.const 1)))     ;; keep at least one digit
@@ -870,59 +870,59 @@ const RT_ITOA: &str = r#"  (func $__rt_itoa (param $value i64) (param $out i32) 
 const RT_STR_TO_INT: &str = r#"  (func $__rt_str_to_int (param $ptr i32) (param $len i32) (param $scratch i32) (result i64) (local $i i32) (local $sign i32) (local $c i32) (local $val i64) (local $sat i32) (local $ndig i32) (local $float i32) (local $bits i64) (local $cap i64) (local $d i64) ;; parse a leading numeric string -> i64 (PHP (int)string)
     (block $wse                                                                  ;; whitespace-skip block
       (loop $wsl                                                                 ;; whitespace loop
-        (br_if $wse (i32.ge_s (local.get $i) (local.get $len)))
-        (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
-        (if (i32.or (i32.and (i32.ge_s (local.get $c) (i32.const 9)) (i32.le_s (local.get $c) (i32.const 13))) (i32.eq (local.get $c) (i32.const 32)))
-          (then (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $wsl))
-          (else (br $wse)))))
+        (br_if $wse (i32.ge_s (local.get $i) (local.get $len)))                   ;; stop when i >= len (past all whitespace)
+        (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))    ;; c = current byte
+        (if (i32.or (i32.and (i32.ge_s (local.get $c) (i32.const 9)) (i32.le_s (local.get $c) (i32.const 13))) (i32.eq (local.get $c) (i32.const 32))) ;; whitespace byte? (9..13 or 32)
+          (then (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $wsl))  ;; whitespace -> advance cursor, loop
+          (else (br $wse)))))                                                      ;; not whitespace -> exit whitespace loop
     (if (i32.lt_s (local.get $i) (local.get $len))                               ;; optional sign
       (then
-        (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
-        (if (i32.eq (local.get $c) (i32.const 45))
-          (then (local.set $sign (i32.const 1)) (local.set $i (i32.add (local.get $i) (i32.const 1))))
+        (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))    ;; c = current byte (possible sign char)
+        (if (i32.eq (local.get $c) (i32.const 45))                               ;; '-' ?
+          (then (local.set $sign (i32.const 1)) (local.set $i (i32.add (local.get $i) (i32.const 1)))) ;; neg sign = 1, advance cursor
           (else
-            (if (i32.eq (local.get $c) (i32.const 43))
-              (then (local.set $i (i32.add (local.get $i) (i32.const 1)))))))))
+            (if (i32.eq (local.get $c) (i32.const 43))                           ;; '+' ?
+              (then (local.set $i (i32.add (local.get $i) (i32.const 1))))))))) ;; '+' -> advance cursor
     (if (i32.eq (local.get $sign) (i32.const 1))                                 ;; saturation cap: 2^63 (neg) or 2^63-1 (pos)
-      (then (local.set $cap (i64.const -9223372036854775808)))
-      (else (local.set $cap (i64.const 9223372036854775807))))
+      (then (local.set $cap (i64.const -9223372036854775808)))                    ;; negative -> cap = 2^63 (INT_MIN magnitude)
+      (else (local.set $cap (i64.const 9223372036854775807))))                    ;; positive -> cap = 2^63-1 (INT_MAX)
     (block $ide                                                                  ;; integer-digit block
       (loop $idl                                                                 ;; integer-digit loop
-        (br_if $ide (i32.ge_s (local.get $i) (local.get $len)))
-        (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
-        (br_if $ide (i32.or (i32.lt_s (local.get $c) (i32.const 48)) (i32.gt_s (local.get $c) (i32.const 57))))
-        (local.set $ndig (i32.add (local.get $ndig) (i32.const 1)))
+        (br_if $ide (i32.ge_s (local.get $i) (local.get $len)))                   ;; stop when i >= len
+        (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))    ;; c = current byte
+        (br_if $ide (i32.or (i32.lt_s (local.get $c) (i32.const 48)) (i32.gt_s (local.get $c) (i32.const 57)))) ;; stop if not a digit '0'..'9'
+        (local.set $ndig (i32.add (local.get $ndig) (i32.const 1)))               ;; digit count++
         (if (i32.eqz (local.get $sat))                                           ;; still within range?
           (then
-            (local.set $d (i64.extend_i32_u (i32.sub (local.get $c) (i32.const 48))))
-            (if (i64.gt_u (local.get $val) (i64.div_u (i64.sub (local.get $cap) (local.get $d)) (i64.const 10)))
+            (local.set $d (i64.extend_i32_u (i32.sub (local.get $c) (i32.const 48)))) ;; d = digit value (c - '0')
+            (if (i64.gt_u (local.get $val) (i64.div_u (i64.sub (local.get $cap) (local.get $d)) (i64.const 10))) ;; overflow check: val * 10 + d > cap?
               (then (local.set $sat (i32.const 1)) (local.set $val (local.get $cap))) ;; overflow -> clamp to the cap
-              (else (local.set $val (i64.add (i64.mul (local.get $val) (i64.const 10)) (local.get $d)))))))
-        (local.set $i (i32.add (local.get $i) (i32.const 1)))
-        (br $idl)))
+              (else (local.set $val (i64.add (i64.mul (local.get $val) (i64.const 10)) (local.get $d))))))) ;; val = val * 10 + d (no overflow)
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))                     ;; i++
+        (br $idl)))                                                               ;; continue integer-digit loop
     (if (i32.lt_s (local.get $i) (local.get $len))                               ;; float continuation? ('.' or 'e'/'E')
       (then
-        (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
-        (if (i32.eq (local.get $c) (i32.const 46))
-          (then (local.set $float (i32.const 1)))
+        (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))    ;; c = current byte after integer digits
+        (if (i32.eq (local.get $c) (i32.const 46))                               ;; '.' (decimal point)?
+          (then (local.set $float (i32.const 1)))                                 ;; decimal point -> float mode
           (else
-            (if (i32.or (i32.eq (local.get $c) (i32.const 101)) (i32.eq (local.get $c) (i32.const 69)))
-              (then (local.set $float (i32.const 1))))))))
+            (if (i32.or (i32.eq (local.get $c) (i32.const 101)) (i32.eq (local.get $c) (i32.const 69))) ;; 'e' or 'E' ?
+              (then (local.set $float (i32.const 1))))))))                        ;; exponent -> float mode
     (if (i32.eq (local.get $float) (i32.const 1))                                ;; float-form -> parse double, INF/NaN -> 0
       (then
-        (call $__rt_str_to_f64 (local.get $ptr) (local.get $len) (i32.add (local.get $scratch) (i32.const 10240)) (local.get $scratch))
-        (local.set $bits (i64.load (i32.add (local.get $scratch) (i32.const 10240))))
-        (if (i32.eq (i32.and (i32.wrap_i64 (i64.shr_u (local.get $bits) (i64.const 52))) (i32.const 2047)) (i32.const 2047))
+        (call $__rt_str_to_f64 (local.get $ptr) (local.get $len) (i32.add (local.get $scratch) (i32.const 10240)) (local.get $scratch)) ;; parse string as f64, result bits at scratch+10240
+        (local.set $bits (i64.load (i32.add (local.get $scratch) (i32.const 10240)))) ;; bits = f64 bit pattern
+        (if (i32.eq (i32.and (i32.wrap_i64 (i64.shr_u (local.get $bits) (i64.const 52))) (i32.const 2047)) (i32.const 2047)) ;; biased exponent == 2047 -> INF or NaN
           (then (return (i64.const 0)))                                          ;; INF or NaN -> 0 (PHP (int)INF/NAN)
           (else (return (i64.trunc_sat_f64_s (f64.reinterpret_i64 (local.get $bits))))))) ;; finite -> truncate toward zero, saturate
       (else                                                                      ;; int-form: no digits -> 0, else apply sign
-        (if (i32.eqz (local.get $ndig))
-          (then (return (i64.const 0)))
+        (if (i32.eqz (local.get $ndig))                                          ;; no digits parsed?
+          (then (return (i64.const 0)))                                          ;; no digits -> return 0
           (else
-            (if (i32.eq (local.get $sign) (i32.const 1))
+            (if (i32.eq (local.get $sign) (i32.const 1))                        ;; negative sign?
               (then (return (i64.sub (i64.const 0) (local.get $val))))           ;; negate (wrapping for INT_MIN)
-              (else (return (local.get $val))))))))
-    (i64.const 0))
+              (else (return (local.get $val))))))))                              ;; positive -> return value unchanged
+    (i64.const 0))                                                               ;; fallthrough: return 0 (unreachable)
 "#;
 
 /// Registers the wasm32-wasi float<->string runtime helpers on `wm`.

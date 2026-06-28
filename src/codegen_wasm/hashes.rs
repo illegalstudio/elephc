@@ -62,14 +62,14 @@ const RT_HASH_FNV1A: &str = r#"(func $__rt_hash_fnv1a (param $ptr i32) (param $l
   (local $hash i64)
   (local $i i64)
   (local.set $hash (i64.const 0xcbf29ce484222325))          ;; FNV offset basis
-  (local.set $i (i64.const 0))
+  (local.set $i (i64.const 0))                              ;; i = 0 (byte cursor)
   (block $end (loop $byte
     (br_if $end (i64.ge_u (local.get $i) (local.get $len)))  ;; consumed all bytes
     (local.set $hash (i64.xor (local.get $hash)
       (i64.extend_i32_u (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))))  ;; hash ^= byte
     (local.set $hash (i64.mul (local.get $hash) (i64.const 0x100000001b3)))  ;; hash *= FNV prime (wraps)
-    (local.set $i (i64.add (local.get $i) (i64.const 1)))
-    (br $byte)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))    ;; i++
+    (br $byte)))                                             ;; next byte
   (local.get $hash))
 "#;
 
@@ -99,16 +99,16 @@ const RT_HASH_KEY_EQ: &str = r#"(func $__rt_hash_key_eq (param $l_lo i64) (param
   (if (i64.eq (local.get $r_hi) (i64.const -1))             ;; left string, right int?
     (then (return (i32.const 0))))                          ;; string vs int -> unequal
   (if (i64.ne (local.get $l_hi) (local.get $r_hi))          ;; both string: different lengths?
-    (then (return (i32.const 0))))
-  (local.set $i (i64.const 0))
+    (then (return (i32.const 0))))                          ;; different lengths -> unequal
+  (local.set $i (i64.const 0))                              ;; i = 0 (byte cursor)
   (block $end (loop $byte
     (br_if $end (i64.ge_u (local.get $i) (local.get $l_hi)))  ;; compared all bytes -> equal
     (if (i32.ne
           (i32.load8_u (i32.add (i32.wrap_i64 (local.get $l_lo)) (i32.wrap_i64 (local.get $i))))
           (i32.load8_u (i32.add (i32.wrap_i64 (local.get $r_lo)) (i32.wrap_i64 (local.get $i)))))  ;; bytes differ?
-      (then (return (i32.const 0))))
-    (local.set $i (i64.add (local.get $i) (i64.const 1)))
-    (br $byte)))
+      (then (return (i32.const 0))))                        ;; bytes differ -> unequal
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))   ;; i++
+    (br $byte)))                                            ;; next byte
   (i32.const 1))
 "#;
 
@@ -235,14 +235,14 @@ const RT_HASH_NEW: &str = r#"(func $__rt_hash_new (param $capacity i64) (param $
   (i64.store (i32.add (local.get $p) (i32.const 16)) (local.get $value_tag)) ;; value_type
   (i64.store (i32.add (local.get $p) (i32.const 24)) (i64.const -1))  ;; head = -1 (empty)
   (i64.store (i32.add (local.get $p) (i32.const 32)) (i64.const -1))  ;; tail = -1 (empty)
-  (local.set $i (i64.const 0))
+  (local.set $i (i64.const 0))                               ;; slot cursor = 0
   (block $end (loop $slot
     (br_if $end (i64.ge_u (local.get $i) (local.get $capacity)))  ;; zeroed every slot
     (i64.store
       (i32.add (i32.add (local.get $p) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 64))))  ;; &slot[i].occupied = P+40+i*64
       (i64.const 0))                                         ;; occupied = empty
-    (local.set $i (i64.add (local.get $i) (i64.const 1)))
-    (br $slot)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))    ;; next slot
+    (br $slot)))                                             ;; next slot
   (local.get $p))
 "#;
 
@@ -263,7 +263,7 @@ const RT_HASH_GET: &str = r#"(func $__rt_hash_get (param $hash i32) (param $key_
   (if (i64.eqz (local.get $cap))
     (then (return (i32.const 0) (i64.const 0) (i64.const 0) (i64.const 8))))  ;; empty table -> miss
   (local.set $slot (i64.rem_u (call $__rt_hash_key_hash (local.get $key_lo) (local.get $key_hi)) (local.get $cap)))  ;; initial bucket
-  (local.set $probes (i64.const 0))
+  (local.set $probes (i64.const 0))                          ;; probe counter = 0
   (block $done (loop $probe
     (br_if $done (i64.ge_u (local.get $probes) (local.get $cap)))  ;; probed every slot -> miss
     (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))  ;; &slot[slot]
@@ -280,8 +280,8 @@ const RT_HASH_GET: &str = r#"(func $__rt_hash_get (param $hash i32) (param $key_
             (i64.load (i32.add (local.get $entry) (i32.const 32)))   ;; value_hi
             (i64.load (i32.add (local.get $entry) (i32.const 40))))))))  ;; value_tag
     (local.set $slot (i64.rem_u (i64.add (local.get $slot) (i64.const 1)) (local.get $cap)))  ;; next bucket (wrap)
-    (local.set $probes (i64.add (local.get $probes) (i64.const 1)))
-    (br $probe)))
+    (local.set $probes (i64.add (local.get $probes) (i64.const 1)))    ;; probe counter++
+    (br $probe)))                                            ;; next probe
   (i32.const 0) (i64.const 0) (i64.const 0) (i64.const 8))    ;; saturated -> miss
 "#;
 
@@ -301,7 +301,7 @@ const RT_HASH_INSERT_OWNED: &str = r#"(func $__rt_hash_insert_owned (param $hash
     (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))  ;; &slot[slot]
     (br_if $empty (i64.eqz (i64.load (local.get $entry))))   ;; found an empty slot
     (local.set $slot (i64.rem_u (i64.add (local.get $slot) (i64.const 1)) (local.get $cap)))  ;; next bucket (wrap)
-    (br $probe)))
+    (br $probe)))                                            ;; next probe
   (i64.store (local.get $entry) (i64.const 1))               ;; occupied = live
   (i64.store (i32.add (local.get $entry) (i32.const 8)) (local.get $key_lo))    ;; key_lo
   (i64.store (i32.add (local.get $entry) (i32.const 16)) (local.get $key_hi))   ;; key_hi
@@ -345,7 +345,7 @@ const RT_HASH_RESIZE: &str = r#"(func $__rt_hash_resize (param $hash i32) (resul
       (i64.load (i32.add (local.get $oe) (i32.const 32)))    ;; value_hi
       (i64.load (i32.add (local.get $oe) (i32.const 40)))))  ;; value_tag (moved, not persisted)
     (local.set $cur (i64.load (i32.add (local.get $oe) (i32.const 56))))  ;; cur = next
-    (br $walk)))
+    (br $walk)))                                             ;; next entry
   (call $__rt_heap_free (local.get $hash))                   ;; shallow free: children moved to `new`
   (local.get $new))
 "#;
@@ -398,7 +398,7 @@ const RT_HASH_CLONE_SHALLOW: &str = r#"(func $__rt_hash_clone_shallow (param $ha
           (then (call $__rt_incref (i32.wrap_i64 (local.get $vlo)))))))  ;; share, bump refcount
     (drop (call $__rt_hash_insert_owned (local.get $new) (local.get $klo) (local.get $khi) (local.get $vlo) (local.get $vhi) (local.get $vtag)))  ;; place into clone
     (local.set $cur (i64.load (i32.add (local.get $oe) (i32.const 56))))  ;; cur = next
-    (br $walk)))
+    (br $walk)))                                             ;; next entry
   (local.get $new))
 "#;
 
@@ -441,8 +441,8 @@ const RT_HASH_SET: &str = r#"(func $__rt_hash_set (param $hash i32) (param $key_
     (then (local.set $hash (call $__rt_hash_resize (local.get $hash)))))  ;; grow past 75% load
   (local.set $cap (i64.load (i32.add (local.get $hash) (i32.const 8))))  ;; capacity (post-resize)
   (local.set $slot (i64.rem_u (call $__rt_hash_key_hash (local.get $key_lo) (local.get $key_hi)) (local.get $cap)))  ;; initial bucket
-  (local.set $probes (i64.const 0))
-  (local.set $matched (i32.const 0))
+  (local.set $probes (i64.const 0))                          ;; probe counter = 0
+  (local.set $matched (i32.const 0))                         ;; no match yet
   (block $stop (loop $probe
     (br_if $stop (i64.ge_u (local.get $probes) (local.get $cap)))  ;; probed every slot
     (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $slot) (i64.const 64)))))  ;; &slot[slot]
@@ -453,12 +453,12 @@ const RT_HASH_SET: &str = r#"(func $__rt_hash_set (param $hash i32) (param $key_
                   (i64.load (i32.add (local.get $entry) (i32.const 8)))
                   (i64.load (i32.add (local.get $entry) (i32.const 16))))  ;; keys equal?
               (then
-                (local.set $matched (i32.const 1))
-                (local.set $mentry (local.get $entry))))))
+                (local.set $matched (i32.const 1))           ;; record the hit
+                (local.set $mentry (local.get $entry))))))   ;; save matched entry address
     (br_if $stop (i32.eq (local.get $matched) (i32.const 1)))  ;; found existing key
     (local.set $slot (i64.rem_u (i64.add (local.get $slot) (i64.const 1)) (local.get $cap)))  ;; next bucket (wrap)
-    (local.set $probes (i64.add (local.get $probes) (i64.const 1)))
-    (br $probe)))
+    (local.set $probes (i64.add (local.get $probes) (i64.const 1)))    ;; probe counter++
+    (br $probe)))                                            ;; next probe
   (if (i32.eq (local.get $matched) (i32.const 1))             ;; UPDATE existing entry
     (then
       (local.set $oldtag (i64.load (i32.add (local.get $mentry) (i32.const 40))))  ;; old value tag
@@ -471,10 +471,10 @@ const RT_HASH_SET: &str = r#"(func $__rt_hash_set (param $hash i32) (param $key_
       (if (i64.eq (local.get $val_tag) (i64.const 1))          ;; new string -> own a copy
         (then
           (call $__rt_str_persist (i32.wrap_i64 (local.get $val_lo)) (local.get $val_hi))
-          (local.set $nl)
-          (local.set $np)
-          (local.set $val_lo (i64.extend_i32_u (local.get $np)))
-          (local.set $val_hi (local.get $nl)))
+          (local.set $nl)                                    ;; persisted length
+          (local.set $np)                                    ;; persisted pointer
+          (local.set $val_lo (i64.extend_i32_u (local.get $np)))       ;; val_lo = persisted ptr
+          (local.set $val_hi (local.get $nl)))               ;; val_hi = persisted length
         (else
           (if (i32.or (i32.or (i64.eq (local.get $val_tag) (i64.const 4)) (i64.eq (local.get $val_tag) (i64.const 5)))
               (i32.or (i32.or (i64.eq (local.get $val_tag) (i64.const 6)) (i64.eq (local.get $val_tag) (i64.const 7)))
@@ -487,16 +487,16 @@ const RT_HASH_SET: &str = r#"(func $__rt_hash_set (param $hash i32) (param $key_
   (if (i64.ge_s (local.get $key_hi) (i64.const 0))            ;; INSERT: own the string key
     (then
       (call $__rt_str_persist (i32.wrap_i64 (local.get $key_lo)) (local.get $key_hi))
-      (local.set $nl)
-      (local.set $np)
+      (local.set $nl)                                        ;; persisted length
+      (local.set $np)                                        ;; persisted pointer
       (local.set $key_lo (i64.extend_i32_u (local.get $np)))))  ;; key_hi unchanged
   (if (i64.eq (local.get $val_tag) (i64.const 1))              ;; own the string value
     (then
       (call $__rt_str_persist (i32.wrap_i64 (local.get $val_lo)) (local.get $val_hi))
-      (local.set $nl)
-      (local.set $np)
-      (local.set $val_lo (i64.extend_i32_u (local.get $np)))
-      (local.set $val_hi (local.get $nl)))
+      (local.set $nl)                                        ;; persisted length
+      (local.set $np)                                        ;; persisted pointer
+      (local.set $val_lo (i64.extend_i32_u (local.get $np)))    ;; val_lo = persisted ptr
+      (local.set $val_hi (local.get $nl)))                   ;; val_hi = persisted length
     (else
       (if (i32.or (i32.or (i64.eq (local.get $val_tag) (i64.const 4)) (i64.eq (local.get $val_tag) (i64.const 5)))
           (i32.or (i32.or (i64.eq (local.get $val_tag) (i64.const 6)) (i64.eq (local.get $val_tag) (i64.const 7)))
@@ -655,7 +655,7 @@ const RT_HASH_UNION: &str = r#"(func $__rt_hash_union (param $a i32) (param $b i
         (local.set $vtag (i64.load (i32.add (local.get $be) (i32.const 40))))  ;; b value_tag
         (local.set $result (call $__rt_hash_set (local.get $result) (local.get $klo) (local.get $khi) (local.get $vlo) (local.get $vhi) (local.get $vtag)))))  ;; append (set owns its copy)
     (local.set $cur (i64.load (i32.add (local.get $be) (i32.const 56))))  ;; cur = b entry.next
-    (br $walk)))
+    (br $walk)))                                                        ;; next entry
   (local.get $result))
 "#;
 
@@ -706,7 +706,7 @@ const RT_ARRAY_HASH_UNION: &str = r#"(func $__rt_array_hash_union (param $a i32)
         (local.set $vtag (local.get $avt))))                          ;; value_tag = left value_type
     (local.set $result (call $__rt_hash_set (local.get $result) (local.get $i) (i64.const -1) (local.get $vlo) (local.get $vhi) (local.get $vtag)))  ;; insert under integer key (set owns the value)
     (local.set $i (i64.add (local.get $i) (i64.const 1)))              ;; next left position
-    (br $lwalk)))
+    (br $lwalk)))                                                      ;; next left entry
   (local.set $cur (i64.load (i32.add (local.get $b) (i32.const 24))))  ;; cur = b.head (insertion-order start)
   (block $rend (loop $rwalk                                           ;; merge each right hash entry
     (br_if $rend (i64.eq (local.get $cur) (i64.const -1)))             ;; end of b's insertion order
@@ -725,7 +725,7 @@ const RT_ARRAY_HASH_UNION: &str = r#"(func $__rt_array_hash_union (param $a i32)
         (local.set $vtag (i64.load (i32.add (local.get $be) (i32.const 40))))  ;; b value_tag
         (local.set $result (call $__rt_hash_set (local.get $result) (local.get $klo) (local.get $khi) (local.get $vlo) (local.get $vhi) (local.get $vtag)))))  ;; append b's entry (set owns the value)
     (local.set $cur (i64.load (i32.add (local.get $be) (i32.const 56))))  ;; cur = b entry.next
-    (br $rwalk)))
+    (br $rwalk)))                                                      ;; next right entry
   (local.get $result))
 "#;
 
@@ -771,7 +771,7 @@ const RT_HASH_ARRAY_UNION: &str = r#"(func $__rt_hash_array_union (param $a i32)
             (local.set $vtag (local.get $bvt))))                      ;; value_tag = right value_type
         (local.set $result (call $__rt_hash_set (local.get $result) (local.get $i) (i64.const -1) (local.get $vlo) (local.get $vhi) (local.get $vtag)))))  ;; append under integer key (set owns the value)
     (local.set $i (i64.add (local.get $i) (i64.const 1)))             ;; next right index
-    (br $walk)))
+    (br $walk)))                                                      ;; next right entry
   (local.get $result))
 "#;
 
@@ -786,7 +786,7 @@ const RT_HASH_FREE_DEEP: &str = r#"(func $__rt_hash_free_deep (param $hash i32)
   (if (i32.eqz (local.get $hash))
     (then (return)))                                         ;; null check
   (local.set $capacity (i64.load (i32.add (local.get $hash) (i32.const 8))))  ;; capacity
-  (local.set $i (i64.const 0))
+  (local.set $i (i64.const 0))                               ;; slot cursor = 0
   (block $end (loop $slot
     (br_if $end (i64.ge_u (local.get $i) (local.get $capacity)))  ;; visited every slot
     (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 64)))))  ;; &slot[i]
@@ -801,8 +801,8 @@ const RT_HASH_FREE_DEEP: &str = r#"(func $__rt_hash_free_deep (param $hash i32)
             (if (i32.or (i32.or (i64.eq (local.get $vtag) (i64.const 4)) (i64.eq (local.get $vtag) (i64.const 5)))
                 (i32.or (i64.eq (local.get $vtag) (i64.const 6)) (i64.eq (local.get $vtag) (i64.const 7))))  ;; array/hash/object/mixed value (i64.eq yields i32 -> combine with i32.or)
               (then (call $__rt_decref_any (i32.wrap_i64 (i64.load (i32.add (local.get $entry) (i32.const 24)))))))))))  ;; release child
-    (local.set $i (i64.add (local.get $i) (i64.const 1)))
-    (br $slot)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))    ;; next slot
+    (br $slot)))                                             ;; next slot
   (call $__rt_heap_free (local.get $hash)))                  ;; free the struct
 "#;
 

@@ -80,12 +80,12 @@ const RT_HEAP_ALLOC: &str = r#"(func $__rt_heap_alloc (param $size i32) (result 
   (local $need i32) (local $blk i32) (local $prev i32) (local $cur i32) (local $grow i32) (local $newend i32) (local $pages i32) (local $bsz i32)
   ;; enforce minimum payload of 8 (a free block must hold an 8-byte next link)
   (if (i32.lt_u (local.get $size) (i32.const 8))
-    (then (local.set $size (i32.const 8))))
+    (then (local.set $size (i32.const 8))))                      ;; enforce minimum payload of 8
   ;; round the payload up to a multiple of 8
-  (local.set $size (i32.and (i32.add (local.get $size) (i32.const 7)) (i32.const -8)))
+  (local.set $size (i32.and (i32.add (local.get $size) (i32.const 7)) (i32.const -8))) ;; round payload up to a multiple of 8
   ;; free-list first-fit search; $blk stays 0 (its initial value) if nothing fits
-  (local.set $prev (i32.const 0))
-  (local.set $cur (global.get $__heap_free))
+  (local.set $prev (i32.const 0))                                ;; prev = null (free-list scan pointer)
+  (local.set $cur (global.get $__heap_free))                     ;; cur = free-list head
   (block $break_search
     (loop $search
       (br_if $break_search (i32.eqz (local.get $cur)))           ;; end of list -> no fit found
@@ -96,33 +96,33 @@ const RT_HEAP_ALLOC: &str = r#"(func $__rt_heap_alloc (param $size i32) (result 
             (then (global.set $__heap_free (i32.load (i32.add (local.get $cur) (i32.const 16)))))                  ;; unlink at head
             (else (i32.store (i32.add (local.get $prev) (i32.const 16)) (i32.load (i32.add (local.get $cur) (i32.const 16))))))  ;; unlink in middle
           (local.set $blk (local.get $cur))                      ;; claim this block
-          (br $break_search)))
+          (br $break_search)))                                   ;; found a fit -> stop scanning
       (local.set $prev (local.get $cur))                         ;; advance prev
       (local.set $cur (i32.load (i32.add (local.get $cur) (i32.const 16))))  ;; advance cur to next free block
-      (br $search)))
+      (br $search)))                                             ;; no fit yet -> next free block
   ;; bump fallback when no free block fit
   (if (i32.eqz (local.get $blk))
     (then
       (local.set $need (i32.add (local.get $size) (i32.const 16)))            ;; header + payload bytes
       (if (i32.gt_u (i32.add (global.get $__heap_ptr) (local.get $need)) (global.get $__heap_end))  ;; would overrun the region
         (then
-          (local.set $newend (i32.add (global.get $__heap_ptr) (local.get $need)))
+          (local.set $newend (i32.add (global.get $__heap_ptr) (local.get $need))) ;; first address past the required bytes
           (local.set $pages (i32.div_u (i32.add (i32.sub (local.get $newend) (global.get $__heap_end)) (i32.const 65535)) (i32.const 65536)))  ;; pages to cover the shortfall
           (local.set $grow (memory.grow (local.get $pages)))     ;; grow linear memory
           (if (i32.eq (local.get $grow) (i32.const -1))
             (then (unreachable)))                                ;; at the wasm32 address limit -> abort
-          (global.set $__heap_end (i32.add (global.get $__heap_end) (i32.mul (local.get $pages) (i32.const 65536))))))
+          (global.set $__heap_end (i32.add (global.get $__heap_end) (i32.mul (local.get $pages) (i32.const 65536)))))) ;; extend the reserved region
       (local.set $blk (global.get $__heap_ptr))                  ;; new block at the bump cursor
       (global.set $__heap_ptr (i32.add (local.get $blk) (local.get $need)))   ;; advance the bump cursor
       (i32.store (local.get $blk) (local.get $size))))           ;; write header.size
   ;; claim: refcount = 1, kind = 0
-  (i32.store (i32.add (local.get $blk) (i32.const 4)) (i32.const 1))
-  (i64.store (i32.add (local.get $blk) (i32.const 8)) (i64.const 0))
+  (i32.store (i32.add (local.get $blk) (i32.const 4)) (i32.const 1)) ;; refcount = 1
+  (i64.store (i32.add (local.get $blk) (i32.const 8)) (i64.const 0)) ;; kind = 0
   ;; accounting: allocs++, live += (size + 16), peak = max(peak, live)
-  (global.set $_gc_allocs (i64.add (global.get $_gc_allocs) (i64.const 1)))
-  (global.set $_gc_live (i64.add (global.get $_gc_live) (i64.extend_i32_u (i32.add (i32.load (local.get $blk)) (i32.const 16)))))
+  (global.set $_gc_allocs (i64.add (global.get $_gc_allocs) (i64.const 1))) ;; allocs++
+  (global.set $_gc_live (i64.add (global.get $_gc_live) (i64.extend_i32_u (i32.add (i32.load (local.get $blk)) (i32.const 16))))) ;; live += payload + header
   (if (i64.gt_u (global.get $_gc_live) (global.get $_gc_peak))
-    (then (global.set $_gc_peak (global.get $_gc_live))))
+    (then (global.set $_gc_peak (global.get $_gc_live))))        ;; peak = max(peak, live)
   (i32.add (local.get $blk) (i32.const 16)))                     ;; user pointer = header + 16
 "#;
 
@@ -132,18 +132,18 @@ const RT_HEAP_ALLOC: &str = r#"(func $__rt_heap_alloc (param $size i32) (result 
 const RT_HEAP_FREE: &str = r#"(func $__rt_heap_free (param $ptr i32)
   (local $hdr i32) (local $sz i32)
   (if (i32.eq (local.get $ptr) (i32.const 0))                    ;; ignore null
-    (then (return)))
+    (then (return)))                                             ;; null -> ignore
   (local.set $hdr (i32.sub (local.get $ptr) (i32.const 16)))     ;; header address
   (local.set $sz (i32.load (local.get $hdr)))                    ;; payload size
   ;; accounting: live -= (size + 16), frees++
-  (global.set $_gc_live (i64.sub (global.get $_gc_live) (i64.extend_i32_u (i32.add (local.get $sz) (i32.const 16)))))
-  (global.set $_gc_frees (i64.add (global.get $_gc_frees) (i64.const 1)))
+  (global.set $_gc_live (i64.sub (global.get $_gc_live) (i64.extend_i32_u (i32.add (local.get $sz) (i32.const 16))))) ;; live -= payload + header
+  (global.set $_gc_frees (i64.add (global.get $_gc_frees) (i64.const 1))) ;; frees++
   ;; mark free: refcount = 0, kind = 0
-  (i32.store (i32.add (local.get $hdr) (i32.const 4)) (i32.const 0))
-  (i64.store (i32.add (local.get $hdr) (i32.const 8)) (i64.const 0))
+  (i32.store (i32.add (local.get $hdr) (i32.const 4)) (i32.const 0)) ;; refcount = 0
+  (i64.store (i32.add (local.get $hdr) (i32.const 8)) (i64.const 0)) ;; kind = 0
   ;; push onto the free list (LIFO): this.next = old head, head = this
-  (i32.store (i32.add (local.get $hdr) (i32.const 16)) (global.get $__heap_free))
-  (global.set $__heap_free (local.get $hdr)))
+  (i32.store (i32.add (local.get $hdr) (i32.const 16)) (global.get $__heap_free)) ;; this block's next = old free-list head
+  (global.set $__heap_free (local.get $hdr)))                    ;; head = this block
 "#;
 
 /// `__rt_heap_free_safe`: like `__rt_heap_free` but silently ignores a pointer
@@ -152,16 +152,16 @@ const RT_HEAP_FREE: &str = r#"(func $__rt_heap_free (param $ptr i32)
 /// data-segment/already-freed values be no-ops instead of corrupting the heap.
 const RT_HEAP_FREE_SAFE: &str = r#"(func $__rt_heap_free_safe (param $ptr i32)
   (if (i32.eq (local.get $ptr) (i32.const 0))                    ;; null -> ignore
-    (then (return)))
+    (then (return)))                                             ;; null -> ignore
   (if (i32.lt_u (local.get $ptr) (i32.add (global.get $__heap_base) (i32.const 16)))  ;; before the first payload
-    (then (return)))
+    (then (return)))                                             ;; before the heap -> ignore
   (if (i32.ge_u (local.get $ptr) (global.get $__heap_ptr))       ;; at/after the bump cursor (not live)
-    (then (return)))
+    (then (return)))                                             ;; beyond the bump cursor -> ignore
   (if (i32.eqz (i32.load (i32.sub (local.get $ptr) (i32.const 12))))  ;; refcount 0 -> already free
-    (then (return)))
+    (then (return)))                                             ;; already free -> ignore
   (if (i32.lt_u (i32.load (i32.sub (local.get $ptr) (i32.const 16))) (i32.const 8))  ;; implausible header size
-    (then (return)))
-  (call $__rt_heap_free (local.get $ptr)))
+    (then (return)))                                             ;; implausible size -> ignore
+  (call $__rt_heap_free (local.get $ptr)))                       ;; safe to free
 "#;
 
 #[cfg(test)]

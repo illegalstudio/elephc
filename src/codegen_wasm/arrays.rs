@@ -64,7 +64,7 @@ const RT_ARRAY_NEW: &str = r#"(func $__rt_array_new (param $capacity i64) (param
   (i64.store (local.get $arr) (i64.const 0))                   ;; length = 0
   (i64.store (i32.add (local.get $arr) (i32.const 8)) (local.get $capacity))    ;; capacity
   (i64.store (i32.add (local.get $arr) (i32.const 16)) (local.get $elem_size))  ;; elem_size
-  (local.get $arr))
+  (local.get $arr))                                                              ;; return the new array pointer
 "#;
 
 /// `__rt_array_grow`: allocates a double-capacity array (min 8), copies the live
@@ -89,15 +89,15 @@ const RT_ARRAY_GROW: &str = r#"(func $__rt_array_grow (param $array i32) (result
              (i64.and (i64.load (i32.sub (local.get $array) (i32.const 8))) (i64.const 65535)))  ;; preserve old value_type/COW (low 16 bits)
   (i64.store (local.get $new) (local.get $len))              ;; copy length (capacity/elem_size set by array_new)
   (local.set $nbytes (i32.wrap_i64 (i64.mul (local.get $len) (local.get $esz))))  ;; live payload bytes
-  (local.set $i (i32.const 0))
+  (local.set $i (i32.const 0))                                                   ;; i = 0 (copy cursor)
   (block $end (loop $copy
-    (br_if $end (i32.ge_u (local.get $i) (local.get $nbytes)))
+    (br_if $end (i32.ge_u (local.get $i) (local.get $nbytes)))                   ;; stop when all bytes copied
     (i32.store8 (i32.add (i32.add (local.get $new) (i32.const 24)) (local.get $i))
                 (i32.load8_u (i32.add (i32.add (local.get $array) (i32.const 24)) (local.get $i))))  ;; copy one byte
-    (local.set $i (i32.add (local.get $i) (i32.const 1)))
-    (br $copy)))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))                        ;; i++
+    (br $copy)))                                                                 ;; next byte
   (call $__rt_heap_free (local.get $array))                  ;; free old struct shallowly (children were moved)
-  (local.get $new))
+  (local.get $new))                                                              ;; return the grown array pointer
 "#;
 
 /// `__rt_array_push_int`: appends an integer, shaping an empty array to 8-byte
@@ -114,12 +114,12 @@ const RT_ARRAY_PUSH_INT: &str = r#"(func $__rt_array_push_int (param $array i32)
   (local.set $len (i64.load (local.get $array)))            ;; length
   (local.set $cap (i64.load (i32.add (local.get $array) (i32.const 8))))  ;; capacity
   (if (i64.ge_s (local.get $len) (local.get $cap))          ;; full -> grow
-    (then (local.set $array (call $__rt_array_grow (local.get $array)))))
+    (then (local.set $array (call $__rt_array_grow (local.get $array)))))        ;; update array pointer after grow
   (local.set $len (i64.load (local.get $array)))            ;; reload length (grow preserves it)
   (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $len) (i64.const 8)))))  ;; slot = A+24+len*8
   (i64.store (local.get $slot) (local.get $value))          ;; write element
   (i64.store (local.get $array) (i64.add (local.get $len) (i64.const 1)))  ;; length++
-  (local.get $array))
+  (local.get $array))                                                            ;; return the (possibly new) array
 "#;
 
 /// `__rt_array_get_int`: reads the i64 element at `index`, returning the PHP null
@@ -128,10 +128,10 @@ const RT_ARRAY_PUSH_INT: &str = r#"(func $__rt_array_push_int (param $array i32)
 const RT_ARRAY_GET_INT: &str = r#"(func $__rt_array_get_int (param $array i32) (param $index i64) (result i64)
   (local $len i64)
   (if (i64.lt_s (local.get $index) (i64.const 0))           ;; negative index -> null
-    (then (return (i64.const 9223372036854775806))))
+    (then (return (i64.const 9223372036854775806))))                             ;; negative index -> null sentinel
   (local.set $len (i64.load (local.get $array)))            ;; length
   (if (i64.ge_s (local.get $index) (local.get $len))        ;; out of bounds -> null
-    (then (return (i64.const 9223372036854775806))))
+    (then (return (i64.const 9223372036854775806))))                             ;; out of bounds -> null sentinel
   (i64.load (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 8))))))  ;; slot[index]
 "#;
 
@@ -157,13 +157,13 @@ const RT_ARRAY_PUSH_STR: &str = r#"(func $__rt_array_push_str (param $array i32)
   (local.set $cap (i64.load (i32.add (local.get $array) (i32.const 8))))  ;; capacity
   (local.set $alen (i64.load (local.get $array)))         ;; length
   (if (i64.ge_u (local.get $alen) (local.get $cap))       ;; full -> grow
-    (then (local.set $array (call $__rt_array_grow (local.get $array)))))
+    (then (local.set $array (call $__rt_array_grow (local.get $array)))))        ;; update array pointer after grow
   (local.set $alen (i64.load (local.get $array)))         ;; reload length after grow
   (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $alen) (i64.const 16)))))  ;; slot = A+24+len*16
   (i64.store (local.get $slot) (i64.extend_i32_u (local.get $newptr)))     ;; pointer (zero-extended) at slot+0
   (i64.store (i32.add (local.get $slot) (i32.const 8)) (local.get $plen))  ;; length at slot+8
   (i64.store (local.get $array) (i64.add (local.get $alen) (i64.const 1))) ;; length++
-  (local.get $array))
+  (local.get $array))                                                            ;; return the (possibly new) array
 "#;
 
 /// `__rt_array_get_str`: reads the (pointer, length) string element at `index`,
@@ -172,10 +172,10 @@ const RT_ARRAY_GET_STR: &str = r#"(func $__rt_array_get_str (param $array i32) (
   (local $len i64)
   (local $slot i32)
   (if (i64.lt_s (local.get $index) (i64.const 0))         ;; negative index -> null pair
-    (then (return (i32.const 0) (i64.const 0))))
+    (then (return (i32.const 0) (i64.const 0))))                                 ;; negative index -> null pair
   (local.set $len (i64.load (local.get $array)))          ;; length
   (if (i64.ge_u (local.get $index) (local.get $len))      ;; out of bounds -> null pair
-    (then (return (i32.const 0) (i64.const 0))))
+    (then (return (i32.const 0) (i64.const 0))))                                 ;; out of bounds -> null pair
   (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 16)))))  ;; slot = A+24+index*16
   (i32.wrap_i64 (i64.load (local.get $slot)))             ;; result 0: pointer (wrapped from i64)
   (i64.load (i32.add (local.get $slot) (i32.const 8))))   ;; result 1: length
@@ -202,7 +202,7 @@ const RT_ARRAY_PUSH_MIXED: &str = r#"(func $__rt_array_push_mixed (param $array 
   (local.set $cap (i64.load (i32.add (local.get $array) (i32.const 8))))  ;; capacity
   (local.set $alen (i64.load (local.get $array)))         ;; length
   (if (i64.ge_u (local.get $alen) (local.get $cap))       ;; full -> grow
-    (then (local.set $array (call $__rt_array_grow (local.get $array)))))
+    (then (local.set $array (call $__rt_array_grow (local.get $array)))))        ;; update array pointer after grow
   (local.set $alen (i64.load (local.get $array)))         ;; reload length after grow
   (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $alen) (i64.const 16)))))  ;; slot = A+24+len*16
   (i64.store (local.get $slot) (i64.extend_i32_u (local.get $cell)))  ;; cell pointer (zero-extended) at slot+0
@@ -266,13 +266,13 @@ const RT_ARRAY_CLONE_SHALLOW: &str = r#"(func $__rt_array_clone_shallow (param $
     (local.set $src (i32.add (local.get $src) (i32.const 1)))     ;; advance source
     (local.set $dst (i32.add (local.get $dst) (i32.const 1)))     ;; advance dest
     (local.set $j (i64.sub (local.get $j) (i64.const 1)))        ;; bytes remaining--
-    (br $bcopy)))
+    (br $bcopy)))                                                                ;; next byte
   (local.set $vt (i32.and (i32.wrap_i64 (i64.shr_u (local.get $kindw) (i64.const 8))) (i32.const 127)))  ;; value_type = bits 8..14
   (if (i32.eq (local.get $vt) (i32.const 1))                ;; string elements -> own fresh copies
     (then
-      (local.set $i (i64.const 0))
+      (local.set $i (i64.const 0))                                               ;; i = 0 (string element cursor)
       (block $send (loop $sclone
-        (br_if $send (i64.ge_s (local.get $i) (local.get $len)))
+        (br_if $send (i64.ge_s (local.get $i) (local.get $len)))                 ;; stop when all string elements cloned
         (local.set $slot (i32.add (i32.add (local.get $new) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 16)))))  ;; slot = new+24+i*16
         (local.set $oldptr (i32.wrap_i64 (i64.load (local.get $slot))))           ;; shared ptr @ slot+0
         (local.set $slen (i64.load (i32.add (local.get $slot) (i32.const 8))))    ;; len @ slot+8
@@ -281,8 +281,8 @@ const RT_ARRAY_CLONE_SHALLOW: &str = r#"(func $__rt_array_clone_shallow (param $
         (local.set $np)                                     ;; persisted pointer
         (i64.store (local.get $slot) (i64.extend_i32_u (local.get $np)))          ;; install owned ptr @ slot+0
         (i64.store (i32.add (local.get $slot) (i32.const 8)) (local.get $nl))     ;; install owned len @ slot+8
-        (local.set $i (i64.add (local.get $i) (i64.const 1)))
-        (br $sclone))))
+        (local.set $i (i64.add (local.get $i) (i64.const 1)))                    ;; i++
+        (br $sclone))))                                                          ;; next string element
     (else
       (if (i32.or (i32.eq (local.get $vt) (i32.const 4))
           (i32.or (i32.eq (local.get $vt) (i32.const 5))
@@ -290,12 +290,12 @@ const RT_ARRAY_CLONE_SHALLOW: &str = r#"(func $__rt_array_clone_shallow (param $
           (i32.or (i32.eq (local.get $vt) (i32.const 7))
                   (i32.eq (local.get $vt) (i32.const 10))))))  ;; refcounted container children
         (then
-          (local.set $i (i64.const 0))
+          (local.set $i (i64.const 0))                                           ;; i = 0 (container element cursor)
           (block $rend (loop $rclone
-            (br_if $rend (i64.ge_s (local.get $i) (local.get $len)))
+            (br_if $rend (i64.ge_s (local.get $i) (local.get $len)))             ;; stop when all container elements increfed
             (call $__rt_incref (i32.wrap_i64 (i64.load (i32.add (i32.add (local.get $new) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $i) (local.get $esz)))))))  ;; share the child, bump its refcount
-            (local.set $i (i64.add (local.get $i) (i64.const 1)))
-            (br $rclone)))))))
+            (local.set $i (i64.add (local.get $i) (i64.const 1)))                ;; i++
+            (br $rclone)))))))                                                   ;; next container element
   (local.get $new))                                         ;; return the independent clone
 "#;
 
@@ -317,19 +317,19 @@ const RT_ARRAY_SET_INT: &str = r#"(func $__rt_array_set_int (param $array i32) (
   (block $gend (loop $grow
     (br_if $gend (i64.lt_s (local.get $index) (i64.load (i32.add (local.get $array) (i32.const 8)))))  ;; index < capacity -> fits
     (local.set $array (call $__rt_array_grow (local.get $array)))  ;; double capacity
-    (br $grow)))
+    (br $grow)))                                                                 ;; keep growing until index fits
   (local.set $oldlen (i64.load (local.get $array)))         ;; length after grow (grow preserves it)
   (if (i64.ge_s (local.get $index) (local.get $oldlen))     ;; writing at/after the end extends
     (then
-      (local.set $j (local.get $oldlen))
+      (local.set $j (local.get $oldlen))                                         ;; start fill cursor at current length
       (block $fend (loop $fill
         (br_if $fend (i64.ge_s (local.get $j) (local.get $index)))  ;; fill [oldlen, index)
         (i64.store (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $j) (i64.const 8)))) (i64.const 0))  ;; gap slot = 0
-        (local.set $j (i64.add (local.get $j) (i64.const 1)))
-        (br $fill)))
+        (local.set $j (i64.add (local.get $j) (i64.const 1)))                    ;; j++
+        (br $fill)))                                                             ;; next gap slot
       (i64.store (local.get $array) (i64.add (local.get $index) (i64.const 1)))))  ;; length = index+1
   (i64.store (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 8)))) (local.get $value))  ;; store element
-  (local.get $array))
+  (local.get $array))                                                            ;; return the (possibly new) array
 "#;
 
 /// `__rt_array_set_str`: assigns a string at `index`. Splits a shared array (COW),
@@ -357,7 +357,7 @@ const RT_ARRAY_SET_STR: &str = r#"(func $__rt_array_set_str (param $array i32) (
   (block $gend (loop $grow
     (br_if $gend (i64.lt_s (local.get $index) (i64.load (i32.add (local.get $array) (i32.const 8)))))  ;; index < capacity -> fits
     (local.set $array (call $__rt_array_grow (local.get $array)))  ;; double capacity
-    (br $grow)))
+    (br $grow)))                                                                 ;; keep growing until index fits
   (local.set $oldlen (i64.load (local.get $array)))         ;; length after grow
   (if (i64.lt_s (local.get $index) (local.get $oldlen))     ;; overwriting an existing element
     (then
@@ -365,19 +365,19 @@ const RT_ARRAY_SET_STR: &str = r#"(func $__rt_array_set_str (param $array i32) (
       (local.set $oldp (i32.wrap_i64 (i64.load (local.get $slot))))  ;; previous string ptr
       (call $__rt_heap_free_safe (local.get $oldp)))        ;; release the overwritten string
     (else
-      (local.set $j (local.get $oldlen))
+      (local.set $j (local.get $oldlen))                                         ;; start fill cursor at current length
       (block $fend (loop $fill
         (br_if $fend (i64.ge_s (local.get $j) (local.get $index)))  ;; fill [oldlen, index)
         (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $j) (i64.const 16)))))  ;; gap slot
         (i64.store (local.get $slot) (i64.const 0))              ;; ptr = 0
         (i64.store (i32.add (local.get $slot) (i32.const 8)) (i64.const 0))  ;; len = 0
-        (local.set $j (i64.add (local.get $j) (i64.const 1)))
-        (br $fill)))
+        (local.set $j (i64.add (local.get $j) (i64.const 1)))                    ;; j++
+        (br $fill)))                                                             ;; next gap slot
       (i64.store (local.get $array) (i64.add (local.get $index) (i64.const 1)))))  ;; length = index+1
   (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 16)))))  ;; target slot
   (i64.store (local.get $slot) (i64.extend_i32_u (local.get $np)))           ;; store ptr @ slot+0
   (i64.store (i32.add (local.get $slot) (i32.const 8)) (local.get $nl))      ;; store len @ slot+8
-  (local.get $array))
+  (local.get $array))                                                            ;; return the (possibly new) array
 "#;
 
 /// `__rt_array_free_deep`: releases each string/container child (value_type 1 or
@@ -400,15 +400,15 @@ const RT_ARRAY_FREE_DEEP: &str = r#"(func $__rt_array_free_deep (param $array i3
       (i32.or (i32.eq (local.get $vt) (i32.const 6))
               (i32.eq (local.get $vt) (i32.const 7))))))    ;; string or container elements own children
     (then
-      (local.set $i (i64.const 0))
+      (local.set $i (i64.const 0))                                               ;; i = 0 (child element cursor)
       (block $end (loop $rel
-        (br_if $end (i64.ge_s (local.get $i) (local.get $len)))
+        (br_if $end (i64.ge_s (local.get $i) (local.get $len)))                  ;; stop when all children released
         (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24))
                                   (i32.wrap_i64 (i64.mul (local.get $i) (local.get $esz)))))  ;; slot base
         (call $__rt_decref_any (i32.wrap_i64 (i64.load (local.get $slot))))  ;; release the child by kind
-        (local.set $i (i64.add (local.get $i) (i64.const 1)))
-        (br $rel)))))
-  (call $__rt_heap_free (local.get $array)))
+        (local.set $i (i64.add (local.get $i) (i64.const 1)))                    ;; i++
+        (br $rel)))))                                                            ;; next child element
+  (call $__rt_heap_free (local.get $array)))                                     ;; free the array struct itself
 "#;
 
 /// `__rt_decref_array`: decrements an indexed array's refcount and deep-frees it
@@ -462,8 +462,8 @@ const RT_ARRAY_UNION: &str = r#"(func $__rt_array_union (param $a i32) (param $b
           (else
             (local.set $result (call $__rt_array_push_int (local.get $result) (local.get $val)))))))  ;; append scalar bits
     (local.set $i (i64.add (local.get $i) (i64.const 1)))               ;; next right index
-    (br $walk)))
-  (local.get $result))
+    (br $walk)))                                                                 ;; next right index
+  (local.get $result))                                                           ;; return the union result
 "#;
 
 #[cfg(test)]

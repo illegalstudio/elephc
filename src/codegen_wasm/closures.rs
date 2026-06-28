@@ -1266,7 +1266,7 @@ const RT_USORT_CALLABLE: &str = r#"(func $__rt_usort_callable (param $desc i32) 
   (local.set $arr (call $__rt_array_ensure_unique (local.get $arr)))  ;; COW split: mutate only an unshared buffer
   (local.set $len (i64.load (local.get $arr)))                       ;; element count @ arr+0
   (if (i64.le_s (local.get $len) (i64.const 1))                      ;; 0 or 1 elements -> already sorted
-    (then (return (local.get $arr))))
+    (then (return (local.get $arr))))                                ;; 0 or 1 elements -> return immediately
   (local.set $i (i64.const 0))                                       ;; outer pass index = 0
   (block $endi
     (loop $Li
@@ -1291,9 +1291,9 @@ const RT_USORT_CALLABLE: &str = r#"(func $__rt_usort_callable (param $desc i32) 
               (i64.store (local.get $slotj) (local.get $b))          ;; arr[j]   = b
               (i64.store (local.get $slotk) (local.get $a))))        ;; arr[j+1] = a
           (local.set $j (i64.add (local.get $j) (i64.const 1)))      ;; j++
-          (br $Lj)))
+          (br $Lj)))                                                 ;; continue inner loop
       (local.set $i (i64.add (local.get $i) (i64.const 1)))          ;; i++
-      (br $Li)))
+      (br $Li)))                                                     ;; continue outer pass
   (local.get $arr))                                                  ;; return the (possibly cloned) sorted array
 "#;
 
@@ -1336,7 +1336,7 @@ const RT_ARRAY_REDUCE_CALLABLE: &str = r#"(func $__rt_array_reduce_callable (par
       (call $__rt_decref_any (local.get $args2))                     ;; deep-free the arg buffer (releases both boxed cells)
       (call $__rt_decref_any (local.get $rcell))                     ;; release the OWNED result cell (load-bearing: never stored)
       (local.set $i (i64.add (local.get $i) (i64.const 1)))          ;; i++
-      (br $L)))
+      (br $L)))                                                      ;; continue fold loop
   (local.get $carry))                                                ;; return the final i64 carry
 "#;
 
@@ -1377,7 +1377,7 @@ const RT_ARRAY_WALK_CALLABLE: &str = r#"(func $__rt_array_walk_callable (param $
       (call $__rt_decref_any (local.get $args1))                     ;; deep-free the arg buffer (releases the boxed item cell)
       (call $__rt_decref_any (local.get $rcell))                     ;; release the OWNED result cell (load-bearing: never stored)
       (local.set $i (i64.add (local.get $i) (i64.const 1)))          ;; i++
-      (br $L))))
+      (br $L))))                                                     ;; continue walk loop
 "#;
 
 /// Derives the unified-ladder wrapper symbol for an FCC-of-free-function target
@@ -2109,17 +2109,17 @@ mod tests {
     fn closure_call_int_balanced_gc() {
         let driver = r#"(func $t (export "t") (result i64)
   (local $desc i32) (local $args i32) (local $cell i32) (local $rcell i32)
-  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))
-  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6))
-  (i64.store (local.get $desc) (i64.const 1))
-  (i32.store offset=8 (local.get $desc) (i32.const 0))
-  (i32.store offset=12 (local.get $desc) (i32.const 0))
-  (i32.store offset=16 (local.get $desc) (i32.const 0))
-  (local.set $args (call $__rt_array_new (i64.const 1) (i64.const 16)))
-  (i64.const 0) (i64.const 42) (i64.const 0) (call $__rt_mixed_from_value)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))            ;; descriptor (rc 1)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp kind 6 (callable)
+  (i64.store (local.get $desc) (i64.const 1))                         ;; descriptor kind = 1 (Closure)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0
+  (i32.store offset=12 (local.get $desc) (i32.const 0))              ;; capture_count = 0
+  (i32.store offset=16 (local.get $desc) (i32.const 0))              ;; capture_tags_ptr = 0
+  (local.set $args (call $__rt_array_new (i64.const 1) (i64.const 16)))  ;; 1-slot arg buffer
+  (i64.const 0) (i64.const 42) (i64.const 0) (call $__rt_mixed_from_value)  ;; box int 42 -> cell
   (local.set $cell)
-  (local.set $args (call $__rt_array_push_mixed (local.get $args) (local.get $cell)))
-  (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args)))
+  (local.set $args (call $__rt_array_push_mixed (local.get $args) (local.get $cell)))  ;; append cell
+  (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args)))     ;; dispatch -> result cell
   (call $__rt_mixed_cast_int (local.get $rcell))                     ;; 84 (borrowed read of the cell)
   drop                                                                ;; discard the result value
   (call $__rt_decref_any (local.get $rcell))                         ;; release the result cell
@@ -3039,17 +3039,17 @@ mod tests {
     fn fcc_free_fn_call_balanced_gc() {
         let driver = r#"(func $t (export "t") (result i64)
   (local $desc i32) (local $args i32) (local $cell i32) (local $rcell i32)
-  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))
-  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6))
-  (i64.store (local.get $desc) (i64.const 11))
-  (i32.store offset=8 (local.get $desc) (i32.const 0))
-  (i32.store offset=12 (local.get $desc) (i32.const 0))
-  (i32.store offset=16 (local.get $desc) (i32.const 0))
-  (local.set $args (call $__rt_array_new (i64.const 1) (i64.const 16)))
-  (i64.const 0) (i64.const 21) (i64.const 0) (call $__rt_mixed_from_value)
+  (local.set $desc (call $__rt_heap_alloc (i32.const 32)))            ;; descriptor (rc 1)
+  (i64.store (i32.sub (local.get $desc) (i32.const 8)) (i64.const 6)) ;; stamp kind 6 (callable)
+  (i64.store (local.get $desc) (i64.const 11))                        ;; descriptor kind = 11 (Function)
+  (i32.store offset=8 (local.get $desc) (i32.const 0))               ;; entry_index = 0 (FCC slot, no closures)
+  (i32.store offset=12 (local.get $desc) (i32.const 0))              ;; capture_count = 0
+  (i32.store offset=16 (local.get $desc) (i32.const 0))              ;; capture_tags_ptr = 0
+  (local.set $args (call $__rt_array_new (i64.const 1) (i64.const 16)))  ;; 1-slot arg buffer
+  (i64.const 0) (i64.const 21) (i64.const 0) (call $__rt_mixed_from_value)  ;; box int 21 -> cell
   (local.set $cell)
-  (local.set $args (call $__rt_array_push_mixed (local.get $args) (local.get $cell)))
-  (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args)))
+  (local.set $args (call $__rt_array_push_mixed (local.get $args) (local.get $cell)))  ;; append cell
+  (local.set $rcell (call $__rt_closure_call (local.get $desc) (local.get $args)))     ;; dispatch -> result cell
   (call $__rt_mixed_cast_int (local.get $rcell))                     ;; 42 (borrowed read of the cell)
   drop                                                                ;; discard the result value
   (call $__rt_decref_any (local.get $rcell))                         ;; release the result cell

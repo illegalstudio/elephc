@@ -111,12 +111,12 @@ const RT_ARGC: &str = r#"(func $__rt_argc (result i64)
 /// WASI argv entries before copying them into PHP strings).
 const RT_STRLEN_C: &str = r#"(func $__rt_strlen_c (param $p i32) (result i32)
   (local $n i32)
-  (local.set $n (i32.const 0))
+  (local.set $n (i32.const 0))                               ;; n = 0
   (block $end (loop $scan
     (br_if $end (i32.eqz (i32.load8_u (i32.add (local.get $p) (local.get $n)))))  ;; stop at the NUL terminator
-    (local.set $n (i32.add (local.get $n) (i32.const 1)))
-    (br $scan)))
-  (local.get $n))"#;
+    (local.set $n (i32.add (local.get $n) (i32.const 1)))    ;; n++
+    (br $scan)))                                             ;; continue scanning
+  (local.get $n))                                            ;; return byte count"#;
 
 /// `__rt_argv`: builds PHP's `$argv` as an indexed string array via WASI
 /// `args_sizes_get` + `args_get`. Temporary heap buffers hold the WASI pointer
@@ -132,23 +132,23 @@ const RT_ARGV: &str = r#"(func $__rt_argv (result i32)
   (local $argp i32)
   (local $len i32)
   (drop (call $wasi_args_sizes_get (i32.const 16) (i32.const 20)))   ;; argc@16, argv_buf_size@20
-  (local.set $argc (i32.load (i32.const 16)))
-  (local.set $bufsize (i32.load (i32.const 20)))
+  (local.set $argc (i32.load (i32.const 16)))                        ;; load argc from scratch
+  (local.set $bufsize (i32.load (i32.const 20)))                     ;; load argv byte-buffer size
   (local.set $ptrs (call $__rt_heap_alloc (i32.mul (local.get $argc) (i32.const 4))))  ;; argc i32 pointers
   (local.set $buf (call $__rt_heap_alloc (local.get $bufsize)))      ;; argv byte buffer
   (drop (call $wasi_args_get (local.get $ptrs) (local.get $buf)))    ;; fill the pointer array + buffer
   (local.set $arr (call $__rt_array_new (i64.extend_i32_u (local.get $argc)) (i64.const 16)))  ;; string array
-  (local.set $i (i32.const 0))
+  (local.set $i (i32.const 0))                                       ;; i = 0
   (block $end (loop $loop
-    (br_if $end (i32.ge_u (local.get $i) (local.get $argc)))
+    (br_if $end (i32.ge_u (local.get $i) (local.get $argc)))         ;; exit loop when all args processed
     (local.set $argp (i32.load (i32.add (local.get $ptrs) (i32.mul (local.get $i) (i32.const 4)))))  ;; argv[i] (C string)
     (local.set $len (call $__rt_strlen_c (local.get $argp)))         ;; its byte length
     (local.set $arr (call $__rt_array_push_str (local.get $arr) (local.get $argp) (i64.extend_i32_u (local.get $len))))  ;; append a persisted copy
-    (local.set $i (i32.add (local.get $i) (i32.const 1)))
-    (br $loop)))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))            ;; i++
+    (br $loop)))                                                     ;; next arg
   (call $__rt_heap_free (local.get $ptrs))                          ;; temporaries no longer needed (args were copied)
-  (call $__rt_heap_free (local.get $buf))
-  (local.get $arr))"#;
+  (call $__rt_heap_free (local.get $buf))                            ;; free the argument byte buffer
+  (local.get $arr))                                                  ;; return the argv array"#;
 
 /// `__rt_mixed_write_stdout`: echoes a boxed Mixed value by dispatching on its tag:
 /// int (0) via `__rt_echo_i64`, float (2) via `__rt_echo_f64` (`%.14G`), string (1)
@@ -161,22 +161,22 @@ const RT_MIXED_WRITE_STDOUT: &str = r#"(func $__rt_mixed_write_stdout (param $pt
   (local.set $tag (i64.load (local.get $ptr)))                      ;; tag @ +0
   (if (i64.eqz (local.get $tag))                                    ;; tag 0 = int
     (then
-      (call $__rt_echo_i64 (i64.load (i32.add (local.get $ptr) (i32.const 8))))
-      (return)))
+      (call $__rt_echo_i64 (i64.load (i32.add (local.get $ptr) (i32.const 8)))) ;; echo int payload (lo @ +8)
+      (return)))                                                     ;; done
   (if (i64.eq (local.get $tag) (i64.const 1))                       ;; tag 1 = string
     (then
       (call $__rt_echo_str
         (i32.wrap_i64 (i64.load (i32.add (local.get $ptr) (i32.const 8))))
-        (i64.load (i32.add (local.get $ptr) (i32.const 16))))
-      (return)))
+        (i64.load (i32.add (local.get $ptr) (i32.const 16))))        ;; echo string (ptr, len)
+      (return)))                                                     ;; done
   (if (i64.eq (local.get $tag) (i64.const 2))                       ;; tag 2 = float
     (then
       (call $__rt_echo_f64 (f64.load (i32.add (local.get $ptr) (i32.const 8)))) ;; %.14G text via __rt_ftoa + fd_write
-      (return)))
+      (return)))                                                     ;; done
   (if (i64.eq (local.get $tag) (i64.const 3))                       ;; tag 3 = bool
     (then
-      (call $__rt_echo_bool (i64.load (i32.add (local.get $ptr) (i32.const 8))))
-      (return))))
+      (call $__rt_echo_bool (i64.load (i32.add (local.get $ptr) (i32.const 8)))) ;; echo bool payload
+      (return))))                                                    ;; done
 "#;
 
 /// `__rt_concat`: appends `a` then `b` into the concat buffer at the current
@@ -188,24 +188,24 @@ const RT_MIXED_WRITE_STDOUT: &str = r#"(func $__rt_mixed_write_stdout (param $pt
 const RT_CONCAT: &str = r#"(func $__rt_concat (param $aptr i32) (param $alen i64) (param $bptr i32) (param $blen i64) (result i32) (result i64)
   (local $start i32) (local $dest i32) (local $i i32) (local $al i32) (local $bl i32)
   (local.set $start (global.get $__concat_off))           ;; result begins at the cursor
-  (local.set $dest (local.get $start))
-  (local.set $al (i32.wrap_i64 (local.get $alen)))
-  (local.set $bl (i32.wrap_i64 (local.get $blen)))
-  (local.set $i (i32.const 0))
+  (local.set $dest (local.get $start))                       ;; write cursor starts at result base
+  (local.set $al (i32.wrap_i64 (local.get $alen)))           ;; a's byte length as i32
+  (local.set $bl (i32.wrap_i64 (local.get $blen)))           ;; b's byte length as i32
+  (local.set $i (i32.const 0))                               ;; copy index = 0
   (block $enda (loop $copya                               ;; copy operand a
-    (br_if $enda (i32.ge_u (local.get $i) (local.get $al)))
+    (br_if $enda (i32.ge_u (local.get $i) (local.get $al)))  ;; stop when a is fully copied
     (i32.store8 (i32.add (local.get $dest) (local.get $i))
-                (i32.load8_u (i32.add (local.get $aptr) (local.get $i))))
-    (local.set $i (i32.add (local.get $i) (i32.const 1)))
-    (br $copya)))
-  (local.set $dest (i32.add (local.get $dest) (local.get $al)))
-  (local.set $i (i32.const 0))
+                (i32.load8_u (i32.add (local.get $aptr) (local.get $i)))) ;; copy one byte of a
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))    ;; i++
+    (br $copya)))                                            ;; next byte
+  (local.set $dest (i32.add (local.get $dest) (local.get $al))) ;; advance write cursor past a
+  (local.set $i (i32.const 0))                               ;; reset copy index for b
   (block $endb (loop $copyb                               ;; copy operand b
-    (br_if $endb (i32.ge_u (local.get $i) (local.get $bl)))
+    (br_if $endb (i32.ge_u (local.get $i) (local.get $bl)))  ;; stop when b is fully copied
     (i32.store8 (i32.add (local.get $dest) (local.get $i))
-                (i32.load8_u (i32.add (local.get $bptr) (local.get $i))))
-    (local.set $i (i32.add (local.get $i) (i32.const 1)))
-    (br $copyb)))
+                (i32.load8_u (i32.add (local.get $bptr) (local.get $i)))) ;; copy one byte of b
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))    ;; i++
+    (br $copyb)))                                            ;; next byte
   (global.set $__concat_off
     (i32.add (i32.add (local.get $start) (local.get $al)) (local.get $bl))) ;; advance cursor
   (local.get $start)                                      ;; result ptr
@@ -243,25 +243,25 @@ const RT_ECHO_I64: &str = r#"(func $__rt_echo_i64 (param $v i64)
   (local.set $ptr (i32.const 64))                              ;; buffer end (exclusive)
   (if (i64.eqz (local.get $v))
     (then
-      (local.set $ptr (i32.sub (local.get $ptr) (i32.const 1)))
+      (local.set $ptr (i32.sub (local.get $ptr) (i32.const 1))) ;; back up one byte for '0'
       (i32.store8 (local.get $ptr) (i32.const 48)))            ;; '0'
     (else
       (local.set $neg (i64.lt_s (local.get $v) (i64.const 0))) ;; sign
       (if (local.get $neg)
         (then (local.set $u (i64.sub (i64.const 0) (local.get $v)))) ;; magnitude (MIN wraps -> correct unsigned)
-        (else (local.set $u (local.get $v))))
+        (else (local.set $u (local.get $v))))                  ;; positive: magnitude = v
       (block $done
         (loop $digit
           (br_if $done (i64.eqz (local.get $u)))               ;; stop when no digits left
-          (local.set $ptr (i32.sub (local.get $ptr) (i32.const 1)))
+          (local.set $ptr (i32.sub (local.get $ptr) (i32.const 1))) ;; back up one byte for digit
           (i32.store8 (local.get $ptr)
             (i32.add (i32.const 48)
               (i32.wrap_i64 (i64.rem_u (local.get $u) (i64.const 10))))) ;; '0' + (u % 10)
           (local.set $u (i64.div_u (local.get $u) (i64.const 10)))      ;; u /= 10
-          (br $digit)))
+          (br $digit)))                                        ;; next digit
       (if (local.get $neg)
         (then
-          (local.set $ptr (i32.sub (local.get $ptr) (i32.const 1)))
+          (local.set $ptr (i32.sub (local.get $ptr) (i32.const 1))) ;; back up one byte for '-'
           (i32.store8 (local.get $ptr) (i32.const 45))))))     ;; '-'
   (local.set $len (i32.sub (i32.const 64) (local.get $ptr)))   ;; byte count
   (i32.store (i32.const 0) (local.get $ptr))                   ;; iovec.buf_ptr

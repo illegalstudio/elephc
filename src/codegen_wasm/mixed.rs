@@ -51,11 +51,11 @@ const RT_MIXED_FROM_VALUE: &str = r#"(func $__rt_mixed_from_value (param $tag i6
   (i64.store (i32.sub (local.get $cell) (i32.const 8)) (i64.const 5))   ;; stamp kind = 5 (mixed)
   (if (i64.eq (local.get $tag) (i64.const 1))                           ;; string: own a persisted copy
     (then
-      (call $__rt_str_persist (i32.wrap_i64 (local.get $lo)) (local.get $hi))
+      (call $__rt_str_persist (i32.wrap_i64 (local.get $lo)) (local.get $hi))    ;; persist string into an owned heap copy
       (local.set $sl)                                                   ;; persisted length
       (local.set $sp)                                                   ;; persisted pointer
-      (local.set $lo (i64.extend_i32_u (local.get $sp)))
-      (local.set $hi (local.get $sl)))
+      (local.set $lo (i64.extend_i32_u (local.get $sp)))                         ;; update lo with persisted pointer
+      (local.set $hi (local.get $sl)))                                           ;; update hi with persisted length
     (else
       (if (i32.or (i32.or (i32.or (i32.or
             (i64.eq (local.get $tag) (i64.const 4))
@@ -63,11 +63,11 @@ const RT_MIXED_FROM_VALUE: &str = r#"(func $__rt_mixed_from_value (param $tag i6
             (i64.eq (local.get $tag) (i64.const 6)))
             (i64.eq (local.get $tag) (i64.const 7)))
             (i64.eq (local.get $tag) (i64.const 10)))                   ;; refcounted child: share ownership
-        (then (call $__rt_incref (i32.wrap_i64 (local.get $lo)))))))
+        (then (call $__rt_incref (i32.wrap_i64 (local.get $lo)))))))             ;; incref the refcounted child
   (i64.store (local.get $cell) (local.get $tag))                        ;; tag @ +0
   (i64.store (i32.add (local.get $cell) (i32.const 8)) (local.get $lo)) ;; lo @ +8
   (i64.store (i32.add (local.get $cell) (i32.const 16)) (local.get $hi)) ;; hi @ +16
-  (local.get $cell))
+  (local.get $cell))                                                             ;; return the new Mixed cell
 "#;
 
 /// `__rt_mixed_unbox`: returns the `(tag, lo, hi)` of a Mixed cell, transparently
@@ -82,7 +82,7 @@ const RT_MIXED_UNBOX: &str = r#"(func $__rt_mixed_unbox (param $ptr i32) (result
       (br_if $done (i64.ne (local.get $tag) (i64.const 7)))             ;; not nested -> done
       (local.set $ptr (i32.wrap_i64 (i64.load (i32.add (local.get $ptr) (i32.const 8)))))  ;; follow nested pointer
       (br_if $done (i32.eqz (local.get $ptr)))                          ;; nested null -> done
-      (br $L)))
+      (br $L)))                                                                  ;; back to top for next nested level
   (i64.load (local.get $ptr))                                           ;; result 0: tag
   (i64.load (i32.add (local.get $ptr) (i32.const 8)))                   ;; result 1: lo
   (i64.load (i32.add (local.get $ptr) (i32.const 16))))                 ;; result 2: hi
@@ -94,11 +94,11 @@ const RT_MIXED_UNBOX: &str = r#"(func $__rt_mixed_unbox (param $ptr i32) (result
 const RT_MIXED_FREE_DEEP: &str = r#"(func $__rt_mixed_free_deep (param $ptr i32)
   (local $tag i64)
   (if (i32.eqz (local.get $ptr))
-    (then (return)))
+    (then (return)))                                                             ;; null check
   (local.set $tag (i64.load (local.get $ptr)))                          ;; tag @ +0
   (if (i64.eq (local.get $tag) (i64.const 1))                           ;; string: free the owned copy
     (then
-      (call $__rt_heap_free_safe (i32.wrap_i64 (i64.load (i32.add (local.get $ptr) (i32.const 8))))))
+      (call $__rt_heap_free_safe (i32.wrap_i64 (i64.load (i32.add (local.get $ptr) (i32.const 8)))))) ;; free the owned string copy
     (else
       (if (i32.or (i32.or (i32.or (i32.or
             (i64.eq (local.get $tag) (i64.const 4))
@@ -106,8 +106,8 @@ const RT_MIXED_FREE_DEEP: &str = r#"(func $__rt_mixed_free_deep (param $ptr i32)
             (i64.eq (local.get $tag) (i64.const 6)))
             (i64.eq (local.get $tag) (i64.const 7)))
             (i64.eq (local.get $tag) (i64.const 10)))                   ;; refcounted child: release it
-        (then (call $__rt_decref_any (i32.wrap_i64 (i64.load (i32.add (local.get $ptr) (i32.const 8)))))))))
-  (call $__rt_heap_free (local.get $ptr)))
+        (then (call $__rt_decref_any (i32.wrap_i64 (i64.load (i32.add (local.get $ptr) (i32.const 8))))))))) ;; release the refcounted child
+  (call $__rt_heap_free (local.get $ptr)))                                       ;; free the cell itself
 "#;
 
 /// `__rt_decref_mixed`: decrements a Mixed cell's refcount and deep-frees it when
@@ -122,7 +122,7 @@ const RT_DECREF_MIXED: &str = r#"(func $__rt_decref_mixed (param $ptr i32)
   (if (i32.ge_u (local.get $ptr) (global.get $__heap_ptr))
     (then (return)))                                                    ;; above heap
   (local.set $rc (i32.sub (i32.load (i32.sub (local.get $ptr) (i32.const 12))) (i32.const 1)))  ;; refcount - 1
-  (i32.store (i32.sub (local.get $ptr) (i32.const 12)) (local.get $rc))
+  (i32.store (i32.sub (local.get $ptr) (i32.const 12)) (local.get $rc))          ;; store decremented refcount
   (if (i32.eqz (local.get $rc))
     (then (call $__rt_mixed_free_deep (local.get $ptr)))))              ;; last owner -> deep free
 "#;
