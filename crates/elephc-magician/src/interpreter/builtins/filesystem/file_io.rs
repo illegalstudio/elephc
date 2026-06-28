@@ -42,16 +42,20 @@ pub(in crate::interpreter) fn eval_builtin_file_probe(
         return Err(EvalStatus::RuntimeFatal);
     };
     let filename = eval_expr(filename, context, scope, values)?;
-    eval_file_probe_result(name, filename, values)
+    eval_file_probe_result(name, filename, context, values)
 }
 
 /// Computes one local filesystem predicate and returns a PHP boolean.
 pub(in crate::interpreter) fn eval_file_probe_result(
     name: &str,
     filename: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    if let Some(stat) = eval_user_wrapper_url_stat_result(&path, 0, context, values)? {
+        return eval_user_wrapper_file_probe_from_stat(name, stat, values);
+    }
     if stream_wrappers::is_phar_stream(&path) {
         let exists = elephc_phar::extract_url_bytes(path.as_bytes()).is_some();
         let supported = matches!(name, "file_exists" | "is_file" | "is_readable");
@@ -88,16 +92,20 @@ pub(in crate::interpreter) fn eval_builtin_file_stat_scalar(
         return Err(EvalStatus::RuntimeFatal);
     };
     let filename = eval_expr(filename, context, scope, values)?;
-    eval_file_stat_scalar_result(name, filename, values)
+    eval_file_stat_scalar_result(name, filename, context, values)
 }
 
 /// Returns scalar stat metadata, using PHP false for failure where native elephc does.
 pub(in crate::interpreter) fn eval_file_stat_scalar_result(
     name: &str,
     filename: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    if let Some(stat) = eval_user_wrapper_url_stat_result(&path, 0, context, values)? {
+        return eval_user_wrapper_file_stat_scalar_from_stat(name, stat, values);
+    }
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
         return match name {
             "filemtime" => values.int(0),
@@ -289,15 +297,20 @@ pub(in crate::interpreter) fn eval_builtin_filesize(
         return Err(EvalStatus::RuntimeFatal);
     };
     let filename = eval_expr(filename, context, scope, values)?;
-    eval_filesize_result(filename, values)
+    eval_filesize_result(filename, context, values)
 }
 
 /// Returns one local file or supported wrapper size in bytes, or zero on failure.
 pub(in crate::interpreter) fn eval_filesize_result(
     filename: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    if let Some(stat) = eval_user_wrapper_url_stat_result(&path, 0, context, values)? {
+        let size = eval_user_wrapper_stat_int_field(stat, "size", values)?.unwrap_or(0);
+        return values.int(size);
+    }
     if let Ok(bytes) = eval_read_path_or_wrapper_bytes(&path) {
         return values.int(i64::try_from(bytes.len()).map_err(|_| EvalStatus::RuntimeFatal)?);
     }
@@ -321,15 +334,22 @@ pub(in crate::interpreter) fn eval_builtin_filetype(
         return Err(EvalStatus::RuntimeFatal);
     };
     let filename = eval_expr(filename, context, scope, values)?;
-    eval_filetype_result(filename, values)
+    eval_filetype_result(filename, context, values)
 }
 
 /// Returns the PHP filetype string for one path, or false when lstat fails.
 pub(in crate::interpreter) fn eval_filetype_result(
     filename: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    if let Some(stat) = eval_user_wrapper_url_stat_result(&path, 0, context, values)? {
+        return match eval_user_wrapper_stat_int_field(stat, "mode", values)? {
+            Some(mode) => values.string(eval_filetype_label_from_mode(mode)),
+            None => values.bool_value(false),
+        };
+    }
     if stream_wrappers::is_phar_stream(&path) {
         return if elephc_phar::extract_url_bytes(path.as_bytes()).is_some() {
             values.string("file")
@@ -376,16 +396,20 @@ pub(in crate::interpreter) fn eval_builtin_stat_array(
         return Err(EvalStatus::RuntimeFatal);
     };
     let filename = eval_expr(filename, context, scope, values)?;
-    eval_stat_array_result(name, filename, values)
+    eval_stat_array_result(name, filename, context, values)
 }
 
 /// Builds PHP's stat array for one local path, or returns false on stat failure.
 pub(in crate::interpreter) fn eval_stat_array_result(
     name: &str,
     filename: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
+    if let Some(stat) = eval_user_wrapper_url_stat_result(&path, 0, context, values)? {
+        return Ok(stat);
+    }
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
         return values.bool_value(false);
     };

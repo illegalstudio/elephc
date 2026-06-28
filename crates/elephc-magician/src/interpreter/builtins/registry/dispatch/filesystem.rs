@@ -66,14 +66,14 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_file_probe_result(name, *filename, values)?
+            eval_file_probe_result(name, *filename, context, values)?
         }
         "fileatime" | "filectime" | "filegroup" | "fileinode" | "filemtime" | "fileowner"
         | "fileperms" => {
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_file_stat_scalar_result(name, *filename, values)?
+            eval_file_stat_scalar_result(name, *filename, context, values)?
         }
         "file_get_contents" => {
             let [filename] = evaluated_args else {
@@ -108,13 +108,13 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_filesize_result(*filename, values)?
+            eval_filesize_result(*filename, context, values)?
         }
         "filetype" => {
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_filetype_result(*filename, values)?
+            eval_filetype_result(*filename, context, values)?
         }
         "fnmatch" => match evaluated_args {
             [pattern, filename] => eval_fnmatch_result(*pattern, *filename, None, values)?,
@@ -216,7 +216,7 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_stat_array_result(name, *filename, values)?
+            eval_stat_array_result(name, *filename, context, values)?
         }
         "linkinfo" => {
             let [path] = evaluated_args else {

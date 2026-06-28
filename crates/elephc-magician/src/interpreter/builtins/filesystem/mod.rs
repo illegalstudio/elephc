@@ -20,6 +20,7 @@ mod stream_context;
 mod stream_settings;
 mod stream_sockets;
 mod streams;
+mod user_wrapper_stat;
 mod user_wrapper_streams;
 
 pub(in crate::interpreter) use directories::*;
@@ -34,4 +35,5 @@ pub(in crate::interpreter) use stream_context::*;
 pub(in crate::interpreter) use stream_settings::*;
 pub(in crate::interpreter) use stream_sockets::*;
 pub(in crate::interpreter) use streams::*;
+pub(in crate::interpreter) use user_wrapper_stat::*;
 pub(in crate::interpreter) use user_wrapper_streams::*;
