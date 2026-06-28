@@ -163,10 +163,15 @@ pub(in crate::interpreter) fn eval_unary_stream_result(
             }
             values.bool_value(context.stream_resources_mut().rewind(id))
         }
-        "fstat" => match context.stream_resources().metadata(id) {
-            Some(metadata) => eval_stat_metadata_array(&metadata, values),
-            None => values.bool_value(false),
-        },
+        "fstat" => {
+            if let Some(result) = eval_user_wrapper_fstat_result(id, context, values)? {
+                return Ok(result);
+            }
+            match context.stream_resources().metadata(id) {
+                Some(metadata) => eval_stat_metadata_array(&metadata, values),
+                None => values.bool_value(false),
+            }
+        }
         "stream_get_meta_data" => eval_stream_get_meta_data_result(id, context, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }

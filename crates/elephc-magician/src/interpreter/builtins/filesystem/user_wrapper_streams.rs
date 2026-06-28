@@ -462,7 +462,7 @@ fn eval_user_wrapper_stream_open_args(
 }
 
 /// Returns a callable eval-declared wrapper method.
-fn eval_user_wrapper_method(
+pub(in crate::interpreter) fn eval_user_wrapper_method(
     class_name: &str,
     method_name: &str,
     context: &ElephcEvalContext,
