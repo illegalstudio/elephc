@@ -144,10 +144,10 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "array_push" | "array_unshift" => Some(&["array", "values"]),
         "array_key_exists" => Some(&["key", "array"]),
         "array_pad" => Some(&["array", "length", "value"]),
-        "array_reverse" => Some(&["array"]),
+        "array_reverse" => Some(&["array", "preserve_keys"]),
         "array_search" | "in_array" => Some(&["needle", "haystack", "strict"]),
         "array_slice" => Some(&["array", "offset", "length"]),
-        "array_splice" => Some(&["array", "offset", "length"]),
+        "array_splice" => Some(&["array", "offset", "length", "replacement"]),
         "acos" | "asin" | "atan" | "cos" | "cosh" | "deg2rad" | "exp" | "log2" | "log10"
         | "rad2deg" | "sin" | "sinh" | "tan" | "tanh" => Some(&["num"]),
         "atan2" => Some(&["y", "x"]),
@@ -279,7 +279,7 @@ pub(in crate::interpreter) fn eval_builtin_param_names(
         "md5" | "sha1" => Some(&["string", "binary"]),
         "microtime" => Some(&["as_float"]),
         "mktime" => Some(&["hour", "minute", "second", "month", "day", "year"]),
-        "nl2br" => Some(&["string"]),
+        "nl2br" => Some(&["string", "use_xhtml"]),
         "number_format" => Some(&[
             "num",
             "decimals",

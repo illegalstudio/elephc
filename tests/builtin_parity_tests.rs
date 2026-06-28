@@ -41,6 +41,9 @@ const EVAL_ONLY_REFLECTION_BUILTINS: &[&str] = &[
     "get_object_vars",
 ];
 
+/// Eval supports these PHP optional parameters before the static backend does.
+const EVAL_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["array_reverse", "array_splice", "nl2br"];
+
 /// Verifies every non-raw-memory static builtin is visible through eval's function lookup.
 #[test]
 fn static_php_visible_builtins_are_visible_to_eval() {
@@ -84,6 +87,11 @@ fn shared_builtin_signature_shape_matches_static_signatures() {
             missing_eval_signature.push(*name);
             continue;
         };
+        if EVAL_SIGNATURE_EXTENSION_BUILTINS.contains(name) {
+            assert_eval_signature_extends_static_signature(name, &static_meta, &eval_meta);
+            continue;
+        }
+
         if static_meta.params != eval_meta.params
             || static_meta.required_param_count != eval_meta.required_param_count
             || static_meta.default_param_count != eval_meta.default_param_count
@@ -105,6 +113,34 @@ fn shared_builtin_signature_shape_matches_static_signatures() {
     assert!(
         mismatched_signatures.is_empty(),
         "shared builtin signature-shape mismatches: {mismatched_signatures:#?}"
+    );
+}
+
+/// Verifies a documented eval signature extension keeps the static prefix contract.
+fn assert_eval_signature_extends_static_signature(
+    name: &str,
+    static_meta: &elephc::builtin_metadata::BuiltinSignatureMetadata,
+    eval_meta: &elephc_magician::builtin_metadata::BuiltinSignatureMetadata,
+) {
+    assert!(
+        eval_meta.params.starts_with(&static_meta.params),
+        "{name} eval extension must preserve static parameter prefix: static={static_meta:#?} eval={eval_meta:#?}"
+    );
+    assert_eq!(
+        static_meta.required_param_count, eval_meta.required_param_count,
+        "{name} eval extension must preserve required parameter count"
+    );
+    assert_eq!(
+        static_meta.variadic, eval_meta.variadic,
+        "{name} eval extension must not change variadic behavior"
+    );
+    assert_eq!(
+        static_meta.by_ref_params, eval_meta.by_ref_params,
+        "{name} eval extension must preserve by-reference parameters"
+    );
+    assert!(
+        eval_meta.default_param_count >= static_meta.default_param_count,
+        "{name} eval extension must not remove defaults"
     );
 }
 

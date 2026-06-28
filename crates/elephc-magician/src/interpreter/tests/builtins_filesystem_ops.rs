@@ -78,11 +78,11 @@ fn execute_program_dispatches_stream_resolve_include_path_builtin() {
 $resolved = stream_resolve_include_path("{file}");
 echo is_string($resolved) && basename($resolved) === "{file}" && file_get_contents($resolved) === "payload" ? "resolved" : "bad"; echo ":";
 echo stream_resolve_include_path("{missing}") === false ? "missing" : "bad"; echo ":";
-$named = stream_resolve_include_path(path: "{file}");
+$named = stream_resolve_include_path(filename: "{file}");
 echo is_string($named) && basename($named) === "{file}" ? "named" : "bad"; echo ":";
 $call = call_user_func("stream_resolve_include_path", "{file}");
 echo is_string($call) && basename($call) === "{file}" ? "call" : "bad"; echo ":";
-$spread = call_user_func_array("stream_resolve_include_path", ["path" => "{file}"]);
+$spread = call_user_func_array("stream_resolve_include_path", ["filename" => "{file}"]);
 echo is_string($spread) && basename($spread) === "{file}" ? "spread" : "bad"; echo ":";
 echo unlink("{file}") ? "cleanup" : "bad"; echo ":";
 return function_exists("stream_resolve_include_path");"#,
