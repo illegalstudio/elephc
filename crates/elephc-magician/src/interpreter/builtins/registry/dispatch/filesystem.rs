@@ -59,7 +59,7 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_file_result(*filename, values)?
+            eval_file_result(*filename, context, values)?
         }
         "file_exists" | "is_dir" | "is_executable" | "is_file" | "is_link" | "is_readable"
         | "is_writable" | "is_writeable" => {
@@ -79,13 +79,13 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_file_get_contents_result(*filename, values)?
+            eval_file_get_contents_result(*filename, context, values)?
         }
         "file_put_contents" => {
             let [filename, data] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_file_put_contents_result(*filename, *data, values)?
+            eval_file_put_contents_result(*filename, *data, context, values)?
         }
         "fclose"
         | "fgetc"
@@ -228,7 +228,7 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_readfile_result(*filename, values)?
+            eval_readfile_result(*filename, context, values)?
         }
         "readline" => {
             if evaluated_args.len() > 1 {

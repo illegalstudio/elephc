@@ -9,6 +9,7 @@
 //!   host filesystem.
 
 mod directories;
+mod file_contents;
 mod file_io;
 mod fnmatch;
 mod ops;
@@ -22,6 +23,7 @@ mod stream_sockets;
 mod streams;
 mod user_wrapper_controls;
 mod user_wrapper_directories;
+mod user_wrapper_file_io;
 mod user_wrapper_lines;
 mod user_wrapper_metadata;
 mod user_wrapper_options;
@@ -30,6 +32,7 @@ mod user_wrapper_stat;
 mod user_wrapper_streams;
 
 pub(in crate::interpreter) use directories::*;
+pub(in crate::interpreter) use file_contents::*;
 pub(in crate::interpreter) use file_io::*;
 pub(in crate::interpreter) use fnmatch::*;
 pub(in crate::interpreter) use ops::*;
@@ -43,6 +46,7 @@ pub(in crate::interpreter) use stream_sockets::*;
 pub(in crate::interpreter) use streams::*;
 pub(in crate::interpreter) use user_wrapper_controls::*;
 pub(in crate::interpreter) use user_wrapper_directories::*;
+pub(in crate::interpreter) use user_wrapper_file_io::*;
 pub(in crate::interpreter) use user_wrapper_lines::*;
 pub(in crate::interpreter) use user_wrapper_metadata::*;
 pub(in crate::interpreter) use user_wrapper_options::*;
