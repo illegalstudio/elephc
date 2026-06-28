@@ -469,6 +469,9 @@ pub(in crate::interpreter) fn eval_flock_result(
 ) -> Result<(bool, bool), EvalStatus> {
     let id = eval_stream_resource_id(stream, values)?;
     let operation = eval_int_value(operation, values)?;
+    if let Some(success) = eval_user_wrapper_flock_result(id, operation, context, values)? {
+        return Ok((success, false));
+    }
     Ok(context
         .stream_resources()
         .flock(id, operation)

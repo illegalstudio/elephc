@@ -82,6 +82,36 @@ pub(in crate::interpreter) fn eval_user_wrapper_ftruncate_result(
     values.bool_value(ok).map(Some)
 }
 
+/// Dispatches `flock()` to a wrapper object's `stream_lock()`.
+pub(in crate::interpreter) fn eval_user_wrapper_flock_result(
+    id: i64,
+    operation: i64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<bool>, EvalStatus> {
+    let Some(info) = context.stream_resources().user_wrapper_stream_info(id) else {
+        return Ok(None);
+    };
+    let Some((declaring_class, stream_lock)) =
+        eval_user_wrapper_method(&info.class_name, "stream_lock", context)
+    else {
+        return Ok(Some(false));
+    };
+    let operation = values.int(operation)?;
+    let result = eval_dynamic_method_with_values(
+        &declaring_class,
+        &info.class_name,
+        &stream_lock,
+        info.object,
+        positional_args(vec![operation]),
+        context,
+        values,
+    )?;
+    let ok = values.truthy(result)?;
+    values.release(result)?;
+    Ok(Some(ok))
+}
+
 /// Calls one no-argument userspace wrapper method on a stream resource.
 fn eval_user_wrapper_call_no_arg_method(
     id: i64,

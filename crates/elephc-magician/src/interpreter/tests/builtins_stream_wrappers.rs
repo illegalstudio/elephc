@@ -225,6 +225,10 @@ fn execute_program_dispatches_user_stream_wrapper_control_methods() {
         echo "F";
         return true;
     }
+    public function stream_lock($operation): bool {
+        echo "L" . $operation;
+        return $operation !== 99;
+    }
 }
 stream_wrapper_register("ctrlw", "EvalControlWrapperW");
 $h = fopen("ctrlw://one", "r+");
@@ -235,7 +239,10 @@ echo fseek($h, 1) === 0 ? "seek" : "bad"; echo ":";
 echo ftell($h) === 1 ? "tell1" : "bad"; echo ":";
 echo ftruncate($h, 3) ? "trunc" : "bad"; echo ":";
 echo stream_get_contents($h) === "bc" ? "contents" : "bad"; echo ":";
-echo fflush($h) ? "flush" : "bad";
+echo fflush($h) ? "flush" : "bad"; echo ":";
+$lock_ok = flock($h, LOCK_EX, $would);
+echo $lock_ok && $would === false ? "lock" : "bad"; echo ":";
+echo flock($h, 99) === false ? "lockfalse" : "bad";
 return true;"#,
     )
     .expect("parse eval fragment");
@@ -246,7 +253,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "Ttell0:read:Ttell2:S0seek:Ttell1:R3trunc:contents:Fflush"
+        "Ttell0:read:Ttell2:S0seek:Ttell1:R3trunc:contents:Fflush:L2lock:L99lockfalse"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
