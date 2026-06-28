@@ -7,9 +7,13 @@
 //! Key details:
 //! - PHAR fixtures are written through `elephc-phar` so tests exercise the same
 //!   archive bridge used by generated-runtime paths.
+//! - HTTP tests use a one-shot localhost server to avoid external network dependencies.
 
 use super::super::*;
 use super::support::*;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::thread::JoinHandle;
 
 /// Verifies eval `fopen()` and one-shot file builtins handle supported wrappers.
 #[test]
@@ -67,6 +71,32 @@ return true;"#
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval `http://` URLs feed `file_get_contents()` and `fopen()`.
+#[test]
+fn execute_program_dispatches_http_stream_wrapper_urls() {
+    let (fgc_port, fgc_server) = spawn_http_once("fgc-body");
+    let (fopen_port, fopen_server) = spawn_http_once("stream-body");
+    let source = format!(
+        r#"echo file_get_contents("http://127.0.0.1:{fgc_port}/body?x=1") === "fgc-body" ? "fgc" : "bad"; echo ":";
+$h = fopen("http://127.0.0.1:{fopen_port}/stream", "r");
+echo is_resource($h) ? "open" : "bad"; echo ":";
+echo fread($h, 64) === "stream-body" ? "read" : "bad"; echo ":";
+echo fclose($h) ? "close" : "bad"; echo ":";
+echo file_get_contents("http://") === false ? "invalid" : "bad";
+return true;"#
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    fgc_server.join().expect("join file_get_contents HTTP fixture");
+    fopen_server.join().expect("join fopen HTTP fixture");
+    assert_eq!(values.output, "fgc:open:read:close:invalid");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval stream wrapper registration changes the visible wrapper list.
 #[test]
 fn execute_program_tracks_stream_wrapper_registry_state() {
@@ -98,4 +128,27 @@ return true;"#,
         "missing:reg:listed:unreg:removed:unfile:nofile:restore:fileback"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Starts a localhost HTTP server that returns one fixed body and then exits.
+fn spawn_http_once(body: &'static str) -> (u16, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind HTTP wrapper fixture");
+    let port = listener
+        .local_addr()
+        .expect("read HTTP wrapper fixture address")
+        .port();
+    let handle = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().expect("accept HTTP wrapper request");
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request).expect("read HTTP wrapper request");
+        let response = format!(
+            "HTTP/1.0 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .expect("write HTTP wrapper response");
+    });
+    (port, handle)
 }

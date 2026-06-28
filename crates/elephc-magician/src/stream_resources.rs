@@ -57,6 +57,10 @@ impl EvalStreamResources {
         if stream_wrappers::is_phar_stream(path) {
             return self.open_phar_stream(path, &mode);
         }
+        if stream_wrappers::is_http_stream(path) && mode.read && !mode.write {
+            let bytes = stream_wrappers::read_http_url(path)?;
+            return self.open_ephemeral_stream(path, &mode, &bytes, None, false);
+        }
         let path = stream_wrappers::local_filesystem_path(path)?;
         let file = mode.open(&path).ok()?;
         Some(self.insert(EvalFileStream::new(file, path, mode.label)))
