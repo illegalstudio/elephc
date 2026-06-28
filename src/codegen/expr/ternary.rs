@@ -102,6 +102,7 @@ fn infer_branch_result_type(left: &Expr, right: &Expr, ctx: &Context) -> PhpType
         defaults: vec![],
         return_type: PhpType::Int,
         declared_return: false,
+        by_ref_return: false,
         ref_params: vec![],
         declared_params: vec![],
         variadic: None,

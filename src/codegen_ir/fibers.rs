@@ -159,6 +159,7 @@ fn descriptor_invoker_placeholder_sig() -> FunctionSig {
         defaults: Vec::new(),
         return_type: PhpType::Mixed,
         declared_return: false,
+        by_ref_return: false,
         ref_params: Vec::new(),
         declared_params: Vec::new(),
         variadic: None,
@@ -192,6 +193,7 @@ fn signature_from_closure(closure: &Function, visible_abi_param_count: usize) ->
             .collect(),
         return_type: closure.return_php_type.clone(),
         declared_return: !matches!(closure.return_php_type, PhpType::Mixed),
+        by_ref_return: false,
         ref_params: closure
             .params
             .iter()

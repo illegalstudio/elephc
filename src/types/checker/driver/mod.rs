@@ -40,6 +40,7 @@ use super::builtin_stdclass::inject_builtin_stdclass;
 use super::builtin_user_filter::inject_builtin_user_filter;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
+    drop_unresolvable_attribute_arg_refs,
 };
 use super::yield_validation::validate_yield_contexts;
 use super::Checker;
@@ -246,6 +247,12 @@ pub(super) fn check_types_impl(
             }
         }
     }
+    // All class/interface/enum metadata now exists, so deferred symbolic
+    // attribute-argument references can be checked for resolvability. Drop any
+    // the EIR backend cannot lower (e.g. built-in `Attribute::TARGET_CLASS`) so
+    // the attribute still compiles, just without reflectable arguments.
+    drop_unresolvable_attribute_arg_refs(&mut checker);
+
     patch_builtin_exception_signatures(&mut checker);
     patch_builtin_fiber_signatures(&mut checker);
     patch_builtin_json_signatures(&mut checker);

@@ -27,6 +27,12 @@ pub(super) fn parse_function_decl(
 ) -> Result<Stmt, CompileError> {
     *pos += 1;
 
+    // PHP `function &f()` returns a reference (alias) to the returned lvalue.
+    let by_ref_return = matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Ampersand));
+    if by_ref_return {
+        *pos += 1;
+    }
+
     let name = match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Identifier(n)) => n.clone(),
         _ => return Err(CompileError::new(span, "Expected function name")),
@@ -59,6 +65,7 @@ pub(super) fn parse_function_decl(
             variadic,
             variadic_type,
             return_type,
+            by_ref_return,
             body,
         },
         span,

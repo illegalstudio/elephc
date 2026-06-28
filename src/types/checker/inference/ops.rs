@@ -350,12 +350,23 @@ impl Checker {
             .map(|(name, _, _, _)| name.clone())
             .collect();
         closure_ref_params.extend(capture_refs.iter().cloned());
-        self.with_local_storage_context(closure_ref_params, |checker| {
+        // Inside a closure body, `$this` is permitted even with no enclosing
+        // class method: the closure may be bound to an object later. Track the
+        // nesting so `infer_this_type` can allow it (as a runtime-dispatched
+        // receiver) rather than rejecting it.
+        self.closure_depth += 1;
+        let prev_by_ref_return = self.current_by_ref_return;
+        self.current_by_ref_return =
+            matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
+        let body_result = self.with_local_storage_context(closure_ref_params, |checker| {
             for stmt in body {
                 checker.check_stmt(stmt, &mut closure_sig.env)?;
             }
             Ok(())
-        })?;
+        });
+        self.current_by_ref_return = prev_by_ref_return;
+        self.closure_depth -= 1;
+        body_result?;
         self.resolve_closure_return_type(body, return_type, expr.span, &closure_sig.env)?;
         Ok(PhpType::Callable)
     }

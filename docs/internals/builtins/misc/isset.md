@@ -25,7 +25,7 @@ _No direct `__rt_*` helpers captured — the lowering is inlined or routes throu
 ## Signature summary
 
 ```php
-function isset(mixed $var, ...$vars): int
+function isset(mixed $var, ...$vars): bool
 ```
 
 ## What the type checker enforces

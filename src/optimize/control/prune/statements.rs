@@ -241,6 +241,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             attributes: Vec::new(),
         }],
         StmtKind::FunctionDecl {
+            by_ref_return,
             name,
             params,
             variadic,
@@ -249,6 +250,7 @@ pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
             body,
         } => vec![Stmt {
             kind: StmtKind::FunctionDecl {
+                by_ref_return,
                 name,
                 params,
                 variadic,

@@ -166,6 +166,7 @@ fn rewrite_expr(
             is_static,
             captures,
             capture_refs,
+            by_ref_return,
         } => ExprKind::Closure {
             params: params
                 .iter()
@@ -187,6 +188,7 @@ fn rewrite_expr(
             body: body.clone(),
             is_arrow: *is_arrow,
             is_static: *is_static,
+            by_ref_return: *by_ref_return,
             captures: captures.clone(),
             capture_refs: capture_refs.clone(),
         },

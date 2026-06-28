@@ -138,6 +138,7 @@ fn contextual_closure_sig(
         defaults,
         return_type,
         declared_return,
+        by_ref_return: false,
         ref_params,
         declared_params,
         variadic: variadic.clone(),

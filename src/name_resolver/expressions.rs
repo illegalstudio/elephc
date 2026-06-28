@@ -172,6 +172,7 @@ pub(super) fn resolve_expr(
             is_static,
             captures,
             capture_refs,
+            by_ref_return,
         } => ExprKind::Closure {
             params: resolve_params(params, current_namespace, imports, symbols),
             variadic: variadic.clone(),
@@ -183,6 +184,7 @@ pub(super) fn resolve_expr(
                 .expect("name resolver bug: closure body resolution failed"),
             is_arrow: *is_arrow,
             is_static: *is_static,
+            by_ref_return: *by_ref_return,
             captures: captures.clone(),
             capture_refs: capture_refs.clone(),
         },

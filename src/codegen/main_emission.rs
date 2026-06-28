@@ -132,6 +132,7 @@ pub(super) fn emit_main_and_finalize(
         defaults: Vec::new(),
         return_type: PhpType::Void,
         declared_return: false,
+        by_ref_return: false,
         ref_params: Vec::new(),
         declared_params: Vec::new(),
         variadic: None,

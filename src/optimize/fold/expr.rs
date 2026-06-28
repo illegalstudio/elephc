@@ -61,6 +61,7 @@ pub(in crate::optimize) fn fold_method(method: ClassMethod) -> ClassMethod {
         variadic: method.variadic,
         variadic_type: method.variadic_type,
         return_type: method.return_type,
+        by_ref_return: method.by_ref_return,
         body: fold_block(method.body),
         span: method.span,
         attributes: method.attributes,
@@ -249,6 +250,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             is_static,
             captures,
             capture_refs,
+            by_ref_return,
         } => ExprKind::Closure {
             params: fold_params(params),
             variadic,
@@ -259,6 +261,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             is_static,
             captures,
             capture_refs,
+            by_ref_return,
         },
         ExprKind::NamedArg { name, value } => ExprKind::NamedArg {
             name,

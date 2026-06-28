@@ -64,6 +64,7 @@ fn test_program_function_effects_recognize_pure_user_functions() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Return(Some(Expr::new(
                     ExprKind::FunctionCall {
@@ -96,6 +97,7 @@ fn test_program_function_effects_propagate_throwing_calls() {
                 variadic: None,
                 variadic_type: None,
                 return_type: None,
+                by_ref_return: false,
                 body: vec![Stmt::new(
                     StmtKind::Throw(Expr::new(
                         ExprKind::NewObject {
@@ -116,6 +118,7 @@ fn test_program_function_effects_propagate_throwing_calls() {
                 variadic: None,
                 variadic_type: None,
                 return_type: None,
+                by_ref_return: false,
                 body: vec![Stmt::new(
                     StmtKind::Return(Some(Expr::new(
                         ExprKind::FunctionCall {

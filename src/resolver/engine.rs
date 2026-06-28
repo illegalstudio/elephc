@@ -398,7 +398,7 @@ pub(super) fn resolve_stmts(
                     stmt.span,
                 ));
             }
-            StmtKind::FunctionDecl { name, params, variadic, variadic_type, return_type, body } => {
+            StmtKind::FunctionDecl { name, params, variadic, variadic_type, return_type, by_ref_return, body } => {
                 let body = resolve_isolated(
                     body.clone(),
                     base_dir,
@@ -414,6 +414,7 @@ pub(super) fn resolve_stmts(
                         variadic: variadic.clone(),
                         variadic_type: variadic_type.clone(),
                         return_type: return_type.clone(),
+                        by_ref_return: *by_ref_return,
                         body,
                     },
                     stmt.span,

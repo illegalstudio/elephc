@@ -146,6 +146,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashGet => hashes::lower_hash_get(ctx, &inst),
         Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
+        Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
         Op::HashUnion => hashes::lower_hash_union(ctx, &inst),
         Op::HashArrayUnion => hashes::lower_hash_array_union(ctx, &inst),
         Op::IterStart => iterators::lower_iter_start(ctx, &inst),
@@ -162,6 +163,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::DynamicObjectNew => objects::lower_dynamic_object_new(ctx, &inst),
         Op::DynamicObjectNewMixed => objects::lower_dynamic_object_new_mixed(ctx, &inst),
         Op::PropGet => objects::lower_prop_get(ctx, &inst),
+        Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
+        Op::BindRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),
         Op::NullsafePropGet => objects::lower_nullsafe_prop_get(ctx, &inst),
         Op::DynamicPropGet => objects::lower_dynamic_prop_get(ctx, &inst),
         Op::PropSet => objects::lower_prop_set(ctx, &inst),
@@ -560,6 +563,7 @@ fn function_signature_from_eir_with_param_count(
         defaults: function.params.iter().take(param_count).map(|_| None).collect(),
         return_type: function.return_php_type.clone(),
         declared_return: !matches!(function.return_php_type, PhpType::Mixed),
+        by_ref_return: false,
         ref_params: function
             .params
             .iter()
@@ -2520,7 +2524,7 @@ fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &target.return_ty)?;
+    store_method_call_result(ctx, inst, &target)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
@@ -2603,7 +2607,7 @@ fn lower_mixed_method_candidate_call(
     }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &candidate.target.return_ty)?;
+    store_method_call_result(ctx, inst, &candidate.target)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
@@ -2806,7 +2810,7 @@ fn lower_nullable_receiver_method_call(
     }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &target.return_ty)?;
+    store_method_call_result(ctx, inst, &target)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -3883,6 +3887,7 @@ struct MethodCallTarget {
     params: Vec<PhpType>,
     ref_params: Vec<bool>,
     return_ty: PhpType,
+    by_ref_return: bool,
 }
 
 /// Concrete runtime class branch available to a `Mixed` receiver method call.
@@ -3995,6 +4000,7 @@ fn resolve_method_call_target(
             .collect(),
         ref_params: callee_sig.ref_params.clone(),
         return_ty: callee_sig.return_type.clone(),
+        by_ref_return: callee_sig.by_ref_return,
     })
 }
 
@@ -4067,6 +4073,25 @@ fn store_call_result(
         ctx.store_result_value(result)?;
     }
     Ok(())
+}
+
+/// Stores a resolved method call's result, honoring by-reference returns.
+///
+/// A by-reference-returning method hands back a single-word reference-cell pointer in the
+/// integer result register (the method body's `Terminator::Return` placed it there), so the
+/// result is stored single-word rather than split by the declared `Str`/`Float` return type.
+fn store_method_call_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: &MethodCallTarget,
+) -> Result<()> {
+    if target.by_ref_return {
+        if let Some(result) = inst.result {
+            ctx.store_int_result_value(result)?;
+        }
+        return Ok(());
+    }
+    store_call_result(ctx, inst, &target.return_ty)
 }
 
 /// Resolves an instruction data immediate as a method name.
@@ -4215,7 +4240,7 @@ fn lower_lexical_instance_static_method_call(
     abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &target.method_key));
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &target.return_ty)?;
+    store_method_call_result(ctx, inst, &target)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
@@ -4363,6 +4388,10 @@ fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     let callee = ctx
         .callable_function_by_name(&function_name)
         .ok_or_else(|| CodegenIrError::unsupported(format!("call to unknown function {}", function_name)))?;
+    // A by-reference-returning callee hands back a single-word reference-cell pointer in the
+    // integer result register (see `Terminator::Return`); capture the flag before the mutable
+    // call-materialization borrows so the result is stored single-word, not split by type.
+    let callee_by_ref_return = callee.flags.by_ref_return;
     if inst.operands.len() != callee.params.len() {
         return Err(CodegenIrError::unsupported(format!(
             "call to {} with {} args for {} params",
@@ -4400,7 +4429,11 @@ fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
                 0x7fff_ffff_ffff_fffe,
             );
         }
-        ctx.store_result_value(result)?;
+        if callee_by_ref_return {
+            ctx.store_int_result_value(result)?;
+        } else {
+            ctx.store_result_value(result)?;
+        }
     }
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_borrowed_stack_mixed_arg_release(ctx, &call_args);
@@ -5788,6 +5821,27 @@ fn lower_alias_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let target_offset = ctx.local_offset(target_slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, source_offset);
+    abi::store_at_offset_scratch(
+        ctx.emitter,
+        pointer_reg,
+        target_offset,
+        abi::tertiary_scratch_reg(ctx.emitter),
+    );
+    ctx.mark_promoted_ref_cell(target_slot);
+    Ok(())
+}
+
+/// Lowers `BindRefCellPtr`: binds the target local slot as a non-owning reference
+/// alias to a ref-cell pointer value (operand 0). Stores the pointer into the slot and
+/// marks it as a promoted ref cell so later loads/stores dereference it. The local does
+/// not own the cell — the owner is the source object property — so no owner slot is
+/// allocated and no release is emitted at scope exit.
+fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let target_slot = expect_local_slot(inst)?;
+    let target_offset = ctx.local_offset(target_slot)?;
+    let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(value, pointer_reg)?;
     abi::store_at_offset_scratch(
         ctx.emitter,
         pointer_reg,

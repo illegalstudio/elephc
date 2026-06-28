@@ -45,6 +45,7 @@ fn cal_method(
         variadic: None,
         variadic_type: None,
         return_type: Some(ret),
+        by_ref_return: false,
         body,
         span: dummy(),
         attributes: Vec::new(),

@@ -16,13 +16,33 @@ use super::*;
 fn test_function_declaration_parses() {
     let stmts = parse_source("<?php function foo($a, $b) { return $a; }");
     if let StmtKind::FunctionDecl {
-        name, params, body, ..
+        name,
+        params,
+        body,
+        by_ref_return,
+        ..
     } = &stmts[0].kind
     {
         assert_eq!(name, "foo");
         let param_names: Vec<&str> = params.iter().map(|(n, _, _, _)| n.as_str()).collect();
         assert_eq!(param_names, &["a", "b"]);
         assert_eq!(body.len(), 1);
+        assert!(!by_ref_return, "plain function is not by-reference");
+    } else {
+        panic!("expected FunctionDecl");
+    }
+}
+
+#[test]
+/// Verifies that `function &f()` parses to a `FunctionDecl` with `by_ref_return` set.
+fn test_by_reference_function_declaration_parses() {
+    let stmts = parse_source("<?php function &ref() { return $x; }");
+    if let StmtKind::FunctionDecl {
+        name, by_ref_return, ..
+    } = &stmts[0].kind
+    {
+        assert_eq!(name, "ref");
+        assert!(by_ref_return, "function &ref() returns by reference");
     } else {
         panic!("expected FunctionDecl");
     }
@@ -96,6 +116,65 @@ fn test_parse_typed_closure_param() {
             assert_eq!(params[0].1, Some(TypeExpr::Int));
             assert!(params[0].3);
             assert!(!is_arrow);
+        } else {
+            panic!("expected Closure");
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+#[test]
+/// Verifies that the result of a static method call can itself be invoked
+/// (`Closure::bind(...)()`), parsing as an `ExprCall` whose callee is the `StaticMethodCall`.
+fn test_parse_invoke_static_method_call_result() {
+    let stmts = parse_source("<?php $r = Closure::bind($f, $o, $o)();");
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        match &value.kind {
+            ExprKind::ExprCall { callee, .. } => {
+                assert!(matches!(callee.kind, ExprKind::StaticMethodCall { .. }));
+            }
+            other => panic!("expected ExprCall, got {:?}", other),
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+#[test]
+/// Verifies that `fn &() => $x` parses an arrow closure with `by_ref_return` set.
+fn test_parse_by_reference_arrow_closure() {
+    let stmts = parse_source("<?php $f = fn &() => $x;");
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        if let ExprKind::Closure {
+            is_arrow,
+            by_ref_return,
+            ..
+        } = &value.kind
+        {
+            assert!(is_arrow);
+            assert!(by_ref_return, "fn &() returns by reference");
+        } else {
+            panic!("expected Closure");
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+#[test]
+/// Verifies that `function &() use ($o) { ... }` parses a closure with `by_ref_return` set.
+fn test_parse_by_reference_closure() {
+    let stmts = parse_source("<?php $f = function &() use ($o) { return $o->v; };");
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        if let ExprKind::Closure {
+            is_arrow,
+            by_ref_return,
+            ..
+        } = &value.kind
+        {
+            assert!(!is_arrow);
+            assert!(by_ref_return, "function &() returns by reference");
         } else {
             panic!("expected Closure");
         }

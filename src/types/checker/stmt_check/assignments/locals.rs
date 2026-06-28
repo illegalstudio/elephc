@@ -149,12 +149,59 @@ pub(super) fn check_assign(
     merge_local_assignment_type(checker, name, &ty, span, env)
 }
 
-/// Type-checks direct reference alias assignment (`$target =& $source`).
+/// Type-checks a reference alias assignment (`$target =& <source>`).
 ///
-/// The source must already be visible in the current environment. On success,
-/// the target is rebound to the source type, marked as by-reference storage for
-/// later checks, and callable metadata is mirrored from the source variable.
+/// The source may be a plain variable (`$b`), an object property (`$obj->prop`), or a
+/// call to a by-reference-returning callee (`f()`, `$o->m()`). For a property source the
+/// property is recorded for reference-property promotion so codegen routes every access
+/// through its ref-cell (write-through). The target is rebound to the source value type
+/// and marked as by-reference storage.
 pub(super) fn check_ref_assign(
+    checker: &mut Checker,
+    target: &str,
+    source: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    match &source.kind {
+        ExprKind::Variable(source_name) => {
+            check_ref_assign_variable(checker, target, source_name, span, env)
+        }
+        ExprKind::PropertyAccess { object, property } => {
+            let object_ty = checker.infer_type(object, env)?;
+            let target_ty = checker.infer_type(source, env)?;
+            if let Some(class) =
+                crate::types::checker::single_object_class_name(&object_ty)
+            {
+                checker
+                    .reference_property_promotions
+                    .insert((class, property.clone()));
+            }
+            env.insert(target.to_string(), target_ty);
+            checker.active_ref_params.insert(target.to_string());
+            clear_callable_metadata(checker, target);
+            Ok(())
+        }
+        ExprKind::FunctionCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. } => {
+            let target_ty = checker.infer_type(source, env)?;
+            env.insert(target.to_string(), target_ty);
+            checker.active_ref_params.insert(target.to_string());
+            clear_callable_metadata(checker, target);
+            Ok(())
+        }
+        _ => Err(CompileError::new(
+            span,
+            "Reference assignment source must be a variable, array/property element, or a by-reference call",
+        )),
+    }
+}
+
+/// Type-checks `$target =& $source` where the source is a plain variable.
+fn check_ref_assign_variable(
     checker: &mut Checker,
     target: &str,
     source: &str,
@@ -176,6 +223,7 @@ pub(super) fn check_ref_assign(
     }
     Ok(())
 }
+
 
 /// Returns `true` if `value` is a closure that captures `name` both by value and by reference.
 ///

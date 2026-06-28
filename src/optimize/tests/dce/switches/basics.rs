@@ -34,6 +34,7 @@ fn test_eliminate_dead_code_drops_empty_switch_shell_created_by_branch_dce() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Switch {
                     subject: touch.clone(),

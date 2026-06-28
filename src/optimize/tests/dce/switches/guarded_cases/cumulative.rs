@@ -26,6 +26,7 @@ fn test_eliminate_dead_code_prunes_exhaustive_switch_true_default_from_cumulativ
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Switch {
                     subject: Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),
@@ -92,6 +93,7 @@ fn test_eliminate_dead_code_uses_cumulative_switch_true_guards_inside_case_body(
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::var("d"),

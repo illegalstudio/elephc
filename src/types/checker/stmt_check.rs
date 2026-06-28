@@ -14,7 +14,7 @@ mod control_flow;
 mod narrowing;
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Stmt, StmtKind};
+use crate::parser::ast::{ExprKind, Stmt, StmtKind};
 use crate::types::TypeEnv;
 
 use super::Checker;
@@ -99,6 +99,37 @@ impl Checker {
             StmtKind::Return(expr) => {
                 if let Some(e) = expr {
                     self.infer_type_with_assignment_effects(e, env)?;
+                    // `function &f() { return $obj->prop; }` returns a reference to the
+                    // property, so promote it to a reference property program-wide.
+                    if self.current_by_ref_return {
+                        if let ExprKind::PropertyAccess { object, property } = &e.kind {
+                            let object_ty = self.infer_type(object, env)?;
+                            if let Some(class) =
+                                crate::types::checker::single_object_class_name(&object_ty)
+                            {
+                                self.reference_property_promotions
+                                    .insert((class, property.clone()));
+                            } else {
+                                // A by-reference closure returning `$this->prop` whose `$this`
+                                // is bound dynamically (`Closure::bind`) has a Mixed receiver, so
+                                // the class is unknown here. Promote the property on every class
+                                // that declares it so the reference resolves at runtime through
+                                // class-id dispatch.
+                                let owners: Vec<String> = self
+                                    .classes
+                                    .iter()
+                                    .filter(|(_, info)| {
+                                        info.properties.iter().any(|(n, _)| n == property)
+                                    })
+                                    .map(|(name, _)| name.clone())
+                                    .collect();
+                                for owner in owners {
+                                    self.reference_property_promotions
+                                        .insert((owner, property.clone()));
+                                }
+                            }
+                        }
+                    }
                 }
                 Ok(())
             }

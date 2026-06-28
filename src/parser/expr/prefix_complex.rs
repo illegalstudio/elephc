@@ -23,6 +23,18 @@ use crate::span::Span;
 use super::calls::parse_first_class_callable_parens;
 use super::{parse_args, parse_expr};
 
+/// Consumes a single leading `&` token if present, returning whether one was seen.
+///
+/// Used to detect the by-reference-return marker in `fn &()` / `function &()`.
+pub(crate) fn consume_optional_ampersand(tokens: &[(Token, Span)], pos: &mut usize) -> bool {
+    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Ampersand)) {
+        *pos += 1;
+        true
+    } else {
+        false
+    }
+}
+
 /// Parses a PHP `match` expression: `match ($subject) { pattern => result, default => fallback }`.
 /// Consumes the `match` keyword, parenthesized subject expression, and the braced arm list.
 /// Handles comma-separated patterns within a single arm, and an optional `default =>` fallback arm.
@@ -144,10 +156,13 @@ pub(super) fn parse_closure(
     span: Span,
     is_static: bool,
 ) -> Result<Expr, CompileError> {
-    if *pos + 1 >= tokens.len() || tokens[*pos + 1].0 != Token::LParen {
+    // `function &(...) use(...) {...}` returns a reference (alias) to the body lvalue.
+    let mut after_fn = *pos + 1;
+    let by_ref_return = consume_optional_ampersand(tokens, &mut after_fn);
+    if after_fn >= tokens.len() || tokens[after_fn].0 != Token::LParen {
         return Err(CompileError::new(span, "Unexpected token: Function"));
     }
-    *pos += 2;
+    *pos = after_fn + 1;
     let (params, variadic, variadic_type) = parse_closure_params(tokens, pos, span)?;
     let mut captures = Vec::new();
     let mut capture_refs = Vec::new();
@@ -208,6 +223,7 @@ pub(super) fn parse_closure(
             body,
             is_arrow: false,
             is_static,
+            by_ref_return,
             captures,
             capture_refs,
         },
@@ -225,6 +241,8 @@ pub(super) fn parse_arrow_closure(
     is_static: bool,
 ) -> Result<Expr, CompileError> {
     *pos += 1;
+    // PHP `fn &() => …` returns a reference (alias) to the body lvalue.
+    let by_ref_return = consume_optional_ampersand(tokens, pos);
     if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
         return Err(CompileError::new(span, "Expected '(' after 'fn'"));
     }
@@ -250,6 +268,7 @@ pub(super) fn parse_arrow_closure(
             body,
             is_arrow: true,
             is_static,
+            by_ref_return,
             captures,
             capture_refs: vec![],
         },

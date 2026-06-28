@@ -50,6 +50,7 @@ pub fn infer_contextual_type(expr: &Expr, ctx: &Context) -> PhpType {
         defaults: Vec::new(),
         return_type: PhpType::Void,
         declared_return: false,
+        by_ref_return: false,
         ref_params: Vec::new(),
         declared_params: Vec::new(),
         variadic: None,

@@ -114,6 +114,7 @@ impl Checker {
                     self.current_class = Some(class.name.clone());
                     self.current_method = Some(method_key.clone());
                     self.current_method_is_static = method.is_static;
+                    self.current_by_ref_return = method.by_ref_return;
                     let method_ref_params: Vec<String> = method
                         .params
                         .iter()
@@ -138,6 +139,7 @@ impl Checker {
                     self.current_class = None;
                     self.current_method = None;
                     self.current_method_is_static = false;
+                    self.current_by_ref_return = false;
                 }
             }
 

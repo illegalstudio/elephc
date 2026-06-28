@@ -130,6 +130,7 @@ fn test_prune_block_drops_statements_after_return() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(StmtKind::Return(Some(Expr::int_lit(7))), Span::dummy()),
                 Stmt::echo(Expr::int_lit(9)),
@@ -158,6 +159,7 @@ fn test_prune_drops_pure_expr_stmt() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::ExprStmt(Expr::binop(Expr::int_lit(2), BinOp::Pow, Expr::int_lit(8))),
@@ -231,6 +233,7 @@ fn test_prune_block_drops_statements_after_exhaustive_if() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::If {
@@ -275,6 +278,7 @@ fn test_prune_block_drops_statements_after_exhaustive_switch() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Switch {

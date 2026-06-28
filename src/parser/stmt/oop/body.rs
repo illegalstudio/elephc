@@ -559,6 +559,11 @@ fn parse_class_like_method(
     is_final: bool,
 ) -> Result<(ClassMethod, Vec<ClassProperty>), CompileError> {
     *pos += 1; // consume 'function'
+    // PHP `function &m()` returns a reference (alias) to the returned lvalue.
+    let by_ref_return = matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Ampersand));
+    if by_ref_return {
+        *pos += 1;
+    }
     // PHP 8 allows identifiers and any semi-reserved keyword as a method name (e.g. `self`,
     // `parent`, `static`, `list`, `print`).
     let method_name = match tokens
@@ -624,6 +629,7 @@ fn parse_class_like_method(
         variadic,
         variadic_type,
         return_type,
+        by_ref_return,
         body,
         span,
         attributes: Vec::new(),
@@ -940,6 +946,7 @@ fn parse_property_hooks(
                     variadic: None,
                     variadic_type: None,
                     return_type: prop_type.cloned(),
+                    by_ref_return: get_by_ref,
                     body,
                     span: hook_span,
                     attributes: Vec::new(),
@@ -968,6 +975,7 @@ fn parse_property_hooks(
                     variadic: None,
                     variadic_type: None,
                     return_type: Some(TypeExpr::Void),
+                    by_ref_return: false,
                     body,
                     span: hook_span,
                     attributes: Vec::new(),

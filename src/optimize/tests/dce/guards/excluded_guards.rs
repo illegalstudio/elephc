@@ -22,6 +22,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_zero_guard() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::binop(Expr::var("value"), BinOp::StrictEq, Expr::int_lit(0)),
@@ -70,6 +71,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_null_guard() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::binop(
@@ -123,6 +125,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_empty_string_g
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::binop(
@@ -179,6 +182,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_string_zero_gu
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::binop(
@@ -235,6 +239,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_excluded_float_guard() 
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::binop(Expr::var("value"), BinOp::StrictEq, Expr::float_lit(1.5)),

@@ -486,12 +486,14 @@ fn test_error_class_attribute_expression_args_are_not_silently_dropped() {
     );
 }
 
-/// Verifies that `class_get_attributes()` on a class with a float attribute argument
-/// reports "class has attribute argument metadata that is not supported yet".
+/// Verifies that `class_get_attributes()` on a class with a still-unsupported
+/// (non-foldable arithmetic) attribute argument reports "class has attribute
+/// argument metadata that is not supported yet" rather than silently dropping it.
+/// Float arguments are now supported, so this guards a genuinely unsupported shape.
 #[test]
-fn test_error_class_attribute_float_args_are_not_silently_dropped() {
+fn test_error_class_get_attributes_unsupported_arg_not_silently_dropped() {
     expect_error(
-        "<?php #[Foo(3.14)] class C {} class_get_attributes('C');",
+        "<?php #[Foo(1 + 2)] class C {} class_get_attributes('C');",
         "class has attribute argument metadata that is not supported yet",
     );
 }

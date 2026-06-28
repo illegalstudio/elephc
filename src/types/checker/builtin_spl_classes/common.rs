@@ -81,6 +81,7 @@ pub(super) fn class_method_with_body(
         variadic: None,
         variadic_type: None,
         return_type,
+        by_ref_return: false,
         body,
         span: crate::span::Span::dummy(),
         attributes: Vec::new(),

@@ -45,6 +45,7 @@ pub fn fold_constants(program: Program) -> Program {
 
 /// Propagates scalar constants across statements and control flow.
 pub fn propagate_constants(program: Program) -> Program {
+    reset_reference_volatile();
     propagate_block(program, HashMap::new()).0
 }
 

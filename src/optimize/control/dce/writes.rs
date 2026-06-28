@@ -389,7 +389,11 @@ fn collect_written_names(stmt: &Stmt, written: &mut Vec<String>) {
         | StmtKind::StaticVar { name, .. } => push_written_name(written, name),
         StmtKind::RefAssign { target, source } => {
             push_written_name(written, target);
-            push_written_name(written, source);
+            // Aliasing a plain variable writes through to it; property/call sources
+            // do not write a local (their reads are tracked separately).
+            if let ExprKind::Variable(source_name) = &source.kind {
+                push_written_name(written, source_name);
+            }
         }
         StmtKind::ArrayAssign { array, .. } | StmtKind::ArrayPush { array, .. } => {
             push_written_name(written, array)

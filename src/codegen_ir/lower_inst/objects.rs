@@ -32,7 +32,7 @@ use super::{
     emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
     materialize_direct_call_args_with_refs,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
-    store_call_result, store_if_result,
+    store_if_result, store_method_call_result,
 };
 use crate::codegen_ir::fibers;
 use crate::codegen_ir::literal_defaults::{
@@ -73,6 +73,9 @@ struct MixedPropertyCandidate {
 struct PropertyDefault {
     offset: usize,
     value: LiteralDefaultValue,
+    /// `true` when the slot holds a ref-cell pointer (an object-owned reference property);
+    /// the default is written THROUGH the cell instead of directly into the slot.
+    is_reference: bool,
 }
 
 /// Concrete class that a dynamic factory can instantiate in this EIR module.
@@ -82,6 +85,7 @@ struct DynamicNewCandidate {
     property_count: usize,
     allow_dynamic_properties: bool,
     uninitialized_marker_offsets: Vec<usize>,
+    owned_reference_property_offsets: Vec<usize>,
     property_defaults: Vec<PropertyDefault>,
     constructor_impl: Option<ConstructorCallTarget>,
 }
@@ -98,6 +102,9 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let class_name = class_name_immediate(ctx, inst)?.to_string();
     if is_fiber_class(&class_name) {
         return lower_fiber_new(ctx, inst);
+    }
+    if class_name == "ReflectionFunction" {
+        return reflection::lower_reflection_function_new(ctx, inst);
     }
     if reflection::is_reflection_owner_class(&class_name) {
         return reflection::lower_reflection_owner_new(ctx, inst, &class_name);
@@ -126,6 +133,7 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
         property_count,
         allow_dynamic_properties,
         uninitialized_marker_offsets,
+        owned_reference_property_offsets,
         property_defaults,
         constructor_impl,
     ) = {
@@ -180,11 +188,13 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
             None
         };
         let marker_offsets = uninitialized_property_marker_offsets(class_info);
+        let owned_ref_offsets = owned_reference_property_offsets(class_info);
         (
             class_info.class_id,
             class_info.properties.len(),
             class_info.allow_dynamic_properties,
             marker_offsets,
+            owned_ref_offsets,
             property_defaults,
             constructor_impl,
         )
@@ -195,6 +205,7 @@ pub(super) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
         property_count,
         allow_dynamic_properties,
         &uninitialized_marker_offsets,
+        &owned_reference_property_offsets,
     )?;
     let result = inst
         .result
@@ -345,6 +356,7 @@ fn lower_callback_filter_iterator_new(
         property_count,
         false,
         &uninitialized_marker_offsets,
+        &[],
     )?;
     let result = inst
         .result
@@ -489,6 +501,7 @@ fn lower_iterator_iterator_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
         property_count,
         false,
         &uninitialized_marker_offsets,
+        &[],
     )?;
     let result = inst
         .result
@@ -1378,6 +1391,7 @@ fn emit_dynamic_new_mixed_candidate(
         candidate.property_count,
         candidate.allow_dynamic_properties,
         &candidate.uninitialized_marker_offsets,
+        &candidate.owned_reference_property_offsets,
     )?;
     let object_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, object_reg);
@@ -1643,6 +1657,7 @@ fn dynamic_new_candidate(
         property_count: class_info.properties.len(),
         allow_dynamic_properties: class_info.allow_dynamic_properties,
         uninitialized_marker_offsets: uninitialized_property_marker_offsets(class_info),
+        owned_reference_property_offsets: owned_reference_property_offsets(class_info),
         property_defaults,
         constructor_impl,
     }))
@@ -1671,6 +1686,7 @@ fn spl_runtime_storage_dynamic_new_candidate(
         property_count: class_info.properties.len(),
         allow_dynamic_properties: class_info.allow_dynamic_properties,
         uninitialized_marker_offsets: Vec::new(),
+        owned_reference_property_offsets: Vec::new(),
         property_defaults: Vec::new(),
         constructor_impl: None,
     })
@@ -1786,6 +1802,7 @@ fn emit_dynamic_new_candidate(
         candidate.property_count,
         candidate.allow_dynamic_properties,
         &candidate.uninitialized_marker_offsets,
+        &candidate.owned_reference_property_offsets,
     )?;
     ctx.store_result_value(result)?;
     emit_property_defaults(ctx, result, &candidate.property_defaults)?;
@@ -1858,6 +1875,7 @@ fn collect_property_defaults(
                 &default_expr.kind,
                 inst.op.name(),
             )?,
+            is_reference: class_info.owned_reference_properties.contains(property),
         });
     }
     Ok(defaults)
@@ -1872,7 +1890,19 @@ fn emit_property_defaults(
     for default in defaults {
         let object_reg = abi::secondary_scratch_reg(ctx.emitter);
         ctx.load_value_to_reg(object, object_reg)?;
-        emit_property_default(ctx, object_reg, default)?;
+        if default.is_reference {
+            // Write the default THROUGH the property's ref-cell: load the cell pointer
+            // from the slot, then write the value at the cell's value/tag words (offset 0).
+            abi::emit_load_from_address(ctx.emitter, object_reg, object_reg, default.offset);
+            let cell_default = PropertyDefault {
+                offset: 0,
+                value: default.value.clone(),
+                is_reference: false,
+            };
+            emit_property_default(ctx, object_reg, &cell_default)?;
+        } else {
+            emit_property_default(ctx, object_reg, default)?;
+        }
     }
     Ok(())
 }
@@ -2079,6 +2109,99 @@ pub(super) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     store_if_result(ctx, inst)
 }
 
+/// Lowers `LoadPropRefCell`: loads the raw ref-cell pointer stored in a reference
+/// property's slot without dereferencing it. The result (an integer-sized pointer)
+/// is the cell shared by the property; callers alias a local to it (`$x = &$obj->prop`)
+/// or return it by reference (`fn &() => $this->prop`).
+pub(super) fn lower_load_prop_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let property = property_name_immediate(ctx, inst)?.to_string();
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return lower_mixed_load_prop_ref_cell(ctx, inst, object, &property);
+    }
+    let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    if !slot.is_reference {
+        return Err(CodegenIrError::unsupported(format!(
+            "load_prop_ref_cell on non-reference property {}::${}",
+            slot.class_name, slot.property
+        )));
+    }
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, base_reg)?;
+    let int_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset); // load the reference-cell pointer from the property slot (no deref)
+    store_ref_cell_pointer_result(ctx, inst)
+}
+
+/// Stores the materialized reference-cell pointer (in the integer result register) into the
+/// instruction's result value as a single machine word.
+///
+/// The cell pointer is one pointer-sized word whatever element type it aliases, so it must
+/// not go through the type-driven result store (which would split a `Str`/`Float` result and
+/// drop the pointer). Shared by both the typed-object and `Mixed`-receiver `LoadPropRefCell`
+/// lowerings.
+fn store_ref_cell_pointer_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(result) = inst.result {
+        ctx.store_int_result_value(result)?;
+    }
+    Ok(())
+}
+
+/// Lowers `LoadPropRefCell` when the receiver is a `Mixed` object (e.g. a closure's `$this`
+/// bound via `Closure::bind`). Unboxes the receiver, dispatches on its runtime class id, and
+/// loads the reference-cell pointer from the matching class's property slot — the raw cell
+/// pointer, not its dereferenced value.
+fn lower_mixed_load_prop_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<()> {
+    let candidates: Vec<MixedPropertyCandidate> =
+        declared_mixed_property_candidates(ctx, property, inst)?
+            .into_iter()
+            .filter(|candidate| candidate.slot.is_reference)
+            .collect();
+    if candidates.is_empty() {
+        return Err(CodegenIrError::unsupported(format!(
+            "load_prop_ref_cell on Mixed receiver for property ${} with no reference-property class",
+            property
+        )));
+    }
+    let done_label = ctx.next_label("mixed_propref_done");
+    let null_label = ctx.next_label("mixed_propref_null");
+    let stdclass_label = ctx.next_label("mixed_propref_stdclass");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!("mixed_propref_{}", label_fragment(&candidate.slot.class_name)))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_mixed_object_payload_or_null(ctx, &null_label);
+    // stdClass has no declared reference property; route it to the null fallback.
+    emit_mixed_property_class_dispatch(ctx, &candidates, &match_labels, &null_label);
+    let _ = stdclass_label;
+
+    let int_reg = abi::int_result_reg(ctx.emitter);
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        abi::emit_load_from_address(ctx.emitter, int_reg, int_reg, candidate.slot.offset); // load the reference-cell pointer from the matched class's property slot
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, int_reg, 0); // no reference cell for a non-object / unknown receiver
+
+    ctx.emitter.label(&done_label);
+    store_ref_cell_pointer_result(ctx, inst)
+}
+
 /// Returns the receiver class when an undeclared property should route through `__get`.
 fn magic_get_receiver_class(
     ctx: &FunctionContext<'_>,
@@ -2122,7 +2245,7 @@ fn lower_magic_get_prop(
     } else {
         abi::emit_call_label(ctx.emitter, &method_symbol(&target.impl_class, &target.method_key));
     }
-    store_call_result(ctx, inst, &target.return_ty)
+    store_method_call_result(ctx, inst, &target)
 }
 
 /// Loads `$this` and the static property name into ABI registers for `__get`.
@@ -3510,6 +3633,7 @@ fn emit_object_allocation(
     property_count: usize,
     allow_dynamic_properties: bool,
     uninitialized_marker_offsets: &[usize],
+    owned_reference_property_offsets: &[usize],
 ) -> Result<()> {
     let dynamic_properties_offset = dynamic_property_hash_offset(property_count);
     let dynamic_properties_bytes = if allow_dynamic_properties { 8 } else { 0 };
@@ -3545,10 +3669,34 @@ fn emit_object_allocation(
             abi::emit_store_to_address(ctx.emitter, marker_reg, object_reg, *offset);
         }
     }
+    for offset in owned_reference_property_offsets {
+        emit_owned_reference_property_cell(ctx, object_reg, *offset);
+    }
     if allow_dynamic_properties {
         emit_dynamic_property_hash_init(ctx, object_reg, dynamic_properties_offset);
     }
     Ok(())
+}
+
+/// Allocates a zero-initialized 16-byte reference cell for an object-owned reference
+/// property and stores the cell pointer in the property slot. The cell must exist from
+/// construction so every (deref) access to the reference property reads a valid pointer;
+/// the property default (if any) is written through the cell by `emit_property_default`.
+fn emit_owned_reference_property_cell(
+    ctx: &mut FunctionContext<'_>,
+    object_reg: &str,
+    offset: usize,
+) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let cell_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 16);                  // 16-byte ref cell: value at +0, tag/len at +8
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    abi::emit_store_zero_to_address(ctx.emitter, result_reg, 0);                // zero the cell value word
+    abi::emit_store_zero_to_address(ctx.emitter, result_reg, 8);               // zero the cell tag/length word
+    abi::emit_reg_move(ctx.emitter, cell_reg, result_reg);                      // preserve the cell pointer across the object restore
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, cell_reg, object_reg, offset);      // store the cell pointer in the reference-property slot
 }
 
 /// Returns the byte offset of the dynamic-property hash pointer for this layout.
@@ -3686,7 +3834,8 @@ fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> Vec<usize> {
         .enumerate()
         .filter_map(|(index, (property, _))| {
             let starts_uninitialized = class_info.declared_properties.contains(property)
-                && class_info.defaults.get(index).is_some_and(|default| default.is_none());
+                && class_info.defaults.get(index).is_some_and(|default| default.is_none())
+                && !class_info.owned_reference_properties.contains(property);
             if starts_uninitialized {
                 Some(
                     class_info
@@ -3695,6 +3844,29 @@ fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> Vec<usize> {
                         .copied()
                         .unwrap_or(8 + index * 16)
                         + 8,
+                )
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Collects the slot offsets of object-owned reference properties, whose ref-cells the
+/// object allocates at construction and releases on destruction.
+fn owned_reference_property_offsets(class_info: &ClassInfo) -> Vec<usize> {
+    class_info
+        .properties
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (property, _))| {
+            if class_info.owned_reference_properties.contains(property) {
+                Some(
+                    class_info
+                        .property_offsets
+                        .get(property)
+                        .copied()
+                        .unwrap_or(8 + index * 16),
                 )
             } else {
                 None

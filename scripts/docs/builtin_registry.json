@@ -2536,7 +2536,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_boolval",
-      "codegen_line": 1042,
+      "codegen_line": 1064,
       "notes": [
         "Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`."
       ],
@@ -3336,7 +3336,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_count",
-      "codegen_line": 916,
+      "codegen_line": 917,
       "notes": [
         "Lowers `count(array)` for concrete array values by reading the runtime length header."
       ],
@@ -3698,7 +3698,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_define",
-      "codegen_line": 548,
+      "codegen_line": 549,
       "notes": [
         "Lowers `define(\"NAME\", value)` with the legacy duplicate-name runtime guard."
       ],
@@ -3749,7 +3749,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_defined",
-      "codegen_line": 743,
+      "codegen_line": 744,
       "notes": [
         "Lowers `defined(\"NAME\")` for compile-time string constant names."
       ],
@@ -3905,7 +3905,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 1074,
+      "codegen_line": 1096,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
@@ -5171,7 +5171,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_floatval",
-      "codegen_line": 1012,
+      "codegen_line": 1034,
       "notes": [
         "Lowers `floatval()` for concrete scalar operands."
       ],
@@ -6251,7 +6251,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_function_exists",
-      "codegen_line": 758,
+      "codegen_line": 759,
       "notes": [
         "Lowers `function_exists(\"name\")` for compile-time string names.",
         "Recognizes user functions, externs, catalog builtins, and the date/time procedural aliases",
@@ -6777,7 +6777,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_gettype",
-      "codegen_line": 611,
+      "codegen_line": 612,
       "notes": [
         "Lowers `gettype(value)` for statically concrete PHP types."
       ],
@@ -8024,7 +8024,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_intval",
-      "codegen_line": 979,
+      "codegen_line": 1001,
       "notes": [
         "Lowers `intval()` for concrete scalar operands."
       ],
@@ -8238,7 +8238,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_callable",
-      "codegen_line": 801,
+      "codegen_line": 802,
       "notes": [
         "Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers."
       ],
@@ -8466,7 +8466,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_array",
-      "codegen_line": 1458,
+      "codegen_line": 1480,
       "notes": [
         "Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value",
         "whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is",
@@ -8505,7 +8505,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_object",
-      "codegen_line": 1473,
+      "codegen_line": 1495,
       "notes": [
         "Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose",
         "runtime tag is an object (6)."
@@ -8543,7 +8543,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_scalar",
-      "codegen_line": 1489,
+      "codegen_line": 1511,
       "notes": [
         "Lowers `is_scalar()`: true for int/float/string/bool, a non-null tagged scalar, or a boxed",
         "Mixed/Union value whose runtime tag is int (0), string (1), float (2), or bool (3). Null,",
@@ -8775,7 +8775,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_is_iterable",
-      "codegen_line": 1250,
+      "codegen_line": 1272,
       "notes": [
         "Lowers `is_iterable()` for concrete values and boxed Mixed payloads."
       ],
@@ -9178,7 +9178,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "int",
+      "return_type": "bool",
       "variadic": "vars"
     },
     "slug": "isset",
@@ -10698,7 +10698,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_phpversion",
-      "codegen_line": 733,
+      "codegen_line": 734,
       "notes": [
         "Lowers `phpversion()` as the compiler package version string."
       ],
@@ -10735,7 +10735,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_pi",
-      "codegen_line": 595,
+      "codegen_line": 596,
       "notes": [
         "Lowers `pi()` as the same data-section float constant used by the legacy backend."
       ],
@@ -13967,7 +13967,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen_ir/lower_inst/builtins.rs",
       "codegen_function": "lower_strlen",
-      "codegen_line": 949,
+      "codegen_line": 971,
       "notes": [
         "Lowers `strlen()` by coercing string-like values and returning the byte length."
       ],

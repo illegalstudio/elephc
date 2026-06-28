@@ -61,8 +61,15 @@ impl Checker {
         span: crate::span::Span,
         env: &TypeEnv,
     ) -> Result<Option<PhpType>, CompileError> {
+        // `isset`/`unset` are lazy language constructs: their operands may be an
+        // undeclared property routed to `__isset`/`__unset`, which must not be
+        // eagerly inferred by argument normalization. Their handlers inspect the
+        // raw operands directly.
+        let is_lazy_construct = matches!(name, "isset" | "unset");
         let normalized_args;
-        let args = if let Some(sig) = crate::types::builtin_call_sig(name) {
+        let args = if let Some(sig) =
+            (!is_lazy_construct).then(|| crate::types::builtin_call_sig(name)).flatten()
+        {
             normalized_args = self.normalize_builtin_call_args(
                 &sig,
                 args,

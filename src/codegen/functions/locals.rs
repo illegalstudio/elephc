@@ -64,11 +64,14 @@ pub fn collect_local_vars(
             }
             StmtKind::RefAssign { target, source } => {
                 if !ctx.variables.contains_key(target) {
-                    let static_ty = ctx
-                        .variables
-                        .get(source)
-                        .map(|var| var.static_ty.clone())
-                        .unwrap_or(PhpType::Mixed);
+                    let static_ty = match &source.kind {
+                        ExprKind::Variable(source_name) => ctx
+                            .variables
+                            .get(source_name)
+                            .map(|var| var.static_ty.clone())
+                            .unwrap_or(PhpType::Mixed),
+                        _ => PhpType::Mixed,
+                    };
                     ctx.alloc_var_with_static_type(target, PhpType::Int, static_ty);
                 }
             }

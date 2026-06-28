@@ -40,6 +40,7 @@ mod json;
 mod regressions;
 mod objects;
 mod destructors;
+mod references;
 mod runtime_gc;
 mod math;
 mod misc;

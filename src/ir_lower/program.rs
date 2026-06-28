@@ -417,6 +417,7 @@ fn lower_function_declarations(
     for stmt in statements {
         match &stmt.kind {
             StmtKind::FunctionDecl {
+                by_ref_return: _,
                 name,
                 params,
                 variadic: _,
@@ -631,6 +632,9 @@ fn lower_builtin_reflection_methods(
         "ReflectionClass",
         "ReflectionMethod",
         "ReflectionProperty",
+        "ReflectionFunction",
+        "ReflectionParameter",
+        "ReflectionNamedType",
     ] {
         lower_builtin_reflection_class_methods(class_name, module, check_result, constants, fiber_return_sigs);
     }
@@ -652,11 +656,17 @@ fn lower_builtin_reflection_class_methods(
             continue;
         }
         let generated_body;
-        let body = if class_name == "ReflectionAttribute"
-            && crate::names::php_symbol_key(&method.name) == "newinstance"
-        {
+        let method_key = crate::names::php_symbol_key(&method.name);
+        let body = if class_name == "ReflectionAttribute" && method_key == "newinstance" {
             generated_body =
                 crate::codegen::reflection::build_attribute_new_instance_body(&check_result.classes);
+            generated_body.as_slice()
+        } else if class_name == "ReflectionAttribute" && method_key == "getarguments" {
+            // Materialize captured attribute arguments through the normal array
+            // lowering (named arguments and associative arrays included) rather
+            // than a bespoke codegen path.
+            generated_body =
+                crate::codegen::reflection::build_attribute_get_arguments_body(&check_result.classes);
             generated_body.as_slice()
         } else {
             &method.body

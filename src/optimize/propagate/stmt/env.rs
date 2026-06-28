@@ -24,6 +24,12 @@ pub(super) fn env_after_scalar_assign(mut env: ConstantEnv, name: &str, value: &
     if expr_effect(value).has_side_effects {
         env.clear();
     }
+    // A reference-bound local's value may change through its alias without a visible local
+    // write, so never record a constant for it.
+    if super::is_reference_volatile(name) {
+        env.remove(name);
+        return env;
+    }
     if let Some(value) = assigned_scalar_value(value) {
         env.insert(name.to_string(), value);
     } else {

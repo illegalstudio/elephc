@@ -35,6 +35,7 @@ fn test_program_static_method_effects_recognize_pure_static_methods() {
                 variadic: None,
                 variadic_type: None,
                 return_type: None,
+                by_ref_return: false,
                 body: vec![Stmt::new(
                     StmtKind::Return(Some(Expr::new(
                         ExprKind::FunctionCall {
@@ -87,6 +88,7 @@ fn test_program_static_method_effects_resolve_self_receiver() {
                     variadic: None,
                     variadic_type: None,
                     return_type: None,
+                    by_ref_return: false,
                     body: vec![Stmt::new(
                         StmtKind::Return(Some(Expr::new(
                             ExprKind::FunctionCall {
@@ -111,6 +113,7 @@ fn test_program_static_method_effects_resolve_self_receiver() {
                     variadic: None,
                     variadic_type: None,
                     return_type: None,
+                    by_ref_return: false,
                     body: vec![Stmt::new(
                         StmtKind::Return(Some(Expr::new(
                             ExprKind::StaticMethodCall {
@@ -166,6 +169,7 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
                     variadic: None,
                     variadic_type: None,
                     return_type: None,
+                    by_ref_return: false,
                     body: vec![Stmt::new(
                         StmtKind::Return(Some(Expr::new(
                             ExprKind::FunctionCall {
@@ -204,6 +208,7 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
                     variadic: None,
                     variadic_type: None,
                     return_type: None,
+                    by_ref_return: false,
                     body: vec![Stmt::new(
                         StmtKind::Return(Some(Expr::new(
                             ExprKind::StaticMethodCall {
@@ -257,6 +262,7 @@ fn test_program_private_instance_method_effects_recognize_private_methods() {
                 variadic: None,
                 variadic_type: None,
                 return_type: None,
+                by_ref_return: false,
                 body: vec![Stmt::new(
                     StmtKind::Return(Some(Expr::new(
                         ExprKind::FunctionCall {

@@ -369,6 +369,7 @@ pub(super) fn resolve_stmt_exprs(
             finally_body,
         },
         StmtKind::FunctionDecl {
+            by_ref_return,
             name,
             params,
             variadic,
@@ -376,6 +377,7 @@ pub(super) fn resolve_stmt_exprs(
             return_type,
             body,
         } => StmtKind::FunctionDecl {
+            by_ref_return,
             name,
             params: resolve_params(
                 params,

@@ -221,6 +221,7 @@ impl Checker {
                 body,
                 captures,
                 capture_refs: _,
+                by_ref_return,
                 ..
             } => {
                 let closure_sig = self.prepare_closure_signature_context(
@@ -241,6 +242,7 @@ impl Checker {
                     defaults: closure_sig.defaults,
                     return_type,
                     declared_return,
+                    by_ref_return: *by_ref_return,
                     ref_params: closure_sig.ref_params,
                     declared_params: closure_sig.declared_params,
                     variadic: variadic.clone(),

@@ -270,7 +270,7 @@ sidebar:
 | [`empty()`](./builtins/misc/empty.md) | `(mixed $value): bool` | `bool` |
 | [`header()`](./builtins/misc/header.md) | `(mixed $header, mixed $replace, mixed $response_code): void` | `void` |
 | [`http_response_code()`](./builtins/misc/http_response_code.md) | `(mixed $response_code): int` | `int` |
-| [`isset()`](./builtins/misc/isset.md) | `(mixed $var, ...$vars): int` | `int` |
+| [`isset()`](./builtins/misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` |
 | [`php_uname()`](./builtins/misc/php_uname.md) | `(string $mode): string` | `string` |
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(string $extension = null): string` | `string` |
 | [`print_r()`](./builtins/misc/print_r.md) | `(...$values): void` | `void` |

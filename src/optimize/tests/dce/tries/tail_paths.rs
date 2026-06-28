@@ -22,6 +22,7 @@ fn test_eliminate_dead_code_keeps_statements_after_fallthrough_try() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Try {
@@ -73,6 +74,7 @@ fn test_eliminate_dead_code_sinks_tail_into_try_fallthrough_paths() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![
                 Stmt::new(
                     StmtKind::Try {

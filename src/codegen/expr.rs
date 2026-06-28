@@ -190,6 +190,7 @@ pub fn emit_expr(
             variadic_type: _,
             captures,
             capture_refs,
+            by_ref_return: _,
         } => calls::emit_closure(
             params,
             variadic,

@@ -62,10 +62,10 @@ pub(super) struct ClassBuildState {
     pub(super) interfaces: Vec<String>,
     pub(super) method_attribute_names: HashMap<String, Vec<String>>,
     pub(super) method_attribute_args:
-        HashMap<String, Vec<Option<Vec<crate::types::AttrArgValue>>>>,
+        HashMap<String, Vec<Option<Vec<crate::types::AttrArgEntry>>>>,
     pub(super) property_attribute_names: HashMap<String, Vec<String>>,
     pub(super) property_attribute_args:
-        HashMap<String, Vec<Option<Vec<crate::types::AttrArgValue>>>>,
+        HashMap<String, Vec<Option<Vec<crate::types::AttrArgEntry>>>>,
 }
 
 impl ClassBuildState {
@@ -135,6 +135,7 @@ impl ClassBuildState {
             final_properties: self.final_properties,
             readonly_properties: self.readonly_properties,
             reference_properties: self.reference_properties,
+            owned_reference_properties: HashSet::new(),
             abstract_properties: self.abstract_properties,
             abstract_property_hooks: self.abstract_property_hooks,
             static_properties: self.static_prop_types,
@@ -196,45 +197,123 @@ pub(super) fn collect_attribute_names(
 /// reflection helper needs the missing argument payload.
 pub(super) fn collect_attribute_args(
     groups: &[crate::parser::ast::AttributeGroup],
-) -> Vec<Option<Vec<crate::types::AttrArgValue>>> {
+) -> Vec<Option<Vec<crate::types::AttrArgEntry>>> {
     use crate::parser::ast::ExprKind;
-    use crate::types::AttrArgValue;
+    use crate::types::{AttrArgEntry, AttrKey};
 
     let mut out = Vec::new();
     for group in groups {
         for attr in &group.attributes {
-            let mut args = Vec::new();
+            let mut entries = Vec::new();
             let mut supported = true;
             for arg_expr in &attr.args {
-                match &arg_expr.kind {
-                    ExprKind::StringLiteral(value) => {
-                        args.push(AttrArgValue::Str(value.clone()))
+                // A named argument (`#[A(name: value)]`) keys the entry by its
+                // string name; positional arguments stay unkeyed and reflection
+                // materializes them at sequential integer offsets like PHP.
+                let (key, value_expr) = match &arg_expr.kind {
+                    ExprKind::NamedArg { name, value } => {
+                        (Some(AttrKey::Str(name.clone())), value.as_ref())
                     }
-                    ExprKind::IntLiteral(value) => args.push(AttrArgValue::Int(*value)),
-                    ExprKind::BoolLiteral(value) => args.push(AttrArgValue::Bool(*value)),
-                    ExprKind::Null => args.push(AttrArgValue::Null),
-                    ExprKind::Negate(inner) => {
-                        if let ExprKind::IntLiteral(n) = &inner.kind {
-                            args.push(AttrArgValue::Int(n.wrapping_neg()));
-                        } else {
-                            supported = false;
-                            break;
-                        }
-                    }
-                    ExprKind::NamedArg { .. } => {
-                        supported = false;
-                        break;
-                    }
-                    _ => {
+                    _ => (None, arg_expr),
+                };
+                match fold_attr_value(value_expr) {
+                    Some(value) => entries.push(AttrArgEntry { key, value }),
+                    None => {
                         supported = false;
                         break;
                     }
                 }
             }
-            out.push(if supported { Some(args) } else { None });
+            out.push(if supported { Some(entries) } else { None });
         }
     }
     out
+}
+
+/// Folds a single attribute-argument expression to a compile-time
+/// [`AttrArgValue`], or `None` when the expression is not a constant shape
+/// reflection can materialize. Handles scalars (string/int/bool/null/float),
+/// negation of numeric literals, positional/associative array literals, and
+/// symbolic references (global constants, class constants, enum cases). The
+/// symbolic references are captured by canonical name and resolved later, when
+/// the synthetic reflection method bodies are lowered (see [`AttrArgValue`]).
+fn fold_attr_value(expr: &crate::parser::ast::Expr) -> Option<crate::types::AttrArgValue> {
+    use crate::parser::ast::ExprKind;
+    use crate::types::{AttrArgEntry, AttrArgValue};
+
+    match &expr.kind {
+        ExprKind::StringLiteral(value) => Some(AttrArgValue::Str(value.clone())),
+        ExprKind::IntLiteral(value) => Some(AttrArgValue::Int(*value)),
+        ExprKind::FloatLiteral(value) => Some(AttrArgValue::Float(value.to_bits())),
+        ExprKind::BoolLiteral(value) => Some(AttrArgValue::Bool(*value)),
+        ExprKind::Null => Some(AttrArgValue::Null),
+        // A bare constant reference (`#[A(SOME_CONST)]`). Name resolution has
+        // already canonicalised the name, so capture it for late resolution.
+        ExprKind::ConstRef(name) => Some(AttrArgValue::ConstRef(name.as_str().to_string())),
+        // A class constant or enum case (`#[A(C::BAR)]` / `#[A(E::Case)]`). Only
+        // a named (class/enum) receiver can be resolved outside a class scope;
+        // `self`/`parent`/`static` have no meaning here and stay unsupported.
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            scoped_receiver_type_name(receiver)
+                .map(|type_name| AttrArgValue::ScopedConst(type_name, name.clone()))
+        }
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(n) => Some(AttrArgValue::Int(n.wrapping_neg())),
+            ExprKind::FloatLiteral(n) => Some(AttrArgValue::Float((-n).to_bits())),
+            _ => None,
+        },
+        ExprKind::ArrayLiteral(elements) => {
+            let mut entries = Vec::with_capacity(elements.len());
+            for element in elements {
+                entries.push(AttrArgEntry {
+                    key: None,
+                    value: fold_attr_value(element)?,
+                });
+            }
+            Some(AttrArgValue::Array(entries))
+        }
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            let mut entries = Vec::with_capacity(pairs.len());
+            for (key_expr, value_expr) in pairs {
+                entries.push(AttrArgEntry {
+                    key: Some(fold_attr_key(key_expr)?),
+                    value: fold_attr_value(value_expr)?,
+                });
+            }
+            Some(AttrArgValue::Array(entries))
+        }
+        _ => None,
+    }
+}
+
+/// Folds an associative-array key expression to an [`AttrKey`], or `None` when
+/// it is not an integer or string literal key (the only keys PHP allows).
+fn fold_attr_key(expr: &crate::parser::ast::Expr) -> Option<crate::types::AttrKey> {
+    use crate::parser::ast::ExprKind;
+    use crate::types::AttrKey;
+
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(AttrKey::Int(*value)),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(n) => Some(AttrKey::Int(n.wrapping_neg())),
+            _ => None,
+        },
+        ExprKind::StringLiteral(value) => Some(AttrKey::Str(value.clone())),
+        _ => None,
+    }
+}
+
+/// Returns the canonical type name of a static receiver when it is a named
+/// class/enum (`#[A(C::BAR)]`), or `None` for `self`/`parent`/`static`, which
+/// have no resolvable meaning in the attribute argument position.
+fn scoped_receiver_type_name(
+    receiver: &crate::parser::ast::StaticReceiver,
+) -> Option<String> {
+    use crate::parser::ast::StaticReceiver;
+    match receiver {
+        StaticReceiver::Named(name) => Some(name.as_str().to_string()),
+        StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => None,
+    }
 }
 
 /// Returns `true` if the class declaration carries the PHP 8.2

@@ -36,6 +36,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_switch_bool_guard_case(
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Switch {
                     subject: Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),
@@ -87,6 +88,7 @@ fn test_eliminate_dead_code_drops_impossible_switch_cases_from_outer_exact_guard
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::binop(Expr::var("value"), BinOp::StrictEq, Expr::int_lit(0)),
@@ -137,6 +139,7 @@ fn test_eliminate_dead_code_drops_impossible_switch_cases_from_outer_excluded_gu
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::new(
@@ -210,6 +213,7 @@ fn test_eliminate_dead_code_drops_impossible_switch_true_cases_from_outer_guard(
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: strict_true.clone(),
@@ -266,6 +270,7 @@ fn test_eliminate_dead_code_invalidates_switch_bool_guard_after_local_write() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::Switch {
                     subject: Expr::new(ExprKind::BoolLiteral(true), Span::dummy()),

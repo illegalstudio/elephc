@@ -103,18 +103,33 @@ fn parse_ref_assign(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     *pos += 1;
-    let source = match tokens.get(*pos).map(|(token, _)| token) {
-        Some(Token::Variable(source)) => source.clone(),
-        _ => {
-            return Err(CompileError::new(
-                span,
-                "Reference assignment source must be a variable",
-            ));
-        }
-    };
-    *pos += 1;
+    let source = parse_expr(tokens, pos)?;
+    if !is_valid_reference_source(&source.kind) {
+        return Err(CompileError::new(
+            span,
+            "Reference assignment source must be a variable, array/property element, or a by-reference call",
+        ));
+    }
     expect_semicolon(tokens, pos)?;
     Ok(Stmt::new(StmtKind::RefAssign { target, source }, span))
+}
+
+/// Returns true when an expression is a legal source for `$x = &<source>`.
+///
+/// PHP allows aliasing variables, array elements, object properties, and the
+/// results of calls that return by reference. Other expressions are rejected.
+fn is_valid_reference_source(kind: &ExprKind) -> bool {
+    matches!(
+        kind,
+        ExprKind::Variable(_)
+            | ExprKind::ArrayAccess { .. }
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::FunctionCall { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::StaticMethodCall { .. }
+            | ExprKind::ClosureCall { .. }
+            | ExprKind::ExprCall { .. }
+    )
 }
 
 /// Converts a lexer `Token` into an `AssignmentOperator` variant.

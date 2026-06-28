@@ -201,6 +201,7 @@ pub(crate) fn lower_user_function(
         body_return_type.clone(),
     );
     function.params = function_params(&eir_signature);
+    function.flags.by_ref_return = signature.by_ref_return;
     function.source_signature = Some(source_signature(name, &eir_signature));
     function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
     attach_generator_source_if_needed(&mut function, body, eir_signature.params.len());
@@ -262,6 +263,7 @@ pub(crate) fn lower_class_method(
     function.flags = FunctionFlags {
         is_method: true,
         is_static,
+        by_ref_return: signature.by_ref_return,
         ..FunctionFlags::default()
     };
     function.source_signature = Some(source_signature(&name, signature));
@@ -348,6 +350,7 @@ pub(crate) fn lower_property_init_thunk(
         defaults: vec![None],
         return_type: PhpType::Void,
         declared_return: false,
+        by_ref_return: false,
         ref_params: vec![false],
         declared_params: vec![false],
         variadic: None,
@@ -428,8 +431,10 @@ pub(crate) fn lower_closure_function(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
+    by_ref_return: bool,
 ) -> FunctionSig {
-    let signature = closure_signature_from_ast(params, variadic, return_type, body, captures);
+    let mut signature = closure_signature_from_ast(params, variadic, return_type, body, captures, parent.classes);
+    signature.by_ref_return = by_ref_return;
     lower_closure_function_with_signature(
         parent,
         name,
@@ -451,8 +456,10 @@ pub(crate) fn lower_closure_function_with_context(
     captures: &[(String, PhpType, bool)],
     contextual_arg_types: &[PhpType],
     self_ref_callable_capture: Option<&str>,
+    by_ref_return: bool,
 ) -> FunctionSig {
-    let mut signature = closure_signature_from_ast(params, variadic, return_type, body, captures);
+    let mut signature = closure_signature_from_ast(params, variadic, return_type, body, captures, parent.classes);
+    signature.by_ref_return = by_ref_return;
     for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
         if type_ann.is_none() {
             if let Some(contextual_ty) = contextual_arg_types.get(idx) {
@@ -491,6 +498,7 @@ fn lower_closure_function_with_signature(
     );
     function.flags = FunctionFlags {
         is_closure: true,
+        by_ref_return: signature.by_ref_return,
         ..FunctionFlags::default()
     };
     function.params = function_params(&signature);
@@ -562,6 +570,7 @@ fn lower_body_into_function(
     all_global_var_names: std::collections::HashSet<String>,
 ) -> Vec<Function> {
     let owner_name = function.name.clone();
+    let function_by_ref_return = function.flags.by_ref_return;
     let by_ref_params = function
         .params
         .iter()
@@ -592,6 +601,7 @@ fn lower_body_into_function(
         in_main,
         all_global_var_names,
     );
+    ctx.by_ref_return = function_by_ref_return;
     for (index, (name, php_type)) in params.iter().enumerate() {
         ctx.declare_local(name, php_type.clone());
         ctx.mark_local_initialized(name);
@@ -942,6 +952,7 @@ fn closure_signature_from_ast(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
 ) -> FunctionSig {
     let mut signature = signature_from_ast_with_variadic(params, return_type, variadic);
     if crate::types::checker::yield_validation::body_contains_yield(body) {
@@ -949,7 +960,9 @@ fn closure_signature_from_ast(
         return signature;
     }
     if return_type.is_none() {
-        if let Some(return_ty) = direct_closure_return_type(body, captures) {
+        if let Some(return_ty) =
+            direct_closure_return_type(body, captures, &signature.params, classes)
+        {
             signature.return_type = return_ty;
         } else if !body_contains_value_return(body) {
             signature.return_type = PhpType::Void;
@@ -962,6 +975,8 @@ fn closure_signature_from_ast(
 fn direct_closure_return_type(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
 ) -> Option<PhpType> {
     let [stmt] = body else {
         return None;
@@ -969,13 +984,21 @@ fn direct_closure_return_type(
     let StmtKind::Return(Some(expr)) = &stmt.kind else {
         return None;
     };
-    Some(direct_closure_return_expr_type(expr, captures))
+    Some(direct_closure_return_expr_type(expr, captures, params, classes))
 }
 
-/// Returns a direct closure return expression type, consulting capture metadata first.
+/// Returns a direct closure return expression type, consulting capture and parameter
+/// metadata first. A bare `return $x` where `$x` is a parameter must adopt the parameter's
+/// declared type (e.g. `mixed`) rather than falling back to the syntactic integer default,
+/// which would otherwise coerce a boxed Mixed argument to an integer on return. A
+/// `return $obj->prop` where `$obj` is a captured/parameter object of a known class adopts
+/// the property's declared type, so a `fn &() => $o->items` closure returns the array type
+/// rather than the syntactic integer default.
 fn direct_closure_return_expr_type(
     expr: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
 ) -> PhpType {
     if let ExprKind::Variable(name) = &expr.kind {
         if let Some((_, php_type, _)) = captures
@@ -983,6 +1006,37 @@ fn direct_closure_return_expr_type(
             .find(|(capture_name, _, _)| capture_name == name)
         {
             return php_type.clone();
+        }
+        if let Some((_, php_type)) = params.iter().find(|(param_name, _)| param_name == name) {
+            return php_type.clone();
+        }
+    }
+    if let ExprKind::PropertyAccess { object, property } = &expr.kind {
+        let receiver_name = match &object.kind {
+            ExprKind::Variable(name) => Some(name.as_str()),
+            ExprKind::This => Some("this"),
+            _ => None,
+        };
+        if let Some(receiver_name) = receiver_name {
+            let receiver_ty = captures
+                .iter()
+                .find(|(capture_name, _, _)| capture_name == receiver_name)
+                .map(|(_, ty, _)| ty)
+                .or_else(|| {
+                    params
+                        .iter()
+                        .find(|(param_name, _)| param_name == receiver_name)
+                        .map(|(_, ty)| ty)
+                });
+            if let Some(PhpType::Object(class)) = receiver_ty {
+                if let Some(info) = classes.get(class.trim_start_matches('\\')) {
+                    if let Some((_, ty)) =
+                        info.properties.iter().find(|(name, _)| name == property)
+                    {
+                        return ty.clone();
+                    }
+                }
+            }
         }
     }
     crate::types::checker::infer_expr_type_syntactic(expr)
@@ -1087,6 +1141,7 @@ fn signature_from_ast_with_variadic(
             .map(type_expr_to_php_type)
             .unwrap_or(PhpType::Mixed),
         declared_return: return_type.is_some(),
+        by_ref_return: false,
         ref_params: params.iter().map(|(_, _, _, by_ref)| *by_ref).collect(),
         declared_params: params.iter().map(|(_, ty, _, _)| ty.is_some()).collect(),
         variadic: variadic.map(str::to_string),

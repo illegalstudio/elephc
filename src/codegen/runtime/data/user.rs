@@ -453,8 +453,8 @@ pub(crate) fn emit_runtime_data_user(
                     // table can reference it by label, then emit the tagged
                     // (tag, lo, hi) rows in source order.
                     let mut arg_rows = Vec::with_capacity(args.len());
-                    for arg in args {
-                        match arg {
+                    for entry in args {
+                        match &entry.value {
                             crate::types::AttrArgValue::Str(value) => {
                                 let label = format!("_attr_arg_str_{}", arg_str_id);
                                 arg_str_id += 1;
@@ -469,10 +469,24 @@ pub(crate) fn emit_runtime_data_user(
                             crate::types::AttrArgValue::Int(value) => {
                                 arg_rows.push((0u64, format!("{}", *value as u64), 0u64));
                             }
+                            crate::types::AttrArgValue::Float(bits) => {
+                                arg_rows.push((2u64, format!("{}", *bits), 0u64));
+                            }
                             crate::types::AttrArgValue::Bool(value) => {
                                 arg_rows.push((3u64, format!("{}", *value as u64), 0u64));
                             }
                             crate::types::AttrArgValue::Null => {
+                                arg_rows.push((8u64, "0".to_string(), 0u64));
+                            }
+                            crate::types::AttrArgValue::Array(_)
+                            | crate::types::AttrArgValue::ConstRef(_)
+                            | crate::types::AttrArgValue::ScopedConst(..) => {
+                                // This legacy flat (tag, lo, hi) table cannot
+                                // represent a nested array or a deferred symbolic
+                                // reference (global/class constant, enum case),
+                                // and no runtime routine reads it; emit a null
+                                // placeholder. The active EIR path materializes
+                                // the real value from class metadata instead.
                                 arg_rows.push((8u64, "0".to_string(), 0u64));
                             }
                         }
@@ -1204,6 +1218,7 @@ mod tests {
             final_properties: HashSet::new(),
             readonly_properties: HashSet::new(),
             reference_properties: HashSet::new(),
+            owned_reference_properties: HashSet::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
             static_properties: Vec::new(),

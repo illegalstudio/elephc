@@ -144,9 +144,18 @@ pub(super) fn check_builtin(
                 return Err(CompileError::new(span, "isset() takes at least 1 argument"));
             }
             for arg in args {
+                // `isset($obj->prop)` on an undeclared property dispatches to
+                // `__isset`; the helper infers the receiver but skips the bare
+                // property access that would otherwise reject the property.
+                if checker
+                    .isset_unset_property_magic_class(arg, "__isset", env)?
+                    .is_some()
+                {
+                    continue;
+                }
                 checker.infer_type(arg, env)?;
             }
-            Ok(Some(PhpType::Int))
+            Ok(Some(PhpType::Bool))
         }
         "array_push" => {
             if args.len() != 2 {

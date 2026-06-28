@@ -217,7 +217,11 @@ pub(super) fn apply_stmt_callable_aliases(stmt: &Stmt, aliases: &mut HashMap<Str
             }
         }
         StmtKind::RefAssign { target, source } => {
-            if let Some(effect) = aliases.get(source).copied() {
+            let effect = match &source.kind {
+                ExprKind::Variable(source_name) => aliases.get(source_name).copied(),
+                _ => None,
+            };
+            if let Some(effect) = effect {
                 aliases.insert(target.clone(), effect);
             } else {
                 aliases.remove(target);

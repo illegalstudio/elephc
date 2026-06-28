@@ -212,7 +212,11 @@ fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span) {
 
 /// Lowers a plain PHP local assignment.
 fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
-    let direct_closure = matches!(value.kind, ExprKind::Closure { .. });
+    // A by-reference `Closure::bind(fn &() => $this->prop, $obj, $obj)` assigned to a variable is
+    // tracked as a static callable, like a closure literal, so a later `$b()` lowers to a direct
+    // call that carries the property's reference-cell pointer instead of boxing it.
+    let bound_closure = crate::ir_lower::expr::is_bound_closure_assignment_shape(ctx, value);
+    let direct_closure = matches!(value.kind, ExprKind::Closure { .. }) || bound_closure;
     ctx.clear_pending_static_callable_result();
     let static_callable = static_callable_binding_for_expr(ctx, value);
     let fiber_start_sig = crate::ir_lower::fibers::start_sig_for_expr(ctx, value);
@@ -221,6 +225,7 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
         .as_ref()
         .map(|assignment| assignment.value)
         .or_else(|| lower_closure_for_assignment(ctx, name, value))
+        .or_else(|| bound_closure.then(|| crate::ir_lower::expr::lower_bound_closure_for_assignment(ctx, value)).flatten())
         .unwrap_or_else(|| lower_expr(ctx, value));
     let (lowered, php_type) = contextualize_array_assignment(ctx, name, value, lowered, span);
     ctx.store_local(name, lowered, php_type, Some(span));
@@ -272,12 +277,35 @@ fn contextualize_array_assignment(
     (hash, contextual_ty)
 }
 
-/// Lowers a by-reference assignment by binding both variables to one ref-cell.
-fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &str, span: Span) {
-    let fiber_start_sig = ctx.fiber_start_sig_for_local(source);
-    ctx.alias_local_ref_cell(target, source, Some(span));
-    if let Some(sig) = fiber_start_sig {
-        ctx.bind_fiber_start_sig(target, sig);
+/// Lowers a by-reference assignment, dispatching on the kind of reference source.
+///
+/// - `$a = &$b` aliases two locals to one ref-cell.
+/// - `$a = &$obj->prop` binds the local to the object's reference-property cell (write-through).
+/// - `$a = &call()` binds the local to the cell returned by a by-reference callee.
+fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &Expr, span: Span) {
+    match &source.kind {
+        ExprKind::Variable(source_name) => {
+            let fiber_start_sig = ctx.fiber_start_sig_for_local(source_name);
+            ctx.alias_local_ref_cell(target, source_name, Some(span));
+            if let Some(sig) = fiber_start_sig {
+                ctx.bind_fiber_start_sig(target, sig);
+            }
+        }
+        ExprKind::PropertyAccess { .. } => {
+            crate::ir_lower::expr::lower_ref_assign_property(ctx, target, source, span);
+        }
+        ExprKind::FunctionCall { .. }
+        | ExprKind::MethodCall { .. }
+        | ExprKind::StaticMethodCall { .. }
+        | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. } => {
+            crate::ir_lower::expr::lower_ref_assign_call(ctx, target, source, span);
+        }
+        _ => {
+            // Other source shapes (e.g. array elements) are rejected by the checker;
+            // evaluate for side effects to keep lowering total.
+            lower_expr(ctx, source);
+        }
     }
 }
 
@@ -1642,6 +1670,27 @@ fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
 
 /// Lowers a return statement using the current function return contract.
 fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option<&Expr>, span: Span) {
+    // A by-reference-returning function hands the caller the ref-cell pointer of the
+    // returned property (`function &f() { return $obj->prop; }`), so `$x = &f()` aliases
+    // it. The cell pointer is materialized as the declared return type so the ABI return
+    // convention matches the caller's expectation for pointer-sized property types.
+    if ctx.by_ref_return {
+        if let Some(Expr { kind: ExprKind::PropertyAccess { object, property }, .. }) = value_expr {
+            let object = lower_expr(ctx, object);
+            let data = ctx.intern_string(property);
+            let result_ty = ctx.return_php_type.clone();
+            let cell_ptr = ctx.emit_value(
+                Op::LoadPropRefCell,
+                vec![object.value],
+                Some(Immediate::Data(data)),
+                result_ty,
+                Op::LoadPropRefCell.default_effects(),
+                Some(span),
+            );
+            terminate_return(ctx, Some(cell_ptr.value));
+            return;
+        }
+    }
     if ctx.return_type == IrType::Void {
         if let Some(value_expr) = value_expr {
             lower_expr(ctx, value_expr);

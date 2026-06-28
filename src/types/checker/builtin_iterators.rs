@@ -94,6 +94,7 @@ fn stub_method_returning_null(name: &str) -> ClassMethod {
         variadic: None,
         variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(ExprKind::Null, crate::span::Span::dummy()))),
             crate::span::Span::dummy(),
@@ -119,6 +120,7 @@ fn stub_method_returning_null_with_param(name: &str, param: &str) -> ClassMethod
         variadic: None,
         variadic_type: None,
         return_type: Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(ExprKind::Null, crate::span::Span::dummy()))),
             crate::span::Span::dummy(),
@@ -142,6 +144,7 @@ fn stub_method_returning_false(name: &str) -> ClassMethod {
         variadic: None,
         variadic_type: None,
         return_type: Some(TypeExpr::Bool),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(Expr::new(
                 ExprKind::BoolLiteral(false),
@@ -168,6 +171,7 @@ fn stub_void_method(name: &str) -> ClassMethod {
         variadic: None,
         variadic_type: None,
         return_type: Some(TypeExpr::Void),
+        by_ref_return: false,
         body: Vec::new(),
         span: crate::span::Span::dummy(),
         attributes: Vec::new(),

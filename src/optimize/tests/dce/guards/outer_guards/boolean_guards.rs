@@ -38,6 +38,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_strict_bool_guard
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: strict_true,
@@ -88,6 +89,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_and_guard() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::binop(Expr::var("a"), BinOp::And, Expr::var("b")),
@@ -135,6 +137,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_negated_and_guard
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: negated_conjunction,
@@ -190,6 +193,7 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_outer_or_false_branch()
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: outer,

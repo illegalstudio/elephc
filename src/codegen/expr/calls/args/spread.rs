@@ -473,6 +473,7 @@ fn fallback_variadic_sig() -> FunctionSig {
         defaults: vec![None],
         return_type: PhpType::Mixed,
         declared_return: false,
+        by_ref_return: false,
         ref_params: vec![false],
         declared_params: vec![false],
         variadic: Some("rest".to_string()),

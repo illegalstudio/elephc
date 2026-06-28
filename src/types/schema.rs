@@ -16,14 +16,52 @@ use crate::span::Span;
 
 use super::{FunctionSig, PhpType};
 
-/// Compile-time attribute argument literal. Captures the subset of PHP
-/// attribute argument expressions that reflection helpers can currently
-/// materialize: strings, ints, bools, null, and negative int literals.
+/// Compile-time attribute argument value. Captures the subset of PHP
+/// attribute argument expressions that reflection helpers can materialize:
+/// scalars (string/int/bool/null/float), and nested arrays of the same.
+///
+/// `Float` stores the IEEE-754 bit pattern (`f64::to_bits`) rather than an
+/// `f64` so the enum can keep deriving `Eq`/`Hash`/`Ord` (used by the
+/// reflection de-duplication `BTreeMap` and schema hashing). Reconstruct the
+/// value with `f64::from_bits`.
+///
+/// `ConstRef` and `ScopedConst` are *deferred symbolic references* — a global
+/// constant name, or a `Type::MEMBER` class-constant / enum-case reference.
+/// Their values are not known at schema-collection time (global constants are
+/// not yet registered and enum cases are not yet built), so they carry the
+/// canonical names and are resolved later, when the synthetic reflection method
+/// bodies (`getArguments()` / `newInstance()`) are lowered through the normal
+/// constant/enum resolution path. Enum-case references resolve to the case
+/// *object*, matching PHP's `ReflectionAttribute::getArguments()`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum AttrArgValue {
     Null,
     Int(i64),
     Bool(bool),
+    Str(String),
+    Float(u64),
+    Array(Vec<AttrArgEntry>),
+    /// Reference to a global constant by canonical name (`#[A(SOME_CONST)]`).
+    ConstRef(String),
+    /// Reference to a class constant or enum case, carried as
+    /// (canonical type name, member name) — e.g. `#[A(C::BAR)]` or `#[A(E::Case)]`.
+    ScopedConst(String, String),
+}
+
+/// One entry of an attribute argument list or of a nested attribute array.
+/// `key` is `None` for a positional argument / next sequential array element,
+/// `Some(AttrKey::Str)` for a named argument (`#[A(name: 1)]`) or string array
+/// key, and `Some(AttrKey::Int)` for an explicit integer array key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AttrArgEntry {
+    pub key: Option<AttrKey>,
+    pub value: AttrArgValue,
+}
+
+/// A resolved array/named-argument key for an [`AttrArgEntry`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum AttrKey {
+    Int(i64),
     Str(String),
 }
 
@@ -93,18 +131,18 @@ pub struct ClassInfo {
     /// aligned with `attribute_names`. `None` means the source uses legal PHP
     /// attribute arguments that this reflection metadata model cannot
     /// materialize yet; callers that need arguments report that at query time.
-    pub attribute_args: Vec<Option<Vec<AttrArgValue>>>,
+    pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>,
     /// Attribute names attached to methods visible on this class, keyed by
     /// PHP's case-insensitive method key. Inherited methods keep the metadata
     /// from the declaring class until overridden.
     pub method_attribute_names: HashMap<String, Vec<String>>,
     /// Literal method-attribute args aligned with `method_attribute_names`.
-    pub method_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgValue>>>>,
+    pub method_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     /// Attribute names attached to properties visible on this class. Property
     /// names are case-sensitive, so the source property name is the key.
     pub property_attribute_names: HashMap<String, Vec<String>>,
     /// Literal property-attribute args aligned with `property_attribute_names`.
-    pub property_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgValue>>>>,
+    pub property_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     /// Trait names used directly by this class declaration, preserving source order.
     pub used_traits: Vec<String>,
     pub properties: Vec<(String, PhpType)>,
@@ -120,6 +158,13 @@ pub struct ClassInfo {
     pub final_properties: HashSet<String>,
     pub readonly_properties: HashSet<String>,
     pub reference_properties: HashSet<String>,
+    /// Reference properties whose ref-cell the OBJECT allocates and frees (created by
+    /// taking a reference to a regular property — `$x = &$obj->prop` — or returning one
+    /// by reference). A subset of `reference_properties`. Constructor-promoted `&$param`
+    /// properties are reference properties but NOT here (their cell is borrowed from the
+    /// caller). The object allocates a cell per such property at construction and releases
+    /// it on destruction.
+    pub owned_reference_properties: HashSet<String>,
     pub abstract_properties: HashSet<String>,
     pub abstract_property_hooks: HashMap<String, PropertyHookContract>,
     pub static_properties: Vec<(String, PhpType)>,

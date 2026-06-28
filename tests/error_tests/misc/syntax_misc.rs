@@ -28,6 +28,16 @@ fn test_error_reference_assignment_requires_variable_source() {
     );
 }
 
+/// Tests that a reference assignment rejects a computed (non-lvalue) source such as
+/// `$a + 1`, which is neither a variable, an array/property element, nor a call.
+#[test]
+fn test_error_reference_assignment_rejects_computed_source() {
+    expect_error(
+        "<?php $a = 1; $b =& $a + 1;",
+        "Reference assignment source must be a variable",
+    );
+}
+
 /// Tests that two `use` statements with the same alias name produce a
 /// "Duplicate import alias" error.
 #[test]

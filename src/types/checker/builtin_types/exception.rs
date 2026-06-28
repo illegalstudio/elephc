@@ -74,6 +74,7 @@ pub(super) fn builtin_exception_constructor_method() -> ClassMethod {
         variadic: None,
         variadic_type: None,
         return_type: None,
+        by_ref_return: false,
         body: vec![
             Stmt::new(
                 StmtKind::PropertyAssign {
@@ -258,6 +259,7 @@ fn concrete_throwable_method(name: &str, return_type: TypeExpr, value: Expr) -> 
         variadic: None,
         variadic_type: None,
         return_type: Some(return_type),
+        by_ref_return: false,
         body: vec![Stmt::new(
             StmtKind::Return(Some(value)),
             crate::span::Span::dummy(),
@@ -280,6 +282,7 @@ fn abstract_throwable_method(name: &str, return_type: TypeExpr) -> ClassMethod {
         variadic: None,
         variadic_type: None,
         return_type: Some(return_type),
+        by_ref_return: false,
         body: Vec::new(),
         span: crate::span::Span::dummy(),
         attributes: Vec::new(),

@@ -28,6 +28,32 @@ pub(crate) use declarations::propagate_params;
 use declarations::{propagate_enum_case, propagate_method, propagate_property};
 use env::{env_after_list_unpack, env_after_scalar_assign};
 
+thread_local! {
+    /// Variables that are bound by reference (`$x = &…`) somewhere in the program being
+    /// propagated. Their value can change through the alias (another local, an object
+    /// property, or a by-reference call result) without a visible local write, so their
+    /// scalar constants must never be propagated. Conservative across the whole program.
+    static REFERENCE_VOLATILE: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Clears the reference-volatile set before a fresh constant-propagation run.
+pub(crate) fn reset_reference_volatile() {
+    REFERENCE_VOLATILE.with(|cell| cell.borrow_mut().clear());
+}
+
+/// Marks `name` as bound by reference, disabling constant propagation for it.
+fn mark_reference_volatile(name: &str) {
+    REFERENCE_VOLATILE.with(|cell| {
+        cell.borrow_mut().insert(name.to_string());
+    });
+}
+
+/// Returns true when `name` is bound by reference and must not carry a propagated constant.
+pub(super) fn is_reference_volatile(name: &str) -> bool {
+    REFERENCE_VOLATILE.with(|cell| cell.borrow().contains(name))
+}
+
 /// Returns the input environment if no expression has side effects,
 /// otherwise returns an empty environment to force conservative invalidation.
 fn env_after_expr_side_effects(env: ConstantEnv, exprs: &[&Expr]) -> ConstantEnv {
@@ -88,10 +114,18 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             let mut next_env = env_after_scalar_assign(env, &name, &value);
             (Stmt::new(StmtKind::Assign { name, value }, span), std::mem::take(&mut next_env))
         }
-        StmtKind::RefAssign { target, source } => (
-            Stmt::new(StmtKind::RefAssign { target, source }, span),
-            HashMap::new(),
-        ),
+        StmtKind::RefAssign { target, source } => {
+            // The target — and a plain-variable source — alias one storage cell; either
+            // side can change the other's value invisibly, so neither may carry a constant.
+            mark_reference_volatile(&target);
+            if let ExprKind::Variable(source_name) = &source.kind {
+                mark_reference_volatile(source_name);
+            }
+            (
+                Stmt::new(StmtKind::RefAssign { target, source }, span),
+                HashMap::new(),
+            )
+        }
         StmtKind::TypedAssign {
             type_expr,
             name,
@@ -231,6 +265,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
         }
         StmtKind::UseDecl { imports } => (Stmt::new(StmtKind::UseDecl { imports }, span), env),
         StmtKind::FunctionDecl {
+            by_ref_return,
             name,
             params,
             variadic,
@@ -240,6 +275,7 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
         } => (
             Stmt::new(
                 StmtKind::FunctionDecl {
+                    by_ref_return,
                     name,
                     params: propagate_params(params),
                     variadic,

@@ -175,26 +175,34 @@ impl Checker {
             ExprKind::FunctionCall { name, args } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 let builtin_name = name.trim_start_matches('\\');
-                for (idx, arg) in expanded_args.iter().enumerate() {
-                    if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
-                        continue;
+                // `isset`/`unset` are lazy language constructs: an operand may be
+                // an undeclared property routed to `__isset`/`__unset`, which must
+                // not be inferred as a bare property access here. The call's own
+                // inference handles the operands (with magic routing).
+                let is_lazy_construct = builtin_name.eq_ignore_ascii_case("isset")
+                    || builtin_name.eq_ignore_ascii_case("unset");
+                if !is_lazy_construct {
+                    for (idx, arg) in expanded_args.iter().enumerate() {
+                        if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
+                            continue;
+                        }
+                        if builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2 {
+                            continue;
+                        }
+                        // The user-sort comparator is type-checked by `check_builtin`
+                        // with its parameters typed from the array element (so an
+                        // unannotated object comparator type-checks). Skip the eager
+                        // pass here, which would otherwise check the comparator body
+                        // with default `Int` parameters and reject object access.
+                        if idx == 1
+                            && (builtin_name.eq_ignore_ascii_case("usort")
+                                || builtin_name.eq_ignore_ascii_case("uasort")
+                                || builtin_name.eq_ignore_ascii_case("uksort"))
+                        {
+                            continue;
+                        }
+                        self.infer_type_with_assignment_effects(arg, env)?;
                     }
-                    if builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2 {
-                        continue;
-                    }
-                    // The user-sort comparator is type-checked by `check_builtin`
-                    // with its parameters typed from the array element (so an
-                    // unannotated object comparator type-checks). Skip the eager
-                    // pass here, which would otherwise check the comparator body
-                    // with default `Int` parameters and reject object access.
-                    if idx == 1
-                        && (builtin_name.eq_ignore_ascii_case("usort")
-                            || builtin_name.eq_ignore_ascii_case("uasort")
-                            || builtin_name.eq_ignore_ascii_case("uksort"))
-                    {
-                        continue;
-                    }
-                    self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
                 if builtin_name.eq_ignore_ascii_case("preg_match") {
@@ -202,6 +210,11 @@ impl Checker {
                         if let Some(name) = preg_match_output_var(arg) {
                             env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
                         }
+                    }
+                }
+                if builtin_name.eq_ignore_ascii_case("unset") {
+                    for arg in &expanded_args {
+                        promote_indexed_local_for_element_unset(arg, env);
                     }
                 }
                 Ok(ty)
@@ -311,4 +324,31 @@ fn preg_match_output_var(arg: &Expr) -> Option<&String> {
         ExprKind::NamedArg { value, .. } => preg_match_output_var(value),
         _ => None,
     }
+}
+
+/// Promotes a packed indexed-array local to an associative array when one of its elements is
+/// removed via `unset($arr[$key])`.
+///
+/// PHP's `unset()` removes a key without renumbering the remaining elements, so the array can no
+/// longer be a contiguous packed list (e.g. `unset([1,2,3][1])` leaves keys `0` and `2`). Re-typing
+/// the local as `AssocArray<Int, T>` makes its literal build as a hash, so the element removal
+/// lowers through `HashUnset`. Only plain `$var[$key]` targets on a currently-packed array are
+/// affected; associative arrays, objects, and non-variable receivers are left unchanged.
+fn promote_indexed_local_for_element_unset(arg: &Expr, env: &mut TypeEnv) {
+    let ExprKind::ArrayAccess { array, .. } = &arg.kind else {
+        return;
+    };
+    let ExprKind::Variable(name) = &array.kind else {
+        return;
+    };
+    let Some(PhpType::Array(elem_ty)) = env.get(name).cloned() else {
+        return;
+    };
+    env.insert(
+        name.clone(),
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: elem_ty,
+        },
+    );
 }

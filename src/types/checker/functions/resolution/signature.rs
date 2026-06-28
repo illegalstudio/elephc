@@ -95,6 +95,7 @@ impl Checker {
             defaults: decl.defaults.clone(),
             return_type: PhpType::Int,
             declared_return: decl.return_type.is_some(),
+            by_ref_return: decl.by_ref_return,
             ref_params: decl.ref_params.clone(),
             deprecation: None,
             declared_params: decl
@@ -119,6 +120,8 @@ impl Checker {
             .filter(|(_, is_ref)| **is_ref)
             .map(|(name, _)| name.clone())
             .collect();
+        let prev_by_ref_return = self.current_by_ref_return;
+        self.current_by_ref_return = decl.by_ref_return;
         let body_check_result = self.with_local_storage_context(ref_param_names, |checker| {
             for stmt in &decl.body {
                 if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
@@ -134,6 +137,7 @@ impl Checker {
             }
             Ok(())
         });
+        self.current_by_ref_return = prev_by_ref_return;
         self.callable_param_names = saved_callable_param_names;
         body_check_result?;
         for pname in &callable_param_names {
@@ -226,6 +230,7 @@ impl Checker {
             defaults: decl.defaults.clone(),
             return_type: return_type.clone(),
             declared_return: decl.return_type.is_some(),
+            by_ref_return: decl.by_ref_return,
             ref_params: decl.ref_params.clone(),
             declared_params: decl
                 .param_types

@@ -20,6 +20,7 @@ fn test_eliminate_dead_code_prunes_truthy_switch_cases_and_default() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::var("flag"),
@@ -84,6 +85,7 @@ fn test_eliminate_dead_code_prunes_falsy_scalar_labels_from_truthy_switch_subjec
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::var("flag"),
@@ -146,6 +148,7 @@ fn test_eliminate_dead_code_combines_exclusion_and_truthy_switch_guards() {
             variadic: None,
             variadic_type: None,
             return_type: None,
+            by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
                     condition: Expr::var("value"),
