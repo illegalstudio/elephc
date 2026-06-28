@@ -24,6 +24,7 @@ pub mod parser;
 pub mod runtime_hooks;
 pub mod scope;
 mod stream_resources;
+mod stream_wrappers;
 pub mod value;
 
 pub use interpreter::builtin_metadata;
