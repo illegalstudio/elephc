@@ -277,6 +277,58 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies path-based filesystem builtins dispatch to wrapper `url_stat()`.
+#[test]
+fn execute_program_dispatches_user_stream_wrapper_url_stat() {
+    let program = parse_fragment(
+        br#"class EvalUrlStatWrapperW {
+    public function url_stat($path, $flags) {
+        if (str_contains($path, "missing")) {
+            return false;
+        }
+        if (str_contains($path, "dir")) {
+            return ["mode" => 16877, "size" => 0, "mtime" => 5, "uid" => 10];
+        }
+        return [
+            "mode" => 33188,
+            "size" => 123,
+            "mtime" => 77,
+            "atime" => 66,
+            "ctime" => 88,
+            "uid" => 501,
+            "gid" => 20,
+            "ino" => 9
+        ];
+    }
+}
+stream_wrapper_register("ustat", "EvalUrlStatWrapperW");
+echo file_exists("ustat://file") ? "exists" : "bad"; echo ":";
+echo is_file("ustat://file") ? "file" : "bad"; echo ":";
+echo is_dir("ustat://file") ? "bad" : "notdir"; echo ":";
+echo filetype("ustat://file") === "file" ? "type" : "bad"; echo ":";
+echo filesize("ustat://file") === 123 ? "size" : "bad"; echo ":";
+echo filemtime("ustat://file") === 77 ? "mtime" : "bad"; echo ":";
+echo fileowner("ustat://file") === 501 ? "owner" : "bad"; echo ":";
+$stat = stat("ustat://file");
+echo $stat["size"] === 123 && $stat["mode"] === 33188 ? "stat" : "bad"; echo ":";
+echo call_user_func("filesize", "ustat://file") === 123 ? "callsize" : "bad"; echo ":";
+echo file_exists("ustat://missing") ? "bad" : "missing"; echo ":";
+echo filetype("ustat://dir") === "dir" ? "dirtype" : "bad";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "exists:file:notdir:type:size:mtime:owner:stat:callsize:missing:dirtype"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Starts a localhost HTTP server that returns one fixed body and then exits.
 fn spawn_http_once(body: &'static str) -> (u16, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind HTTP wrapper fixture");

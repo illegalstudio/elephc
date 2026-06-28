@@ -221,6 +221,44 @@ pub(in crate::interpreter) fn eval_user_wrapper_fpassthru_result(
     values.int(len).map(Some)
 }
 
+/// Dispatches path-based filesystem probes to a wrapper object's `url_stat()`.
+pub(in crate::interpreter) fn eval_user_wrapper_url_stat_result(
+    path: &str,
+    flags: i64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(class_name) = context
+        .stream_resources()
+        .user_stream_wrapper_class_for_path(path)
+    else {
+        return Ok(None);
+    };
+    let Some(class) = context.class(&class_name).cloned() else {
+        return values.bool_value(false).map(Some);
+    };
+    let Some((declaring_class, url_stat)) =
+        eval_user_wrapper_method(class.name(), "url_stat", context)
+    else {
+        return values.bool_value(false).map(Some);
+    };
+    let mut scope = ElephcEvalScope::new();
+    let object = eval_dynamic_class_new_object(&class, Vec::new(), context, &mut scope, values)?;
+    let path = values.string(path)?;
+    let flags = values.int(flags)?;
+    let result = eval_dynamic_method_with_values(
+        &declaring_class,
+        class.name(),
+        &url_stat,
+        object,
+        positional_args(vec![path, flags]),
+        context,
+        values,
+    )?;
+    values.release(object)?;
+    Ok(Some(result))
+}
+
 /// Reads one chunk from a userspace-wrapper stream.
 fn eval_user_wrapper_read_bytes(
     id: i64,
