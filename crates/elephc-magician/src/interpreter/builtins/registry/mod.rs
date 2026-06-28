@@ -14,9 +14,11 @@ mod callable;
 mod callable_validation;
 mod dispatch;
 mod names;
+mod signature;
 
 pub(in crate::interpreter) use binding::*;
 pub(in crate::interpreter) use callable::*;
 pub(in crate::interpreter) use callable_validation::*;
 pub(in crate::interpreter) use dispatch::*;
 pub(in crate::interpreter) use names::*;
+pub(in crate::interpreter) use signature::*;

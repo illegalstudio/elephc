@@ -83,3 +83,33 @@ echo preg_match("/(?<=foo)bar/", "foobar");');
 
     assert_eq!(out, "1:1");
 }
+
+/// Verifies eval named builtin calls can skip optional parameters with defaults.
+#[test]
+fn test_eval_named_builtin_arguments_fill_default_gaps() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo str_pad(string: "x", length: 3, pad_type: 0);
+echo ":";
+echo json_encode(value: ["a" => 1], depth: 512);');
+"#,
+    );
+
+    assert_eq!(out, "  x:{\"a\":1}");
+}
+
+/// Verifies eval named builtin calls preserve variadic and by-reference behavior.
+#[test]
+fn test_eval_named_builtin_arguments_support_variadic_and_by_ref() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$items = [3, 1, 2];
+sort(array: $items);
+echo implode(",", $items);
+echo ":";
+echo max(value: 3, values: 8);');
+"#,
+    );
+
+    assert_eq!(out, "1,2,3:8");
+}
