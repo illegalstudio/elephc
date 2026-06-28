@@ -60,6 +60,16 @@ pub(in crate::interpreter) fn eval_stream_set_blocking_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_settings_stream_resource_id(stream, values)?;
     let enable = values.truthy(enable)?;
+    if let Some(result) = eval_user_wrapper_stream_set_option_result(
+        id,
+        EVAL_STREAM_OPTION_BLOCKING,
+        if enable { 1 } else { 0 },
+        0,
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
     values.bool_value(context.stream_resources().set_blocking(id, enable).unwrap_or(false))
 }
 
@@ -96,6 +106,16 @@ pub(in crate::interpreter) fn eval_stream_set_timeout_result(
         Some(microseconds) => eval_int_value(microseconds, values)?,
         None => 0,
     };
+    if let Some(result) = eval_user_wrapper_stream_set_option_result(
+        id,
+        EVAL_STREAM_OPTION_READ_TIMEOUT,
+        seconds,
+        microseconds,
+        context,
+        values,
+    )? {
+        return Ok(result);
+    }
     values.bool_value(
         context
             .stream_resources()

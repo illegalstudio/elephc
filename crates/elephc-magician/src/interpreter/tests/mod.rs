@@ -33,6 +33,7 @@ mod builtins_stream_settings;
 mod builtins_stream_sockets;
 mod builtins_stream_wrapper_directories;
 mod builtins_stream_wrapper_metadata;
+mod builtins_stream_wrapper_options;
 mod builtins_stream_wrapper_path_ops;
 mod builtins_stream_wrappers;
 mod builtins_strings_binary;
