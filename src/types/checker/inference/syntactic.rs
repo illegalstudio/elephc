@@ -345,7 +345,10 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     key_ty,
                     normalized_array_key_type(key, infer_expr_type_syntactic(key)),
                 );
-                value_ty = wider_type_syntactic(&value_ty, &infer_expr_type_syntactic(value));
+                value_ty = merge_array_literal_element_type_syntactic(
+                    value_ty,
+                    infer_expr_type_syntactic(value),
+                );
             }
             PhpType::AssocArray {
                 key: Box::new(key_ty),
