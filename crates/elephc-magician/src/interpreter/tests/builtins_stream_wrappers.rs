@@ -343,6 +343,44 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies line-oriented reads dispatch through userspace stream wrappers.
+#[test]
+fn execute_program_dispatches_user_stream_wrapper_line_reads() {
+    let program = parse_fragment(
+        br#"class EvalLineWrapperW {
+    public $data;
+    public $pos;
+    public function stream_open($path, $mode, $options, &$opened_path): bool {
+        $this->data = "aa\nbbENDcc";
+        $this->pos = 0;
+        return true;
+    }
+    public function stream_read($count): string {
+        $chunk = substr($this->data, $this->pos, $count);
+        $this->pos += strlen($chunk);
+        return $chunk;
+    }
+    public function stream_eof(): bool {
+        return $this->pos >= strlen($this->data);
+    }
+}
+stream_wrapper_register("linew", "EvalLineWrapperW");
+$h = fopen("linew://one", "r");
+echo fgets($h) === "aa\n" ? "fgets" : "bad"; echo ":";
+echo stream_get_line($h, 10, "END") === "bb" ? "getline" : "bad"; echo ":";
+echo stream_get_contents($h) === "cc" ? "rest" : "bad";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "fgets:getline:rest");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies path-based filesystem builtins dispatch to wrapper `url_stat()`.
 #[test]
 fn execute_program_dispatches_user_stream_wrapper_url_stat() {

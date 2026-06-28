@@ -260,7 +260,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_url_stat_result(
 }
 
 /// Reads one chunk from a userspace-wrapper stream.
-fn eval_user_wrapper_read_bytes(
+pub(in crate::interpreter) fn eval_user_wrapper_read_bytes(
     id: i64,
     length: usize,
     context: &mut ElephcEvalContext,
@@ -364,7 +364,7 @@ fn eval_user_wrapper_contents_bytes(
 }
 
 /// Returns a userspace-wrapper EOF result, falling back to cached EOF state.
-fn eval_user_wrapper_eof_bool(
+pub(in crate::interpreter) fn eval_user_wrapper_eof_bool(
     id: i64,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
