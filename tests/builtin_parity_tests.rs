@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Static builtin names and signatures are read from compiler metadata APIs.
-//! - Eval builtin existence and named-argument parameters are read from magician metadata APIs.
+//! - Eval builtin existence and signature shape are read from magician metadata APIs.
 
 use std::collections::BTreeSet;
 
@@ -61,16 +61,16 @@ fn static_php_visible_builtins_are_visible_to_eval() {
     );
 }
 
-/// Verifies eval has named-argument parameter metadata for each shared static builtin.
+/// Verifies eval has signature metadata for each shared static builtin.
 #[test]
-fn shared_builtin_parameter_names_match_static_signatures() {
+fn shared_builtin_signature_shape_matches_static_signatures() {
     let static_only = STATIC_ONLY_RAW_MEMORY_BUILTINS
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
     let mut missing_static_signature = Vec::new();
     let mut missing_eval_signature = Vec::new();
-    let mut mismatched_params = Vec::new();
+    let mut mismatched_signatures = Vec::new();
 
     for name in elephc::builtin_metadata::php_visible_builtin_names() {
         if static_only.contains(name) {
@@ -84,12 +84,13 @@ fn shared_builtin_parameter_names_match_static_signatures() {
             missing_eval_signature.push(*name);
             continue;
         };
-        if static_meta.params != eval_meta.params {
-            mismatched_params.push((
-                *name,
-                static_meta.params.clone(),
-                eval_meta.params.clone(),
-            ));
+        if static_meta.params != eval_meta.params
+            || static_meta.required_param_count != eval_meta.required_param_count
+            || static_meta.default_param_count != eval_meta.default_param_count
+            || static_meta.variadic != eval_meta.variadic
+            || static_meta.by_ref_params != eval_meta.by_ref_params
+        {
+            mismatched_signatures.push((*name, static_meta, eval_meta));
         }
     }
 
@@ -102,8 +103,8 @@ fn shared_builtin_parameter_names_match_static_signatures() {
         "shared builtins without eval parameter metadata: {missing_eval_signature:?}"
     );
     assert!(
-        mismatched_params.is_empty(),
-        "shared builtin parameter-name mismatches: {mismatched_params:#?}"
+        mismatched_signatures.is_empty(),
+        "shared builtin signature-shape mismatches: {mismatched_signatures:#?}"
     );
 }
 

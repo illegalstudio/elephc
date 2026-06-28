@@ -69,32 +69,51 @@ pub(in crate::interpreter) fn bind_builtin_named_arg(
     Ok(())
 }
 
-/// Collects ordered bound arguments, rejecting gaps where defaults would be needed.
-pub(in crate::interpreter) fn collect_contiguous_bound_args(
-    bound_args: Vec<Option<RuntimeCellHandle>>,
-) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    let Some(last_index) = bound_args.iter().rposition(Option::is_some) else {
-        return Ok(Vec::new());
-    };
-    bound_args
-        .into_iter()
-        .take(last_index + 1)
-        .collect::<Option<Vec<_>>>()
-        .ok_or(EvalStatus::RuntimeFatal)
-}
-
-/// Collects ordered builtin arguments, applying PHP defaults for special named-call gaps.
+/// Collects ordered builtin arguments, applying PHP defaults for named-call gaps.
 pub(in crate::interpreter) fn collect_bound_builtin_args(
     name: &str,
-    mut bound_args: Vec<Option<RuntimeCellHandle>>,
+    bound_args: Vec<Option<RuntimeCellHandle>>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    if name == "array_splice" && bound_args.get(3).is_some_and(Option::is_some) {
-        if bound_args.get(2).is_some_and(Option::is_none) {
-            bound_args[2] = Some(values.null()?);
+    if !bound_args.iter().any(Option::is_some) {
+        return Ok(Vec::new());
+    }
+
+    let shape = eval_builtin_signature_shape(name).ok_or(EvalStatus::RuntimeFatal)?;
+    let last_index = bound_args
+        .iter()
+        .rposition(Option::is_some)
+        .expect("non-empty bound args has a last supplied arg");
+    let mut args = Vec::with_capacity(last_index + 1);
+
+    for (index, arg) in bound_args.into_iter().take(last_index + 1).enumerate() {
+        if let Some(value) = arg {
+            args.push(value);
+        } else if index >= shape.required_param_count {
+            args.push(eval_builtin_default_arg(name, index, values)?);
+        } else {
+            return Err(EvalStatus::RuntimeFatal);
         }
     }
-    collect_contiguous_bound_args(bound_args)
+
+    Ok(args)
+}
+
+/// Materializes one builtin default argument as a runtime cell.
+fn eval_builtin_default_arg(
+    name: &str,
+    index: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match eval_builtin_default_value(name, index).ok_or(EvalStatus::RuntimeFatal)? {
+        EvalBuiltinDefaultValue::Null => values.null(),
+        EvalBuiltinDefaultValue::Bool(value) => values.bool_value(value),
+        EvalBuiltinDefaultValue::Int(value) => values.int(value),
+        EvalBuiltinDefaultValue::Float(value) => values.float(value),
+        EvalBuiltinDefaultValue::String(value) => values.string(value),
+        EvalBuiltinDefaultValue::Bytes(value) => values.string_bytes_value(value),
+        EvalBuiltinDefaultValue::EmptyArray => values.array_new(0),
+    }
 }
 
 /// Returns PHP parameter names for builtin calls implemented by eval.
