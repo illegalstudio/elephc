@@ -208,6 +208,75 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies aggregate stream helpers drain and copy userspace wrapper streams.
+#[test]
+fn execute_program_dispatches_user_stream_wrapper_aggregate_reads() {
+    let program = parse_fragment(
+        br#"class EvalSlowWrapperW {
+    public $data;
+    public $pos;
+    public function stream_open($path, $mode, $options, &$opened_path): bool {
+        $this->data = "abcdefghi";
+        $this->pos = 0;
+        return true;
+    }
+    public function stream_read($count): string {
+        $limit = min(2, $count);
+        $chunk = substr($this->data, $this->pos, $limit);
+        $this->pos += strlen($chunk);
+        return $chunk;
+    }
+    public function stream_eof(): bool {
+        return $this->pos >= strlen($this->data);
+    }
+    public function stream_seek($offset, $whence): bool {
+        if ($whence !== 0) { return false; }
+        $this->pos = $offset;
+        return true;
+    }
+}
+class EvalSinkWrapperW {
+    public function stream_open($path, $mode, $options, &$opened_path): bool {
+        return true;
+    }
+    public function stream_write($data): int {
+        echo "<" . $data . ">";
+        return strlen($data);
+    }
+}
+stream_wrapper_register("sloww", "EvalSlowWrapperW");
+stream_wrapper_register("sinkw", "EvalSinkWrapperW");
+$h = fopen("sloww://read", "r");
+echo stream_get_contents($h, 5) === "abcde" ? "bounded" : "bad"; echo ":";
+echo stream_get_contents($h) === "fghi" ? "rest" : "bad"; echo ":";
+echo stream_get_contents($h, 3, 2) === "cde" ? "offset" : "bad"; echo ":";
+$src = fopen("sloww://copy", "r");
+$dst = fopen("php://memory", "w+");
+echo stream_copy_to_stream($src, $dst, 5) === 5 ? "copy" : "bad"; echo ":";
+rewind($dst);
+echo stream_get_contents($dst) === "abcde" ? "copied" : "bad"; echo ":";
+$raw = fopen("php://memory", "w+");
+fwrite($raw, "sinkdata");
+rewind($raw);
+$sink = fopen("sinkw://out", "w");
+echo stream_copy_to_stream($raw, $sink) === 8 ? "sinkcopy" : "bad"; echo ":";
+$pass = fopen("sloww://pass", "r");
+echo fpassthru($pass) === 9 ? "pass" : "bad";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "bounded:rest:offset:copy:copied:<sinkdata>sinkcopy:abcdefghipass"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Starts a localhost HTTP server that returns one fixed body and then exits.
 fn spawn_http_once(body: &'static str) -> (u16, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind HTTP wrapper fixture");

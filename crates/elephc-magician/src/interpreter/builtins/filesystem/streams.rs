@@ -157,7 +157,12 @@ pub(in crate::interpreter) fn eval_unary_stream_result(
             }
             None => values.bool_value(false),
         },
-        "rewind" => values.bool_value(context.stream_resources_mut().rewind(id)),
+        "rewind" => {
+            if let Some(seek_ok) = eval_user_wrapper_fseek_result(id, 0, 0, context, values)? {
+                return values.bool_value(seek_ok);
+            }
+            values.bool_value(context.stream_resources_mut().rewind(id))
+        }
         "fstat" => match context.stream_resources().metadata(id) {
             Some(metadata) => eval_stat_metadata_array(&metadata, values),
             None => values.bool_value(false),
@@ -173,6 +178,9 @@ fn eval_fpassthru_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(result) = eval_user_wrapper_fpassthru_result(id, context, values)? {
+        return Ok(result);
+    }
     let Some(bytes) = context.stream_resources_mut().get_contents(id, None, None) else {
         return values.bool_value(false);
     };
@@ -578,6 +586,9 @@ pub(in crate::interpreter) fn eval_fseek_result(
         Some(whence) => eval_int_value(whence, values)?,
         None => 0,
     };
+    if let Some(seek_ok) = eval_user_wrapper_fseek_result(id, offset, whence, context, values)? {
+        return values.int(if seek_ok { 0 } else { -1 });
+    }
     let status = if context.stream_resources_mut().seek(id, offset, whence) {
         0
     } else {
@@ -649,6 +660,11 @@ pub(in crate::interpreter) fn eval_stream_get_contents_result(
     let id = eval_stream_resource_id(stream, values)?;
     let length = eval_optional_stream_length(length, values)?;
     let offset = eval_optional_stream_offset(offset, values)?;
+    if let Some(result) =
+        eval_user_wrapper_stream_get_contents_result(id, length, offset, context, values)?
+    {
+        return Ok(result);
+    }
     match context
         .stream_resources_mut()
         .get_contents(id, length, offset)
@@ -739,6 +755,11 @@ pub(in crate::interpreter) fn eval_stream_copy_to_stream_result(
     let to = eval_stream_resource_id(to, values)?;
     let length = eval_optional_stream_length(length, values)?;
     let offset = eval_optional_stream_offset(offset, values)?;
+    if let Some(result) =
+        eval_user_wrapper_stream_copy_to_stream_result(from, to, length, offset, context, values)?
+    {
+        return Ok(result);
+    }
     match context
         .stream_resources_mut()
         .copy_to_stream(from, to, length, offset)
