@@ -23,7 +23,7 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             let [path] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_unary_path_bool_result(name, *path, values)?
+            eval_unary_path_bool_result(name, *path, context, values)?
         }
         "chmod" => {
             let [filename, permissions] = evaluated_args else {
@@ -53,7 +53,7 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             let [from, to] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_binary_path_bool_result(name, *from, *to, values)?
+            eval_binary_path_bool_result(name, *from, *to, context, values)?
         }
         "file" => {
             let [filename] = evaluated_args else {
@@ -606,7 +606,7 @@ pub(in crate::interpreter) fn eval_filesystem_builtin_with_values(
             let [filename] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_unlink_result(*filename, values)?
+            eval_unlink_result(*filename, context, values)?
         }
         _ => return Ok(None),
     };

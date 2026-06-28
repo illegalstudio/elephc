@@ -27,16 +27,20 @@ pub(in crate::interpreter) fn eval_builtin_unary_path_bool(
         return Err(EvalStatus::RuntimeFatal);
     };
     let path = eval_expr(path, context, scope, values)?;
-    eval_unary_path_bool_result(name, path, values)
+    eval_unary_path_bool_result(name, path, context, values)
 }
 
-/// Executes a one-path local filesystem operation and returns whether it succeeded.
+/// Executes a one-path filesystem operation and returns whether it succeeded.
 pub(in crate::interpreter) fn eval_unary_path_bool_result(
     name: &str,
     path: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(path, values)?;
+    if let Some(result) = eval_user_wrapper_single_path_op_result(name, &path, context, values)? {
+        return Ok(result);
+    }
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
         return values.bool_value(false);
     };
@@ -62,18 +66,24 @@ pub(in crate::interpreter) fn eval_builtin_binary_path_bool(
     };
     let from = eval_expr(from, context, scope, values)?;
     let to = eval_expr(to, context, scope, values)?;
-    eval_binary_path_bool_result(name, from, to, values)
+    eval_binary_path_bool_result(name, from, to, context, values)
 }
 
-/// Executes a two-path local filesystem operation and returns whether it succeeded.
+/// Executes a two-path filesystem operation and returns whether it succeeded.
 pub(in crate::interpreter) fn eval_binary_path_bool_result(
     name: &str,
     from: RuntimeCellHandle,
     to: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let from = eval_path_string(from, values)?;
     let to = eval_path_string(to, values)?;
+    if name == "rename" {
+        if let Some(result) = eval_user_wrapper_rename_result(&from, &to, context, values)? {
+            return Ok(result);
+        }
+    }
     let Some(from) = stream_wrappers::local_filesystem_path(&from) else {
         return values.bool_value(false);
     };

@@ -98,17 +98,21 @@ pub(in crate::interpreter) fn eval_builtin_unlink(
         return Err(EvalStatus::RuntimeFatal);
     };
     let filename = eval_expr(filename, context, scope, values)?;
-    eval_unlink_result(filename, values)
+    eval_unlink_result(filename, context, values)
 }
 
-/// Deletes one local file and returns whether it succeeded.
+/// Deletes one path and returns whether it succeeded.
 pub(in crate::interpreter) fn eval_unlink_result(
     filename: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
     if stream_wrappers::is_phar_stream(&path) {
         return values.bool_value(elephc_phar::delete_url_bytes(path.as_bytes()).is_some());
+    }
+    if let Some(result) = eval_user_wrapper_unlink_result(&path, context, values)? {
+        return Ok(result);
     }
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
         return values.bool_value(false);
