@@ -147,15 +147,25 @@ pub(in crate::interpreter) fn eval_unary_stream_result(
             }
             values.bool_value(context.stream_resources().eof(id).unwrap_or(false))
         }
-        "fflush" => values.bool_value(context.stream_resources_mut().flush(id)),
+        "fflush" => {
+            if let Some(result) = eval_user_wrapper_fflush_result(id, context, values)? {
+                return Ok(result);
+            }
+            values.bool_value(context.stream_resources_mut().flush(id))
+        }
         "fpassthru" => eval_fpassthru_result(id, context, values),
         "fsync" => values.bool_value(context.stream_resources_mut().sync_all(id)),
         "fdatasync" => values.bool_value(context.stream_resources_mut().sync_data(id)),
-        "ftell" => match context.stream_resources_mut().tell(id) {
-            Some(position) => {
-                values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)
+        "ftell" => {
+            if let Some(result) = eval_user_wrapper_ftell_result(id, context, values)? {
+                return Ok(result);
             }
-            None => values.bool_value(false),
+            match context.stream_resources_mut().tell(id) {
+                Some(position) => {
+                    values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)
+                }
+                None => values.bool_value(false),
+            }
         },
         "rewind" => {
             if let Some(seek_ok) = eval_user_wrapper_fseek_result(id, 0, 0, context, values)? {
@@ -629,6 +639,9 @@ pub(in crate::interpreter) fn eval_ftruncate_result(
     let Ok(size) = u64::try_from(size) else {
         return values.bool_value(false);
     };
+    if let Some(result) = eval_user_wrapper_ftruncate_result(id, size, context, values)? {
+        return Ok(result);
+    }
     values.bool_value(context.stream_resources_mut().truncate(id, size))
 }
 

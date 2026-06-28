@@ -185,6 +185,72 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval userspace stream wrappers dispatch stream control methods.
+#[test]
+fn execute_program_dispatches_user_stream_wrapper_control_methods() {
+    let program = parse_fragment(
+        br#"class EvalControlWrapperW {
+    public $data;
+    public $pos;
+    public function stream_open($path, $mode, $options, &$opened_path): bool {
+        $this->data = "abcdef";
+        $this->pos = 0;
+        return true;
+    }
+    public function stream_read($count): string {
+        $chunk = substr($this->data, $this->pos, $count);
+        $this->pos += strlen($chunk);
+        return $chunk;
+    }
+    public function stream_eof(): bool {
+        return $this->pos >= strlen($this->data);
+    }
+    public function stream_tell(): int {
+        echo "T";
+        return $this->pos;
+    }
+    public function stream_seek($offset, $whence): bool {
+        echo "S" . $whence;
+        if ($whence !== 0) { return false; }
+        $this->pos = $offset;
+        return true;
+    }
+    public function stream_truncate($new_size): bool {
+        echo "R" . $new_size;
+        $this->data = substr($this->data, 0, $new_size);
+        if ($this->pos > $new_size) { $this->pos = $new_size; }
+        return true;
+    }
+    public function stream_flush(): bool {
+        echo "F";
+        return true;
+    }
+}
+stream_wrapper_register("ctrlw", "EvalControlWrapperW");
+$h = fopen("ctrlw://one", "r+");
+echo ftell($h) === 0 ? "tell0" : "bad"; echo ":";
+echo fread($h, 2) === "ab" ? "read" : "bad"; echo ":";
+echo ftell($h) === 2 ? "tell2" : "bad"; echo ":";
+echo fseek($h, 1) === 0 ? "seek" : "bad"; echo ":";
+echo ftell($h) === 1 ? "tell1" : "bad"; echo ":";
+echo ftruncate($h, 3) ? "trunc" : "bad"; echo ":";
+echo stream_get_contents($h) === "bc" ? "contents" : "bad"; echo ":";
+echo fflush($h) ? "flush" : "bad";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Ttell0:read:Ttell2:S0seek:Ttell1:R3trunc:contents:Fflush"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies a wrapper whose `stream_open()` returns false makes `fopen()` false.
 #[test]
 fn execute_program_user_stream_wrapper_open_false_returns_false() {
