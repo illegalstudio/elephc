@@ -36,6 +36,15 @@ pub(crate) fn is_http_stream(path: &str) -> bool {
     path.starts_with("http://")
 }
 
+/// Extracts and normalizes the PHP stream-wrapper scheme from a URL-like path.
+pub(crate) fn stream_scheme(path: &str) -> Option<String> {
+    let separator = path.find("://")?;
+    if separator == 0 || !path_has_scheme(path) {
+        return None;
+    }
+    Some(path[..separator].to_ascii_lowercase())
+}
+
 /// Maps plain local paths and `file://` URLs onto host filesystem paths.
 pub(crate) fn local_filesystem_path(path: &str) -> Option<String> {
     if let Some(rest) = path.strip_prefix("file://") {

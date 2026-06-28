@@ -130,6 +130,84 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval userspace stream wrappers dispatch core stream methods.
+#[test]
+fn execute_program_dispatches_user_stream_wrapper_methods() {
+    let program = parse_fragment(
+        br#"class EvalUserWrapperW {
+    public $data;
+    public $pos;
+    public function stream_open($path, $mode, $options, &$opened_path): bool {
+        $this->data = "abcdef";
+        $this->pos = 0;
+        $opened_path = "ignored";
+        return true;
+    }
+    public function stream_read($count): string {
+        $chunk = substr($this->data, $this->pos, $count);
+        $this->pos += strlen($chunk);
+        return $chunk;
+    }
+    public function stream_write($data): int {
+        echo "[" . $data . "]";
+        return strlen($data);
+    }
+    public function stream_eof(): bool {
+        return $this->pos >= strlen($this->data);
+    }
+    public function stream_close(): void {
+        echo "C";
+    }
+}
+echo stream_wrapper_register("uw", "EvalUserWrapperW") ? "reg" : "bad"; echo ":";
+$h = fopen("uw://read", "r");
+echo is_resource($h) ? "open" : "bad"; echo ":";
+echo fread($h, 2); echo ":";
+echo feof($h) ? "bad" : "not"; echo ":";
+echo fread($h, 4); echo ":";
+echo feof($h) ? "eof" : "bad"; echo ":";
+echo fclose($h) ? "closed" : "bad"; echo ":";
+$w = fopen("uw://write", "w");
+echo fwrite($w, "xyz") === 3 ? "wrote" : "bad"; echo ":";
+echo fclose($w) ? "closed2" : "bad";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "reg:open:ab:not:cdef:eof:Cclosed:[xyz]wrote:Cclosed2"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies a wrapper whose `stream_open()` returns false makes `fopen()` false.
+#[test]
+fn execute_program_user_stream_wrapper_open_false_returns_false() {
+    let program = parse_fragment(
+        br#"class EvalRejectWrapperW {
+    public function stream_open($path, $mode, $options, &$opened_path): bool {
+        return false;
+    }
+}
+stream_wrapper_register("rejectw", "EvalRejectWrapperW");
+echo fopen("rejectw://x", "r") === false ? "false" : "bad";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "false");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Starts a localhost HTTP server that returns one fixed body and then exits.
 fn spawn_http_once(body: &'static str) -> (u16, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind HTTP wrapper fixture");

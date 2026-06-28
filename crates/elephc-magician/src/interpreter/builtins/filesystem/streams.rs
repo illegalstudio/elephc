@@ -9,7 +9,8 @@
 //!
 //! Key details:
 //! - Runtime resource payloads are zero-based; `get_resource_id()` exposes payload + 1.
-//! - This module supports local file resources, not sockets, pipes, wrappers, or filters.
+//! - File-backed streams stay in `EvalStreamResources`; userspace wrapper calls
+//!   delegate to the focused wrapper-dispatch helper module.
 
 use super::super::super::*;
 use super::*;
@@ -29,7 +30,9 @@ pub(in crate::interpreter) fn eval_builtin_fopen(
     for arg in &args[2..] {
         eval_expr(arg, context, scope, values)?;
     }
-    eval_fopen_result(filename, mode, context, values)
+    let filename = eval_path_string(filename, values)?;
+    let mode = eval_stream_string(mode, values)?;
+    eval_fopen_path_result(&filename, &mode, context, scope, values)
 }
 
 /// Opens a local file stream and returns a resource cell or PHP false.
@@ -41,7 +44,24 @@ pub(in crate::interpreter) fn eval_fopen_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let filename = eval_path_string(filename, values)?;
     let mode = eval_stream_string(mode, values)?;
-    match context.stream_resources_mut().open_path(&filename, &mode) {
+    let mut scope = ElephcEvalScope::new();
+    eval_fopen_path_result(&filename, &mode, context, &mut scope, values)
+}
+
+/// Opens a stream by already-coerced path and mode strings.
+fn eval_fopen_path_result(
+    filename: &str,
+    mode: &str,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(result) =
+        eval_user_wrapper_fopen_result(filename, mode, context, scope, values)?
+    {
+        return Ok(result);
+    }
+    match context.stream_resources_mut().open_path(filename, mode) {
         Some(id) => values.resource(id),
         None => {
             values.warning("Warning: fopen(): Failed to open stream\n")?;
@@ -97,12 +117,22 @@ pub(in crate::interpreter) fn eval_unary_stream_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_resource_id(stream, values)?;
     match name {
-        "fclose" => values.bool_value(context.stream_resources_mut().close(id)),
-        "fgetc" => match context.stream_resources_mut().read(id, 1) {
-            Some(bytes) if !bytes.is_empty() => values.string_bytes_value(&bytes),
-            Some(_) => values.bool_value(false),
-            None => values.bool_value(false),
-        },
+        "fclose" => {
+            if let Some(result) = eval_user_wrapper_fclose_result(id, context, values)? {
+                return Ok(result);
+            }
+            values.bool_value(context.stream_resources_mut().close(id))
+        }
+        "fgetc" => {
+            if let Some(result) = eval_user_wrapper_fread_result(id, 1, context, values)? {
+                return Ok(result);
+            }
+            match context.stream_resources_mut().read(id, 1) {
+                Some(bytes) if !bytes.is_empty() => values.string_bytes_value(&bytes),
+                Some(_) => values.bool_value(false),
+                None => values.bool_value(false),
+            }
+        }
         "fgets" => match context
             .stream_resources_mut()
             .read_line(id, usize::MAX, None, true, true)
@@ -111,7 +141,12 @@ pub(in crate::interpreter) fn eval_unary_stream_result(
             Some(_) => values.bool_value(false),
             None => values.bool_value(false),
         },
-        "feof" => values.bool_value(context.stream_resources().eof(id).unwrap_or(false)),
+        "feof" => {
+            if let Some(result) = eval_user_wrapper_feof_result(id, context, values)? {
+                return Ok(result);
+            }
+            values.bool_value(context.stream_resources().eof(id).unwrap_or(false))
+        }
         "fflush" => values.bool_value(context.stream_resources_mut().flush(id)),
         "fpassthru" => eval_fpassthru_result(id, context, values),
         "fsync" => values.bool_value(context.stream_resources_mut().sync_all(id)),
@@ -218,6 +253,9 @@ pub(in crate::interpreter) fn eval_fread_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_resource_id(stream, values)?;
     let length = eval_nonnegative_usize(length, values)?;
+    if let Some(result) = eval_user_wrapper_fread_result(id, length, context, values)? {
+        return Ok(result);
+    }
     match context.stream_resources_mut().read(id, length) {
         Some(bytes) => values.string_bytes_value(&bytes),
         None => values.bool_value(false),
@@ -248,6 +286,9 @@ pub(in crate::interpreter) fn eval_fwrite_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_resource_id(stream, values)?;
     let data = values.string_bytes(data)?;
+    if let Some(result) = eval_user_wrapper_fwrite_result(id, &data, context, values)? {
+        return Ok(result);
+    }
     match context.stream_resources_mut().write(id, &data) {
         Some(written) => values.int(i64::try_from(written).map_err(|_| EvalStatus::RuntimeFatal)?),
         None => values.bool_value(false),

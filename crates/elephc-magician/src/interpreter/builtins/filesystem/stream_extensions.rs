@@ -49,10 +49,10 @@ pub(in crate::interpreter) fn eval_stream_wrapper_registry_result(
     let protocol = eval_stream_wrapper_protocol(evaluated_args[0], values)?;
     let ok = match name {
         "stream_wrapper_register" => {
-            let _ = values.string_bytes(evaluated_args[1])?;
+            let class_name = eval_stream_wrapper_class(evaluated_args[1], context, values)?;
             context
                 .stream_resources_mut()
-                .register_stream_wrapper(&protocol, EVAL_STREAM_WRAPPERS)
+                .register_stream_wrapper(&protocol, &class_name, EVAL_STREAM_WRAPPERS)
         }
         "stream_wrapper_unregister" => context
             .stream_resources_mut()
@@ -72,6 +72,19 @@ fn eval_stream_wrapper_protocol(
 ) -> Result<String, EvalStatus> {
     let bytes = values.string_bytes(protocol)?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Coerces one stream wrapper class argument into a resolved class-name string.
+fn eval_stream_wrapper_class(
+    class_name: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let bytes = values.string_bytes(class_name)?;
+    let class_name = String::from_utf8_lossy(&bytes).into_owned();
+    Ok(context
+        .resolve_class_name(&class_name)
+        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string()))
 }
 
 /// Evaluates `stream_filter_register(filter_name, class)`.
