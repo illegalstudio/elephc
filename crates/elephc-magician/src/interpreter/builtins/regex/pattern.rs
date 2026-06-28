@@ -1,5 +1,5 @@
 //! Purpose:
-//! Parses PHP delimited preg patterns and compiles them into Rust byte regexes.
+//! Parses PHP delimited preg patterns and compiles them into PCRE2 regexes.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::regex` entrypoint modules.
@@ -10,30 +10,14 @@
 
 use super::super::super::*;
 
-/// Compiles one eval PCRE-style delimited pattern into a Rust regex.
+/// Compiles one eval PCRE-style delimited pattern into a PCRE2 regex.
 pub(in crate::interpreter) fn eval_preg_regex(
     pattern: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Regex, EvalStatus> {
     let pattern = values.string_bytes(pattern)?;
     let (body, modifiers) = eval_preg_pattern_parts(&pattern)?;
-    let body = String::from_utf8(body).map_err(|_| EvalStatus::RuntimeFatal)?;
-    let mut builder = RegexBuilder::new(&body);
-    builder
-        .case_insensitive(modifiers.case_insensitive)
-        .multi_line(modifiers.multi_line)
-        .dot_matches_new_line(modifiers.dot_matches_new_line)
-        .swap_greed(modifiers.swap_greed);
-    builder.build().map_err(|_| EvalStatus::RuntimeFatal)
-}
-
-/// Regex modifiers supported by eval `preg_*` pattern stripping.
-#[derive(Default)]
-pub(in crate::interpreter) struct EvalPregModifiers {
-    case_insensitive: bool,
-    multi_line: bool,
-    dot_matches_new_line: bool,
-    swap_greed: bool,
+    Regex::compile(&body, modifiers)
 }
 
 /// Splits a PHP delimited regex into body bytes and supported modifiers.
@@ -122,7 +106,7 @@ pub(in crate::interpreter) fn eval_preg_modifiers(
             b'm' => parsed.multi_line = true,
             b's' => parsed.dot_matches_new_line = true,
             b'U' => parsed.swap_greed = true,
-            b'u' => {}
+            b'u' => parsed.unicode = true,
             _ => return Err(EvalStatus::RuntimeFatal),
         }
     }

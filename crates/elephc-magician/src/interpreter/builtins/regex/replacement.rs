@@ -8,7 +8,6 @@
 //! - Supports `$n`, `${n}`, and `\n` capture references without allocating
 //!   intermediate runtime cells.
 
-use super::super::super::*;
 use super::*;
 
 /// Appends one replacement string after expanding `$n`, `${n}`, and `\n` captures.

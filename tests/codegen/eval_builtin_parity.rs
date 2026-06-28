@@ -69,3 +69,17 @@ echo STRLEN("fghi");');
 
     assert_eq!(out, "324");
 }
+
+/// Verifies eval preg builtins use PCRE2 features that Rust regex did not support.
+#[test]
+fn test_eval_preg_uses_pcre2_lookaround_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo preg_match("/foo(?=bar)/", "foobar");
+echo ":";
+echo preg_match("/(?<=foo)bar/", "foobar");');
+"#,
+    );
+
+    assert_eq!(out, "1:1");
+}

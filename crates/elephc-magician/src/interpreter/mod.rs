@@ -68,7 +68,6 @@ use include_exec::*;
 use json::*;
 use libc_shims::*;
 use reflection::*;
-use regex::bytes::{Captures, Regex, RegexBuilder};
 use return_type_compat::*;
 use return_values::*;
 pub use runtime_ops::RuntimeValueOps;

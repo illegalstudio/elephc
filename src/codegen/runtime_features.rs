@@ -81,8 +81,8 @@ pub fn runtime_features_for_program_and_classes(
 pub fn required_libraries_for_runtime_features(features: RuntimeFeatures) -> Vec<String> {
     let mut libs = Vec::new();
     if features.regex {
-        libs.push("pcre2-posix".to_string());
-        libs.push("pcre2-8".to_string());
+        push_required_library(&mut libs, "pcre2-posix");
+        push_required_library(&mut libs, "pcre2-8");
     }
     if features.phar_archive {
         libs.push("elephc_phar".to_string());
@@ -95,9 +95,20 @@ pub fn required_libraries_for_runtime_features(features: RuntimeFeatures) -> Vec
         libs.push("elephc_crypto".to_string());
     }
     if features.eval {
-        libs.push("elephc_magician".to_string());
+        // Eval code can call preg_* from dynamically parsed source, so PCRE2 is
+        // required even when no static preg call appears in the AOT AST.
+        push_required_library(&mut libs, "pcre2-posix");
+        push_required_library(&mut libs, "pcre2-8");
+        push_required_library(&mut libs, "elephc_magician");
     }
     libs
+}
+
+/// Appends a required link library once while preserving feature order.
+fn push_required_library(libs: &mut Vec<String>, library: &str) {
+    if !libs.iter().any(|existing| existing == library) {
+        libs.push(library.to_string());
+    }
 }
 
 /// Builds the optional runtime feature set, using class metadata when codegen has it.
@@ -919,7 +930,7 @@ mod tests {
         assert!(required_libraries_for_runtime_features(RuntimeFeatures::none()).is_empty());
     }
 
-    /// Verifies eval runtime features request the magician bridge staticlib for final linking.
+    /// Verifies eval runtime features request PCRE2 plus the magician bridge staticlib for final linking.
     #[test]
     fn test_eval_runtime_features_require_elephc_magician_library() {
         assert_eq!(
@@ -927,7 +938,11 @@ mod tests {
                 eval: true,
                 ..RuntimeFeatures::none()
             }),
-            vec!["elephc_magician".to_string()]
+            vec![
+                "pcre2-posix".to_string(),
+                "pcre2-8".to_string(),
+                "elephc_magician".to_string()
+            ]
         );
     }
 
