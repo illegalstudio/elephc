@@ -5561,7 +5561,7 @@ fn eval_property_reference_alias_name(object_identity: u64, storage_property_nam
 }
 
 /// Reads the current value from a persistent reference target.
-fn eval_reference_target_value(
+pub(in crate::interpreter) fn eval_reference_target_value(
     target: &EvalReferenceTarget,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

@@ -37,9 +37,18 @@ Eval URL codec dispatch includes `urlencode()`, `urldecode()`, `rawurlencode()`,
 
 Eval ASCII character-class dispatch includes `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, and `ctype_space()` on non-empty byte strings through the same builtin-call binding path.
 
-Eval `print_r()` writes scalars through the eval output hook and emits `Array\n` for indexed or associative arrays, matching the native runtime's currently supported `print_r()` shape.
+Eval `print_r()` formats scalars, recursive arrays, and bridge-visible object
+properties inside the interpreter. With the second argument truthy it returns
+the captured string; otherwise it emits that string through the eval output
+hook and returns `true`.
 
-Eval `var_dump()` formats scalar tags and array contents inside the interpreter, then emits one byte string through the eval output hook. Array dumping reads foreach-visible keys and values through the same eval hooks used by `foreach`, `array_keys()`, and `array_values()`.
+Eval `var_dump()` formats one or more materialized arguments inside the
+interpreter, then emits one byte string through the eval output hook. Array
+dumping reads foreach-visible keys and values through the same eval hooks used
+by `foreach`, `array_keys()`, and `array_values()`. Object dumping uses eval
+class metadata for eval-declared property visibility labels, public runtime
+property hooks for generated/AOT objects, and eval property-alias metadata for
+reference markers.
 
 Eval SPL class introspection dispatch includes `spl_classes()` through direct
 calls, callable dispatch, and `function_exists()` probes. The interpreter builds

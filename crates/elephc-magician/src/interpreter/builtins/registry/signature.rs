@@ -112,6 +112,8 @@ pub(in crate::interpreter) fn eval_builtin_signature_shape(
 
         "preg_match" => optional_by_ref(params, 2, &["matches"]),
         "preg_split" => optional(params, 2),
+        "print_r" => optional(params, 1),
+        "var_dump" => variadic(params, &[]),
 
         "touch" | "basename" | "dirname" | "pathinfo" => optional(params, 1),
         "fnmatch" | "fopen" | "fseek" | "fputcsv" => optional(params, 2),
@@ -216,6 +218,7 @@ pub(in crate::interpreter) fn eval_builtin_default_value(
         ("preg_match", 2) => EmptyArray,
         ("preg_split", 2) => Int(-1),
         ("preg_split", 3) => Int(0),
+        ("print_r", 1) => Bool(false),
 
         ("touch", 1 | 2) => Null,
         ("basename", 1) => String(""),

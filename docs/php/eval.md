@@ -828,19 +828,23 @@ ignore/substitute modes where applicable, `JSON_BIGINT_AS_STRING` for
 overflowing integer tokens in `json_decode()`, and `JsonException` through
 `JSON_THROW_ON_ERROR`.
 
-Eval local filesystem calls operate on host filesystem paths. Stream wrappers,
-PHAR URLs, network URLs, ownership/group modification, and `fstat()` array
-results remain outside the eval filesystem subset. Stream wrapper functionality
-for native code is documented in [Streams](streams.md).
+Eval local filesystem calls operate on host filesystem paths and support the
+implemented stream-wrapper paths, including `file://`, `php://memory`,
+`data://`, `phar://`, plain `http://`, and eval-registered userspace wrappers.
+Eval also supports complete `fstat()` arrays and portable ownership/group
+metadata calls where the host platform exposes them. TLS-backed `https://`
+URLs remain outside magician's implemented wrapper paths.
 
-Eval `print_r()` supports the one-argument form. Scalars print through the same
-output path as `echo`, boolean false and null print nothing, and arrays print
-the same `Array\n` header shape as elephc's native `print_r()` subset.
+Eval `print_r()` supports the normal echoing form and `print_r($value, true)`.
+Scalars print through the same output path as `echo`, boolean false and null
+print nothing, arrays use PHP's recursive `Array\n(\n    [key] => value\n)\n`
+shape, and objects render class names plus bridge-visible properties.
 
-Eval `var_dump()` supports the one-argument form. Scalars print typed
+Eval `var_dump()` supports one or more arguments. Scalars print typed
 diagnostic lines, indexed or associative arrays print foreach-visible keys and
-nested values through eval value hooks, and eval-declared or generated/AOT
-objects print their PHP-visible class names.
+nested values through eval value hooks, and objects print class names, object
+ids, bridge-visible properties, eval-declared private/protected/public property
+labels, and eval property references when alias metadata is available.
 
 ## Current limitations
 
