@@ -10,7 +10,10 @@
 //! - Lookup normalizes names with PHP-style case-insensitivity.
 //! - Parameter names are the same registry data used by eval named-argument binding.
 
-use super::builtins::{eval_builtin_param_names, eval_php_visible_builtin_exists};
+use super::builtins::{
+    eval_builtin_param_names, eval_php_visible_builtin_exists,
+    eval_php_visible_builtin_function_names,
+};
 
 /// A compact, comparison-friendly view of an eval builtin call signature.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +26,11 @@ pub struct BuiltinSignatureMetadata {
 pub fn php_visible_builtin_exists(name: &str) -> bool {
     let canonical = php_symbol_key(name);
     eval_php_visible_builtin_exists(&canonical)
+}
+
+/// Returns the eval interpreter's PHP-visible builtin names.
+pub fn php_visible_builtin_names() -> &'static [&'static str] {
+    eval_php_visible_builtin_function_names()
 }
 
 /// Returns comparison metadata for one eval builtin signature, when named calls are tracked.
